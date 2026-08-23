@@ -79,7 +79,7 @@ pub fn analyze_live(events: &[ObserverEvent]) -> LiveAnalysis {
     };
 
     for event in events {
-        match event.kind {
+        match &event.kind {
             ObserverEventKind::DomMutation | ObserverEventKind::Layout => counts.dom += 1,
             ObserverEventKind::Console => {
                 counts.console += 1;
@@ -143,7 +143,7 @@ pub fn diagnose_live(events: &[ObserverEvent]) -> LiveDiagnosis {
             } else {
                 group.message.clone()
             },
-            severity: match group.level {
+            severity: match &group.level {
                 ConsoleLevel::Error => 3,
                 ConsoleLevel::Warning => 2,
                 ConsoleLevel::Info | ConsoleLevel::Debug => 1,
@@ -173,7 +173,9 @@ pub fn diagnose_live(events: &[ObserverEvent]) -> LiveDiagnosis {
     });
 
     let mut unknowns = Vec::new();
-    let has_layout = events.iter().any(|event| event.kind == ObserverEventKind::Layout);
+    let has_layout = events
+        .iter()
+        .any(|event| event.kind == ObserverEventKind::Layout);
     if events.is_empty() {
         unknowns.push(LiveUncertainty {
             class: LiveUncertaintyClass::Identity,
@@ -205,25 +207,34 @@ pub fn diagnose_live(events: &[ObserverEvent]) -> LiveDiagnosis {
 
     let mut recommended_actions = Vec::new();
     if events.is_empty() {
-        recommended_actions.push("Open the native preview so LocalView can attach its secure observer".into());
+        recommended_actions.push(
+            "Open the native preview so LocalView can attach its secure observer".into(),
+        );
     }
     if analysis.counts.semantic_snapshots == 0 {
-        recommended_actions.push("Queue a semantic snapshot before making state-dependent claims".into());
+        recommended_actions
+            .push("Queue a semantic snapshot before making state-dependent claims".into());
     }
     if !has_layout {
-        recommended_actions.push("Run X-Ray/layout inspection before claiming a visual root cause".into());
+        recommended_actions
+            .push("Run X-Ray/layout inspection before claiming a visual root cause".into());
     }
     if !analysis.network.is_empty() {
-        recommended_actions.push("Trace failed or slow requests to their initiating interaction/source".into());
+        recommended_actions
+            .push("Trace failed or slow requests to their initiating interaction/source".into());
     }
     if !analysis.console.is_empty() {
         recommended_actions.push("Trace grouped console errors to source-map evidence".into());
     }
     if !analysis.performance.is_empty() {
-        recommended_actions.push("Capture a targeted performance sample around the affected interaction".into());
+        recommended_actions
+            .push("Capture a targeted performance sample around the affected interaction".into());
     }
-    if findings.is_empty() && events.len() > 0 {
-        recommended_actions.push("No retained deterministic failure was found; expand evidence only if the issue still reproduces".into());
+    if findings.is_empty() && !events.is_empty() {
+        recommended_actions.push(
+            "No retained deterministic failure was found; expand evidence only if the issue still reproduces"
+                .into(),
+        );
     }
 
     LiveDiagnosis {
