@@ -112,6 +112,13 @@ impl LiveBridge {
     }
 
     pub async fn ingest(&self, batch: ObserverBatch) -> IngestReport {
+        self.ingest_collect(batch).await.0
+    }
+
+    pub async fn ingest_collect(
+        &self,
+        batch: ObserverBatch,
+    ) -> (IngestReport, Vec<ObserverEvent>) {
         let mut states = self.inner.write().await;
         let state = states.entry(batch.session_id).or_default();
         if batch.generation > state.generation {
@@ -119,7 +126,7 @@ impl LiveBridge {
             state.last_seq = None;
             state.events.clear();
         }
-        let mut accepted = 0;
+        let mut accepted_events = Vec::new();
         let mut rejected_stale = 0;
         for event in batch.events {
             let stale_generation = batch.generation < state.generation;
@@ -129,18 +136,19 @@ impl LiveBridge {
                 continue;
             }
             state.last_seq = Some(event.seq);
+            accepted_events.push(event.clone());
             state.events.push_back(event);
-            accepted += 1;
             while state.events.len() > self.event_capacity {
                 state.events.pop_front();
             }
         }
-        IngestReport {
-            accepted,
+        let report = IngestReport {
+            accepted: accepted_events.len(),
             rejected_stale,
             last_seq: state.last_seq,
             generation: state.generation,
-        }
+        };
+        (report, accepted_events)
     }
 
     pub async fn recent(&self, session_id: SessionId, limit: usize) -> Vec<ObserverEvent> {
@@ -273,6 +281,21 @@ mod tests {
             .await;
         assert_eq!(second.accepted, 1);
         assert_eq!(bridge.recent(id, 10).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ingest_collect_returns_only_accepted_events() {
+        let bridge = LiveBridge::new(32, 8);
+        let id = Uuid::new_v4();
+        let (report, accepted) = bridge
+            .ingest_collect(ObserverBatch {
+                session_id: id,
+                generation: 1,
+                events: vec![event(1), event(1), event(2)],
+            })
+            .await;
+        assert_eq!(report.accepted, 2);
+        assert_eq!(accepted.iter().map(|item| item.seq).collect::<Vec<_>>(), vec![1, 2]);
     }
 
     #[tokio::test]

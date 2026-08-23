@@ -16,7 +16,14 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use localview_live_bridge::{BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch};
+use localview_evidence::{
+    EvidenceDraft, EvidenceKind, EvidenceStore, Provenance, UncertaintyClass,
+};
+use localview_live_analysis::{analyze_live, diagnose_live};
+use localview_live_bridge::{
+    BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch, ObserverEvent,
+    ObserverEventKind,
+};
 use localview_observation::ObservationBus;
 use localview_protocol::{Health, ObservationEvent, SessionId};
 use localview_sessions::SessionManager;
@@ -29,6 +36,7 @@ pub struct ControlState {
     pub sessions: Arc<SessionManager>,
     pub observations: ObservationBus,
     pub live: LiveBridge,
+    pub evidence: EvidenceStore,
     pub paused: Arc<AtomicBool>,
 }
 
@@ -40,6 +48,10 @@ pub fn router(state: ControlState) -> Router {
         .route("/v1/sessions/{id}/preview", post(set_preview))
         .route("/v1/sessions/{id}/observer", post(ingest_observer))
         .route("/v1/sessions/{id}/observer/recent", get(recent_observer))
+        .route("/v1/sessions/{id}/analysis", get(session_analysis))
+        .route("/v1/sessions/{id}/diagnose", get(session_diagnose))
+        .route("/v1/sessions/{id}/evidence/recent", get(recent_evidence))
+        .route("/v1/evidence/{evidence_id}", get(get_evidence))
         .route("/v1/sessions/{id}/actions", post(queue_action).get(take_actions))
         .route(
             "/v1/sessions/{id}/actions/results",
@@ -166,7 +178,15 @@ async fn ingest_observer(
         )
             .into_response();
     }
-    Json(state.live.ingest(batch).await).into_response()
+
+    let (report, accepted_events) = state.live.ingest_collect(batch).await;
+    for event in accepted_events {
+        state
+            .evidence
+            .insert(evidence_from_observer(id, report.generation, event))
+            .await;
+    }
+    Json(report).into_response()
 }
 
 async fn recent_observer(
@@ -181,6 +201,68 @@ async fn recent_observer(
         return response;
     }
     Json(state.live.recent(id, 250).await).into_response()
+}
+
+async fn session_analysis(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if let Err(response) = ensure_session(&state, id).await {
+        return response;
+    }
+    let events = state.live.recent(id, 2048).await;
+    Json(analyze_live(&events)).into_response()
+}
+
+async fn session_diagnose(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if let Err(response) = ensure_session(&state, id).await {
+        return response;
+    }
+    let events = state.live.recent(id, 2048).await;
+    Json(diagnose_live(&events)).into_response()
+}
+
+async fn recent_evidence(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if let Err(response) = ensure_session(&state, id).await {
+        return response;
+    }
+    Json(state.evidence.recent_for_session(id, 250).await).into_response()
+}
+
+async fn get_evidence(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(evidence_id): Path<String>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    match state.evidence.get(&evidence_id).await {
+        Some(evidence) => Json(evidence).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "evidence_not_found"})),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,7 +316,25 @@ async fn complete_action(
     if let Err(response) = ensure_session(&state, id).await {
         return response;
     }
+
+    let evidence = EvidenceDraft {
+        kind: EvidenceKind::Interaction,
+        session_id: id,
+        region: None,
+        payload: serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
+        provenance: Provenance {
+            source: "native-action-executor".into(),
+            engine: Some("native-webview".into()),
+            revision: None,
+            parent_ids: Vec::new(),
+            captured_at: result.completed_at,
+        },
+        confidence: 1.0,
+        uncertainty: UncertaintyClass::Observed,
+        secret_taint: false,
+    };
     state.live.complete_action(id, result).await;
+    state.evidence.insert(evidence).await;
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -282,6 +382,59 @@ async fn resume(
     }
     state.paused.store(false, Ordering::Relaxed);
     StatusCode::NO_CONTENT.into_response()
+}
+
+fn evidence_from_observer(
+    session_id: SessionId,
+    generation: u64,
+    event: ObserverEvent,
+) -> EvidenceDraft {
+    let ObserverEvent {
+        seq,
+        captured_at,
+        kind,
+        reference,
+        route,
+        payload,
+    } = event;
+    let evidence_kind = evidence_kind(&kind);
+    let region = reference.clone();
+    EvidenceDraft {
+        kind: evidence_kind,
+        session_id,
+        region,
+        payload: serde_json::json!({
+            "sequence": seq,
+            "kind": kind,
+            "route": route,
+            "reference": reference,
+            "observed": payload,
+        }),
+        provenance: Provenance {
+            source: format!("preview-observer:generation:{generation}"),
+            engine: Some("native-webview".into()),
+            revision: None,
+            parent_ids: Vec::new(),
+            captured_at,
+        },
+        confidence: 1.0,
+        uncertainty: UncertaintyClass::Observed,
+        secret_taint: false,
+    }
+}
+
+fn evidence_kind(kind: &ObserverEventKind) -> EvidenceKind {
+    match kind {
+        ObserverEventKind::DomMutation | ObserverEventKind::SemanticSnapshot => EvidenceKind::Semantic,
+        ObserverEventKind::Layout => EvidenceKind::Layout,
+        ObserverEventKind::Console | ObserverEventKind::RuntimeError => EvidenceKind::Console,
+        ObserverEventKind::Network => EvidenceKind::Network,
+        ObserverEventKind::Performance => EvidenceKind::Performance,
+        ObserverEventKind::Route
+        | ObserverEventKind::Focus
+        | ObserverEventKind::Scroll
+        | ObserverEventKind::Hmr => EvidenceKind::Interaction,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

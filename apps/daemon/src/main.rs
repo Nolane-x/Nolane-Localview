@@ -14,6 +14,7 @@ use chrono::Utc;
 use localview_control::ControlState;
 use localview_core::RuntimeConfig;
 use localview_discovery::{CommandListenerSource, DiscoveryEngine};
+use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
 use localview_protocol::ObservationEvent;
@@ -34,6 +35,7 @@ async fn main() -> Result<()> {
     let sessions = Arc::new(SessionManager::new(config.disconnect_grace));
     let observations = ObservationBus::new(1024);
     let live = LiveBridge::default();
+    let evidence = EvidenceStore::default();
     let paused = Arc::new(AtomicBool::new(matches!(
         config.auto_open,
         localview_core::AutoOpenMode::Paused
@@ -44,6 +46,7 @@ async fn main() -> Result<()> {
         sessions: sessions.clone(),
         observations: observations.clone(),
         live: live.clone(),
+        evidence: evidence.clone(),
         paused: paused.clone(),
     };
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config.control_port);
@@ -90,6 +93,7 @@ async fn main() -> Result<()> {
                         }
                         for id in result.removed {
                             live.release_session(id).await;
+                            evidence.release_session(id).await;
                         }
                     }
                     Err(error) => warn!(%error, "discovery scan failed"),
