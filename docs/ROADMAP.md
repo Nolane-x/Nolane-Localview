@@ -1,8 +1,8 @@
 # LocalView Delivery Roadmap
 
-This roadmap maps the large product vision to independently testable vertical slices.
+This roadmap maps the large product vision to independently testable vertical slices. The repository intentionally lands shared primitives early so later waves compose rather than duplicate browser machinery.
 
-## Wave 0 — Rust/Tauri foundation — active
+## Wave 0 — Rust/Tauri foundation — implemented foundation
 
 - Rust workspace and shared protocol.
 - Localhost listener discovery and bounded HTTP classifier.
@@ -11,17 +11,31 @@ This roadmap maps the large product vision to independently testable vertical sl
 - CLI, MCP bridge and Tauri dashboard.
 - Native system tray and close-to-tray behavior.
 - CI across Linux, Windows and macOS for the Rust core.
+- Tiered engine policy, artifact retention, diagnostics/report primitives.
 
-## Wave 1 — Live WebView instrumentation
+## Wave 1 — Live WebView instrumentation — active
 
-- Inject observation bootstrap into preview WebViews.
-- DOM mutation batches with HMR settle detection.
-- Stable element ref fingerprints across re-render.
-- AX/role/name extraction.
-- geometry/computed-style packets.
-- route/focus/scroll state.
-- page snapshot v1.
-- event subscription transport.
+Landed foundation:
+
+- Tauri initialization-script injection into localhost preview WebViews.
+- In-page ring buffer with bounded retention.
+- Stable element fingerprints for interactive elements.
+- Interactive semantic snapshot primitive.
+- DOM mutation batching.
+- history API, popstate and hash route observation.
+- focus and scroll observation.
+- warning/error/exception observation with in-page redaction.
+- long-task and layout-shift observation when supported.
+- top-level navigation guard that keeps the preview on loopback.
+
+Next integration work:
+
+- secure native drain transport without granting generic Tauri IPC to untrusted localhost pages.
+- DOM/AX tree depth expansion.
+- computed-style packets.
+- geometry delta subscription.
+- deterministic click/type executor.
+- daemon event subscription transport.
 
 **Done when:** an agent can list interactive elements, inspect one element, click/type it and receive only state deltas.
 
