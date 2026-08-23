@@ -43,7 +43,7 @@ fn macos_backend_uses_wkwebview_snapshot_and_common_frame_builder() {
 #[test]
 fn linux_backend_uses_webkitgtk_snapshot_and_common_frame_builder() {
     let source = include_str!("../src/platform/linux.rs");
-    assert!(source.contains("get_snapshot"));
+    assert!(source.contains(".snapshot("));
     assert!(source.contains("SnapshotRegion::Visible"));
     assert!(source.contains("build_frame"));
 }
