@@ -223,9 +223,18 @@ impl LiveBridge {
         state.inflight.remove(index)
     }
 
-    pub async fn complete_action(&self, session_id: SessionId, result: BridgeActionResult) {
+    pub async fn complete_action(&self, action: &BridgeAction, mut result: BridgeActionResult) {
+        if let BridgeActionKind::TypeText { text, .. } = &action.action {
+            result.payload = Value::Null;
+            if !text.is_empty() {
+                result.error = result
+                    .error
+                    .map(|error| error.replace(text, "[REDACTED]"));
+            }
+        }
+
         let mut states = self.inner.write().await;
-        let state = states.entry(session_id).or_default();
+        let state = states.entry(action.session_id).or_default();
         state.results.push_back(result);
         while state.results.len() > self.result_capacity {
             state.results.pop_front();
