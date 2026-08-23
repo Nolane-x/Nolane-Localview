@@ -1,9 +1,5 @@
 use tauri::webview::PlatformWebview;
-use webkit2gtk::{
-    gio,
-    prelude::WebViewExt,
-    SnapshotOptions, SnapshotRegion,
-};
+use webkit2gtk::{gio, SnapshotOptions, SnapshotRegion, WebViewExt};
 
 use crate::{
     build_frame, CaptureCompletion, CaptureRequest, NativeCaptureBackend, NativeCaptureError,

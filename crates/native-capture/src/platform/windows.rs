@@ -85,7 +85,7 @@ pub(crate) fn capture(
                     Some(&mut bytes_read),
                 )
             };
-            if let Err(error) = read_result {
+            if let Err(error) = read_result.ok() {
                 finish(
                     &callback_state,
                     Err(NativeCaptureError::Platform(error.to_string())),
