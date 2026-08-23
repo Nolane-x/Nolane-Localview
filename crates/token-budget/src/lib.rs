@@ -3,7 +3,7 @@
 use localview_protocol::{DetailLevel, TokenBudget};
 use serde::Serialize;
 
-pub fn approximate_tokens(text: &str) -> usize { (text.chars().count() + 3) / 4 }
+pub fn approximate_tokens(text: &str) -> usize { text.chars().count().div_ceil(4) }
 
 pub fn serialize_with_budget<T: Serialize>(value: &T, budget: &TokenBudget) -> serde_json::Value {
     let full = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
