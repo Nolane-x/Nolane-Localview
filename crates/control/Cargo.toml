@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+localview-live-bridge = { path = "../live-bridge" }
 localview-observation = { path = "../observation" }
 localview-protocol = { path = "../protocol" }
 localview-sessions = { path = "../sessions" }
