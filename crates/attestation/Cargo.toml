@@ -1,0 +1,14 @@
+[package]
+name = "localview-attestation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+hex = "0.4"
+hmac = "0.12"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
