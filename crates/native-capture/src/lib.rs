@@ -1,5 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod platform;
+
 use std::{
     fmt,
     time::{SystemTime, UNIX_EPOCH},
@@ -7,11 +9,15 @@ use std::{
 
 use localview_capture::CaptureTarget;
 use serde::{Deserialize, Serialize};
+use tauri::webview::PlatformWebview;
 use thiserror::Error;
 
 pub const MAX_PNG_BYTES: usize = 24 * 1024 * 1024;
 pub const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 const PNG_MIN_IHDR_BYTES: usize = 24;
+
+type CaptureCompletion =
+    Box<dyn FnOnce(Result<CapturedFrame, NativeCaptureError>) + Send + 'static>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CaptureRequest {
@@ -74,6 +80,19 @@ pub enum NativeCaptureError {
     InvalidImage,
     #[error("native capture frame too large: {bytes} > {limit}")]
     FrameTooLarge { bytes: usize, limit: usize },
+}
+
+pub fn capture_webview(
+    webview: PlatformWebview,
+    request: CaptureRequest,
+    completion: impl FnOnce(Result<CapturedFrame, NativeCaptureError>) + Send + 'static,
+) {
+    if request.target != CaptureTarget::Viewport {
+        completion(Err(NativeCaptureError::UnsupportedTarget));
+        return;
+    }
+
+    platform::capture(webview, request, Box::new(completion));
 }
 
 pub fn validate_frame_size(bytes: usize) -> Result<(), NativeCaptureError> {
