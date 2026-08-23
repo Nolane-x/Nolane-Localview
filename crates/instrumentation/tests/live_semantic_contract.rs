@@ -32,3 +32,13 @@ fn semantic_packets_remain_privacy_bounded() {
     assert!(!script.contains("sessionStorage"));
     assert!(!script.contains("document.cookie"));
 }
+
+#[test]
+fn deep_semantic_names_do_not_force_inner_text_layout_scans() {
+    let script = bootstrap_script(&InstrumentationConfig::default());
+
+    assert!(!script.contains("el.innerText"));
+    assert!(script.contains("textNameAllowed"));
+    assert!(script.contains("boundedText"));
+    assert!(script.contains("el.textContent"));
+}
