@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use localview_evidence::EvidenceKind;
 use serde::{Deserialize, Serialize};
@@ -79,7 +79,7 @@ pub fn plan_perception(candidates: &[PerceptionCandidate], budget: &PerceptionBu
         capture_bytes: 0,
         rejected: Vec::new(),
     };
-    let mut evidence_covered = BTreeSet::new();
+    let mut evidence_covered = HashSet::new();
 
     for candidate in ordered {
         if plan.actions.len() >= budget.max_actions.max(1) {
@@ -143,20 +143,42 @@ pub struct QaCheck {
     pub priority: u16,
 }
 
-pub fn adaptive_qa_plan(signals: &[RiskSignal], checks_by_target: &BTreeMap<String, Vec<String>>, max_checks: usize) -> Vec<QaCheck> {
+pub fn adaptive_qa_plan(
+    signals: &[RiskSignal],
+    checks_by_target: &BTreeMap<String, Vec<String>>,
+    max_checks: usize,
+) -> Vec<QaCheck> {
     let mut signals = signals.to_vec();
-    signals.sort_by(|left, right| right.score().total_cmp(&left.score()).then_with(|| left.id.cmp(&right.id)));
+    signals.sort_by(|left, right| {
+        right
+            .score()
+            .total_cmp(&left.score())
+            .then_with(|| left.id.cmp(&right.id))
+    });
     let mut dedupe = BTreeSet::new();
     let mut result = Vec::new();
     for signal in signals {
-        for target in signal.affected_targets {
-            let Some(checks) = checks_by_target.get(&target) else { continue; };
+        let score = signal.score();
+        for target in &signal.affected_targets {
+            let Some(checks) = checks_by_target.get(target) else {
+                continue;
+            };
             for check in checks {
                 let key = format!("{target}|{check}");
-                if !dedupe.insert(key.clone()) { continue; }
-                let priority = (signal.score() * 1000.0).round().clamp(0.0, u16::MAX as f32) as u16;
-                result.push(QaCheck { id: key, target: target.clone(), check: check.clone(), priority });
-                if result.len() >= max_checks { return result; }
+                if !dedupe.insert(key.clone()) {
+                    continue;
+                }
+                let priority =
+                    (score * 1000.0).round().clamp(0.0, u16::MAX as f32) as u16;
+                result.push(QaCheck {
+                    id: key,
+                    target: target.clone(),
+                    check: check.clone(),
+                    priority,
+                });
+                if result.len() >= max_checks {
+                    return result;
+                }
             }
         }
     }
