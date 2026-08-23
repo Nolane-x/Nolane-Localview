@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::{HashMap, VecDeque}, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
+
 use chrono::{DateTime, Utc};
 use localview_protocol::{ElementRef, SessionId};
 use serde::{Deserialize, Serialize};
@@ -17,6 +21,7 @@ pub enum ObserverEventKind {
     Focus,
     Scroll,
     Console,
+    Network,
     RuntimeError,
     Performance,
     Hmr,
@@ -126,30 +131,64 @@ impl LiveBridge {
             state.last_seq = Some(event.seq);
             state.events.push_back(event);
             accepted += 1;
-            while state.events.len() > self.event_capacity { state.events.pop_front(); }
+            while state.events.len() > self.event_capacity {
+                state.events.pop_front();
+            }
         }
-        IngestReport { accepted, rejected_stale, last_seq: state.last_seq, generation: state.generation }
+        IngestReport {
+            accepted,
+            rejected_stale,
+            last_seq: state.last_seq,
+            generation: state.generation,
+        }
     }
 
     pub async fn recent(&self, session_id: SessionId, limit: usize) -> Vec<ObserverEvent> {
         let states = self.inner.read().await;
-        states.get(&session_id).map(|state| {
-            state.events.iter().rev().take(limit).cloned().collect::<Vec<_>>().into_iter().rev().collect()
-        }).unwrap_or_default()
+        states
+            .get(&session_id)
+            .map(|state| {
+                state
+                    .events
+                    .iter()
+                    .rev()
+                    .take(limit)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
-    pub async fn enqueue_action(&self, session_id: SessionId, reference: Option<ElementRef>, action: BridgeActionKind) -> BridgeAction {
-        let action = BridgeAction { id: Uuid::new_v4(), session_id, reference, action, created_at: Utc::now() };
+    pub async fn enqueue_action(
+        &self,
+        session_id: SessionId,
+        reference: Option<ElementRef>,
+        action: BridgeActionKind,
+    ) -> BridgeAction {
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id,
+            reference,
+            action,
+            created_at: Utc::now(),
+        };
         let mut states = self.inner.write().await;
         let state = states.entry(session_id).or_default();
         state.actions.push_back(action.clone());
-        while state.actions.len() > self.action_capacity { state.actions.pop_front(); }
+        while state.actions.len() > self.action_capacity {
+            state.actions.pop_front();
+        }
         action
     }
 
     pub async fn take_actions(&self, session_id: SessionId, limit: usize) -> Vec<BridgeAction> {
         let mut states = self.inner.write().await;
-        let Some(state) = states.get_mut(&session_id) else { return Vec::new(); };
+        let Some(state) = states.get_mut(&session_id) else {
+            return Vec::new();
+        };
         let count = limit.min(state.actions.len());
         state.actions.drain(..count).collect()
     }
@@ -158,21 +197,43 @@ impl LiveBridge {
         let mut states = self.inner.write().await;
         let state = states.entry(session_id).or_default();
         state.results.push_back(result);
-        while state.results.len() > self.result_capacity { state.results.pop_front(); }
+        while state.results.len() > self.result_capacity {
+            state.results.pop_front();
+        }
     }
 
-    pub async fn recent_results(&self, session_id: SessionId, limit: usize) -> Vec<BridgeActionResult> {
+    pub async fn recent_results(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<BridgeActionResult> {
         let states = self.inner.read().await;
-        states.get(&session_id).map(|state| {
-            state.results.iter().rev().take(limit).cloned().collect::<Vec<_>>().into_iter().rev().collect()
-        }).unwrap_or_default()
+        states
+            .get(&session_id)
+            .map(|state| {
+                state
+                    .results
+                    .iter()
+                    .rev()
+                    .take(limit)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
-    pub async fn release_session(&self, session_id: SessionId) { self.inner.write().await.remove(&session_id); }
+    pub async fn release_session(&self, session_id: SessionId) {
+        self.inner.write().await.remove(&session_id);
+    }
 }
 
 impl Default for LiveBridge {
-    fn default() -> Self { Self::new(2048, 128) }
+    fn default() -> Self {
+        Self::new(2048, 128)
+    }
 }
 
 #[cfg(test)]
@@ -180,17 +241,36 @@ mod tests {
     use super::*;
 
     fn event(seq: u64) -> ObserverEvent {
-        ObserverEvent { seq, captured_at: Utc::now(), kind: ObserverEventKind::DomMutation, reference: None, route: None, payload: Value::Null }
+        ObserverEvent {
+            seq,
+            captured_at: Utc::now(),
+            kind: ObserverEventKind::DomMutation,
+            reference: None,
+            route: None,
+            payload: Value::Null,
+        }
     }
 
     #[tokio::test]
     async fn rejects_duplicate_sequences_and_resets_on_generation() {
         let bridge = LiveBridge::new(32, 8);
         let id = Uuid::new_v4();
-        let first = bridge.ingest(ObserverBatch { session_id: id, generation: 1, events: vec![event(1), event(2), event(2)] }).await;
+        let first = bridge
+            .ingest(ObserverBatch {
+                session_id: id,
+                generation: 1,
+                events: vec![event(1), event(2), event(2)],
+            })
+            .await;
         assert_eq!(first.accepted, 2);
         assert_eq!(first.rejected_stale, 1);
-        let second = bridge.ingest(ObserverBatch { session_id: id, generation: 2, events: vec![event(1)] }).await;
+        let second = bridge
+            .ingest(ObserverBatch {
+                session_id: id,
+                generation: 2,
+                events: vec![event(1)],
+            })
+            .await;
         assert_eq!(second.accepted, 1);
         assert_eq!(bridge.recent(id, 10).await.len(), 1);
     }
@@ -199,7 +279,32 @@ mod tests {
     async fn action_queue_is_bounded_and_drainable() {
         let bridge = LiveBridge::new(32, 8);
         let id = Uuid::new_v4();
-        for _ in 0..10 { bridge.enqueue_action(id, None, BridgeActionKind::Click).await; }
+        for _ in 0..10 {
+            bridge
+                .enqueue_action(id, None, BridgeActionKind::Click)
+                .await;
+        }
         assert_eq!(bridge.take_actions(id, 20).await.len(), 8);
+    }
+
+    #[tokio::test]
+    async fn network_events_round_trip_through_bounded_history() {
+        let bridge = LiveBridge::new(32, 8);
+        let id = Uuid::new_v4();
+        bridge
+            .ingest(ObserverBatch {
+                session_id: id,
+                generation: 1,
+                events: vec![ObserverEvent {
+                    seq: 1,
+                    captured_at: Utc::now(),
+                    kind: ObserverEventKind::Network,
+                    reference: None,
+                    route: Some("/".into()),
+                    payload: serde_json::json!({"method":"GET","status":200}),
+                }],
+            })
+            .await;
+        assert_eq!(bridge.recent(id, 10).await.len(), 1);
     }
 }
