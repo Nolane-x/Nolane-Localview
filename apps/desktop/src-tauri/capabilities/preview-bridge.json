@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/remote-schema.json",
+  "identifier": "preview-bridge-capability",
+  "description": "Least-privilege bridge for LocalView-managed loopback previews. No core, filesystem, shell, or arbitrary network permissions are granted.",
+  "windows": ["preview-*"],
+  "local": false,
+  "remote": {
+    "urls": [
+      "http://localhost:*/*",
+      "http://127.0.0.1:*/*",
+      "http://[::1]:*/*"
+    ]
+  },
+  "permissions": ["previewbridge"]
+}
