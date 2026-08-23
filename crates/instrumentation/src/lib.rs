@@ -107,40 +107,57 @@ const SCRIPT: &str = r#"
     TABLE: 'table', UL: 'list', OL: 'list', LI: 'listitem'
   })[el.tagName] || null;
 
+  const boundedText = (value, max = 512) => redact(String(value ?? '').slice(0, max))
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const textNameAllowed = (el) => {
+    const role = roleOf(el);
+    return ['A', 'BUTTON', 'SUMMARY', 'LABEL', 'OPTION', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(el.tagName)
+      || ['button', 'link', 'heading', 'tab', 'menuitem', 'option', 'checkbox', 'radio', 'switch'].includes(role)
+      || !!el.isContentEditable;
+  };
+
   const nameOf = (el) => {
     const labelled = el.getAttribute?.('aria-label');
-    if (labelled) return redact(labelled).slice(0, 180);
+    if (labelled) return boundedText(labelled, 180).slice(0, 180) || null;
     const labelledBy = el.getAttribute?.('aria-labelledby');
     if (labelledBy) {
       const text = labelledBy.split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').trim();
-      if (text) return redact(text).replace(/\s+/g, ' ').slice(0, 180);
+      if (text) return boundedText(text, 512).slice(0, 180) || null;
     }
     if (el.labels?.length) {
-      const text = Array.from(el.labels).map(label => label.textContent || '').join(' ').replace(/\s+/g, ' ').trim();
-      if (text) return redact(text).slice(0, 180);
+      const text = Array.from(el.labels).map(label => label.textContent || '').join(' ');
+      if (text) return boundedText(text, 512).slice(0, 180) || null;
     }
-    if (el.tagName === 'BUTTON' && el.value) return redact(el.value).slice(0, 180);
+    if (el.tagName === 'BUTTON' && el.value) return boundedText(el.value, 180).slice(0, 180) || null;
     if (el.tagName === 'INPUT') {
       const type = String(el.type || 'text').toLowerCase();
-      if (['button', 'submit', 'reset'].includes(type) && el.value) return redact(el.value).slice(0, 180);
+      if (['button', 'submit', 'reset'].includes(type) && el.value) return boundedText(el.value, 180).slice(0, 180) || null;
       const placeholder = el.getAttribute?.('placeholder');
-      return placeholder ? redact(placeholder).slice(0, 180) : null;
+      return placeholder ? boundedText(placeholder, 180).slice(0, 180) || null : null;
     }
     if (['TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable) {
       const placeholder = el.getAttribute?.('placeholder');
-      return placeholder ? redact(placeholder).slice(0, 180) : null;
+      if (placeholder) return boundedText(placeholder, 180).slice(0, 180) || null;
     }
-    return redact(el.innerText || el.alt || el.title || '').replace(/\s+/g, ' ').trim().slice(0, 180) || null;
+    if (el.tagName === 'IMG' && el.alt) return boundedText(el.alt, 180).slice(0, 180) || null;
+    if (textNameAllowed(el)) {
+      const text = boundedText(el.textContent, 512);
+      if (text) return text.slice(0, 180);
+    }
+    const title = el.getAttribute?.('title');
+    return title ? boundedText(title, 180).slice(0, 180) || null : null;
   };
 
   const descriptionOf = (el) => {
     const ids = el.getAttribute?.('aria-describedby');
     if (ids) {
-      const text = ids.split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').replace(/\s+/g, ' ').trim();
-      if (text) return redact(text).slice(0, 240);
+      const text = ids.split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ');
+      if (text) return boundedText(text, 640).slice(0, 240) || null;
     }
     const title = el.getAttribute?.('title');
-    return title ? redact(title).slice(0, 240) : null;
+    return title ? boundedText(title, 240).slice(0, 240) || null : null;
   };
 
   const ancestry = (el) => {
