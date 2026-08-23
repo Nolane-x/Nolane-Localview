@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn planner_skips_irrelevant_revisions() {
-        let history = (0..5).map(|index| RevisionCandidate { revision: format!("r{index}"), parent: index.checked_sub(1).map(|parent| format!("r{parent}")), changed_files: BTreeSet::from([if index == 3 { "Hero.tsx".into() } else { "README.md".into() }]), environment_hash: "env".into() }).collect::<Vec<_>>();
+        let history = (0usize..5).map(|index| RevisionCandidate { revision: format!("r{index}"), parent: index.checked_sub(1).map(|parent| format!("r{parent}")), changed_files: BTreeSet::from([if index == 3 { "Hero.tsx".into() } else { "README.md".into() }]), environment_hash: "env".into() }).collect::<Vec<_>>();
         let contract = BisectContract { target: "hero".into(), good_revision: "r0".into(), bad_revision: "r4".into(), environment_hash: "env".into(), relevant_files: BTreeSet::from(["Hero.tsx".into()]), allow_working_tree: false };
         assert_eq!(plan(&history, &contract, &BTreeMap::new()).expect("step").revision, "r3");
     }
