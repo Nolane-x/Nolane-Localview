@@ -1,0 +1,18 @@
+[package]
+name = "localview-live-analysis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+localview-console = { path = "../console" }
+localview-live-bridge = { path = "../live-bridge" }
+localview-network = { path = "../network" }
+localview-performance = { path = "../performance" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+uuid.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "localview-diagnostics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+localview-a11y = { path = "../a11y" }
+localview-layout = { path = "../layout" }
+localview-network = { path = "../network" }
+localview-performance = { path = "../performance" }
+serde.workspace = true

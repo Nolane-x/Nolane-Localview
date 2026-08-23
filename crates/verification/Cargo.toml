@@ -1,0 +1,18 @@
+[package]
+name = "localview-verification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+localview-causal = { path = "../causal" }
+localview-content-addressed = { path = "../content-addressed" }
+localview-contracts = { path = "../contracts" }
+localview-evidence = { path = "../evidence" }
+serde.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
