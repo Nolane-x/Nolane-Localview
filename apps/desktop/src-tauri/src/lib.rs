@@ -342,6 +342,8 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
 
   const eventKind = (type) => ({
     dom_changed: 'dom_mutation',
+    geometry_changed: 'layout',
+    semantic_snapshot: 'semantic_snapshot',
     route_changed: 'route',
     focus_changed: 'focus',
     scroll_changed: 'scroll',
@@ -448,6 +450,11 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         return { reference: queued.reference };
       case 'snapshot':
         return window.__LOCALVIEW__?.snapshot?.() ?? null;
+      case 'inspect': {
+        if (!queued.reference) throw new Error('inspect requires an element reference');
+        const api = window.__LOCALVIEW__;
+        return api?.inspect?.(queued.reference) ?? null;
+      }
       default:
         throw new Error(`unsupported LocalView action: ${action.type}`);
     }

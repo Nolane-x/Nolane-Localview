@@ -13,22 +13,30 @@ This roadmap maps the expanded product vision to independently testable vertical
 - CI across Linux, Windows and macOS for the Rust core.
 - Tiered engine policy, artifact retention, diagnostics/report primitives.
 
-## Wave 1 — Live WebView instrumentation — active
+## Wave 1 — Live WebView instrumentation — late-stage active
 
-Landed foundation:
+Landed live path:
 
 - Tauri initialization-script injection into LocalView-managed localhost WebViews.
 - In-page ring buffer with bounded retention and secret/query redaction.
-- Stable element fingerprints for interactive elements.
-- Interactive semantic snapshot primitive.
+- Stable element fingerprints and stable-ref action targeting.
+- Bounded deep DOM/ARIA semantic tree rather than interactive-only snapshots.
+- Semantic role/name/description/state/attribute packets without live form-value capture.
+- Fixed-property computed-style packets with bounded style sampling.
+- Viewport and document-space geometry.
+- Semantic added/removed/changed-ref delta plus geometry/layout delta transport.
+- Bounded visibility state: viewport intersection, ancestor clipping and center-point occlusion hit-testing.
+- Explicit dev source hints from `data-source` / `data-component-source` when the application exposes them.
 - DOM mutation batching.
-- history API, popstate and hash route observation.
+- history API, popstate and hash route observation with fresh semantic snapshots.
 - focus and scroll observation.
 - warning/error/exception observation.
 - fetch/XHR metadata observation without response-body capture.
 - long-task and layout-shift observation when supported.
 - bounded native drain transport for observer events.
+- normalized semantic/layout observer events through the daemon/control evidence path.
 - queued deterministic click/type/key/scroll/focus/snapshot execution.
+- synchronous MCP `page.snapshot` and `page.inspect` backed by fresh completed snapshot actions.
 - bridge caller/session ownership validation.
 - top-level navigation guard that keeps managed preview/workspace surfaces on loopback.
 - capability-isolated `preview-*` / `workspace-*` WebViews.
@@ -42,27 +50,29 @@ Current safety gate before native workspace becomes default:
 - verify reconnect/crash cleanup and no orphan child WebViews;
 - keep iframe fallback until those policies pass.
 
-Next integration work:
+Remaining Wave 1 integration:
 
-- DOM/AX tree depth expansion beyond interactive-only nodes.
-- bounded computed-style packets.
-- geometry delta subscription and visibility/occlusion state.
-- richer semantic snapshot/state delta transport into the daemon/MCP surface.
-- source/runtime correlation hooks.
+- native accessibility-tree enrichment where platform APIs materially improve over DOM/ARIA semantics;
+- sourcemap consumer wired to live runtime nodes;
+- React component ownership adapter, followed by Vue/Svelte ownership adapters;
+- CSS declaration/specificity tracing and runtime/source correlation beyond explicit dev attributes.
 
-**Done when:** an agent can list a bounded semantic tree, inspect one element, click/type it, and receive only relevant semantic/layout/runtime deltas through an isolated LocalView surface.
+**Done when:** an agent can list a bounded semantic tree, inspect one element, click/type it, and receive only relevant semantic/layout/runtime deltas through an isolated LocalView surface. The core path for that definition now exists; the remaining Wave 1 work deepens native accessibility and framework/source ownership rather than reopening the basic bridge.
 
-## Wave 2 — Visual runtime
+## Wave 2 — Visual runtime — next major vertical slice
 
-- Native viewport/element/region capture adapters.
-- Stable capture transaction.
+- Native viewport/element/region capture adapter abstraction.
+- WebView2 capture backend on Windows.
+- WKWebView snapshot backend on macOS.
+- WebKitGTK snapshot backend on Linux.
+- Stable capture transaction and settle contract.
 - progressive changed-region capture.
 - full-page guarded stitching.
-- visual packet format.
-- before/after and region diff.
-- screenshot masking for private selectors.
+- visual packet format with route/viewport/ref/revision provenance.
+- before/after and region diff wired to evidence.
+- screenshot masking for private selectors before agent exposure/persistence.
 
-**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot.
+**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target.
 
 ## Wave 3 — Runtime telemetry
 
@@ -82,13 +92,21 @@ Remaining integration:
 ## Wave 4 — Layout + responsive intelligence
 
 - computed grid/flex data.
-- overflow/occlusion/sticky collision detection.
-- spacing rhythm and alignment families.
+- overflow/occlusion/sticky collision detection beyond the bounded visibility packet.
+- spacing rhythm and alignment families connected to live snapshots.
 - breakpoint adaptive/binary search execution.
 - responsive contact sheet.
 - content stress matrix and locale expansion.
 
 ## Wave 5 — Source intelligence
+
+Landed foundation:
+
+- stack/data-source ranking primitives;
+- source-region/dependency graph primitives;
+- live explicit `data-source` / `data-component-source` propagation into semantic nodes.
+
+Remaining integration:
 
 - sourcemap consumer wired to live runtime nodes.
 - React component ownership adapter.
@@ -100,6 +118,7 @@ Remaining integration:
 ## Wave 6 — Accessibility + interaction
 
 - axe-core bridge plus LocalView deterministic checks.
+- native AX enrichment where useful and privacy-safe.
 - keyboard journey.
 - focus-path overlay.
 - effective hitbox testing.
@@ -108,7 +127,7 @@ Remaining integration:
 
 ## Wave 7 — Visual critic + design grammar
 
-- project design-scale extraction.
+- project design-scale extraction from live evidence.
 - density/balance/hierarchy features.
 - deterministic / heuristic / subjective evidence classes.
 - critic overlay with confidence/evidence/source hints.
@@ -144,3 +163,4 @@ The V2/V3 causal, proof-carrying, multi-agent, content-addressed and attested-pr
 - No unbounded screenshot/history cache.
 - No claim of automated accessibility completeness.
 - No subjective aesthetic score presented as deterministic truth.
+- Native pixel capture must use auditable platform adapters rather than silently degrading to DOM/canvas reconstruction.

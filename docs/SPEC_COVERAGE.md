@@ -1,6 +1,6 @@
 # Product Specification Coverage Ledger
 
-This ledger keeps implementation claims tied to the LocalView AI-Native Localhost Runtime Product Spec. `Implemented` means code exists in the repository. `Partial` means the subsystem exists but lacks one or more live integrations. `Planned` means it is still specification-only.
+This ledger keeps implementation claims tied to the LocalView AI-Native Localhost Runtime Product Spec. `Implemented` means the capability is connected through the live product path and has verification evidence. `Partial` means useful code exists but one or more required runtime integrations are still missing. `Planned` means the product capability is still specification-only or has only non-executing scaffolding.
 
 | Spec capability | Status | Repository surface / next gate |
 | --- | --- | --- |
@@ -10,41 +10,41 @@ This ledger keeps implementation claims tied to the LocalView AI-Native Localhos
 | Port-independent project identity | Implemented | `localview-core` + sessions |
 | Session lifecycle / reconnect grace | Implemented | `crates/sessions` |
 | Tray + close-to-tray desktop shell | Implemented | Tauri desktop |
-| Lightweight native preview | Partial | Native WebView window implemented; flagship shell now also presents inline workspace when framing is permitted |
-| Human View zero-clutter workspace | Implemented | Full-canvas workspace + floating chrome |
-| X-Ray / Inspector UI | Partial | Floating surface and semantic/layout/source subsystems exist; live element-selection transport still to connect |
-| Stable capture policy | Implemented | `crates/capture` |
-| Progressive capture regions | Implemented | element → component → section → viewport planning |
-| Pixel visual diff | Implemented | `crates/visual` |
-| Semantic snapshot model | Implemented | protocol + semantic crate |
-| Stable element refs | Implemented | semantic + injected observer |
-| State diff | Implemented | semantic/state delta models |
-| Layout intelligence | Implemented | overflow, zero-area, overlap, drift, spacing inference |
-| Responsive intelligence | Implemented | presets + adaptive/binary breakpoint sweep |
-| Source mapping hints | Implemented | stack/source ranking |
-| Framework awareness | Implemented | framework adapter crate |
-| Console analysis | Partial | analyzer + injected observer capture; secure native drain pending |
-| Network analysis | Partial | analyzer implemented; live request bridge pending |
-| Accessibility analysis | Implemented | accessible-name/image/hit-target checks |
-| Performance analysis | Partial | analyzer + observer long-task/layout-shift capture; native drain pending |
-| Interaction flows | Implemented | flow graph + shortest path primitives |
-| Design grammar | Implemented | spacing/radius/type/control scale inference |
-| Observation bus | Implemented | bounded broadcast/history |
-| Diagnostics fusion | Implemented | deterministic/heuristic/subjective issue assembly |
-| Reports | Implemented | JSON/Markdown/HTML renderers |
-| Artifact storage | Implemented | bounded deduplicating local store |
-| Engine tier escalation | Implemented | static/lightweight/native WebView/Chromium policy |
-| Token budgeting | Implemented | compact/deep/minimal serialization budget |
-| Local permission/security model | Implemented | bearer token, localhost control plane, redaction policy |
-| MCP control plane | Partial | stdio bridge and core tools implemented; protocol/version compatibility must continue to be verified |
-| AI Critic / Point-and-Ask | Partial | UI and evidence architecture defined; model-provider execution intentionally not hard-wired |
-| Secure observer drain | Planned | next highest-priority integration |
-| Native screenshot adapter | Planned | capture planner exists; OS/WebView execution adapter still required |
-| Direct click/type agent actions | Planned | protocol surface and flow primitives exist; secure WebView action bridge required |
-| Full replay / rich state timeline UI | Planned | observation primitives exist; desktop timeline surface still to implement |
+| Lightweight native preview | Partial | Native WebView preview and feature-gated child workspace exist; iframe remains the conservative default until cross-platform composition/focus/DPI policy is validated |
+| Human View zero-clutter workspace | Partial | Full-canvas workspace and floating chrome exist; native child-WebView policy gate remains |
+| X-Ray / Inspector UI | Partial | Semantic/layout/source primitives and live inspect data exist; interactive point-and-select overlay is not yet fully wired |
+| Stable capture policy | Partial | `crates/capture` transaction/planning primitives exist; real WebView/OS pixel acquisition is not wired |
+| Progressive capture regions | Partial | element → component → section → viewport planning exists; live pixel capture execution is pending |
+| Pixel visual diff | Partial | `crates/visual` has pixel/diff primitives; end-to-end live capture → diff → evidence loop is pending |
+| Semantic snapshot model | Implemented | Managed WebViews emit bounded deep DOM/ARIA semantic trees with states, geometry, computed-style packets, visibility/occlusion and deltas; this is not claimed to be the native OS accessibility tree |
+| Stable element refs | Implemented | Injected observer fingerprints + live bridge/action paths |
+| State diff | Implemented | Live semantic added/removed/changed refs plus layout deltas are transported through the observer path |
+| Layout intelligence | Partial | Live document geometry and bounded visibility/occlusion are wired; broader overflow/sticky/alignment/spacing audits remain to be connected to runtime evidence |
+| Responsive intelligence | Partial | Preset/adaptive/binary breakpoint algorithms exist; live resize/sweep/contact-sheet execution remains |
+| Source mapping hints | Partial | Explicit `data-source` / `data-component-source` hints are carried on live semantic nodes; sourcemap consumers and framework component ownership are still pending |
+| Framework awareness | Partial | Framework detection/adapters exist as primitives; React/Vue/Svelte live ownership/source correlation is not yet complete |
+| Console analysis | Partial | Warning/error/exception metadata is captured, securely drained and retained; richer action/route correlation remains |
+| Network analysis | Partial | fetch/XHR metadata and failures are captured without response bodies and securely drained; mock/delay and causal correlation remain |
+| Accessibility analysis | Partial | Deterministic accessible-name/image/hit-target checks exist plus DOM/ARIA semantics; axe/native AX integration and journey verification remain |
+| Performance analysis | Partial | long-task/layout-shift observation is live; broader sampling/budget packets remain |
+| Interaction flows | Partial | Flow graph/replay primitives and deterministic page actions exist; discovery/replay verification is not yet complete |
+| Design grammar | Partial | spacing/radius/type/control inference primitives exist; live project extraction and regression baselines remain |
+| Observation bus | Implemented | Bounded observer history plus authenticated native drain |
+| Diagnostics fusion | Partial | Deterministic/heuristic/subjective issue assembly exists; more live visual/source evidence still needs to feed it |
+| Reports | Partial | JSON/Markdown/HTML renderers exist; complete CI/headless report production is pending |
+| Artifact storage | Implemented | Bounded deduplicating local store primitives are wired for retained local evidence/artifacts where used |
+| Engine tier escalation | Partial | Static/lightweight/native WebView/Chromium policy exists; on-demand Tier-3 execution is not yet the default verified visual path |
+| Token budgeting | Partial | Compact/deep/minimal serialization budget primitives exist; active-perception budgeting across all tools remains |
+| Local permission/security model | Implemented | Bearer token, loopback control plane, caller/session ownership checks, navigation guard and redaction policy |
+| MCP control plane | Partial | stdio MCP exposes live sessions/observer/actions plus synchronous `page.snapshot` and `page.inspect`; visual/source/a11y/flow surfaces remain incomplete |
+| AI Critic / Point-and-Ask | Partial | UI/evidence architecture exists; point-select transport and optional model-provider execution are not complete |
+| Secure observer drain | Implemented | Managed preview/workspace WebViews drain bounded observer events through caller/session-validated Tauri commands into the authenticated local control plane |
+| Direct click/type agent actions | Implemented | Stable-ref click/type/key/scroll/focus/snapshot actions execute inside the managed WebView through the bounded queue/result bridge |
+| Native screenshot adapter | Planned | Capture planner exists; platform WebView pixel adapters are the next visual-runtime gate |
+| Full replay / rich state timeline UI | Partial | Observation/action primitives exist; complete deterministic replay and desktop timeline are pending |
 | Full DevTools replacement | Explicitly out of scope for v1 | Product spec says not to build it |
 | Cloud accounts / collaborative remote browser | Explicitly out of scope for v1 | Local-first runtime by design |
 
 ## Completion rule
 
-This file must be updated whenever a capability crosses `Planned → Partial → Implemented`. A feature is not called complete merely because a panel exists; the backing runtime path and verification evidence must exist too.
+A capability is not called complete merely because a crate, panel, model or planner exists. `Implemented` requires a live execution path plus verification evidence. Pure algorithms that are valuable but not yet connected to the product remain `Partial` until their end-to-end path is real.

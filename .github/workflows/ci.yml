@@ -70,3 +70,5 @@ jobs:
         run: cargo test -p localview-desktop --test capability_isolation
       - name: Workspace surface policy contract
         run: cargo test -p localview-desktop --test workspace_surface_policy
+      - name: Live semantic bridge contract
+        run: cargo test -p localview-desktop --test live_semantic_bridge_contract
