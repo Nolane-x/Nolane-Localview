@@ -4,7 +4,7 @@ use std::{net::SocketAddr, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 use anyhow::Result;
 use axum::{extract::{Path, State}, http::{HeaderMap, StatusCode}, response::IntoResponse, routing::{get, post}, Json, Router};
 use localview_observation::ObservationBus;
-use localview_protocol::{Health, ObservationEvent, Session, SessionId};
+use localview_protocol::{Health, ObservationEvent, SessionId};
 use localview_sessions::SessionManager;
 use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
@@ -27,24 +27,52 @@ pub fn router(state: ControlState) -> Router {
 
 pub async fn serve(addr: SocketAddr, state: ControlState) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, router(state)).await?; Ok(())
+    axum::serve(listener, router(state)).await?;
+    Ok(())
 }
 
-async fn health(State(s):State<ControlState>) -> Json<Health> { Json(Health{version:env!("CARGO_PKG_VERSION").into(),status:"ready".into(),paused:s.paused.load(Ordering::Relaxed),sessions:s.sessions.list().await.len()}) }
+async fn health(State(s): State<ControlState>) -> Json<Health> {
+    Json(Health { version: env!("CARGO_PKG_VERSION").into(), status: "ready".into(), paused: s.paused.load(Ordering::Relaxed), sessions: s.sessions.list().await.len() })
+}
 
-fn authorized(headers:&HeaderMap, state:&ControlState)->bool {
+fn authorized(headers: &HeaderMap, state: &ControlState) -> bool {
     let expected = format!("Bearer {}", state.token);
-    headers.get(axum::http::header::AUTHORIZATION).and_then(|v|v.to_str().ok()).map(|v|v==expected).unwrap_or(false)
+    headers.get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok()).map(|v| v == expected).unwrap_or(false)
 }
-fn denied()->(StatusCode,Json<serde_json::Value>){(StatusCode::UNAUTHORIZED,Json(serde_json::json!({"error":"unauthorized"})))}
+fn denied() -> axum::response::Response { (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"unauthorized"}))).into_response() }
 
-async fn list_sessions(State(s):State<ControlState>, headers:HeaderMap)->impl IntoResponse { if !authorized(&headers,&s){return denied().into_response();} Json(s.sessions.list().await).into_response() }
-async fn get_session(State(s):State<ControlState>, headers:HeaderMap, Path(id):Path<SessionId>)->impl IntoResponse { if !authorized(&headers,&s){return denied().into_response();} match s.sessions.get(id).await {Some(v)=>Json(v).into_response(),None=>(StatusCode::NOT_FOUND,Json(serde_json::json!({"error":"session_not_found"}))).into_response()} }
+async fn list_sessions(State(s): State<ControlState>, headers: HeaderMap) -> axum::response::Response {
+    if !authorized(&headers, &s) { return denied(); }
+    Json(s.sessions.list().await).into_response()
+}
+async fn get_session(State(s): State<ControlState>, headers: HeaderMap, Path(id): Path<SessionId>) -> axum::response::Response {
+    if !authorized(&headers, &s) { return denied(); }
+    match s.sessions.get(id).await {
+        Some(v) => Json(v).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"session_not_found"}))).into_response(),
+    }
+}
 
-#[derive(Debug,Deserialize)] struct PreviewRequest { visible: bool }
-async fn set_preview(State(s):State<ControlState>, headers:HeaderMap, Path(id):Path<SessionId>, Json(req):Json<PreviewRequest>)->impl IntoResponse { if !authorized(&headers,&s){return denied().into_response();} if s.sessions.set_preview_visible(id,req.visible).await {StatusCode::NO_CONTENT}else{StatusCode::NOT_FOUND} }
-async fn recent_events(State(s):State<ControlState>, headers:HeaderMap)->impl IntoResponse { if !authorized(&headers,&s){return denied().into_response();} Json(s.observations.recent(100).await).into_response() }
-async fn pause(State(s):State<ControlState>, headers:HeaderMap)->impl IntoResponse { if !authorized(&headers,&s){return denied().into_response();} s.paused.store(true,Ordering::Relaxed); StatusCode::NO_CONTENT.into_response() }
-async fn resume(State(s):State<ControlState>, headers:HeaderMap)->impl IntoResponse { if !authorized(&headers,&s){return denied().into_response();} s.paused.store(false,Ordering::Relaxed); StatusCode::NO_CONTENT.into_response() }
+#[derive(Debug, Deserialize)]
+struct PreviewRequest { visible: bool }
+async fn set_preview(State(s): State<ControlState>, headers: HeaderMap, Path(id): Path<SessionId>, Json(req): Json<PreviewRequest>) -> axum::response::Response {
+    if !authorized(&headers, &s) { return denied(); }
+    if s.sessions.set_preview_visible(id, req.visible).await { StatusCode::NO_CONTENT.into_response() } else { StatusCode::NOT_FOUND.into_response() }
+}
+async fn recent_events(State(s): State<ControlState>, headers: HeaderMap) -> axum::response::Response {
+    if !authorized(&headers, &s) { return denied(); }
+    Json(s.observations.recent(100).await).into_response()
+}
+async fn pause(State(s): State<ControlState>, headers: HeaderMap) -> axum::response::Response {
+    if !authorized(&headers, &s) { return denied(); }
+    s.paused.store(true, Ordering::Relaxed);
+    StatusCode::NO_CONTENT.into_response()
+}
+async fn resume(State(s): State<ControlState>, headers: HeaderMap) -> axum::response::Response {
+    if !authorized(&headers, &s) { return denied(); }
+    s.paused.store(false, Ordering::Relaxed);
+    StatusCode::NO_CONTENT.into_response()
+}
 
-#[derive(Debug,Clone,Serialize,Deserialize)] pub struct EventEnvelope { pub event: ObservationEvent }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventEnvelope { pub event: ObservationEvent }
