@@ -49,6 +49,41 @@ pub struct ControlState {
     pub paused: Arc<AtomicBool>,
 }
 
+#[derive(Debug)]
+enum ControlError {
+    SessionNotFound,
+    ProjectRootUnavailable,
+    GitStateUnavailable(String),
+}
+
+impl IntoResponse for ControlError {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            Self::SessionNotFound => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "session_not_found"})),
+            )
+                .into_response(),
+            Self::ProjectRootUnavailable => (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "project_root_unavailable",
+                    "message": "LocalView has no filesystem root for this session"
+                })),
+            )
+                .into_response(),
+            Self::GitStateUnavailable(message) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "git_state_unavailable",
+                    "message": message
+                })),
+            )
+                .into_response(),
+        }
+    }
+}
+
 pub fn router(state: ControlState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -110,18 +145,11 @@ fn denied() -> axum::response::Response {
         .into_response()
 }
 
-async fn ensure_session(
-    state: &ControlState,
-    id: SessionId,
-) -> Result<(), axum::response::Response> {
+async fn ensure_session(state: &ControlState, id: SessionId) -> Result<(), ControlError> {
     if state.sessions.get(id).await.is_some() {
         Ok(())
     } else {
-        Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "session_not_found"})),
-        )
-            .into_response())
+        Err(ControlError::SessionNotFound)
     }
 }
 
@@ -145,11 +173,7 @@ async fn get_session(
     }
     match state.sessions.get(id).await {
         Some(value) => Json(value).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "session_not_found"})),
-        )
-            .into_response(),
+        None => ControlError::SessionNotFound.into_response(),
     }
 }
 
@@ -162,15 +186,11 @@ async fn session_project_state(
         return denied();
     }
     let Some(session) = state.sessions.get(id).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "session_not_found"})),
-        )
-            .into_response();
+        return ControlError::SessionNotFound.into_response();
     };
     match project_revision(&session).await {
         Ok(revision) => Json(revision).into_response(),
-        Err(response) => response,
+        Err(error) => error.into_response(),
     }
 }
 
@@ -204,8 +224,8 @@ async fn ingest_observer(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(response) = ensure_session(&state, id).await {
-        return response;
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
     }
     if batch.session_id != id {
         return (
@@ -233,8 +253,8 @@ async fn recent_observer(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(response) = ensure_session(&state, id).await {
-        return response;
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
     }
     Json(state.live.recent(id, 250).await).into_response()
 }
@@ -247,8 +267,8 @@ async fn session_analysis(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(response) = ensure_session(&state, id).await {
-        return response;
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
     }
     let events = state.live.recent(id, 2048).await;
     Json(analyze_live(&events)).into_response()
@@ -262,8 +282,8 @@ async fn session_diagnose(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(response) = ensure_session(&state, id).await {
-        return response;
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
     }
     let events = state.live.recent(id, 2048).await;
     Json(diagnose_live(&events)).into_response()
@@ -279,7 +299,7 @@ async fn session_verify(
     }
     match build_verification(&state, id).await {
         Ok(packet) => Json(packet).into_response(),
-        Err(response) => response,
+        Err(error) => error.into_response(),
     }
 }
 
@@ -293,7 +313,7 @@ async fn session_coverage(
     }
     let packet = match build_verification(&state, id).await {
         Ok(packet) => packet,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
 
     let required = packet.required_evidence_classes.clone();
@@ -339,7 +359,7 @@ async fn create_session_proof(
     }
     let packet = match build_verification(&state, id).await {
         Ok(packet) => packet,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
     let proof = proof_from_verification(&packet);
     let draft = EvidenceDraft {
@@ -386,8 +406,8 @@ async fn recent_evidence(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(response) = ensure_session(&state, id).await {
-        return response;
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
     }
     Json(state.evidence.recent_for_session(id, 250).await).into_response()
 }
@@ -466,7 +486,9 @@ async fn proof_evidence_staleness(
     };
     Json(proof_staleness(
         &proof,
-        current.as_ref().map(|revision| revision.working_tree_id.as_str()),
+        current
+            .as_ref()
+            .map(|revision| revision.working_tree_id.as_str()),
     ))
     .into_response()
 }
@@ -486,8 +508,8 @@ async fn queue_action(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(response) = ensure_session(&state, id).await {
-        return response;
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
     }
     let action = state
         .live
@@ -504,8 +526,8 @@ async fn take_actions(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(response) = ensure_session(&state, id).await {
-        return response;
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
     }
     Json(state.live.take_actions(id, 64).await).into_response()
 }
@@ -519,8 +541,8 @@ async fn complete_action(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(response) = ensure_session(&state, id).await {
-        return response;
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
     }
 
     let Some(action) = state.live.claim_action(id, result.action_id).await else {
@@ -536,7 +558,10 @@ async fn complete_action(
         .await
         .and_then(|session| session.project.git_root.or(session.project.cwd));
     let revision = if let Some(root) = revision {
-        inspect_git(root).await.ok().map(|value| value.working_tree_id)
+        inspect_git(root)
+            .await
+            .ok()
+            .map(|value| value.working_tree_id)
     } else {
         None
     };
@@ -596,8 +621,8 @@ async fn action_results(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(response) = ensure_session(&state, id).await {
-        return response;
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
     }
     Json(state.live.recent_results(id, 100).await).into_response()
 }
@@ -637,13 +662,9 @@ async fn resume(
 async fn build_verification(
     state: &ControlState,
     id: SessionId,
-) -> Result<LiveVerificationPacket, axum::response::Response> {
+) -> Result<LiveVerificationPacket, ControlError> {
     let Some(session) = state.sessions.get(id).await else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "session_not_found"})),
-        )
-            .into_response());
+        return Err(ControlError::SessionNotFound);
     };
     let revision = project_revision(&session).await.ok();
     let evidence = state.evidence.recent_for_session(id, 4096).await;
@@ -655,7 +676,9 @@ async fn build_verification(
         .count();
     let required = BTreeSet::from(["semantic".to_owned(), "layout".to_owned()]);
     Ok(verify_current(
-        revision.as_ref().map(|value| value.working_tree_id.as_str()),
+        revision
+            .as_ref()
+            .map(|value| value.working_tree_id.as_str()),
         &evidence,
         deterministic_failures,
         0,
@@ -663,32 +686,18 @@ async fn build_verification(
     ))
 }
 
-async fn project_revision(session: &Session) -> Result<ProjectRevision, axum::response::Response> {
+async fn project_revision(session: &Session) -> Result<ProjectRevision, ControlError> {
     let Some(root) = session
         .project
         .git_root
         .as_deref()
         .or(session.project.cwd.as_deref())
     else {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "project_root_unavailable",
-                "message": "LocalView has no filesystem root for this session"
-            })),
-        )
-            .into_response());
+        return Err(ControlError::ProjectRootUnavailable);
     };
-    inspect_git(root).await.map_err(|error| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "git_state_unavailable",
-                "message": error.to_string()
-            })),
-        )
-            .into_response()
-    })
+    inspect_git(root)
+        .await
+        .map_err(|error| ControlError::GitStateUnavailable(error.to_string()))
 }
 
 fn sanitize_action_result(action: &BridgeAction, result: &BridgeActionResult) -> serde_json::Value {
