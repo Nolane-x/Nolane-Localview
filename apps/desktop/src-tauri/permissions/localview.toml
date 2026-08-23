@@ -1,17 +1,21 @@
 [[permission]]
 identifier = "maincommands"
-description = "Allows the bundled LocalView dashboard to inspect runtime state and live evidence, pause or resume discovery, and open a localhost preview."
+description = "Allows the bundled LocalView dashboard to inspect runtime state and live evidence, pause or resume discovery, open a localhost preview, and manage the bounded native workspace surface when compiled."
 commands.allow = [
   "dashboard_state",
   "live_session_state",
   "pause_runtime",
   "resume_runtime",
-  "open_preview"
+  "open_preview",
+  "workspace_surface_open",
+  "workspace_surface_set_bounds",
+  "workspace_surface_navigate",
+  "workspace_surface_close"
 ]
 
 [[permission]]
 identifier = "previewbridge"
-description = "Allows a LocalView-managed localhost preview to submit bounded observer data and execute only queued LocalView page actions through the native bridge."
+description = "Allows a LocalView-managed loopback preview or workspace WebView to submit bounded observer data and execute only queued LocalView page actions through the native bridge."
 commands.allow = [
   "preview_ingest",
   "preview_take_actions",
