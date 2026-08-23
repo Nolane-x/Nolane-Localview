@@ -19,19 +19,16 @@ pub(crate) fn capture(
     #[cfg(windows)]
     {
         windows::capture(webview, request, completion);
-        return;
     }
 
     #[cfg(target_os = "macos")]
     {
         macos::capture(webview, request, completion);
-        return;
     }
 
     #[cfg(target_os = "linux")]
     {
         linux::capture(webview, request, completion);
-        return;
     }
 
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
