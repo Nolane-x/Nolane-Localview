@@ -34,12 +34,17 @@ enum Command {
     },
     Analyze { session: Option<SessionId> },
     Diagnose { session: Option<SessionId> },
+    Verify { session: Option<SessionId> },
+    Coverage { session: Option<SessionId> },
+    Proof { session: Option<SessionId> },
     Evidence {
         session: Option<SessionId>,
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
     EvidenceGet { evidence_id: String },
+    EvidenceTrace { evidence_id: String },
+    ProofStaleness { evidence_id: String },
     Click { session: SessionId, reference: String },
     Type {
         session: SessionId,
@@ -126,16 +131,7 @@ async fn main() -> Result<()> {
             print_json(&value)?;
         }
         Command::ProjectState { session } => {
-            let session = resolve_session(&client, &cli.control, session).await?;
-            let value: Value = authed_get(
-                &client,
-                &cli.control,
-                &format!("/v1/sessions/{session}/project-state"),
-            )
-            .await?
-            .json()
-            .await?;
-            print_json(&value)?;
+            print_session_endpoint(&client, &cli.control, session, "project-state").await?;
         }
         Command::Pause => {
             authed_post_empty(&client, &cli.control, "/v1/runtime/pause").await?;
@@ -158,28 +154,28 @@ async fn main() -> Result<()> {
             print_json(&events[start..])?;
         }
         Command::Analyze { session } => {
-            let session = resolve_session(&client, &cli.control, session).await?;
-            let analysis: Value = authed_get(
-                &client,
-                &cli.control,
-                &format!("/v1/sessions/{session}/analysis"),
-            )
-            .await?
-            .json()
-            .await?;
-            print_json(&analysis)?;
+            print_session_endpoint(&client, &cli.control, session, "analysis").await?;
         }
         Command::Diagnose { session } => {
+            print_session_endpoint(&client, &cli.control, session, "diagnose").await?;
+        }
+        Command::Verify { session } => {
+            print_session_endpoint(&client, &cli.control, session, "verify").await?;
+        }
+        Command::Coverage { session } => {
+            print_session_endpoint(&client, &cli.control, session, "coverage").await?;
+        }
+        Command::Proof { session } => {
             let session = resolve_session(&client, &cli.control, session).await?;
-            let diagnosis: Value = authed_get(
+            let value: Value = authed_post_empty_response(
                 &client,
                 &cli.control,
-                &format!("/v1/sessions/{session}/diagnose"),
+                &format!("/v1/sessions/{session}/proof"),
             )
             .await?
             .json()
             .await?;
-            print_json(&diagnosis)?;
+            print_json(&value)?;
         }
         Command::Evidence { session, limit } => {
             let session = resolve_session(&client, &cli.control, session).await?;
@@ -195,20 +191,34 @@ async fn main() -> Result<()> {
             print_json(&evidence[start..])?;
         }
         Command::EvidenceGet { evidence_id } => {
-            let evidence: Value = authed_get(
+            print_path(&client, &cli.control, &format!("/v1/evidence/{evidence_id}")).await?;
+        }
+        Command::EvidenceTrace { evidence_id } => {
+            print_path(
                 &client,
                 &cli.control,
-                &format!("/v1/evidence/{evidence_id}"),
+                &format!("/v1/evidence/{evidence_id}/trace"),
             )
-            .await?
-            .json()
             .await?;
-            print_json(&evidence)?;
+        }
+        Command::ProofStaleness { evidence_id } => {
+            print_path(
+                &client,
+                &cli.control,
+                &format!("/v1/proof/{evidence_id}/staleness"),
+            )
+            .await?;
         }
         Command::Click { session, reference } => {
-            queue_action(&client, &cli.control, session, Some(reference), BridgeActionKind::Click).await?;
+            queue_action(&client, &cli.control, session, Some(reference), BridgeActionKind::Click)
+                .await?;
         }
-        Command::Type { session, reference, text, clear_first } => {
+        Command::Type {
+            session,
+            reference,
+            text,
+            clear_first,
+        } => {
             queue_action(
                 &client,
                 &cli.control,
@@ -218,7 +228,12 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
-        Command::Key { session, key, reference, modifiers } => {
+        Command::Key {
+            session,
+            key,
+            reference,
+            modifiers,
+        } => {
             queue_action(
                 &client,
                 &cli.control,
@@ -274,6 +289,21 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn print_session_endpoint(
+    client: &Client,
+    base: &str,
+    requested: Option<SessionId>,
+    endpoint: &str,
+) -> Result<()> {
+    let session = resolve_session(client, base, requested).await?;
+    print_path(client, base, &format!("/v1/sessions/{session}/{endpoint}")).await
+}
+
+async fn print_path(client: &Client, base: &str, path: &str) -> Result<()> {
+    let value: Value = authed_get(client, base, path).await?.json().await?;
+    print_json(&value)
+}
+
 async fn resolve_session(
     client: &Client,
     base: &str,
@@ -323,14 +353,18 @@ async fn authed_get(client: &Client, base: &str, path: &str) -> Result<Response>
 }
 
 async fn authed_post_empty(client: &Client, base: &str, path: &str) -> Result<()> {
+    authed_post_empty_response(client, base, path).await?;
+    Ok(())
+}
+
+async fn authed_post_empty_response(client: &Client, base: &str, path: &str) -> Result<Response> {
     let token = read_token().await?;
-    client
+    Ok(client
         .post(format!("{base}{path}"))
         .bearer_auth(token)
         .send()
         .await?
-        .error_for_status()?;
-    Ok(())
+        .error_for_status()?)
 }
 
 async fn authed_post_json<T: Serialize + ?Sized>(
