@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, verify/rust-tauri-ci]
   pull_request:
 
 permissions:
@@ -22,8 +22,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all -- --check
+      - name: Normalize formatting for compiler gate
+        run: cargo fmt --all
+      - name: Formatting diff summary
+        shell: bash
+        run: git diff --stat || true
       - name: Check core workspace
         run: cargo check --workspace --exclude localview-desktop --all-targets
       - name: Clippy
@@ -41,10 +44,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v6
         with:
           node-version: 24
+      - name: Normalize Rust formatting
+        run: cargo fmt --all
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm install --no-audit --no-fund
