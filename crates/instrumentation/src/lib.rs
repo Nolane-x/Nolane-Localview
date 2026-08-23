@@ -7,6 +7,7 @@ pub struct InstrumentationConfig {
     pub max_events: usize,
     pub max_interactive_nodes: usize,
     pub include_console: bool,
+    pub include_network: bool,
     pub include_performance: bool,
     pub include_scroll: bool,
 }
@@ -17,6 +18,7 @@ impl Default for InstrumentationConfig {
             max_events: 1_024,
             max_interactive_nodes: 1_000,
             include_console: true,
+            include_network: true,
             include_performance: true,
             include_scroll: true,
         }
@@ -44,6 +46,20 @@ const SCRIPT: &str = r#"
     .replace(/(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s,;]+/ig, '$1[REDACTED]')
     .replace(/((?:api[_-]?key|token|password|secret)\s*[:=]\s*)[^\s,;]+/ig, '$1[REDACTED]')
     .slice(0, 1500);
+
+  const safeUrl = (value) => {
+    try {
+      const url = new URL(String(value ?? ''), location.href);
+      const sensitive = /token|key|secret|password|authorization/i;
+      for (const key of Array.from(url.searchParams.keys())) {
+        if (sensitive.test(key)) url.searchParams.set(key, '[REDACTED]');
+      }
+      url.hash = '';
+      return redact(url.toString()).slice(0, 1000);
+    } catch (_) {
+      return redact(value).slice(0, 1000);
+    }
+  };
 
   const push = (type, payload = {}) => {
     events.push({
@@ -177,7 +193,7 @@ const SCRIPT: &str = r#"
 
   const announceRoute = (source) => push('route_changed', {
     source,
-    href: location.href,
+    href: safeUrl(location.href),
   });
 
   for (const method of ['pushState', 'replaceState']) {
@@ -220,13 +236,71 @@ const SCRIPT: &str = r#"
     }
     addEventListener('error', (event) => push('exception', {
       message: redact(event.message),
-      source: redact(event.filename),
+      source: safeUrl(event.filename),
       line: event.lineno,
       column: event.colno,
     }));
     addEventListener('unhandledrejection', (event) => push('unhandled_rejection', {
       message: redact(event.reason?.message || event.reason),
     }));
+  }
+
+  if (config.include_network) {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const request = args[0];
+      const init = args[1] || {};
+      const method = String(init.method || request?.method || 'GET').toUpperCase();
+      const url = safeUrl(request?.url || request);
+      const started = performance.now();
+      try {
+        const response = await originalFetch(...args);
+        push('network', {
+          transport: 'fetch',
+          method,
+          url,
+          status: response.status,
+          ok: response.ok,
+          duration: Math.round((performance.now() - started) * 10) / 10,
+        });
+        return response;
+      } catch (error) {
+        push('network', {
+          transport: 'fetch',
+          method,
+          url,
+          status: null,
+          ok: false,
+          duration: Math.round((performance.now() - started) * 10) / 10,
+          error: redact(error?.message || error),
+        });
+        throw error;
+      }
+    };
+
+    const xhrMeta = new WeakMap();
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      xhrMeta.set(this, { method: String(method || 'GET').toUpperCase(), url: safeUrl(url), started: 0 });
+      return originalOpen.call(this, method, url, ...rest);
+    };
+    XMLHttpRequest.prototype.send = function(...args) {
+      const meta = xhrMeta.get(this) || { method: 'GET', url: '', started: 0 };
+      meta.started = performance.now();
+      xhrMeta.set(this, meta);
+      this.addEventListener('loadend', () => {
+        push('network', {
+          transport: 'xhr',
+          method: meta.method,
+          url: meta.url,
+          status: Number.isFinite(this.status) ? this.status : null,
+          ok: this.status >= 200 && this.status < 400,
+          duration: Math.round((performance.now() - meta.started) * 10) / 10,
+        });
+      }, { once: true });
+      return originalSend.apply(this, args);
+    };
   }
 
   if (config.include_performance && 'PerformanceObserver' in window) {
@@ -257,7 +331,7 @@ const SCRIPT: &str = r#"
     refFor,
   });
 
-  push('instrumentation_ready', { href: location.href });
+  push('instrumentation_ready', { href: safeUrl(location.href) });
 })();
 "#;
 
@@ -271,6 +345,15 @@ mod tests {
         assert!(script.contains("window.__LOCALVIEW__"));
         assert!(script.contains("dom_changed"));
         assert!(script.contains("route_changed"));
+        assert!(script.contains("push('network'"));
         assert!(!script.contains("__LOCALVIEW_CONFIG__"));
+    }
+
+    #[test]
+    fn defaults_capture_metadata_without_bodies() {
+        let script = bootstrap_script(&InstrumentationConfig::default());
+        assert!(script.contains("include_network"));
+        assert!(!script.contains("response.text()"));
+        assert!(!script.contains("response.json()"));
     }
 }
