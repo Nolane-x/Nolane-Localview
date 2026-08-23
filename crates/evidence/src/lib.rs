@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::{BTreeMap, HashMap, VecDeque}, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
+
 use chrono::{DateTime, Utc};
 use localview_protocol::SessionId;
 use serde::{Deserialize, Serialize};
@@ -29,7 +33,13 @@ pub enum EvidenceKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum UncertaintyClass { Observed, Derived, Heuristic, Subjective, Unknown }
+pub enum UncertaintyClass {
+    Observed,
+    Derived,
+    Heuristic,
+    Subjective,
+    Unknown,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Provenance {
@@ -66,7 +76,10 @@ pub struct EvidenceDraft {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InsertReport { pub id: EvidenceId, pub deduplicated: bool }
+pub struct InsertReport {
+    pub id: EvidenceId,
+    pub deduplicated: bool,
+}
 
 #[derive(Debug, Default)]
 struct StoreState {
@@ -82,7 +95,10 @@ pub struct EvidenceStore {
 
 impl EvidenceStore {
     pub fn new(capacity: usize) -> Self {
-        Self { state: Arc::new(RwLock::new(StoreState::default())), capacity: capacity.max(64) }
+        Self {
+            state: Arc::new(RwLock::new(StoreState::default())),
+            capacity: capacity.max(64),
+        }
     }
 
     pub async fn insert(&self, draft: EvidenceDraft) -> InsertReport {
@@ -105,32 +121,64 @@ impl EvidenceStore {
         state.order.push_back(id.clone());
         state.by_id.insert(id.clone(), object);
         while state.order.len() > self.capacity {
-            if let Some(oldest) = state.order.pop_front() { state.by_id.remove(&oldest); }
+            if let Some(oldest) = state.order.pop_front() {
+                state.by_id.remove(&oldest);
+            }
         }
         InsertReport { id, deduplicated: false }
     }
 
-    pub async fn get(&self, id: &str) -> Option<EvidenceObject> { self.state.read().await.by_id.get(id).cloned() }
+    pub async fn get(&self, id: &str) -> Option<EvidenceObject> {
+        self.state.read().await.by_id.get(id).cloned()
+    }
 
-    pub async fn recent_for_session(&self, session_id: SessionId, limit: usize) -> Vec<EvidenceObject> {
+    pub async fn recent_for_session(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<EvidenceObject> {
         let state = self.state.read().await;
-        state.order.iter().rev().filter_map(|id| state.by_id.get(id)).filter(|e| e.session_id == session_id).take(limit).cloned().collect::<Vec<_>>().into_iter().rev().collect()
+        state
+            .order
+            .iter()
+            .rev()
+            .filter_map(|id| state.by_id.get(id))
+            .filter(|evidence| evidence.session_id == session_id)
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
     }
 
     pub async fn mark_revision_stale(&self, revision: &str) -> Vec<EvidenceId> {
         let state = self.state.read().await;
-        state.by_id.values().filter(|e| e.provenance.revision.as_deref().is_some_and(|value| value != revision)).map(|e| e.id.clone()).collect()
+        state
+            .by_id
+            .values()
+            .filter(|evidence| {
+                evidence
+                    .provenance
+                    .revision
+                    .as_deref()
+                    .is_some_and(|value| value != revision)
+            })
+            .map(|evidence| evidence.id.clone())
+            .collect()
     }
 
     pub async fn release_session(&self, session_id: SessionId) {
         let mut state = self.state.write().await;
-        let ids = state.by_id.values().filter(|e| e.session_id == session_id).map(|e| e.id.clone()).collect::<Vec<_>>();
-        for id in ids { state.by_id.remove(&id); }
-        state.order.retain(|id| state.by_id.contains_key(id));
+        state.by_id.retain(|_, evidence| evidence.session_id != session_id);
+        let remaining = state.by_id.keys().cloned().collect::<HashSet<_>>();
+        state.order.retain(|id| remaining.contains(id));
     }
 }
 
-impl Default for EvidenceStore { fn default() -> Self { Self::new(4096) } }
+impl Default for EvidenceStore {
+    fn default() -> Self { Self::new(4096) }
+}
 
 pub fn evidence_id(draft: &EvidenceDraft) -> EvidenceId {
     let canonical = canonical_value(serde_json::to_value(draft).unwrap_or(Value::Null));
@@ -142,7 +190,10 @@ pub fn evidence_id(draft: &EvidenceDraft) -> EvidenceId {
 fn canonical_value(value: Value) -> Value {
     match value {
         Value::Object(map) => {
-            let sorted = map.into_iter().map(|(key, value)| (key, canonical_value(value))).collect::<BTreeMap<_, _>>();
+            let sorted = map
+                .into_iter()
+                .map(|(key, value)| (key, canonical_value(value)))
+                .collect::<BTreeMap<_, _>>();
             Value::Object(sorted.into_iter().collect())
         }
         Value::Array(values) => Value::Array(values.into_iter().map(canonical_value).collect()),
@@ -161,7 +212,13 @@ mod tests {
             session_id,
             region: Some("hero".into()),
             payload: serde_json::json!({"b": 2, "a": 1}),
-            provenance: Provenance { source: "layout-engine".into(), engine: Some("native".into()), revision: Some("abc".into()), parent_ids: Vec::new(), captured_at: DateTime::<Utc>::from_timestamp(1, 0).expect("timestamp") },
+            provenance: Provenance {
+                source: "layout-engine".into(),
+                engine: Some("native".into()),
+                revision: Some("abc".into()),
+                parent_ids: Vec::new(),
+                captured_at: DateTime::<Utc>::from_timestamp(1, 0).expect("timestamp"),
+            },
             confidence: 0.95,
             uncertainty: UncertaintyClass::Observed,
             secret_taint: false,
@@ -177,5 +234,17 @@ mod tests {
         assert_eq!(first.id, second.id);
         assert!(!first.deduplicated);
         assert!(second.deduplicated);
+    }
+
+    #[tokio::test]
+    async fn releasing_session_removes_only_its_evidence() {
+        let store = EvidenceStore::new(64);
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        store.insert(draft(first)).await;
+        store.insert(draft(second)).await;
+        store.release_session(first).await;
+        assert!(store.recent_for_session(first, 10).await.is_empty());
+        assert_eq!(store.recent_for_session(second, 10).await.len(), 1);
     }
 }
