@@ -6,13 +6,13 @@ Approved architecture for Wave 2 of LocalView. This design starts from `main` co
 
 ## Goal
 
-Provide real, privacy-bounded native viewport capture for LocalView-managed WebViews on Windows, macOS and Linux without weakening the existing `#![forbid(unsafe_code)]` boundary in the desktop shell, capture planner, protocol or evidence crates.
+Provide real, privacy-bounded native viewport capture for LocalView-managed WebViews on Windows, macOS and Linux without weakening the existing `#![forbid(unsafe_code)]` boundary in the desktop shell, capture planner, protocol, control, artifact or evidence crates.
 
 The first vertical slice is intentionally narrow:
 
-`managed WebView -> native platform snapshot -> PNG bytes -> provenance-rich capture packet -> bounded local artifact/evidence path`
+`managed WebView -> native platform snapshot -> owned PNG bytes -> bounded local artifact -> daemon Visual evidence metadata`
 
-Element/region capture, stable-settle orchestration, progressive changed-region capture, masking, stitching and responsive contact sheets build on this slice after viewport capture is verified.
+Element/region capture, stable-settle orchestration, progressive changed-region capture, masking, stitching and responsive contact sheets build on this slice only after viewport capture is verified.
 
 ## Non-goals for the first slice
 
@@ -25,7 +25,7 @@ Element/region capture, stable-settle orchestration, progressive changed-region 
 
 ## Architectural boundary
 
-Create a new `crates/native-capture` crate. It owns all platform-specific WebView access and is the only LocalView crate allowed to contain audited `unsafe` required by platform handles. Consumers receive only safe Rust values.
+Create `crates/native-capture`. It owns platform-specific WebView execution and is the only LocalView crate allowed to contain audited `unsafe` required by platform handles.
 
 ```text
 localview-desktop (safe)
@@ -33,35 +33,41 @@ localview-desktop (safe)
         | WebviewWindow::with_webview(main-thread closure)
         v
 localview-native-capture
-  safe public API
+  safe data/error API
+  safe entrypoint accepting Tauri PlatformWebview wrapper
   +-- windows backend: WebView2 CapturePreview
   +-- macOS backend: WKWebView takeSnapshot
   +-- Linux backend: WebKitGTK get_snapshot
         |
         v
-CapturedFrame { png, metadata }
+CapturedFrame { owned png, metadata }   <-- deliberately NOT Serialize
         |
-        +--> localview-artifacts
-        +--> localview-evidence (visual evidence metadata)
+        +--> localview-artifacts (desktop-owned bounded store)
+        |
+        +--> authenticated control endpoint
+                    |
+                    v
+              daemon EvidenceStore
+              Visual metadata only
 ```
 
 `localview-capture` remains the platform-independent transaction/planning layer. `localview-native-capture` is an execution adapter, not a replacement for capture policy.
 
-## Why a separate crate
+## Platform compatibility anchor
 
-Tauri 2.11.5 exposes `WebviewWindow::with_webview`, executing a closure on the main thread and providing a platform-specific handle. Tauri explicitly notes that WebView2/WebKitGTK/objc2 bindings may move across minor versions, so the desktop dependency is already pinned to `2.11.5` and the adapter must keep platform bindings tightly scoped.
+Tauri is pinned to `2.11.5`. `WebviewWindow::with_webview` runs the platform closure on the main thread and provides a safe Tauri `PlatformWebview` wrapper. Tauri notes that direct WebView2/WebKitGTK/objc2 bindings may change across minor releases, so the adapter pins matching dependency families and keeps their use inside target-specific modules.
 
-Official platform primitives:
+Platform primitives used by the design:
 
-- Windows: `ICoreWebView2::CapturePreview` writes PNG/JPEG into an `IStream` and completes asynchronously.
-- macOS: `WKWebView::takeSnapshot` with `WKSnapshotConfiguration` returns a platform-native image asynchronously.
-- Linux: `webkit_web_view_get_snapshot` / finish returns a WebKitGTK snapshot asynchronously.
+- Windows: `ICoreWebView2::CapturePreview` -> PNG in `IStream`.
+- macOS: `WKWebView::takeSnapshot` + `WKSnapshotConfiguration` -> native image -> PNG.
+- Linux: WebKitGTK visible-region snapshot -> Cairo surface -> PNG.
 
-No DOM screenshot emulation is needed.
+No browser-side screenshot emulation is permitted.
 
-## Public safe API
+## Safe contract
 
-The crate exposes data and error types that contain no raw platform handles:
+Serializable request/metadata types contain no raw handles:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -79,7 +85,19 @@ pub struct ViewportMeta {
     pub device_scale_factor: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeCaptureBackend {
+    WebView2,
+    WkWebView,
+    WebKitGtk,
+}
+```
+
+The pixel-bearing frame is intentionally not serializable:
+
+```rust
+#[derive(Debug, PartialEq)]
 pub struct CapturedFrame {
     pub png: Vec<u8>,
     pub pixel_width: u32,
@@ -90,91 +108,102 @@ pub struct CapturedFrame {
     pub revision: Option<String>,
     pub captured_at_unix_ms: u64,
 }
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeCaptureBackend {
-    WebView2,
-    WkWebView,
-    WebKitGtk,
-}
 ```
 
-The first slice only accepts `CaptureTarget::Viewport`. Unsupported targets return an explicit `UnsupportedTarget` error; they must never silently degrade to a different capture method.
+The execution entrypoint may accept Tauri's safe `PlatformWebview` wrapper because desktop receives that wrapper from `with_webview`. No raw pointer, COM interface, Objective-C object, GTK object or platform FFI type may appear in request/result/error types or cross back into desktop.
+
+The first slice accepts only `CaptureTarget::Viewport`. Any other target returns `UnsupportedTarget`; no silent fallback is allowed.
 
 ## Platform backend contract
 
 ### Windows
 
-Use the WebView2 handle obtained from Tauri's platform WebView. Request PNG through `CapturePreview`. Wait for completion without blocking the UI thread indefinitely. Convert the resulting `IStream` to owned bytes before returning to safe code.
+Use the WebView2 handle held by Tauri's platform wrapper. Request PNG with `CapturePreview`, collect the async `IStream` result into owned bytes, validate it and return it through the safe completion boundary.
 
 Requirements:
 
-- Do not capture before WebView content is ready; surface an explicit not-ready/platform error.
-- Enforce a hard timeout at the coordinator boundary.
-- Validate the PNG signature before a frame is accepted.
-- Release all COM resources on every path.
+- Capture before content readiness fails explicitly.
+- The desktop coordinator enforces a hard timeout.
+- PNG signature, encoded byte size and non-zero IHDR dimensions are validated.
+- COM stream/callback lifetime is contained entirely within the Windows module.
 
 ### macOS
 
-Use the `WKWebView` pointer exposed through Tauri and `WKSnapshotConfiguration` covering the visible viewport. Request a native snapshot after pending screen updates and encode the resulting image as PNG.
+Use `WKWebView` and `WKSnapshotConfiguration` for the visible viewport with pending screen updates included. Convert the returned native image to PNG inside the macOS module.
 
 Requirements:
 
-- All AppKit/WebKit interaction stays on the main thread.
-- Callback state must be lifetime-safe across the async completion.
-- Return owned PNG bytes; no Objective-C object escapes the crate boundary.
+- AppKit/WebKit interaction stays on the main thread.
+- Callback state remains valid until completion.
+- No Objective-C object escapes the adapter.
+- PNG signature, size and dimensions are validated.
 
 ### Linux
 
-Use WebKitGTK snapshot APIs against the WebView handle. For the first slice capture the visible region only, convert the returned Cairo surface to PNG bytes, and return owned bytes.
+Use the WebKitGTK visible-region snapshot API against the Tauri-owned `WebView`, then encode the returned Cairo surface to PNG.
 
 Requirements:
 
-- Run GTK/WebKit calls on the UI thread.
-- Correctly own/unref GObject/Cairo resources on success and error paths.
-- No fallback to browser-side canvas.
+- GTK/WebKit calls stay on the UI thread.
+- GObject/Cairo ownership remains inside the platform module.
+- No canvas fallback.
+- PNG signature, size and dimensions are validated.
 
 ## Safety policy
 
-- `localview-desktop`, `localview-capture`, `localview-artifacts`, `localview-evidence` and protocol crates keep `#![forbid(unsafe_code)]`.
+- `localview-desktop`, `localview-capture`, `localview-artifacts`, `localview-evidence`, `localview-control` and protocol crates retain `#![forbid(unsafe_code)]`.
 - `localview-native-capture` uses `#![deny(unsafe_op_in_unsafe_fn)]`.
-- Platform code lives in `platform/windows.rs`, `platform/macos.rs`, `platform/linux.rs`; common modules remain safe.
-- Every unsafe block must have a `// SAFETY:` comment describing lifetime/thread/ownership invariants.
-- No raw pointer or platform object appears in the public API.
-- No `unsafe` is introduced into the desktop Tauri crate.
+- Platform implementation lives only in `src/platform/windows.rs`, `macos.rs`, `linux.rs`.
+- Every explicit unsafe block must have a neighboring `// SAFETY:` explanation of thread, lifetime and ownership invariants.
+- Crate root/common modules expose no raw pointers or platform FFI objects.
+- No unsafe code is introduced into the Tauri desktop crate.
 
-## Coordinator and provenance
+## Desktop coordinator and trusted provenance
 
-Desktop owns the WebView window and therefore starts capture. The coordinator validates that the caller targets a LocalView-managed `preview-*` or `workspace-*` WebView whose session matches the request.
+Desktop owns the managed WebView and starts capture. It resolves only the expected `preview-{session}` or `workspace-{session}` surface and reuses the existing label/session ownership policy.
 
-The capture result must preserve:
+Provenance rules:
 
-- LocalView session id outside the raw adapter result.
-- Route.
-- Viewport CSS size.
-- device scale factor.
-- Pixel width/height.
-- Backend.
-- Optional source revision.
-- Capture timestamp.
-- Target (`viewport` in this slice).
-- Artifact id after persistence.
+- Route is read from the resolved WebView itself; a caller-supplied route is never trusted.
+- Session id is the command/session identity already checked against the surface label.
+- Viewport metadata is provided by the LocalView surface state for the first slice and is recorded alongside pixel dimensions; later work can add stricter native viewport cross-checking.
+- Optional revision is carried from project state when available.
+- Backend and capture timestamp come from the adapter result.
+- Artifact id comes from bounded local persistence.
 
-Pixels are stored in `localview-artifacts`; `localview-evidence` receives metadata/provenance and the artifact id, not a base64 copy of the PNG.
+The command receipt exposes artifact id and metadata only; it never returns filesystem path or PNG bytes.
+
+## Artifact and evidence ownership
+
+Desktop keeps a long-lived `VisualCaptureState` managed by Tauri. It lazily opens one `ArtifactStore` under `state_dir()/artifacts/visual` with a first-slice capacity of 256 MiB. Reusing the store instance is required so in-memory accounting/LRU remains meaningful across captures.
+
+After storing `visual/png`, desktop posts a narrow `VisualEvidenceRequest` to the authenticated daemon control plane. The control route verifies the session exists and constructs `EvidenceDraft { kind: Visual, ... }` itself. The daemon remains the single owner of `EvidenceStore`, so visual evidence becomes visible to existing `/evidence/recent`, verification and MCP paths without duplicating evidence state in desktop.
+
+The Visual evidence payload contains only:
+
+- artifact id;
+- pixel width/height;
+- backend;
+- route;
+- viewport metadata;
+- revision;
+- target `viewport`;
+- capture timestamp.
+
+It never contains raw PNG or base64.
 
 ## Privacy and resource limits
 
 - Capture only LocalView-managed loopback preview/workspace surfaces.
-- Do not expose screenshot bytes through observer event history.
-- Default per-frame encoded PNG limit: 24 MiB. Larger frames fail closed.
-- No unbounded screenshot history; persistence remains governed by the artifact store capacity.
-- No screenshot body is written to logs.
-- Private-selector masking is a later transaction stage; until masking exists, this capture tool is local-only and must not claim masked-safe export.
+- Do not expose screenshot bytes through observer/action histories.
+- Encoded PNG limit is exactly 24 MiB (`25_165_824` bytes); larger frames fail closed.
+- Artifact retention is bounded to 256 MiB for this first desktop visual store.
+- No screenshot body is logged.
+- Private-selector masking is a later capture-transaction stage. Until masking exists, the feature remains local-only and must not claim masked-safe export.
 
 ## Error model
 
-Use a typed `NativeCaptureError` with stable categories:
+`NativeCaptureError` has stable categories:
 
 - `UnsupportedTarget`
 - `UnsupportedPlatform`
@@ -184,54 +213,54 @@ Use a typed `NativeCaptureError` with stable categories:
 - `InvalidImage`
 - `FrameTooLarge { bytes, limit }`
 
-Public callers can convert these to user-facing strings, but tests match the typed category.
+Callers convert these to UI strings only at the outer boundary; tests match typed categories.
 
 ## Testing strategy
 
 ### Portable tests
 
-Run on all CI OSes and require no real GUI:
+All CI OSes verify:
 
-- capture request/metadata serde round-trip;
+- request/metadata serde round-trip;
+- `CapturedFrame` is kept out of serialization paths by design and contract tests inspect evidence payloads instead;
 - viewport-only target enforcement;
-- PNG signature validation;
-- frame-size bound;
-- provenance construction;
-- safety-boundary contract ensuring desktop/capture crates retain `forbid(unsafe_code)` and the adapter contains no public raw pointer type.
+- PNG signature/IHDR parsing;
+- 24 MiB limit;
+- desktop/capture/control/evidence/artifact crates retain unsafe prohibition;
+- native-capture common/public files expose no raw pointer declarations.
 
 ### Platform compile gates
 
-CI must compile the real backend on its matching runner:
+- Windows backend on `windows-latest`.
+- macOS backend on `macos-latest`.
+- Linux backend on Ubuntu with WebKitGTK development packages installed before the native-capture workspace check.
 
-- Windows backend on `windows-latest`;
-- macOS backend on `macos-latest`;
-- Linux backend on `ubuntu-latest` with existing Tauri/WebKitGTK system packages.
+### Runtime smoke
 
-### Runtime smoke test
-
-After compile-safe adapters exist, add one platform smoke harness that opens a local fixture in a managed WebView and verifies the returned bytes decode as PNG with non-zero dimensions. This may be gated where CI GUI availability is insufficient; a missing GUI smoke must remain documented as an integration gap rather than being called implemented.
+After compile-safe adapters exist, add a managed local fixture smoke that verifies returned bytes decode as PNG with non-zero dimensions. If a hosted CI runner cannot provide the required GUI session, that is recorded as an integration gap rather than relabeled as completion.
 
 ## Delivery slices
 
-1. Safe contract + validation + CI boundary tests.
-2. Platform backend compilation through Tauri `with_webview`.
-3. Desktop viewport capture command and caller/session ownership validation.
-4. Artifact persistence and Visual evidence metadata.
-5. MCP/CLI read path for capture metadata/artifact reference.
-6. Stable-capture settle transaction.
-7. Region/element capture and progressive changed-region capture.
-8. Privacy masking, visual diff integration and guarded full-page stitching.
+1. Safe contract + PNG/dimension/size validation.
+2. Audited platform adapter boundary and compile gates.
+3. Windows/macOS/Linux native viewport implementations.
+4. Desktop managed-surface coordinator + bounded artifact store.
+5. Authenticated daemon Visual evidence ingestion.
+6. MCP/CLI metadata/artifact-reference read surface.
+7. Stable-settle transaction.
+8. Element/region + progressive changed-region capture.
+9. Masking + visual diff + guarded full-page stitching.
 
 ## Completion criteria for the first native-capture vertical slice
 
-The slice is complete only when all of the following are true:
+The slice is complete only when:
 
-- `localview-native-capture` exists with a safe public API and audited platform modules.
-- Desktop still forbids unsafe code.
-- Windows/macOS/Linux platform backends compile in CI.
-- A managed preview/workspace can request a viewport capture through the native adapter.
-- Returned bytes are validated as PNG and bounded by size.
-- Pixels can be stored through the bounded artifact store.
-- Visual evidence records artifact id + route/viewport/backend/revision provenance without embedding PNG bytes.
-- No browser-side canvas fallback exists.
-- Coverage ledger says `Partial`, not `Implemented`, until a real native screenshot smoke is verified on supported platforms.
+- `localview-native-capture` has safe common types and audited platform modules.
+- Desktop/control/capture/artifact/evidence crates still forbid unsafe.
+- Windows/macOS/Linux backend code compiles on matching CI runners.
+- Managed preview/workspace capture goes through the native adapter only.
+- PNG bytes pass signature, dimension and size validation.
+- Pixels are retained through one bounded desktop artifact store.
+- Visual evidence is inserted into the daemon's existing EvidenceStore using artifact id + provenance only.
+- No canvas/browser reconstruction exists.
+- Coverage ledger remains `Partial` until real native screenshot smoke evidence exists on supported platforms.
