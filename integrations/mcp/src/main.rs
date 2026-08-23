@@ -72,18 +72,8 @@ async fn handle(request: RpcRequest) -> RpcResponse {
         _ => Err(anyhow::anyhow!("method not found: {}", request.method)),
     };
     match result {
-        Ok(value) => RpcResponse {
-            jsonrpc: "2.0",
-            id,
-            result: Some(value),
-            error: None,
-        },
-        Err(error) => RpcResponse {
-            jsonrpc: "2.0",
-            id,
-            result: None,
-            error: Some(json!({"code": -32000, "message": error.to_string()})),
-        },
+        Ok(value) => RpcResponse { jsonrpc: "2.0", id, result: Some(value), error: None },
+        Err(error) => RpcResponse { jsonrpc: "2.0", id, result: None, error: Some(json!({"code": -32000, "message": error.to_string()})) },
     }
 }
 
@@ -91,6 +81,7 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"name":"session.list","description":"List detected LocalView sessions","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"session.inspect","description":"Inspect one LocalView session","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}),
+        json!({"name":"session.project_state","description":"Read Git branch, commit, dirty files and working-tree identity for one LocalView session without mutating the repository","inputSchema":{"type":"object","properties":{"session":{"type":"string"}},"required":["session"]}}),
         json!({"name":"session.analysis","description":"Analyze retained live console, network and performance evidence for one session","inputSchema":{"type":"object","properties":{"session":{"type":"string"}},"required":["session"]}}),
         json!({"name":"session.diagnose","description":"Return evidence-first findings, uncertainty and recommended next checks for one session","inputSchema":{"type":"object","properties":{"session":{"type":"string"}},"required":["session"]}}),
         json!({"name":"evidence.recent","description":"Read recent content-addressed evidence objects for one session","inputSchema":{"type":"object","properties":{"session":{"type":"string"}},"required":["session"]}}),
@@ -110,183 +101,82 @@ fn tool_definitions() -> Vec<Value> {
 }
 
 async fn call_tool(params: &Value) -> Result<Value> {
-    let name = params
-        .get("name")
-        .and_then(Value::as_str)
-        .context("missing tool name")?;
-    let args = params
-        .get("arguments")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let base = std::env::var("LOCALVIEW_CONTROL")
-        .unwrap_or_else(|_| "http://127.0.0.1:45454".into());
+    let name = params.get("name").and_then(Value::as_str).context("missing tool name")?;
+    let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let base = std::env::var("LOCALVIEW_CONTROL").unwrap_or_else(|_| "http://127.0.0.1:45454".into());
     let token = read_token().await?;
     let client = reqwest::Client::new();
 
     let response = match name {
-        "session.list" => client
-            .get(format!("{base}/v1/sessions"))
-            .bearer_auth(&token)
-            .send()
-            .await?,
+        "session.list" => client.get(format!("{base}/v1/sessions")).bearer_auth(&token).send().await?,
         "session.inspect" => {
             let id = string_arg(&args, "id")?;
-            client
-                .get(format!("{base}/v1/sessions/{id}"))
-                .bearer_auth(&token)
-                .send()
-                .await?
+            client.get(format!("{base}/v1/sessions/{id}")).bearer_auth(&token).send().await?
+        }
+        "session.project_state" => {
+            let session = string_arg(&args, "session")?;
+            client.get(format!("{base}/v1/sessions/{session}/project-state")).bearer_auth(&token).send().await?
         }
         "session.analysis" => {
             let session = string_arg(&args, "session")?;
-            client
-                .get(format!("{base}/v1/sessions/{session}/analysis"))
-                .bearer_auth(&token)
-                .send()
-                .await?
+            client.get(format!("{base}/v1/sessions/{session}/analysis")).bearer_auth(&token).send().await?
         }
         "session.diagnose" => {
             let session = string_arg(&args, "session")?;
-            client
-                .get(format!("{base}/v1/sessions/{session}/diagnose"))
-                .bearer_auth(&token)
-                .send()
-                .await?
+            client.get(format!("{base}/v1/sessions/{session}/diagnose")).bearer_auth(&token).send().await?
         }
         "evidence.recent" => {
             let session = string_arg(&args, "session")?;
-            client
-                .get(format!("{base}/v1/sessions/{session}/evidence/recent"))
-                .bearer_auth(&token)
-                .send()
-                .await?
+            client.get(format!("{base}/v1/sessions/{session}/evidence/recent")).bearer_auth(&token).send().await?
         }
         "evidence.get" => {
             let id = string_arg(&args, "id")?;
-            client
-                .get(format!("{base}/v1/evidence/{id}"))
-                .bearer_auth(&token)
-                .send()
-                .await?
+            client.get(format!("{base}/v1/evidence/{id}")).bearer_auth(&token).send().await?
         }
-        "runtime.pause" => client
-            .post(format!("{base}/v1/runtime/pause"))
-            .bearer_auth(&token)
-            .send()
-            .await?,
-        "runtime.resume" => client
-            .post(format!("{base}/v1/runtime/resume"))
-            .bearer_auth(&token)
-            .send()
-            .await?,
-        "events.recent" => client
-            .get(format!("{base}/v1/events/recent"))
-            .bearer_auth(&token)
-            .send()
-            .await?,
+        "runtime.pause" => client.post(format!("{base}/v1/runtime/pause")).bearer_auth(&token).send().await?,
+        "runtime.resume" => client.post(format!("{base}/v1/runtime/resume")).bearer_auth(&token).send().await?,
+        "events.recent" => client.get(format!("{base}/v1/events/recent")).bearer_auth(&token).send().await?,
         "observer.recent" => {
             let session = string_arg(&args, "session")?;
-            client
-                .get(format!("{base}/v1/sessions/{session}/observer/recent"))
-                .bearer_auth(&token)
-                .send()
-                .await?
+            client.get(format!("{base}/v1/sessions/{session}/observer/recent")).bearer_auth(&token).send().await?
         }
         "action.click" => {
             let session = string_arg(&args, "session")?;
             let reference = string_arg(&args, "reference")?;
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                Some(reference),
-                json!({"type":"click"}),
-            )
-            .await?
+            post_action(&client, &base, &token, session, Some(reference), json!({"type":"click"})).await?
         }
         "action.type" => {
             let session = string_arg(&args, "session")?;
             let reference = string_arg(&args, "reference")?;
             let text = string_arg(&args, "text")?;
-            let clear_first = args
-                .get("clear_first")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                Some(reference),
-                json!({"type":"type_text","text":text,"clear_first":clear_first}),
-            )
-            .await?
+            let clear_first = args.get("clear_first").and_then(Value::as_bool).unwrap_or(false);
+            post_action(&client, &base, &token, session, Some(reference), json!({"type":"type_text","text":text,"clear_first":clear_first})).await?
         }
         "action.key" => {
             let session = string_arg(&args, "session")?;
             let key = string_arg(&args, "key")?;
             let reference = args.get("reference").and_then(Value::as_str);
-            let modifiers = args
-                .get("modifiers")
-                .cloned()
-                .unwrap_or_else(|| json!([]));
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                reference,
-                json!({"type":"key","key":key,"modifiers":modifiers}),
-            )
-            .await?
+            let modifiers = args.get("modifiers").cloned().unwrap_or_else(|| json!([]));
+            post_action(&client, &base, &token, session, reference, json!({"type":"key","key":key,"modifiers":modifiers})).await?
         }
         "action.scroll" => {
             let session = string_arg(&args, "session")?;
             let x = number_arg(&args, "x")?;
             let y = number_arg(&args, "y")?;
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                None,
-                json!({"type":"scroll","x":x,"y":y}),
-            )
-            .await?
+            post_action(&client, &base, &token, session, None, json!({"type":"scroll","x":x,"y":y})).await?
         }
         "action.focus" => {
             let session = string_arg(&args, "session")?;
             let reference = string_arg(&args, "reference")?;
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                Some(reference),
-                json!({"type":"focus"}),
-            )
-            .await?
+            post_action(&client, &base, &token, session, Some(reference), json!({"type":"focus"})).await?
         }
         "action.snapshot" => {
             let session = string_arg(&args, "session")?;
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                None,
-                json!({"type":"snapshot"}),
-            )
-            .await?
+            post_action(&client, &base, &token, session, None, json!({"type":"snapshot"})).await?
         }
         "action.results" => {
             let session = string_arg(&args, "session")?;
-            client
-                .get(format!("{base}/v1/sessions/{session}/actions/results"))
-                .bearer_auth(&token)
-                .send()
-                .await?
+            client.get(format!("{base}/v1/sessions/{session}/actions/results")).bearer_auth(&token).send().await?
         }
         _ => return Err(anyhow::anyhow!("unknown tool: {name}")),
     };
@@ -300,9 +190,7 @@ async fn call_tool(params: &Value) -> Result<Value> {
     } else {
         response.json::<Value>().await?
     };
-    Ok(json!({
-        "content": [{"type":"text","text":serde_json::to_string_pretty(&content)?}]
-    }))
+    Ok(json!({"content": [{"type":"text","text":serde_json::to_string_pretty(&content)?}]}))
 }
 
 async fn post_action(
@@ -322,23 +210,14 @@ async fn post_action(
 }
 
 fn string_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str> {
-    args.get(name)
-        .and_then(Value::as_str)
-        .with_context(|| format!("missing {name}"))
+    args.get(name).and_then(Value::as_str).with_context(|| format!("missing {name}"))
 }
 
 fn number_arg(args: &Value, name: &str) -> Result<f64> {
-    args.get(name)
-        .and_then(Value::as_f64)
-        .with_context(|| format!("missing {name}"))
+    args.get(name).and_then(Value::as_f64).with_context(|| format!("missing {name}"))
 }
 
 async fn read_token() -> Result<String> {
-    let dir = dirs::data_local_dir()
-        .context("no local data directory")?
-        .join("LocalView");
-    Ok(tokio::fs::read_to_string(dir.join("control.token"))
-        .await?
-        .trim()
-        .to_owned())
+    let dir = dirs::data_local_dir().context("no local data directory")?.join("LocalView");
+    Ok(tokio::fs::read_to_string(dir.join("control.token")).await?.trim().to_owned())
 }

@@ -25,6 +25,7 @@ use localview_live_bridge::{
     ObserverEventKind,
 };
 use localview_observation::ObservationBus;
+use localview_project_state::inspect_git;
 use localview_protocol::{Health, ObservationEvent, SessionId};
 use localview_sessions::SessionManager;
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,7 @@ pub fn router(state: ControlState) -> Router {
         .route("/health", get(health))
         .route("/v1/sessions", get(list_sessions))
         .route("/v1/sessions/{id}", get(get_session))
+        .route("/v1/sessions/{id}/project-state", get(session_project_state))
         .route("/v1/sessions/{id}/preview", post(set_preview))
         .route("/v1/sessions/{id}/observer", post(ingest_observer))
         .route("/v1/sessions/{id}/observer/recent", get(recent_observer))
@@ -133,6 +135,44 @@ async fn get_session(
         None => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "session_not_found"})),
+        )
+            .into_response(),
+    }
+}
+
+async fn session_project_state(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    let Some(session) = state.sessions.get(id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "session_not_found"})),
+        )
+            .into_response();
+    };
+    let Some(root) = session.project.git_root.as_deref().or(session.project.cwd.as_deref()) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "project_root_unavailable",
+                "message": "LocalView has no filesystem root for this session"
+            })),
+        )
+            .into_response();
+    };
+    match inspect_git(root).await {
+        Ok(revision) => Json(revision).into_response(),
+        Err(error) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "git_state_unavailable",
+                "message": error.to_string()
+            })),
         )
             .into_response(),
     }

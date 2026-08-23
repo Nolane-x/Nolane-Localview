@@ -24,6 +24,7 @@ enum Command {
     Status,
     Sessions,
     Show { session: SessionId },
+    ProjectState { session: Option<SessionId> },
     Pause,
     Resume,
     Observer {
@@ -31,24 +32,15 @@ enum Command {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
-    Analyze {
-        session: Option<SessionId>,
-    },
-    Diagnose {
-        session: Option<SessionId>,
-    },
+    Analyze { session: Option<SessionId> },
+    Diagnose { session: Option<SessionId> },
     Evidence {
         session: Option<SessionId>,
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
-    EvidenceGet {
-        evidence_id: String,
-    },
-    Click {
-        session: SessionId,
-        reference: String,
-    },
+    EvidenceGet { evidence_id: String },
+    Click { session: SessionId, reference: String },
     Type {
         session: SessionId,
         reference: String,
@@ -64,18 +56,9 @@ enum Command {
         #[arg(long = "modifier")]
         modifiers: Vec<String>,
     },
-    Scroll {
-        session: SessionId,
-        x: f64,
-        y: f64,
-    },
-    Focus {
-        session: SessionId,
-        reference: String,
-    },
-    Snapshot {
-        session: SessionId,
-    },
+    Scroll { session: SessionId, x: f64, y: f64 },
+    Focus { session: SessionId, reference: String },
+    Snapshot { session: SessionId },
     ActionResults {
         session: SessionId,
         #[arg(long, default_value_t = 100)]
@@ -136,6 +119,18 @@ async fn main() -> Result<()> {
                 &client,
                 &cli.control,
                 &format!("/v1/sessions/{session}"),
+            )
+            .await?
+            .json()
+            .await?;
+            print_json(&value)?;
+        }
+        Command::ProjectState { session } => {
+            let session = resolve_session(&client, &cli.control, session).await?;
+            let value: Value = authed_get(
+                &client,
+                &cli.control,
+                &format!("/v1/sessions/{session}/project-state"),
             )
             .await?
             .json()
@@ -211,21 +206,9 @@ async fn main() -> Result<()> {
             print_json(&evidence)?;
         }
         Command::Click { session, reference } => {
-            queue_action(
-                &client,
-                &cli.control,
-                session,
-                Some(reference),
-                BridgeActionKind::Click,
-            )
-            .await?;
+            queue_action(&client, &cli.control, session, Some(reference), BridgeActionKind::Click).await?;
         }
-        Command::Type {
-            session,
-            reference,
-            text,
-            clear_first,
-        } => {
+        Command::Type { session, reference, text, clear_first } => {
             queue_action(
                 &client,
                 &cli.control,
@@ -235,12 +218,7 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
-        Command::Key {
-            session,
-            key,
-            reference,
-            modifiers,
-        } => {
+        Command::Key { session, key, reference, modifiers } => {
             queue_action(
                 &client,
                 &cli.control,
