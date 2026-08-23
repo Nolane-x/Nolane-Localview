@@ -8,6 +8,7 @@ use localview_live_bridge::{BridgeAction, BridgeActionKind, BridgeActionResult, 
 use localview_protocol::{Health, Session, SessionId};
 use reqwest::{Client, Response};
 use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Parser)]
 #[command(name = "localview", version, about = "AI-native localhost visual runtime")]
@@ -29,6 +30,20 @@ enum Command {
         session: SessionId,
         #[arg(long, default_value_t = 100)]
         limit: usize,
+    },
+    Analyze {
+        session: Option<SessionId>,
+    },
+    Diagnose {
+        session: Option<SessionId>,
+    },
+    Evidence {
+        session: Option<SessionId>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    EvidenceGet {
+        evidence_id: String,
     },
     Click {
         session: SessionId,
@@ -147,6 +162,54 @@ async fn main() -> Result<()> {
             let start = events.len().saturating_sub(limit);
             print_json(&events[start..])?;
         }
+        Command::Analyze { session } => {
+            let session = resolve_session(&client, &cli.control, session).await?;
+            let analysis: Value = authed_get(
+                &client,
+                &cli.control,
+                &format!("/v1/sessions/{session}/analysis"),
+            )
+            .await?
+            .json()
+            .await?;
+            print_json(&analysis)?;
+        }
+        Command::Diagnose { session } => {
+            let session = resolve_session(&client, &cli.control, session).await?;
+            let diagnosis: Value = authed_get(
+                &client,
+                &cli.control,
+                &format!("/v1/sessions/{session}/diagnose"),
+            )
+            .await?
+            .json()
+            .await?;
+            print_json(&diagnosis)?;
+        }
+        Command::Evidence { session, limit } => {
+            let session = resolve_session(&client, &cli.control, session).await?;
+            let evidence: Vec<Value> = authed_get(
+                &client,
+                &cli.control,
+                &format!("/v1/sessions/{session}/evidence/recent"),
+            )
+            .await?
+            .json()
+            .await?;
+            let start = evidence.len().saturating_sub(limit);
+            print_json(&evidence[start..])?;
+        }
+        Command::EvidenceGet { evidence_id } => {
+            let evidence: Value = authed_get(
+                &client,
+                &cli.control,
+                &format!("/v1/evidence/{evidence_id}"),
+            )
+            .await?
+            .json()
+            .await?;
+            print_json(&evidence)?;
+        }
         Command::Click { session, reference } => {
             queue_action(
                 &client,
@@ -231,6 +294,24 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn resolve_session(
+    client: &Client,
+    base: &str,
+    requested: Option<SessionId>,
+) -> Result<SessionId> {
+    if let Some(session) = requested {
+        return Ok(session);
+    }
+    let sessions: Vec<Session> = authed_get(client, base, "/v1/sessions").await?.json().await?;
+    match sessions.as_slice() {
+        [] => Err(anyhow::anyhow!("no LocalView sessions are active")),
+        [session] => Ok(session.id),
+        _ => Err(anyhow::anyhow!(
+            "multiple LocalView sessions are active; pass a session id explicitly"
+        )),
+    }
 }
 
 async fn queue_action(

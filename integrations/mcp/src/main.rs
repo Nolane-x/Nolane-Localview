@@ -91,6 +91,10 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"name":"session.list","description":"List detected LocalView sessions","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"session.inspect","description":"Inspect one LocalView session","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}),
+        json!({"name":"session.analysis","description":"Analyze retained live console, network and performance evidence for one session","inputSchema":{"type":"object","properties":{"session":{"type":"string"}},"required":["session"]}}),
+        json!({"name":"session.diagnose","description":"Return evidence-first findings, uncertainty and recommended next checks for one session","inputSchema":{"type":"object","properties":{"session":{"type":"string"}},"required":["session"]}}),
+        json!({"name":"evidence.recent","description":"Read recent content-addressed evidence objects for one session","inputSchema":{"type":"object","properties":{"session":{"type":"string"}},"required":["session"]}}),
+        json!({"name":"evidence.get","description":"Read one evidence object by evidence id","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}),
         json!({"name":"runtime.pause","description":"Pause localhost discovery","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"runtime.resume","description":"Resume localhost discovery","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"events.recent","description":"Return recent daemon runtime events","inputSchema":{"type":"object","properties":{}}}),
@@ -129,6 +133,38 @@ async fn call_tool(params: &Value) -> Result<Value> {
             let id = string_arg(&args, "id")?;
             client
                 .get(format!("{base}/v1/sessions/{id}"))
+                .bearer_auth(&token)
+                .send()
+                .await?
+        }
+        "session.analysis" => {
+            let session = string_arg(&args, "session")?;
+            client
+                .get(format!("{base}/v1/sessions/{session}/analysis"))
+                .bearer_auth(&token)
+                .send()
+                .await?
+        }
+        "session.diagnose" => {
+            let session = string_arg(&args, "session")?;
+            client
+                .get(format!("{base}/v1/sessions/{session}/diagnose"))
+                .bearer_auth(&token)
+                .send()
+                .await?
+        }
+        "evidence.recent" => {
+            let session = string_arg(&args, "session")?;
+            client
+                .get(format!("{base}/v1/sessions/{session}/evidence/recent"))
+                .bearer_auth(&token)
+                .send()
+                .await?
+        }
+        "evidence.get" => {
+            let id = string_arg(&args, "id")?;
+            client
+                .get(format!("{base}/v1/evidence/{id}"))
                 .bearer_auth(&token)
                 .send()
                 .await?
@@ -269,12 +305,12 @@ async fn call_tool(params: &Value) -> Result<Value> {
     }))
 }
 
-async fn post_action<'a>(
+async fn post_action(
     client: &reqwest::Client,
     base: &str,
     token: &str,
     session: &str,
-    reference: Option<&'a str>,
+    reference: Option<&str>,
     action: Value,
 ) -> Result<reqwest::Response> {
     Ok(client
