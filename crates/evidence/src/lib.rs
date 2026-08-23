@@ -29,6 +29,9 @@ pub enum EvidenceKind {
     Contract,
     Test,
     Causal,
+    Coverage,
+    Proof,
+    Repro,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,6 +42,16 @@ pub enum UncertaintyClass {
     Heuristic,
     Subjective,
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum RetentionTier {
+    Ephemeral,
+    Session,
+    Project,
+    Baseline,
+    Pinned,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +97,7 @@ pub struct InsertReport {
 #[derive(Debug, Default)]
 struct StoreState {
     by_id: HashMap<EvidenceId, EvidenceObject>,
+    retention: HashMap<EvidenceId, RetentionTier>,
     order: VecDeque<EvidenceId>,
 }
 
@@ -102,10 +116,29 @@ impl EvidenceStore {
     }
 
     pub async fn insert(&self, draft: EvidenceDraft) -> InsertReport {
+        self.insert_with_retention(draft, RetentionTier::Session)
+            .await
+    }
+
+    pub async fn insert_with_retention(
+        &self,
+        draft: EvidenceDraft,
+        retention: RetentionTier,
+    ) -> InsertReport {
         let id = evidence_id(&draft);
         let mut state = self.state.write().await;
         if state.by_id.contains_key(&id) {
-            return InsertReport { id, deduplicated: true };
+            let current = state
+                .retention
+                .entry(id.clone())
+                .or_insert(RetentionTier::Session);
+            if retention > *current {
+                *current = retention;
+            }
+            return InsertReport {
+                id,
+                deduplicated: true,
+            };
         }
         let object = EvidenceObject {
             id: id.clone(),
@@ -119,17 +152,69 @@ impl EvidenceStore {
             secret_taint: draft.secret_taint,
         };
         state.order.push_back(id.clone());
+        state.retention.insert(id.clone(), retention);
         state.by_id.insert(id.clone(), object);
-        while state.order.len() > self.capacity {
-            if let Some(oldest) = state.order.pop_front() {
+        while state.by_id.len() > self.capacity {
+            let candidate = state.order.iter().position(|candidate_id| {
+                state
+                    .retention
+                    .get(candidate_id)
+                    .copied()
+                    .unwrap_or(RetentionTier::Session)
+                    < RetentionTier::Baseline
+            });
+            let Some(index) = candidate else {
+                break;
+            };
+            if let Some(oldest) = state.order.remove(index) {
                 state.by_id.remove(&oldest);
+                state.retention.remove(&oldest);
             }
         }
-        InsertReport { id, deduplicated: false }
+        InsertReport {
+            id,
+            deduplicated: false,
+        }
     }
 
     pub async fn get(&self, id: &str) -> Option<EvidenceObject> {
         self.state.read().await.by_id.get(id).cloned()
+    }
+
+    pub async fn retention(&self, id: &str) -> Option<RetentionTier> {
+        self.state.read().await.retention.get(id).copied()
+    }
+
+    pub async fn set_retention(&self, id: &str, retention: RetentionTier) -> bool {
+        let mut state = self.state.write().await;
+        if !state.by_id.contains_key(id) {
+            return false;
+        }
+        state.retention.insert(id.to_owned(), retention);
+        true
+    }
+
+    pub async fn trace(&self, id: &str, max_depth: usize) -> Vec<EvidenceObject> {
+        let state = self.state.read().await;
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::from([(id.to_owned(), 0usize)]);
+        let mut trace = Vec::new();
+        while let Some((current, depth)) = queue.pop_front() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            let Some(evidence) = state.by_id.get(&current) else {
+                continue;
+            };
+            trace.push(evidence.clone());
+            if depth >= max_depth {
+                continue;
+            }
+            for parent in &evidence.provenance.parent_ids {
+                queue.push_back((parent.clone(), depth + 1));
+            }
+        }
+        trace
     }
 
     pub async fn recent_for_session(
@@ -170,14 +255,30 @@ impl EvidenceStore {
 
     pub async fn release_session(&self, session_id: SessionId) {
         let mut state = self.state.write().await;
-        state.by_id.retain(|_, evidence| evidence.session_id != session_id);
-        let remaining = state.by_id.keys().cloned().collect::<HashSet<_>>();
-        state.order.retain(|id| remaining.contains(id));
+        let keep = state
+            .by_id
+            .iter()
+            .filter(|(id, evidence)| {
+                evidence.session_id != session_id
+                    || state
+                        .retention
+                        .get(*id)
+                        .copied()
+                        .unwrap_or(RetentionTier::Session)
+                        >= RetentionTier::Project
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<HashSet<_>>();
+        state.by_id.retain(|id, _| keep.contains(id));
+        state.order.retain(|id| keep.contains(id));
+        state.retention.retain(|id, _| keep.contains(id));
     }
 }
 
 impl Default for EvidenceStore {
-    fn default() -> Self { Self::new(4096) }
+    fn default() -> Self {
+        Self::new(4096)
+    }
 }
 
 pub fn evidence_id(draft: &EvidenceDraft) -> EvidenceId {
@@ -226,25 +327,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identical_evidence_is_deduplicated() {
+    async fn identical_evidence_is_deduplicated_and_can_raise_retention() {
         let store = EvidenceStore::new(64);
         let session = Uuid::new_v4();
         let first = store.insert(draft(session)).await;
-        let second = store.insert(draft(session)).await;
+        let second = store
+            .insert_with_retention(draft(session), RetentionTier::Pinned)
+            .await;
         assert_eq!(first.id, second.id);
         assert!(!first.deduplicated);
         assert!(second.deduplicated);
+        assert_eq!(
+            store.retention(&first.id).await,
+            Some(RetentionTier::Pinned)
+        );
     }
 
     #[tokio::test]
-    async fn releasing_session_removes_only_its_evidence() {
+    async fn trace_follows_parent_provenance_without_cycles() {
+        let store = EvidenceStore::new(64);
+        let session = Uuid::new_v4();
+        let parent = store.insert(draft(session)).await.id;
+        let mut child = draft(session);
+        child.payload = serde_json::json!({"child": true});
+        child.provenance.parent_ids = vec![parent.clone()];
+        let child = store.insert(child).await.id;
+        let trace = store.trace(&child, 4).await;
+        assert_eq!(trace.len(), 2);
+        assert_eq!(trace[0].id, child);
+        assert_eq!(trace[1].id, parent);
+    }
+
+    #[tokio::test]
+    async fn releasing_session_preserves_project_retention_only() {
         let store = EvidenceStore::new(64);
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
-        store.insert(draft(first)).await;
-        store.insert(draft(second)).await;
+        let session_only = store.insert(draft(first)).await.id;
+        let project = store
+            .insert_with_retention(draft(second), RetentionTier::Project)
+            .await
+            .id;
         store.release_session(first).await;
-        assert!(store.recent_for_session(first, 10).await.is_empty());
-        assert_eq!(store.recent_for_session(second, 10).await.len(), 1);
+        store.release_session(second).await;
+        assert!(store.get(&session_only).await.is_none());
+        assert!(store.get(&project).await.is_some());
     }
 }
