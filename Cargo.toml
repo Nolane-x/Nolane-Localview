@@ -30,6 +30,7 @@ members = [
   "crates/reports",
   "crates/quality",
   "crates/live-bridge",
+  "crates/live-analysis",
   "crates/evidence",
   "crates/causal",
   "crates/contracts",
