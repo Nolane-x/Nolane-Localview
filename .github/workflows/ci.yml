@@ -64,3 +64,5 @@ jobs:
         run: npm run build
       - name: Check Tauri backend
         run: cargo check -p localview-desktop
+      - name: Desktop capability regression tests
+        run: cargo test -p localview-desktop --test capability_isolation
