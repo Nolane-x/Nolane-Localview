@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
-  "description": "Bundled LocalView dashboard capability. Preview windows do not inherit this capability.",
-  "windows": ["main"],
+  "description": "Bundled LocalView dashboard capability scoped to the main WebView only. Child preview and workspace WebViews do not inherit dashboard permissions.",
+  "webviews": ["main"],
   "permissions": ["core:default", "maincommands"]
 }

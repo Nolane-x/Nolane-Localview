@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import type { DashboardState, LiveSessionState, Session } from '../types';
+import { WorkspaceSurface } from './WorkspaceSurface';
 import {
   CommandRailButton,
   FloatingPanel,
@@ -25,6 +26,11 @@ const fallback: DashboardState = {
   sessions: [],
   engine: { native: 'Tauri / WRY', tier3: 'Chromium on demand' },
   capabilities: [],
+  workspace_surface: {
+    compiled: false,
+    default_mode: 'iframe',
+    reason: 'Waiting for LocalView desktop runtime capability negotiation',
+  },
 };
 
 const emptyLive: LiveSessionState = { observer: [], action_results: [] };
@@ -135,7 +141,7 @@ export default function LocalViewShell() {
 
   return (
     <div className={`localview ${immersive ? 'is-immersive' : ''}`}>
-      <Workspace current={current} url={currentUrl} />
+      <WorkspaceSurface current={current} url={currentUrl} support={state.workspace_surface} />
       <div className="chrome-layer" aria-label="LocalView controls">
         <TopPill
           state={state}
@@ -166,31 +172,6 @@ export default function LocalViewShell() {
       </div>
     </div>
   );
-}
-
-function Workspace({ current, url }: { current?: Session; url?: string }) {
-  if (!current || !url) {
-    return <main className="workspace workspace-empty">
-      <div className="empty-orbit" aria-hidden="true"><i/><i/><i/><span/></div>
-      <div className="empty-copy">
-        <span className="micro-label">LOCALVIEW RUNTIME</span>
-        <h1>Your localhost becomes the workspace.</h1>
-        <p>Run a frontend dev server. LocalView discovers it automatically and keeps every analysis surface hidden until you ask for it.</p>
-        <div className="empty-command"><kbd>⌘</kbd><kbd>K</kbd><span>Open command palette</span></div>
-      </div>
-    </main>;
-  }
-
-  return <main className="workspace">
-    <iframe
-      key={url}
-      className="app-frame"
-      src={url}
-      title={`${current.project.display_name} local preview`}
-      referrerPolicy="no-referrer"
-    />
-    {current.status === 'disconnected' && <div className="disconnect-shade"><div><span className="health-dot danger"/><strong>Dev server disconnected</strong><p>LocalView is preserving the session only for the reconnect grace period.</p></div></div>}
-  </main>;
 }
 
 function TopPill({ state, current, selected, live, onSelect, onSessions, onPause, onOpenNative, onImmersive }: {

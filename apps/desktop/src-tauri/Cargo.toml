@@ -14,6 +14,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 name = "localview-desktop"
 path = "src/main.rs"
 
+[features]
+default = []
+native-workspace = ["tauri/unstable"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 

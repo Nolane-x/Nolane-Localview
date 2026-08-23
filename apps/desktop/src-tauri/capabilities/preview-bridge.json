@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/remote-schema.json",
   "identifier": "preview-bridge-capability",
-  "description": "Least-privilege bridge for LocalView-managed loopback previews. IPC is granted only to URLPattern forms accepted by Tauri; IPv6 loopback remains unprivileged until the upstream URLPattern parser accepts the literal safely. No core, filesystem, shell, or arbitrary network permissions are granted.",
-  "windows": ["preview-*"],
+  "description": "Least-privilege bridge for LocalView-managed loopback preview and workspace WebViews. IPC is granted only to URLPattern forms accepted by Tauri; IPv6 loopback remains unprivileged until the upstream URLPattern parser accepts the literal safely. No core, filesystem, shell, arbitrary network, or dashboard permissions are granted.",
+  "webviews": ["preview-*", "workspace-*"],
   "local": false,
   "remote": {
     "urls": [
