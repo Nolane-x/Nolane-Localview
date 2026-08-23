@@ -17,8 +17,8 @@ function readBounds(element: HTMLElement): WorkspaceBounds | undefined {
 
 export function WorkspaceSurface({ current, url, support }: WorkspaceSurfaceProps) {
   const slotRef = useRef<HTMLElement>(null);
-  const openedSessionRef = useRef<string>();
-  const lastUrlRef = useRef<string>();
+  const openedSessionRef = useRef<string | null>(null);
+  const lastUrlRef = useRef<string | null>(null);
   const [nativeFailedFor, setNativeFailedFor] = useState<string>();
 
   const wantsNative = useMemo(
@@ -53,8 +53,8 @@ export function WorkspaceSurface({ current, url, support }: WorkspaceSurfaceProp
     return () => {
       disposed = true;
       if (openedSessionRef.current === sessionId) {
-        openedSessionRef.current = undefined;
-        lastUrlRef.current = undefined;
+        openedSessionRef.current = null;
+        lastUrlRef.current = null;
         void api.closeWorkspaceSurface(sessionId).catch(() => undefined);
       }
     };
