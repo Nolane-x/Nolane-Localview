@@ -66,7 +66,7 @@ const SCRIPT: &str = r#"
       seq: ++sequence,
       type,
       at: performance.now(),
-      route: location.pathname + location.search + location.hash,
+      route: safeUrl(location.href),
       ...payload,
     });
     if (events.length > config.max_events) {
@@ -97,7 +97,21 @@ const SCRIPT: &str = r#"
       const text = labelledBy.split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').trim();
       if (text) return redact(text).slice(0, 180);
     }
-    if ('value' in el && ['BUTTON', 'INPUT'].includes(el.tagName) && el.value) return redact(el.value).slice(0, 180);
+    if (el.labels?.length) {
+      const text = Array.from(el.labels).map(label => label.textContent || '').join(' ').replace(/\s+/g, ' ').trim();
+      if (text) return redact(text).slice(0, 180);
+    }
+    if (el.tagName === 'BUTTON' && el.value) return redact(el.value).slice(0, 180);
+    if (el.tagName === 'INPUT') {
+      const type = String(el.type || 'text').toLowerCase();
+      if (['button', 'submit', 'reset'].includes(type) && el.value) return redact(el.value).slice(0, 180);
+      const placeholder = el.getAttribute?.('placeholder');
+      return placeholder ? redact(placeholder).slice(0, 180) : null;
+    }
+    if (['TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable) {
+      const placeholder = el.getAttribute?.('placeholder');
+      return placeholder ? redact(placeholder).slice(0, 180) : null;
+    }
     return redact(el.innerText || el.alt || el.title || '').replace(/\s+/g, ' ').trim().slice(0, 180) || null;
   };
 
@@ -156,8 +170,8 @@ const SCRIPT: &str = r#"
       .map(semanticNode);
     return {
       version: snapshotVersion,
-      route: location.pathname + location.search + location.hash,
-      title: document.title,
+      route: safeUrl(location.href),
+      title: redact(document.title).slice(0, 240),
       readyState: document.readyState,
       viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
       scroll: { x: scrollX, y: scrollY },
@@ -350,10 +364,13 @@ mod tests {
     }
 
     #[test]
-    fn defaults_capture_metadata_without_bodies() {
+    fn defaults_capture_metadata_without_bodies_or_live_form_values() {
         let script = bootstrap_script(&InstrumentationConfig::default());
         assert!(script.contains("include_network"));
         assert!(!script.contains("response.text()"));
         assert!(!script.contains("response.json()"));
+        assert!(!script.contains("['BUTTON', 'INPUT'].includes(el.tagName) && el.value"));
+        assert!(script.contains("el.isContentEditable"));
+        assert!(script.contains("route: safeUrl(location.href)"));
     }
 }
