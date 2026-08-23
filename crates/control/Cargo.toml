@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+chrono.workspace = true
 localview-evidence = { path = "../evidence" }
 localview-live-analysis = { path = "../live-analysis" }
 localview-live-bridge = { path = "../live-bridge" }
@@ -15,6 +16,7 @@ localview-observation = { path = "../observation" }
 localview-project-state = { path = "../project-state" }
 localview-protocol = { path = "../protocol" }
 localview-sessions = { path = "../sessions" }
+localview-verification = { path = "../verification" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
