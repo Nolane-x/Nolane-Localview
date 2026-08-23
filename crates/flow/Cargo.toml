@@ -1,12 +1,9 @@
 [package]
-name = "localview-semantic"
+name = "localview-flow"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-chrono.workspace = true
-localview-protocol = { path = "../protocol" }
 serde.workspace = true
-serde_json.workspace = true

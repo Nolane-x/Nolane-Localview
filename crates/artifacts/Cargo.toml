@@ -1,12 +1,11 @@
 [package]
-name = "localview-semantic"
+name = "localview-artifacts"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-chrono.workspace = true
-localview-protocol = { path = "../protocol" }
+anyhow.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+tokio.workspace = true

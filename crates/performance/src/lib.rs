@@ -1,0 +1,5 @@
+#![forbid(unsafe_code)]
+use serde::{Deserialize,Serialize};
+#[derive(Debug,Clone,Serialize,Deserialize,Default)]pub struct PerformanceSample{pub render_ms:Option<u64>,pub long_tasks_ms:Vec<u64>,pub cumulative_layout_shift:Option<f64>,pub transferred_bytes:Option<u64>,pub heap_bytes:Option<u64>,pub hmr_settle_ms:Option<u64>}
+#[derive(Debug,Clone,Serialize,Deserialize)]pub struct PerformanceFinding{pub code:String,pub severity:u8,pub message:String}
+pub fn analyze(s:&PerformanceSample)->Vec<PerformanceFinding>{let mut o=Vec::new();for t in &s.long_tasks_ms{if *t>=50{o.push(PerformanceFinding{code:"long_task".into(),severity:2,message:format!("Main-thread task lasted {t}ms")});}}if s.cumulative_layout_shift.is_some_and(|v|v>0.25){o.push(PerformanceFinding{code:"layout_instability".into(),severity:2,message:format!("CLS {:.3}",s.cumulative_layout_shift.unwrap())});}if s.hmr_settle_ms.is_some_and(|v|v>2_000){o.push(PerformanceFinding{code:"slow_hmr".into(),severity:1,message:format!("HMR settle {}ms",s.hmr_settle_ms.unwrap())});}o}
