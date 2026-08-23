@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
-    BridgeAction, BridgeActionResult, IngestReport, ObserverBatch,
+    BridgeAction, BridgeActionResult, IngestReport, ObserverBatch, ObserverEvent,
 };
 use localview_protocol::{Health, Session, SessionId};
 use serde::Serialize;
@@ -24,6 +24,12 @@ struct DashboardState {
 struct EngineInfo {
     native: &'static str,
     tier3: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct LiveSessionState {
+    observer: Vec<ObserverEvent>,
+    action_results: Vec<BridgeActionResult>,
 }
 
 #[tauri::command]
@@ -88,6 +94,42 @@ async fn dashboard_state() -> Result<DashboardState, String> {
             "Verification",
             "MCP",
         ],
+    })
+}
+
+#[tauri::command]
+async fn live_session_state(session_id: SessionId) -> Result<LiveSessionState, String> {
+    let token = read_token().await?;
+    let client = control_client()?;
+    let observer = client
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/observer/recent"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json::<Vec<ObserverEvent>>()
+        .await
+        .map_err(err)?;
+    let action_results = client
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/results"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json::<Vec<BridgeActionResult>>()
+        .await
+        .map_err(err)?;
+    Ok(LiveSessionState {
+        observer,
+        action_results,
     })
 }
 
@@ -312,6 +354,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     focus_changed: 'focus',
     scroll_changed: 'scroll',
     console: 'console',
+    network: 'network',
     exception: 'runtime_error',
     unhandled_rejection: 'runtime_error',
     long_task: 'performance',
@@ -458,7 +501,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         }
       }
     } catch (_) {
-      // The native bridge is deliberately best-effort: page rendering must never depend on it.
+      // Best effort by design: LocalView observation must never break the target application.
     } finally {
       busy = false;
       if (running) setTimeout(tick, 140);
@@ -510,6 +553,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             dashboard_state,
+            live_session_state,
             pause_runtime,
             resume_runtime,
             open_preview,
