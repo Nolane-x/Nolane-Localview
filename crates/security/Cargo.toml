@@ -1,0 +1,12 @@
+[package]
+name = "localview-security"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+localview-protocol = { path = "../protocol" }
+regex.workspace = true
+serde.workspace = true
+uuid.workspace = true

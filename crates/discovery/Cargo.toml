@@ -1,0 +1,16 @@
+[package]
+name = "localview-discovery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+localview-protocol = { path = "../protocol" }
+regex.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true

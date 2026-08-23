@@ -1,0 +1,21 @@
+[package]
+name = "localview-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+localview-control = { path = "../../crates/control" }
+localview-core = { path = "../../crates/core" }
+localview-discovery = { path = "../../crates/discovery" }
+localview-observation = { path = "../../crates/observation" }
+localview-protocol = { path = "../../crates/protocol" }
+localview-security = { path = "../../crates/security" }
+localview-sessions = { path = "../../crates/sessions" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
