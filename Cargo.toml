@@ -14,6 +14,7 @@ members = [
   "crates/responsive",
   "crates/source-map",
   "crates/source-graph",
+  "crates/project-state",
   "crates/token-budget",
   "crates/framework-adapters",
   "crates/capture",
