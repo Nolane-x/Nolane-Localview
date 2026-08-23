@@ -1,0 +1,18 @@
+[[permission]]
+identifier = "maincommands"
+description = "Allows the bundled LocalView dashboard to inspect runtime state, pause or resume discovery, and open a localhost preview."
+commands.allow = [
+  "dashboard_state",
+  "pause_runtime",
+  "resume_runtime",
+  "open_preview"
+]
+
+[[permission]]
+identifier = "previewbridge"
+description = "Allows a LocalView-managed localhost preview to submit bounded observer data and execute only queued LocalView page actions through the native bridge."
+commands.allow = [
+  "preview_ingest",
+  "preview_take_actions",
+  "preview_complete_action"
+]
