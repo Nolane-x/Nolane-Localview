@@ -117,7 +117,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({"name":"events.recent","description":"Return recent daemon runtime events","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"observer.recent","description":"Read recent in-page observer events for one session","inputSchema":session_schema()}),
         json!({"name":"page.snapshot","description":"Return a completed privacy-bounded semantic, ARIA, style and geometry snapshot from the active LocalView page bridge","inputSchema":session_schema()}),
-        json!({"name":"page.inspect","description":"Return completed semantic, ARIA, computed-style and geometry details for one stable LocalView element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"}},"required":["session","reference"]}}),
+        json!({"name":"page.inspect","description":"Return one element from a fresh semantic snapshot using its stable LocalView reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"}},"required":["session","reference"]}}),
         json!({"name":"action.click","description":"Queue a click against a stable LocalView element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"}},"required":["session","reference"]}}),
         json!({"name":"action.type","description":"Queue text input against a stable element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"},"text":{"type":"string"},"clear_first":{"type":"boolean","default":false}},"required":["session","reference","text"]}}),
         json!({"name":"action.key","description":"Queue a keyboard event","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"},"key":{"type":"string"},"modifiers":{"type":"array","items":{"type":"string"}}},"required":["session","key"]}}),
@@ -144,30 +144,23 @@ async fn call_tool(params: &Value) -> Result<Value> {
 
     if name == "page.snapshot" {
         let session = string_arg(&args, "session")?;
-        let payload = execute_page_action(
-            &client,
-            &base,
-            &token,
-            session,
-            None,
-            json!({"type":"snapshot"}),
-        )
-        .await?;
+        let payload = fresh_page_snapshot(&client, &base, &token, session).await?;
         return tool_content(payload);
     }
     if name == "page.inspect" {
         let session = string_arg(&args, "session")?;
         let reference = string_arg(&args, "reference")?;
-        let payload = execute_page_action(
-            &client,
-            &base,
-            &token,
-            session,
-            Some(reference),
-            json!({"type":"inspect"}),
-        )
-        .await?;
-        return tool_content(payload);
+        let snapshot = fresh_page_snapshot(&client, &base, &token, session).await?;
+        let node = find_semantic_node(&snapshot, reference)
+            .cloned()
+            .with_context(|| format!("element reference not found in fresh snapshot: {reference}"))?;
+        return tool_content(json!({
+            "reference": reference,
+            "version": snapshot.get("version"),
+            "route": snapshot.get("route"),
+            "viewport": snapshot.get("viewport"),
+            "node": node,
+        }));
     }
 
     let response = match name {
@@ -325,6 +318,23 @@ async fn call_tool(params: &Value) -> Result<Value> {
     tool_content(content)
 }
 
+async fn fresh_page_snapshot(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    session: &str,
+) -> Result<Value> {
+    execute_page_action(
+        client,
+        base,
+        token,
+        session,
+        None,
+        json!({"type":"snapshot"}),
+    )
+    .await
+}
+
 async fn execute_page_action(
     client: &reqwest::Client,
     base: &str,
@@ -374,6 +384,19 @@ async fn execute_page_action(
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+fn find_semantic_node<'a>(snapshot: &'a Value, reference: &str) -> Option<&'a Value> {
+    fn visit<'a>(node: &'a Value, reference: &str) -> Option<&'a Value> {
+        if node.get("ref").and_then(Value::as_str) == Some(reference) {
+            return Some(node);
+        }
+        node.get("children")
+            .and_then(Value::as_array)
+            .and_then(|children| children.iter().find_map(|child| visit(child, reference)))
+    }
+
+    snapshot.get("semantic_tree").and_then(|root| visit(root, reference))
 }
 
 fn tool_content(content: Value) -> Result<Value> {
@@ -478,4 +501,29 @@ async fn read_token() -> Result<String> {
         .await?
         .trim()
         .to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_node_lookup_walks_nested_snapshot() {
+        let snapshot = json!({
+            "semantic_tree": {
+                "ref": "@root",
+                "children": [{
+                    "ref": "@section",
+                    "children": [{"ref": "@save", "role": "button", "children": []}]
+                }]
+            }
+        });
+        assert_eq!(
+            find_semantic_node(&snapshot, "@save")
+                .and_then(|node| node.get("role"))
+                .and_then(Value::as_str),
+            Some("button")
+        );
+        assert!(find_semantic_node(&snapshot, "@missing").is_none());
+    }
 }
