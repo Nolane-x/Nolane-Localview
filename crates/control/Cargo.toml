@@ -15,6 +15,7 @@ localview-live-bridge = { path = "../live-bridge" }
 localview-observation = { path = "../observation" }
 localview-project-state = { path = "../project-state" }
 localview-protocol = { path = "../protocol" }
+localview-security = { path = "../security" }
 localview-sessions = { path = "../sessions" }
 localview-verification = { path = "../verification" }
 serde.workspace = true
