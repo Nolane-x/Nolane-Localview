@@ -27,6 +27,8 @@ members = [
   "crates/instrumentation",
   "crates/diagnostics",
   "crates/reports",
+  "crates/quality",
+  "crates/live-bridge",
   "apps/daemon",
   "apps/cli",
   "apps/desktop/src-tauri",
