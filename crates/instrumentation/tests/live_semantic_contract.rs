@@ -1,0 +1,34 @@
+use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
+
+#[test]
+fn default_runtime_exposes_bounded_semantic_and_geometry_contract() {
+    let config = InstrumentationConfig::default();
+    let encoded = serde_json::to_value(&config).expect("config serializes");
+
+    assert_eq!(encoded["max_semantic_nodes"], 600);
+    assert_eq!(encoded["max_tree_depth"], 12);
+    assert_eq!(encoded["max_style_nodes"], 192);
+    assert_eq!(encoded["max_geometry_nodes"], 384);
+
+    let script = bootstrap_script(&config);
+    assert!(script.contains("semantic_snapshot"));
+    assert!(script.contains("geometry_changed"));
+    assert!(script.contains("computedStylePacket"));
+    assert!(script.contains("semanticTree"));
+    assert!(script.contains("inspect(reference)"));
+    assert!(script.contains("documentRect"));
+    assert!(script.contains("layout_changes"));
+}
+
+#[test]
+fn semantic_packets_remain_privacy_bounded() {
+    let script = bootstrap_script(&InstrumentationConfig::default());
+
+    assert!(!script.contains("response.text()"));
+    assert!(!script.contains("response.json()"));
+    assert!(!script.contains("backgroundImage"));
+    assert!(!script.contains("cssText"));
+    assert!(!script.contains("localStorage"));
+    assert!(!script.contains("sessionStorage"));
+    assert!(!script.contains("document.cookie"));
+}
