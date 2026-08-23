@@ -63,7 +63,6 @@ pub enum BridgeActionKind {
     Scroll { x: f64, y: f64 },
     Focus,
     Snapshot,
-    Inspect,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
