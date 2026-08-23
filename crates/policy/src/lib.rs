@@ -38,7 +38,10 @@ impl Default for ProjectPolicy {
             denied_routes: Vec::new(),
             protected_selectors: Vec::new(),
             allowed_external_hosts: BTreeSet::new(),
-            require_confirmation_for: BTreeSet::from([IntentClass::Destructive, IntentClass::ExternalSideEffect]),
+            require_confirmation_for: BTreeSet::from([
+                IntentClass::Destructive,
+                IntentClass::ExternalSideEffect,
+            ]),
             redact_selectors: Vec::new(),
         }
     }
@@ -46,7 +49,13 @@ impl Default for ProjectPolicy {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
-pub enum IntentClass { ReadOnly, LocalInteraction, LocalMutation, Destructive, ExternalSideEffect }
+pub enum IntentClass {
+    ReadOnly,
+    LocalInteraction,
+    LocalMutation,
+    Destructive,
+    ExternalSideEffect,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionIntent {
@@ -63,25 +72,47 @@ pub struct ActionIntent {
 pub enum PolicyDecision { Allow, Deny, RequireConfirmation }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PolicyResult { pub decision: PolicyDecision, pub reasons: Vec<String> }
+pub struct PolicyResult {
+    pub decision: PolicyDecision,
+    pub reasons: Vec<String>,
+}
 
 pub fn authorize(intent: &ActionIntent, policy: &ProjectPolicy) -> PolicyResult {
     let mut reasons = Vec::new();
-    if !policy.allowed.contains(&intent.permission) { reasons.push(format!("permission {:?} is not granted", intent.permission)); }
-    if intent.route.as_ref().is_some_and(|route| policy.denied_routes.iter().any(|prefix| route.starts_with(prefix))) { reasons.push("route is denied by project policy".into()); }
-    if intent.selector.as_ref().is_some_and(|selector| policy.protected_selectors.iter().any(|protected| selector == protected)) { reasons.push("target is protected by project policy".into()); }
-    if let Some(host) = &intent.external_host {
-        if !policy.allowed_external_hosts.contains(host) { reasons.push(format!("external host {host} is not allowlisted")); }
+    if !policy.allowed.contains(&intent.permission) {
+        reasons.push(format!("permission {:?} is not granted", intent.permission));
     }
-    if !reasons.is_empty() { return PolicyResult { decision: PolicyDecision::Deny, reasons }; }
-    if policy.require_confirmation_for.contains(&intent.class) { return PolicyResult { decision: PolicyDecision::RequireConfirmation, reasons: vec!["intent class requires explicit confirmation".into()] }; }
+    if intent.route.as_ref().is_some_and(|route| {
+        policy.denied_routes.iter().any(|prefix| route.starts_with(prefix))
+    }) {
+        reasons.push("route is denied by project policy".into());
+    }
+    if intent.selector.as_ref().is_some_and(|selector| {
+        policy.protected_selectors.iter().any(|protected| selector == protected)
+    }) {
+        reasons.push("target is protected by project policy".into());
+    }
+    if let Some(host) = &intent.external_host {
+        if !policy.allowed_external_hosts.contains(host) {
+            reasons.push(format!("external host {host} is not allowlisted"));
+        }
+    }
+    if !reasons.is_empty() {
+        return PolicyResult { decision: PolicyDecision::Deny, reasons };
+    }
+    if policy.require_confirmation_for.contains(&intent.class) {
+        return PolicyResult {
+            decision: PolicyDecision::RequireConfirmation,
+            reasons: vec!["intent class requires explicit confirmation".into()],
+        };
+    }
     PolicyResult { decision: PolicyDecision::Allow, reasons }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentProfile {
     pub id: String,
-    pub capabilities: BTreeSet<Capability>,
+    pub capabilities: Vec<Capability>,
     pub permissions: BTreeSet<Permission>,
     pub max_parallel_actions: usize,
     pub token_budget: usize,
@@ -131,7 +162,8 @@ pub fn persona_drift(before: &Persona, after: &Persona) -> PersonaDrift {
     if before.reduced_motion != after.reduced_motion { changed.push("reduced_motion".into()); }
     if before.input_mode != after.input_mode { changed.push("input_mode".into()); }
     if before.runtime_state != after.runtime_state { changed.push("runtime_state".into()); }
-    let security_sensitive = before.secret_fields != after.secret_fields || changed.iter().any(|field| after.secret_fields.contains(field));
+    let security_sensitive = before.secret_fields != after.secret_fields
+        || changed.iter().any(|field| after.secret_fields.contains(field));
     PersonaDrift { changed_fields: changed, security_sensitive }
 }
 
@@ -149,9 +181,25 @@ pub struct PluginManifest {
 }
 
 pub fn plugin_allowed(manifest: &PluginManifest, policy: &ProjectPolicy) -> PolicyResult {
-    let ungranted = manifest.requested_permissions.difference(&policy.allowed).copied().collect::<Vec<_>>();
-    if !ungranted.is_empty() { return PolicyResult { decision: PolicyDecision::Deny, reasons: vec![format!("plugin requests ungranted permissions: {ungranted:?}")] }; }
-    if manifest.trust == PluginTrust::Untrusted && (!manifest.analyzer_only || manifest.network_access) { return PolicyResult { decision: PolicyDecision::Deny, reasons: vec!["untrusted plugins must be analyzer-only and offline".into()] }; }
+    let ungranted = manifest
+        .requested_permissions
+        .difference(&policy.allowed)
+        .copied()
+        .collect::<Vec<_>>();
+    if !ungranted.is_empty() {
+        return PolicyResult {
+            decision: PolicyDecision::Deny,
+            reasons: vec![format!("plugin requests ungranted permissions: {ungranted:?}")],
+        };
+    }
+    if manifest.trust == PluginTrust::Untrusted
+        && (!manifest.analyzer_only || manifest.network_access)
+    {
+        return PolicyResult {
+            decision: PolicyDecision::Deny,
+            reasons: vec!["untrusted plugins must be analyzer-only and offline".into()],
+        };
+    }
     PolicyResult { decision: PolicyDecision::Allow, reasons: Vec::new() }
 }
 
@@ -164,10 +212,15 @@ pub struct FormAction {
 }
 
 pub fn classify_form_action(action: &FormAction) -> IntentClass {
-    if action.external_destination.is_some() { IntentClass::ExternalSideEffect }
-    else if action.submit && action.changes_server_state { IntentClass::Destructive }
-    else if action.submit { IntentClass::LocalMutation }
-    else { IntentClass::LocalInteraction }
+    if action.external_destination.is_some() {
+        IntentClass::ExternalSideEffect
+    } else if action.submit && action.changes_server_state {
+        IntentClass::Destructive
+    } else if action.submit {
+        IntentClass::LocalMutation
+    } else {
+        IntentClass::LocalInteraction
+    }
 }
 
 #[cfg(test)]
@@ -177,14 +230,36 @@ mod tests {
     #[test]
     fn external_host_is_denied_without_allowlist() {
         let policy = ProjectPolicy::default();
-        let result = authorize(&ActionIntent { name: "post".into(), class: IntentClass::ExternalSideEffect, permission: Permission::ExternalNetwork, route: None, selector: None, external_host: Some("api.example.com".into()) }, &policy);
+        let result = authorize(
+            &ActionIntent {
+                name: "post".into(),
+                class: IntentClass::ExternalSideEffect,
+                permission: Permission::ExternalNetwork,
+                route: None,
+                selector: None,
+                external_host: Some("api.example.com".into()),
+            },
+            &policy,
+        );
         assert_eq!(result.decision, PolicyDecision::Deny);
     }
 
     #[test]
-    fn untrusted_plugin_cannot_request network_or_mutation() {
-        let policy = ProjectPolicy { allowed: BTreeSet::from([Permission::Observe]), ..ProjectPolicy::default() };
-        let result = plugin_allowed(&PluginManifest { id: "x".into(), trust: PluginTrust::Untrusted, requested_permissions: BTreeSet::from([Permission::Observe]), analyzer_only: true, network_access: true }, &policy);
+    fn untrusted_plugin_cannot_request_network_or_mutation() {
+        let policy = ProjectPolicy {
+            allowed: BTreeSet::from([Permission::Observe]),
+            ..ProjectPolicy::default()
+        };
+        let result = plugin_allowed(
+            &PluginManifest {
+                id: "x".into(),
+                trust: PluginTrust::Untrusted,
+                requested_permissions: BTreeSet::from([Permission::Observe]),
+                analyzer_only: true,
+                network_access: true,
+            },
+            &policy,
+        );
         assert_eq!(result.decision, PolicyDecision::Deny);
     }
 }
