@@ -61,11 +61,22 @@ impl SessionManager {
         let ids = sessions.keys().copied().collect::<Vec<_>>();
         for id in ids {
             if seen.contains(&id) { continue; }
-            let session = sessions.get_mut(&id).expect("known id");
-            if session.disconnected_at.is_none() {
-                session.disconnected_at = Some(now); session.status = SessionStatus::Disconnected; result.disconnected.push(id);
-            } else if now - session.disconnected_at.unwrap() >= grace {
-                sessions.remove(&id); result.removed.push(id);
+            let mut should_remove = false;
+            if let Some(session) = sessions.get_mut(&id) {
+                match session.disconnected_at.as_ref() {
+                    None => {
+                        session.disconnected_at = Some(now);
+                        session.status = SessionStatus::Disconnected;
+                        result.disconnected.push(id);
+                    }
+                    Some(disconnected_at) => {
+                        should_remove = now.signed_duration_since(disconnected_at.to_owned()) >= grace;
+                    }
+                }
+            }
+            if should_remove {
+                sessions.remove(&id);
+                result.removed.push(id);
             }
         }
         result
@@ -84,7 +95,7 @@ mod tests {
         let manager = SessionManager::new(Duration::from_secs(2)); let t = Utc::now();
         let first = manager.reconcile(vec![discovered(5173)], t).await; let id = first.created[0];
         let moved = manager.reconcile(vec![discovered(5174)], t + chrono::Duration::milliseconds(500)).await;
-        assert!(moved.created.is_empty()); assert_eq!(manager.get(id).await.unwrap().endpoint.port, 5174);
+        assert!(moved.created.is_empty()); assert_eq!(manager.get(id).await.expect("session should exist").endpoint.port, 5174);
     }
     #[tokio::test]
     async fn removes_after_grace() {
