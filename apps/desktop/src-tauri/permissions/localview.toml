@@ -1,8 +1,9 @@
 [[permission]]
 identifier = "maincommands"
-description = "Allows the bundled LocalView dashboard to inspect runtime state, pause or resume discovery, and open a localhost preview."
+description = "Allows the bundled LocalView dashboard to inspect runtime state and live evidence, pause or resume discovery, and open a localhost preview."
 commands.allow = [
   "dashboard_state",
+  "live_session_state",
   "pause_runtime",
   "resume_runtime",
   "open_preview"
