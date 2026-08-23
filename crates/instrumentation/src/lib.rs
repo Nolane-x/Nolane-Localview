@@ -10,6 +10,7 @@ pub struct InstrumentationConfig {
     pub max_tree_depth: usize,
     pub max_style_nodes: usize,
     pub max_geometry_nodes: usize,
+    pub max_occlusion_samples: usize,
     pub include_console: bool,
     pub include_network: bool,
     pub include_performance: bool,
@@ -25,6 +26,7 @@ impl Default for InstrumentationConfig {
             max_tree_depth: 12,
             max_style_nodes: 192,
             max_geometry_nodes: 384,
+            max_occlusion_samples: 128,
             include_console: true,
             include_network: true,
             include_performance: true,
@@ -228,6 +230,23 @@ const SCRIPT: &str = r#"
     return output;
   };
 
+  const sourceHint = (el) => {
+    for (const attribute of ['data-component-source', 'data-source']) {
+      const raw = el.getAttribute?.(attribute);
+      if (!raw) continue;
+      const value = redact(raw).trim().slice(0, 320);
+      if (!value) continue;
+      const match = value.match(/^(.*?)(?::(\d+))?(?::(\d+))?$/);
+      return {
+        origin: attribute,
+        file: (match?.[1] || value).slice(0, 260),
+        line: match?.[2] ? Number(match[2]) : null,
+        column: match?.[3] ? Number(match[3]) : null,
+      };
+    }
+    return null;
+  };
+
   const STYLE_PROPERTIES = [
     'display', 'position', 'overflowX', 'overflowY', 'boxSizing', 'zIndex',
     'flexDirection', 'flexWrap', 'justifyContent', 'alignItems', 'gap', 'rowGap', 'columnGap',
@@ -249,7 +268,54 @@ const SCRIPT: &str = r#"
     return packet;
   };
 
-  const compactSemanticNode = (el, includeStyle) => {
+  const rectIntersects = (a, b) =>
+    a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
+
+  const ancestorClips = (el, rect) => {
+    let cursor = el.parentElement;
+    for (let depth = 0; cursor && depth < 10; depth++, cursor = cursor.parentElement) {
+      const style = getComputedStyle(cursor);
+      const clipsX = ['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowX);
+      const clipsY = ['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowY);
+      if (!clipsX && !clipsY) continue;
+      const boundary = cursor.getBoundingClientRect();
+      if ((clipsX && (rect.left < boundary.left || rect.right > boundary.right)) ||
+          (clipsY && (rect.top < boundary.top || rect.bottom > boundary.bottom))) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const visibilityPacket = (el, style, budget) => {
+    const rect = el.getBoundingClientRect();
+    const viewport = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const inViewport = rect.width > 0 && rect.height > 0 && rectIntersects(rect, viewport);
+    const clipped = inViewport ? ancestorClips(el, rect) : false;
+    let occluded = false;
+    let occludedBy = null;
+    let sampled = false;
+
+    if (inViewport && !el.hidden && style.visibility !== 'hidden' && style.display !== 'none' &&
+        style.opacity !== '0' && budget.remaining > 0) {
+      budget.remaining -= 1;
+      sampled = true;
+      const x = Math.max(0, Math.min(innerWidth - 1, rect.left + rect.width / 2));
+      const y = Math.max(0, Math.min(innerHeight - 1, rect.top + rect.height / 2));
+      const stack = typeof document.elementsFromPoint === 'function' ? document.elementsFromPoint(x, y) : [];
+      const blocker = stack.find(candidate =>
+        candidate !== el && !el.contains(candidate) && !candidate.contains?.(el)
+      );
+      if (blocker) {
+        occluded = true;
+        occludedBy = refFor(blocker);
+      }
+    }
+
+    return { inViewport, clipped, occluded, occludedBy, sampled };
+  };
+
+  const compactSemanticNode = (el, includeStyle, occlusionBudget) => {
     const style = getComputedStyle(el);
     return {
       ref: refFor(el),
@@ -261,6 +327,8 @@ const SCRIPT: &str = r#"
       documentRect: documentRect(el),
       interactive: isInteractive(el),
       states: statePacket(el, style),
+      visibility: visibilityPacket(el, style, occlusionBudget),
+      sourceHint: sourceHint(el),
       attributes: safeAttributes(el),
       style: includeStyle ? computedStylePacket(el) : null,
     };
@@ -268,7 +336,7 @@ const SCRIPT: &str = r#"
 
   const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'META', 'LINK', 'HEAD']);
 
-  const semanticTree = () => {
+  const semanticTree = (occlusionBudget) => {
     const root = document.body || document.documentElement;
     if (!root) return null;
     let nodes = 0;
@@ -280,7 +348,7 @@ const SCRIPT: &str = r#"
       nodes += 1;
       const includeStyle = styled < config.max_style_nodes && (isInteractive(el) || depth <= 3);
       if (includeStyle) styled += 1;
-      const node = compactSemanticNode(el, includeStyle);
+      const node = compactSemanticNode(el, includeStyle, occlusionBudget);
       node.children = [];
       for (const child of Array.from(el.children || [])) {
         if (nodes >= config.max_semantic_nodes) break;
@@ -302,7 +370,8 @@ const SCRIPT: &str = r#"
 
   const rectEqual = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
   const semanticSignature = (node) => JSON.stringify([
-    node.tag, node.role, node.name, node.description, node.interactive, node.states, node.attributes
+    node.tag, node.role, node.name, node.description, node.interactive, node.states,
+    node.visibility, node.sourceHint, node.attributes
   ]);
 
   const snapshotDelta = (before, after) => {
@@ -342,13 +411,14 @@ const SCRIPT: &str = r#"
     };
   };
 
-  const interactiveSnapshot = () => Array.from(document.querySelectorAll(interactiveSelector))
+  const interactiveSnapshot = (occlusionBudget) => Array.from(document.querySelectorAll(interactiveSelector))
     .slice(0, config.max_interactive_nodes)
-    .map((el) => compactSemanticNode(el, false));
+    .map((el) => compactSemanticNode(el, false, occlusionBudget));
 
   const snapshot = () => {
     snapshotVersion += 1;
-    const semantic_tree = semanticTree();
+    const occlusionBudget = { remaining: Math.max(0, Number(config.max_occlusion_samples) || 0) };
+    const semantic_tree = semanticTree(occlusionBudget);
     const packet = {
       version: snapshotVersion,
       route: safeUrl(location.href),
@@ -358,7 +428,11 @@ const SCRIPT: &str = r#"
       scroll: { x: scrollX, y: scrollY },
       activeRef: refFor(document.activeElement),
       semantic_tree,
-      interactive: interactiveSnapshot(),
+      interactive: interactiveSnapshot(occlusionBudget),
+      occlusion: {
+        max_samples: config.max_occlusion_samples,
+        sampled: Math.max(0, Number(config.max_occlusion_samples) || 0) - occlusionBudget.remaining,
+      },
     };
     packet.delta = snapshotDelta(lastSnapshot, packet);
     lastSnapshot = packet;
@@ -386,7 +460,7 @@ const SCRIPT: &str = r#"
     }
     return {
       reference,
-      node: compactSemanticNode(el, true),
+      node: compactSemanticNode(el, true, { remaining: 1 }),
       ancestry: parents,
       viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
       route: safeUrl(location.href),
@@ -643,5 +717,6 @@ mod tests {
         assert_eq!(config.max_tree_depth, 12);
         assert_eq!(config.max_style_nodes, 192);
         assert_eq!(config.max_geometry_nodes, 384);
+        assert_eq!(config.max_occlusion_samples, 128);
     }
 }
