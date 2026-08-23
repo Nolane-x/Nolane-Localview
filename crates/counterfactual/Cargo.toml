@@ -1,0 +1,11 @@
+[package]
+name = "localview-counterfactual"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+localview-evidence = { path = "../evidence" }
+serde.workspace = true
+uuid.workspace = true
