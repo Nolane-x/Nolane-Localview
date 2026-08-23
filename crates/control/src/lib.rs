@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeSet,
     net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -16,18 +17,25 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use localview_evidence::{
-    EvidenceDraft, EvidenceKind, EvidenceStore, Provenance, UncertaintyClass,
+    EvidenceDraft, EvidenceKind, EvidenceStore, Provenance, RetentionTier, UncertaintyClass,
 };
-use localview_live_analysis::{analyze_live, diagnose_live};
+use localview_live_analysis::{analyze_live, diagnose_live, FindingClass};
 use localview_live_bridge::{
-    BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch, ObserverEvent,
+    BridgeAction, BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch, ObserverEvent,
     ObserverEventKind,
 };
 use localview_observation::ObservationBus;
-use localview_project_state::inspect_git;
-use localview_protocol::{Health, ObservationEvent, SessionId};
+use localview_project_state::{inspect_git, ProjectRevision};
+use localview_protocol::{Health, ObservationEvent as RuntimeObservationEvent, Session, SessionId};
+use localview_security::SecretRedactor;
 use localview_sessions::SessionManager;
+use localview_verification::{
+    proof_from_verification, proof_staleness, strict_coverage_report, verify_current, CoverageTarget,
+    LiveVerificationPacket, LiveVerificationVerdict, StrictCoverageObservation, VerificationProof,
+    VerificationState,
+};
 use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
 
@@ -52,8 +60,13 @@ pub fn router(state: ControlState) -> Router {
         .route("/v1/sessions/{id}/observer/recent", get(recent_observer))
         .route("/v1/sessions/{id}/analysis", get(session_analysis))
         .route("/v1/sessions/{id}/diagnose", get(session_diagnose))
+        .route("/v1/sessions/{id}/verify", get(session_verify))
+        .route("/v1/sessions/{id}/coverage", get(session_coverage))
+        .route("/v1/sessions/{id}/proof", post(create_session_proof))
         .route("/v1/sessions/{id}/evidence/recent", get(recent_evidence))
         .route("/v1/evidence/{evidence_id}", get(get_evidence))
+        .route("/v1/evidence/{evidence_id}/trace", get(trace_evidence))
+        .route("/v1/proof/{evidence_id}/staleness", get(proof_evidence_staleness))
         .route("/v1/sessions/{id}/actions", post(queue_action).get(take_actions))
         .route(
             "/v1/sessions/{id}/actions/results",
@@ -155,26 +168,9 @@ async fn session_project_state(
         )
             .into_response();
     };
-    let Some(root) = session.project.git_root.as_deref().or(session.project.cwd.as_deref()) else {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "project_root_unavailable",
-                "message": "LocalView has no filesystem root for this session"
-            })),
-        )
-            .into_response();
-    };
-    match inspect_git(root).await {
+    match project_revision(&session).await {
         Ok(revision) => Json(revision).into_response(),
-        Err(error) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "git_state_unavailable",
-                "message": error.to_string()
-            })),
-        )
-            .into_response(),
+        Err(response) => response,
     }
 }
 
@@ -273,6 +269,115 @@ async fn session_diagnose(
     Json(diagnose_live(&events)).into_response()
 }
 
+async fn session_verify(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    match build_verification(&state, id).await {
+        Ok(packet) => Json(packet).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn session_coverage(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    let packet = match build_verification(&state, id).await {
+        Ok(packet) => packet,
+        Err(response) => return response,
+    };
+
+    let required = packet.required_evidence_classes.clone();
+    let target = CoverageTarget {
+        id: "current_ui".into(),
+        risk_weight: 1,
+        required_evidence_classes: required.clone(),
+    };
+    let state_value = match packet.verdict {
+        LiveVerificationVerdict::Pass => VerificationState::Verified,
+        LiveVerificationVerdict::Stale => VerificationState::Stale,
+        LiveVerificationVerdict::Fail | LiveVerificationVerdict::Inconclusive => {
+            if packet.fresh_evidence_ids.is_empty() {
+                VerificationState::Unknown
+            } else {
+                VerificationState::Observed
+            }
+        }
+    };
+    let observation = StrictCoverageObservation {
+        target_id: "current_ui".into(),
+        state: state_value,
+        evidence_classes: packet.fresh_evidence_classes.clone(),
+        evidence_ids: packet.fresh_evidence_ids.clone(),
+    };
+    let current_target = strict_coverage_report(&[target], &[observation]);
+    Json(serde_json::json!({
+        "project_denominator_known": false,
+        "project_verified_ratio": serde_json::Value::Null,
+        "reason": "LocalView has not compiled a complete product-state denominator for this project yet",
+        "current_target": current_target,
+    }))
+    .into_response()
+}
+
+async fn create_session_proof(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    let packet = match build_verification(&state, id).await {
+        Ok(packet) => packet,
+        Err(response) => return response,
+    };
+    let proof = proof_from_verification(&packet);
+    let draft = EvidenceDraft {
+        kind: EvidenceKind::Proof,
+        session_id: id,
+        region: None,
+        payload: serde_json::to_value(&proof).unwrap_or(serde_json::Value::Null),
+        provenance: Provenance {
+            source: "verification-runtime".into(),
+            engine: Some("deterministic".into()),
+            revision: proof.payload.revision.clone(),
+            parent_ids: proof.payload.evidence_ids.clone(),
+            captured_at: Utc::now(),
+        },
+        confidence: if proof.payload.verdict == LiveVerificationVerdict::Pass {
+            1.0
+        } else {
+            0.0
+        },
+        uncertainty: if proof.payload.verdict == LiveVerificationVerdict::Pass {
+            UncertaintyClass::Derived
+        } else {
+            UncertaintyClass::Unknown
+        },
+        secret_taint: false,
+    };
+    let stored = state
+        .evidence
+        .insert_with_retention(draft, RetentionTier::Project)
+        .await;
+    Json(serde_json::json!({
+        "proof": proof,
+        "evidence_id": stored.id,
+        "deduplicated": stored.deduplicated,
+    }))
+    .into_response()
+}
+
 async fn recent_evidence(
     State(state): State<ControlState>,
     headers: HeaderMap,
@@ -303,6 +408,67 @@ async fn get_evidence(
         )
             .into_response(),
     }
+}
+
+async fn trace_evidence(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(evidence_id): Path<String>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if state.evidence.get(&evidence_id).await.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "evidence_not_found"})),
+        )
+            .into_response();
+    }
+    Json(state.evidence.trace(&evidence_id, 16).await).into_response()
+}
+
+async fn proof_evidence_staleness(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(evidence_id): Path<String>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    let Some(evidence) = state.evidence.get(&evidence_id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "evidence_not_found"})),
+        )
+            .into_response();
+    };
+    if evidence.kind != EvidenceKind::Proof {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "evidence_is_not_proof"})),
+        )
+            .into_response();
+    }
+    let proof: VerificationProof = match serde_json::from_value(evidence.payload.clone()) {
+        Ok(proof) => proof,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({"error": "invalid_proof_payload", "message": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    let current = match state.sessions.get(evidence.session_id).await {
+        Some(session) => project_revision(&session).await.ok(),
+        None => None,
+    };
+    Json(proof_staleness(
+        &proof,
+        current.as_ref().map(|revision| revision.working_tree_id.as_str()),
+    ))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -357,15 +523,34 @@ async fn complete_action(
         return response;
     }
 
-    let evidence = EvidenceDraft {
+    let Some(action) = state.live.claim_action(id, result.action_id).await else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "action_result_without_inflight_origin"})),
+        )
+            .into_response();
+    };
+    let revision = state
+        .sessions
+        .get(id)
+        .await
+        .and_then(|session| session.project.git_root.or(session.project.cwd));
+    let revision = if let Some(root) = revision {
+        inspect_git(root).await.ok().map(|value| value.working_tree_id)
+    } else {
+        None
+    };
+
+    let sanitized_result = sanitize_action_result(&action, &result);
+    let interaction = EvidenceDraft {
         kind: EvidenceKind::Interaction,
         session_id: id,
-        region: None,
-        payload: serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
+        region: action.reference.clone(),
+        payload: sanitized_result,
         provenance: Provenance {
             source: "native-action-executor".into(),
             engine: Some("native-webview".into()),
-            revision: None,
+            revision: revision.clone(),
             parent_ids: Vec::new(),
             captured_at: result.completed_at,
         },
@@ -373,8 +558,33 @@ async fn complete_action(
         uncertainty: UncertaintyClass::Observed,
         secret_taint: false,
     };
+    state.evidence.insert(interaction).await;
+
+    if matches!(action.action, BridgeActionKind::Snapshot) && result.ok {
+        for kind in [EvidenceKind::Semantic, EvidenceKind::Layout] {
+            state
+                .evidence
+                .insert(EvidenceDraft {
+                    kind,
+                    session_id: id,
+                    region: None,
+                    payload: result.payload.clone(),
+                    provenance: Provenance {
+                        source: "native-semantic-snapshot".into(),
+                        engine: Some("native-webview".into()),
+                        revision: revision.clone(),
+                        parent_ids: Vec::new(),
+                        captured_at: result.completed_at,
+                    },
+                    confidence: 1.0,
+                    uncertainty: UncertaintyClass::Observed,
+                    secret_taint: false,
+                })
+                .await;
+        }
+    }
+
     state.live.complete_action(id, result).await;
-    state.evidence.insert(evidence).await;
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -424,6 +634,106 @@ async fn resume(
     StatusCode::NO_CONTENT.into_response()
 }
 
+async fn build_verification(
+    state: &ControlState,
+    id: SessionId,
+) -> Result<LiveVerificationPacket, axum::response::Response> {
+    let Some(session) = state.sessions.get(id).await else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "session_not_found"})),
+        )
+            .into_response());
+    };
+    let revision = project_revision(&session).await.ok();
+    let evidence = state.evidence.recent_for_session(id, 4096).await;
+    let diagnosis = diagnose_live(&state.live.recent(id, 2048).await);
+    let deterministic_failures = diagnosis
+        .findings
+        .iter()
+        .filter(|finding| finding.class == FindingClass::Deterministic && finding.severity >= 3)
+        .count();
+    let required = BTreeSet::from(["semantic".to_owned(), "layout".to_owned()]);
+    Ok(verify_current(
+        revision.as_ref().map(|value| value.working_tree_id.as_str()),
+        &evidence,
+        deterministic_failures,
+        0,
+        &required,
+    ))
+}
+
+async fn project_revision(session: &Session) -> Result<ProjectRevision, axum::response::Response> {
+    let Some(root) = session
+        .project
+        .git_root
+        .as_deref()
+        .or(session.project.cwd.as_deref())
+    else {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "project_root_unavailable",
+                "message": "LocalView has no filesystem root for this session"
+            })),
+        )
+            .into_response());
+    };
+    inspect_git(root).await.map_err(|error| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "git_state_unavailable",
+                "message": error.to_string()
+            })),
+        )
+            .into_response()
+    })
+}
+
+fn sanitize_action_result(action: &BridgeAction, result: &BridgeActionResult) -> serde_json::Value {
+    let redactor = SecretRedactor::default();
+    let error = result.error.as_deref().map(|value| redactor.redact(value));
+    match &action.action {
+        BridgeActionKind::TypeText { .. } => serde_json::json!({
+            "action_id": result.action_id,
+            "action": "type_text",
+            "reference": action.reference,
+            "ok": result.ok,
+            "error": error,
+            "completed_at": result.completed_at,
+            "input_value_retained": false,
+        }),
+        BridgeActionKind::Snapshot => serde_json::json!({
+            "action_id": result.action_id,
+            "action": "snapshot",
+            "ok": result.ok,
+            "error": error,
+            "completed_at": result.completed_at,
+        }),
+        BridgeActionKind::Click => action_summary(action, result, "click", error),
+        BridgeActionKind::Key { .. } => action_summary(action, result, "key", error),
+        BridgeActionKind::Scroll { .. } => action_summary(action, result, "scroll", error),
+        BridgeActionKind::Focus => action_summary(action, result, "focus", error),
+    }
+}
+
+fn action_summary(
+    action: &BridgeAction,
+    result: &BridgeActionResult,
+    action_name: &str,
+    error: Option<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "action_id": result.action_id,
+        "action": action_name,
+        "reference": action.reference,
+        "ok": result.ok,
+        "error": error,
+        "completed_at": result.completed_at,
+    })
+}
+
 fn evidence_from_observer(
     session_id: SessionId,
     generation: u64,
@@ -465,7 +775,9 @@ fn evidence_from_observer(
 
 fn evidence_kind(kind: &ObserverEventKind) -> EvidenceKind {
     match kind {
-        ObserverEventKind::DomMutation | ObserverEventKind::SemanticSnapshot => EvidenceKind::Semantic,
+        ObserverEventKind::DomMutation | ObserverEventKind::SemanticSnapshot => {
+            EvidenceKind::Semantic
+        }
         ObserverEventKind::Layout => EvidenceKind::Layout,
         ObserverEventKind::Console | ObserverEventKind::RuntimeError => EvidenceKind::Console,
         ObserverEventKind::Network => EvidenceKind::Network,
@@ -479,5 +791,40 @@ fn evidence_kind(kind: &ObserverEventKind) -> EvidenceKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope {
-    pub event: ObservationEvent,
+    pub event: RuntimeObservationEvent,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn action(kind: BridgeActionKind) -> BridgeAction {
+        BridgeAction {
+            id: Uuid::new_v4(),
+            session_id: Uuid::nil(),
+            reference: Some("@e1".into()),
+            action: kind,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn type_action_evidence_never_retains_input_text_or_result_value() {
+        let action = action(BridgeActionKind::TypeText {
+            text: "super-secret-value".into(),
+            clear_first: true,
+        });
+        let result = BridgeActionResult {
+            action_id: action.id,
+            ok: true,
+            error: None,
+            payload: serde_json::json!({"value":"super-secret-value"}),
+            completed_at: Utc::now(),
+        };
+        let payload = sanitize_action_result(&action, &result).to_string();
+        assert!(!payload.contains("super-secret-value"));
+        assert!(payload.contains("input_value_retained"));
+    }
 }
