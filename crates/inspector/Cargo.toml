@@ -1,0 +1,10 @@
+[package]
+name = "localview-inspector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+localview-protocol = { path = "../protocol" }
+serde.workspace = true
