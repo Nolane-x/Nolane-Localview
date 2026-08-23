@@ -16,9 +16,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use localview_live_bridge::{
-    BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch,
-};
+use localview_live_bridge::{BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch};
 use localview_observation::ObservationBus;
 use localview_protocol::{Health, ObservationEvent, SessionId};
 use localview_sessions::SessionManager;
@@ -43,7 +41,10 @@ pub fn router(state: ControlState) -> Router {
         .route("/v1/sessions/{id}/observer", post(ingest_observer))
         .route("/v1/sessions/{id}/observer/recent", get(recent_observer))
         .route("/v1/sessions/{id}/actions", post(queue_action).get(take_actions))
-        .route("/v1/sessions/{id}/actions/results", post(complete_action).get(action_results))
+        .route(
+            "/v1/sessions/{id}/actions/results",
+            post(complete_action).get(action_results),
+        )
         .route("/v1/events/recent", get(recent_events))
         .route("/v1/runtime/pause", post(pause))
         .route("/v1/runtime/resume", post(resume))
@@ -82,7 +83,10 @@ fn denied() -> axum::response::Response {
         .into_response()
 }
 
-async fn ensure_session(state: &ControlState, id: SessionId) -> Result<(), axum::response::Response> {
+async fn ensure_session(
+    state: &ControlState,
+    id: SessionId,
+) -> Result<(), axum::response::Response> {
     if state.sessions.get(id).await.is_some() {
         Ok(())
     } else {
@@ -147,7 +151,7 @@ async fn ingest_observer(
     State(state): State<ControlState>,
     headers: HeaderMap,
     Path(id): Path<SessionId>,
-    Json(mut batch): Json<ObserverBatch>,
+    Json(batch): Json<ObserverBatch>,
 ) -> axum::response::Response {
     if !authorized(&headers, &state) {
         return denied();
@@ -162,7 +166,6 @@ async fn ingest_observer(
         )
             .into_response();
     }
-    batch.session_id = id;
     Json(state.live.ingest(batch).await).into_response()
 }
 
@@ -198,7 +201,10 @@ async fn queue_action(
     if let Err(response) = ensure_session(&state, id).await {
         return response;
     }
-    let action = state.live.enqueue_action(id, request.reference, request.action).await;
+    let action = state
+        .live
+        .enqueue_action(id, request.reference, request.action)
+        .await;
     (StatusCode::ACCEPTED, Json(action)).into_response()
 }
 
