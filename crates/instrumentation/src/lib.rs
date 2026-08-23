@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 pub struct InstrumentationConfig {
     pub max_events: usize,
     pub max_interactive_nodes: usize,
+    pub max_semantic_nodes: usize,
+    pub max_tree_depth: usize,
+    pub max_style_nodes: usize,
+    pub max_geometry_nodes: usize,
     pub include_console: bool,
     pub include_network: bool,
     pub include_performance: bool,
@@ -17,6 +21,10 @@ impl Default for InstrumentationConfig {
         Self {
             max_events: 1_024,
             max_interactive_nodes: 1_000,
+            max_semantic_nodes: 600,
+            max_tree_depth: 12,
+            max_style_nodes: 192,
+            max_geometry_nodes: 384,
             include_console: true,
             include_network: true,
             include_performance: true,
@@ -37,9 +45,14 @@ const SCRIPT: &str = r#"
   const config = __LOCALVIEW_CONFIG__;
   const events = [];
   const refs = new WeakMap();
+  const elementsByRef = new Map();
+  const geometryBaseline = new Map();
   let sequence = 0;
   let snapshotVersion = 0;
   let mutationFlushQueued = false;
+  let geometryFlushQueued = false;
+  let routeSnapshotTimer = 0;
+  let lastSnapshot = null;
   const changedRefs = new Set();
 
   const redact = (value) => String(value ?? '')
@@ -86,7 +99,10 @@ const SCRIPT: &str = r#"
   const roleOf = (el) => el.getAttribute?.('role') || ({
     A: 'link', BUTTON: 'button', INPUT: 'textbox', SELECT: 'combobox',
     TEXTAREA: 'textbox', IMG: 'img', NAV: 'navigation', MAIN: 'main',
-    HEADER: 'banner', FOOTER: 'contentinfo', FORM: 'form'
+    HEADER: 'banner', FOOTER: 'contentinfo', FORM: 'form', ARTICLE: 'article',
+    ASIDE: 'complementary', SECTION: 'region', H1: 'heading', H2: 'heading',
+    H3: 'heading', H4: 'heading', H5: 'heading', H6: 'heading', DIALOG: 'dialog',
+    TABLE: 'table', UL: 'list', OL: 'list', LI: 'listitem'
   })[el.tagName] || null;
 
   const nameOf = (el) => {
@@ -95,7 +111,7 @@ const SCRIPT: &str = r#"
     const labelledBy = el.getAttribute?.('aria-labelledby');
     if (labelledBy) {
       const text = labelledBy.split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').trim();
-      if (text) return redact(text).slice(0, 180);
+      if (text) return redact(text).replace(/\s+/g, ' ').slice(0, 180);
     }
     if (el.labels?.length) {
       const text = Array.from(el.labels).map(label => label.textContent || '').join(' ').replace(/\s+/g, ' ').trim();
@@ -115,14 +131,24 @@ const SCRIPT: &str = r#"
     return redact(el.innerText || el.alt || el.title || '').replace(/\s+/g, ' ').trim().slice(0, 180) || null;
   };
 
+  const descriptionOf = (el) => {
+    const ids = el.getAttribute?.('aria-describedby');
+    if (ids) {
+      const text = ids.split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').replace(/\s+/g, ' ').trim();
+      if (text) return redact(text).slice(0, 240);
+    }
+    const title = el.getAttribute?.('title');
+    return title ? redact(title).slice(0, 240) : null;
+  };
+
   const ancestry = (el) => {
     const parts = [];
     let cursor = el;
-    for (let depth = 0; cursor && depth < 5; depth++, cursor = cursor.parentElement) {
+    for (let depth = 0; cursor && depth < 6; depth++, cursor = cursor.parentElement) {
       let part = cursor.tagName?.toLowerCase() || 'node';
-      if (cursor.id) part += '#' + cursor.id;
+      if (cursor.id) part += '#' + redact(cursor.id).slice(0, 80);
       const testId = cursor.getAttribute?.('data-testid');
-      if (testId) part += '[testid=' + testId + ']';
+      if (testId) part += '[testid=' + redact(testId).slice(0, 80) + ']';
       parts.push(part);
     }
     return parts.reverse().join('>');
@@ -134,6 +160,7 @@ const SCRIPT: &str = r#"
     const signature = [roleOf(el) || '', nameOf(el) || '', el.tagName || '', ancestry(el)].join('|');
     const ref = '@e' + fnv(signature);
     refs.set(el, ref);
+    if (elementsByRef.size < config.max_semantic_nodes * 2) elementsByRef.set(ref, el);
     return ref;
   };
 
@@ -147,28 +174,182 @@ const SCRIPT: &str = r#"
     };
   };
 
+  const documentRect = (el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.round((r.x + scrollX) * 10) / 10,
+      y: Math.round((r.y + scrollY) * 10) / 10,
+      width: Math.round(r.width * 10) / 10,
+      height: Math.round(r.height * 10) / 10,
+    };
+  };
+
   const interactiveSelector = [
     'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
     '[role="button"]', '[role="link"]', '[role="textbox"]', '[tabindex]'
   ].join(',');
 
-  const semanticNode = (el) => ({
-    ref: refFor(el),
-    tag: el.tagName.toLowerCase(),
-    role: roleOf(el),
-    name: nameOf(el),
-    rect: rectOf(el),
-    disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
-    hidden: el.hidden || getComputedStyle(el).visibility === 'hidden' || getComputedStyle(el).display === 'none',
+  const isInteractive = (el) => {
+    try { return el.matches(interactiveSelector); } catch (_) { return false; }
+  };
+
+  const boolAttr = (el, name) => {
+    const value = el.getAttribute?.(name);
+    if (value === null || value === undefined) return null;
+    if (value === '' || value === name || value === 'true') return true;
+    if (value === 'false') return false;
+    return redact(value).slice(0, 80);
+  };
+
+  const statePacket = (el, style) => ({
+    disabled: !!el.disabled || boolAttr(el, 'aria-disabled') === true,
+    checked: typeof el.checked === 'boolean' ? el.checked : boolAttr(el, 'aria-checked'),
+    pressed: boolAttr(el, 'aria-pressed'),
+    selected: typeof el.selected === 'boolean' ? el.selected : boolAttr(el, 'aria-selected'),
+    expanded: boolAttr(el, 'aria-expanded'),
+    required: !!el.required || boolAttr(el, 'aria-required') === true,
+    readonly: !!el.readOnly || boolAttr(el, 'aria-readonly') === true,
+    invalid: boolAttr(el, 'aria-invalid'),
     focused: document.activeElement === el,
+    focusable: isInteractive(el) || Number(el.tabIndex) >= 0,
+    hidden: !!el.hidden || style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0',
   });
+
+  const safeAttributes = (el) => {
+    const output = {};
+    const allowed = new Set(['id', 'role', 'type', 'name', 'data-testid', 'aria-label', 'aria-labelledby', 'aria-describedby', 'aria-live', 'aria-current', 'aria-haspopup', 'aria-controls']);
+    for (const attr of Array.from(el.attributes || [])) {
+      if (allowed.has(attr.name) || attr.name.startsWith('aria-')) {
+        if (/value|password|secret|token|key/i.test(attr.name)) continue;
+        output[attr.name] = redact(attr.value).slice(0, 160);
+      }
+    }
+    if (el.tagName === 'A' && el.getAttribute('href')) output.href = safeUrl(el.href);
+    return output;
+  };
+
+  const STYLE_PROPERTIES = [
+    'display', 'position', 'overflowX', 'overflowY', 'boxSizing', 'zIndex',
+    'flexDirection', 'flexWrap', 'justifyContent', 'alignItems', 'gap', 'rowGap', 'columnGap',
+    'gridTemplateColumns', 'gridTemplateRows',
+    'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
+    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+    'fontSize', 'fontWeight', 'fontFamily', 'lineHeight', 'color', 'backgroundColor',
+    'opacity', 'pointerEvents', 'visibility'
+  ];
+
+  const computedStylePacket = (el) => {
+    const style = getComputedStyle(el);
+    const packet = {};
+    for (const property of STYLE_PROPERTIES) {
+      const value = style[property];
+      if (value !== undefined && value !== '') packet[property] = redact(value).slice(0, 180);
+    }
+    return packet;
+  };
+
+  const compactSemanticNode = (el, includeStyle) => {
+    const style = getComputedStyle(el);
+    return {
+      ref: refFor(el),
+      tag: el.tagName.toLowerCase(),
+      role: roleOf(el),
+      name: nameOf(el),
+      description: descriptionOf(el),
+      rect: rectOf(el),
+      documentRect: documentRect(el),
+      interactive: isInteractive(el),
+      states: statePacket(el, style),
+      attributes: safeAttributes(el),
+      style: includeStyle ? computedStylePacket(el) : null,
+    };
+  };
+
+  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'META', 'LINK', 'HEAD']);
+
+  const semanticTree = () => {
+    const root = document.body || document.documentElement;
+    if (!root) return null;
+    let nodes = 0;
+    let styled = 0;
+
+    const visit = (el, depth) => {
+      if (!el || el.nodeType !== Node.ELEMENT_NODE || SKIP_TAGS.has(el.tagName)) return null;
+      if (nodes >= config.max_semantic_nodes || depth > config.max_tree_depth) return null;
+      nodes += 1;
+      const includeStyle = styled < config.max_style_nodes && (isInteractive(el) || depth <= 3);
+      if (includeStyle) styled += 1;
+      const node = compactSemanticNode(el, includeStyle);
+      node.children = [];
+      for (const child of Array.from(el.children || [])) {
+        if (nodes >= config.max_semantic_nodes) break;
+        const next = visit(child, depth + 1);
+        if (next) node.children.push(next);
+      }
+      return node;
+    };
+
+    return visit(root, 0);
+  };
+
+  const flattenTree = (root, out = new Map()) => {
+    if (!root) return out;
+    out.set(root.ref, root);
+    for (const child of root.children || []) flattenTree(child, out);
+    return out;
+  };
+
+  const rectEqual = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  const semanticSignature = (node) => JSON.stringify([
+    node.tag, node.role, node.name, node.description, node.interactive, node.states, node.attributes
+  ]);
+
+  const snapshotDelta = (before, after) => {
+    if (!before) return {
+      added_refs: Array.from(flattenTree(after.semantic_tree).keys()).slice(0, config.max_semantic_nodes),
+      removed_refs: [],
+      changed_refs: [],
+      layout_changes: [],
+      route_changed: false,
+    };
+    const oldNodes = flattenTree(before.semantic_tree);
+    const newNodes = flattenTree(after.semantic_tree);
+    const added_refs = [];
+    const removed_refs = [];
+    const changed_refs = [];
+    const layout_changes = [];
+
+    for (const [ref, node] of newNodes) {
+      const old = oldNodes.get(ref);
+      if (!old) {
+        added_refs.push(ref);
+        continue;
+      }
+      if (semanticSignature(old) !== semanticSignature(node)) changed_refs.push(ref);
+      if (!rectEqual(old.documentRect, node.documentRect)) {
+        layout_changes.push({ reference: ref, before: old.documentRect, after: node.documentRect });
+      }
+    }
+    for (const ref of oldNodes.keys()) if (!newNodes.has(ref)) removed_refs.push(ref);
+
+    return {
+      added_refs: added_refs.slice(0, config.max_semantic_nodes),
+      removed_refs: removed_refs.slice(0, config.max_semantic_nodes),
+      changed_refs: changed_refs.slice(0, config.max_semantic_nodes),
+      layout_changes: layout_changes.slice(0, config.max_geometry_nodes),
+      route_changed: before.route !== after.route,
+    };
+  };
+
+  const interactiveSnapshot = () => Array.from(document.querySelectorAll(interactiveSelector))
+    .slice(0, config.max_interactive_nodes)
+    .map((el) => compactSemanticNode(el, false));
 
   const snapshot = () => {
     snapshotVersion += 1;
-    const interactive = Array.from(document.querySelectorAll(interactiveSelector))
-      .slice(0, config.max_interactive_nodes)
-      .map(semanticNode);
-    return {
+    const semantic_tree = semanticTree();
+    const packet = {
       version: snapshotVersion,
       route: safeUrl(location.href),
       title: redact(document.title).slice(0, 240),
@@ -176,39 +357,120 @@ const SCRIPT: &str = r#"
       viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
       scroll: { x: scrollX, y: scrollY },
       activeRef: refFor(document.activeElement),
-      interactive,
+      semantic_tree,
+      interactive: interactiveSnapshot(),
     };
+    packet.delta = snapshotDelta(lastSnapshot, packet);
+    lastSnapshot = packet;
+    push('semantic_snapshot', { snapshot: packet });
+    return packet;
+  };
+
+  const resolveRef = (reference) => {
+    if (!reference) return null;
+    const cached = elementsByRef.get(reference);
+    if (cached?.isConnected) return cached;
+    for (const element of Array.from(document.querySelectorAll('*')).slice(0, config.max_semantic_nodes * 2)) {
+      if (refFor(element) === reference) return element;
+    }
+    return null;
+  };
+
+  const inspect = (reference) => {
+    const el = resolveRef(reference);
+    if (!el) return null;
+    const parents = [];
+    let cursor = el.parentElement;
+    for (let depth = 0; cursor && depth < 6; depth++, cursor = cursor.parentElement) {
+      parents.push({ ref: refFor(cursor), tag: cursor.tagName.toLowerCase(), role: roleOf(cursor), name: nameOf(cursor) });
+    }
+    return {
+      reference,
+      node: compactSemanticNode(el, true),
+      ancestry: parents,
+      viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+      route: safeUrl(location.href),
+    };
+  };
+
+  const sampleGeometry = (reason) => {
+    geometryFlushQueued = false;
+    const elements = Array.from(document.querySelectorAll(interactiveSelector)).slice(0, config.max_geometry_nodes);
+    const current = new Map();
+    const layout_changes = [];
+    for (const el of elements) {
+      const ref = refFor(el);
+      if (!ref) continue;
+      const rect = documentRect(el);
+      current.set(ref, rect);
+      const before = geometryBaseline.get(ref);
+      if (before && !rectEqual(before, rect)) layout_changes.push({ reference: ref, before, after: rect });
+    }
+    for (const [ref, before] of geometryBaseline) {
+      if (!current.has(ref)) layout_changes.push({ reference: ref, before, after: null });
+    }
+    geometryBaseline.clear();
+    for (const [ref, rect] of current) geometryBaseline.set(ref, rect);
+    if (layout_changes.length) push('geometry_changed', {
+      reason,
+      layout_changes: layout_changes.slice(0, config.max_geometry_nodes),
+      truncated: layout_changes.length > config.max_geometry_nodes,
+    });
+  };
+
+  const scheduleGeometry = (reason) => {
+    if (geometryFlushQueued) return;
+    geometryFlushQueued = true;
+    requestAnimationFrame(() => sampleGeometry(reason));
   };
 
   const flushMutations = () => {
     mutationFlushQueued = false;
     if (!changedRefs.size) return;
-    push('dom_changed', { refs: Array.from(changedRefs).slice(0, 256) });
+    push('dom_changed', { refs: Array.from(changedRefs).filter(Boolean).slice(0, 256) });
     changedRefs.clear();
+    scheduleGeometry('dom_mutation');
   };
 
-  new MutationObserver((records) => {
-    for (const record of records) {
-      if (record.target?.nodeType === Node.ELEMENT_NODE) changedRefs.add(refFor(record.target));
-      for (const node of record.addedNodes || []) {
-        if (node.nodeType === Node.ELEMENT_NODE) changedRefs.add(refFor(node));
+  const startDomObservers = () => {
+    const root = document.documentElement;
+    if (!root) return;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.target?.nodeType === Node.ELEMENT_NODE) changedRefs.add(refFor(record.target));
+        for (const node of record.addedNodes || []) {
+          if (node.nodeType === Node.ELEMENT_NODE) changedRefs.add(refFor(node));
+        }
       }
-    }
-    if (!mutationFlushQueued) {
-      mutationFlushQueued = true;
-      queueMicrotask(flushMutations);
-    }
-  }).observe(document.documentElement, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-    characterData: true,
-  });
+      if (!mutationFlushQueued) {
+        mutationFlushQueued = true;
+        queueMicrotask(flushMutations);
+      }
+    }).observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
 
-  const announceRoute = (source) => push('route_changed', {
-    source,
-    href: safeUrl(location.href),
-  });
+    if ('ResizeObserver' in window) {
+      const resizeObserver = new ResizeObserver(() => scheduleGeometry('resize_observer'));
+      resizeObserver.observe(document.documentElement);
+      if (document.body) resizeObserver.observe(document.body);
+    }
+  };
+
+  const scheduleRouteSnapshot = () => {
+    clearTimeout(routeSnapshotTimer);
+    routeSnapshotTimer = setTimeout(() => {
+      try { snapshot(); } catch (_) {}
+    }, 80);
+  };
+
+  const announceRoute = (source) => {
+    push('route_changed', { source, href: safeUrl(location.href) });
+    scheduleRouteSnapshot();
+  };
 
   for (const method of ['pushState', 'replaceState']) {
     const original = history[method];
@@ -222,6 +484,7 @@ const SCRIPT: &str = r#"
   addEventListener('hashchange', () => announceRoute('hashchange'));
   addEventListener('focusin', (event) => push('focus_changed', { ref: refFor(event.target), focused: true }), true);
   addEventListener('focusout', (event) => push('focus_changed', { ref: refFor(event.target), focused: false }), true);
+  addEventListener('resize', () => scheduleGeometry('viewport_resize'), { passive: true });
 
   if (config.include_scroll) {
     let scrollScheduled = false;
@@ -270,21 +533,13 @@ const SCRIPT: &str = r#"
       try {
         const response = await originalFetch(...args);
         push('network', {
-          transport: 'fetch',
-          method,
-          url,
-          status: response.status,
-          ok: response.ok,
+          transport: 'fetch', method, url, status: response.status, ok: response.ok,
           duration: Math.round((performance.now() - started) * 10) / 10,
         });
         return response;
       } catch (error) {
         push('network', {
-          transport: 'fetch',
-          method,
-          url,
-          status: null,
-          ok: false,
+          transport: 'fetch', method, url, status: null, ok: false,
           duration: Math.round((performance.now() - started) * 10) / 10,
           error: redact(error?.message || error),
         });
@@ -305,9 +560,7 @@ const SCRIPT: &str = r#"
       xhrMeta.set(this, meta);
       this.addEventListener('loadend', () => {
         push('network', {
-          transport: 'xhr',
-          method: meta.method,
-          url: meta.url,
+          transport: 'xhr', method: meta.method, url: meta.url,
           status: Number.isFinite(this.status) ? this.status : null,
           ok: this.status >= 200 && this.status < 400,
           duration: Math.round((performance.now() - meta.started) * 10) / 10,
@@ -320,9 +573,7 @@ const SCRIPT: &str = r#"
   if (config.include_performance && 'PerformanceObserver' in window) {
     try {
       new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          push('long_task', { duration: entry.duration, startTime: entry.startTime });
-        }
+        for (const entry of list.getEntries()) push('long_task', { duration: entry.duration, startTime: entry.startTime });
       }).observe({ type: 'longtask', buffered: true });
     } catch (_) {}
     try {
@@ -337,6 +588,7 @@ const SCRIPT: &str = r#"
   window.__LOCALVIEW__ = Object.freeze({
     version: '0.2.0',
     snapshot,
+    inspect(reference) { return inspect(reference); },
     drain(max = 256) {
       const count = Math.max(0, Math.min(Number(max) || 0, events.length));
       return events.splice(0, count);
@@ -345,7 +597,17 @@ const SCRIPT: &str = r#"
     refFor,
   });
 
-  push('instrumentation_ready', { href: safeUrl(location.href) });
+  const start = () => {
+    startDomObservers();
+    try { sampleGeometry('initial'); } catch (_) {}
+    try { snapshot(); } catch (_) {}
+    push('instrumentation_ready', { href: safeUrl(location.href) });
+  };
+  if (document.readyState === 'loading') {
+    addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    queueMicrotask(start);
+  }
 })();
 "#;
 
@@ -372,5 +634,14 @@ mod tests {
         assert!(!script.contains("['BUTTON', 'INPUT'].includes(el.tagName) && el.value"));
         assert!(script.contains("el.isContentEditable"));
         assert!(script.contains("route: safeUrl(location.href)"));
+    }
+
+    #[test]
+    fn semantic_defaults_are_bounded() {
+        let config = InstrumentationConfig::default();
+        assert_eq!(config.max_semantic_nodes, 600);
+        assert_eq!(config.max_tree_depth, 12);
+        assert_eq!(config.max_style_nodes, 192);
+        assert_eq!(config.max_geometry_nodes, 384);
     }
 }
