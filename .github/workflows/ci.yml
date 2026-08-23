@@ -66,3 +66,5 @@ jobs:
         run: cargo check -p localview-desktop
       - name: Desktop capability regression tests
         run: cargo test -p localview-desktop --test capability_isolation
+      - name: Workspace surface policy contract
+        run: cargo test -p localview-desktop --test workspace_surface_policy
