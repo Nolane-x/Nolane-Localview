@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod workspace_surface;
+
 use std::path::PathBuf;
 
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
@@ -18,6 +20,7 @@ struct DashboardState {
     sessions: Vec<Session>,
     engine: EngineInfo,
     capabilities: Vec<&'static str>,
+    workspace_surface: workspace_surface::WorkspaceSurfaceSupport,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +97,7 @@ async fn dashboard_state() -> Result<DashboardState, String> {
             "Verification",
             "MCP",
         ],
+        workspace_surface: workspace_surface::workspace_surface_support(),
     })
 }
 
@@ -215,7 +219,7 @@ async fn preview_take_actions(
         .get(format!(
             "http://127.0.0.1:45454/v1/sessions/{session_id}/actions"
         ))
-        .bearer_auth(token)
+        .bearer_auth(&token)
         .send()
         .await
         .map_err(err)?
@@ -252,30 +256,18 @@ fn ensure_preview_caller(
     webview_window: &tauri::WebviewWindow,
     session_id: SessionId,
 ) -> Result<(), String> {
-    let expected = preview_label(session_id);
-    if webview_window.label() != expected {
+    if !workspace_surface::bridge_surface_label_allowed(webview_window.label(), session_id) {
         return Err("preview bridge session/window mismatch".into());
     }
     Ok(())
 }
 
 fn preview_label(session_id: SessionId) -> String {
-    format!(
-        "preview-{}",
-        session_id
-            .to_string()
-            .chars()
-            .filter(|character| character.is_ascii_alphanumeric())
-            .take(18)
-            .collect::<String>()
-    )
+    workspace_surface::preview_surface_label(session_id)
 }
 
 fn preview_navigation_allowed(url: &url::Url) -> bool {
-    matches!(
-        url.host_str(),
-        Some("localhost") | Some("127.0.0.1") | Some("::1")
-    )
+    workspace_surface::workspace_navigation_allowed(url)
 }
 
 async fn post_control(path: &str) -> Result<(), String> {
@@ -559,7 +551,11 @@ pub fn run() {
             open_preview,
             preview_ingest,
             preview_take_actions,
-            preview_complete_action
+            preview_complete_action,
+            workspace_surface::workspace_surface_open,
+            workspace_surface::workspace_surface_set_bounds,
+            workspace_surface::workspace_surface_navigate,
+            workspace_surface::workspace_surface_close
         ])
         .run(tauri::generate_context!())
         .expect("error while running LocalView desktop");
