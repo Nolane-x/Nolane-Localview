@@ -62,8 +62,10 @@ jobs:
       - name: Build frontend
         working-directory: apps/desktop
         run: npm run build
-      - name: Check Tauri backend
+      - name: Check stable Tauri backend
         run: cargo check -p localview-desktop
+      - name: Check native workspace backend
+        run: cargo check -p localview-desktop --features native-workspace
       - name: Desktop capability regression tests
         run: cargo test -p localview-desktop --test capability_isolation
       - name: Workspace surface policy contract
