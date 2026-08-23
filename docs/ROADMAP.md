@@ -1,6 +1,6 @@
 # LocalView Delivery Roadmap
 
-This roadmap maps the large product vision to independently testable vertical slices. The repository intentionally lands shared primitives early so later waves compose rather than duplicate browser machinery.
+This roadmap maps the expanded product vision to independently testable vertical slices. The repository lands shared primitives early, but a feature is counted as complete only when it is connected to the live runtime path rather than merely represented by a crate or data model.
 
 ## Wave 0 — Rust/Tauri foundation — implemented foundation
 
@@ -17,27 +17,40 @@ This roadmap maps the large product vision to independently testable vertical sl
 
 Landed foundation:
 
-- Tauri initialization-script injection into localhost preview WebViews.
-- In-page ring buffer with bounded retention.
+- Tauri initialization-script injection into LocalView-managed localhost WebViews.
+- In-page ring buffer with bounded retention and secret/query redaction.
 - Stable element fingerprints for interactive elements.
 - Interactive semantic snapshot primitive.
 - DOM mutation batching.
 - history API, popstate and hash route observation.
 - focus and scroll observation.
-- warning/error/exception observation with in-page redaction.
+- warning/error/exception observation.
+- fetch/XHR metadata observation without response-body capture.
 - long-task and layout-shift observation when supported.
-- top-level navigation guard that keeps the preview on loopback.
+- bounded native drain transport for observer events.
+- queued deterministic click/type/key/scroll/focus/snapshot execution.
+- bridge caller/session ownership validation.
+- top-level navigation guard that keeps managed preview/workspace surfaces on loopback.
+- capability-isolated `preview-*` / `workspace-*` WebViews.
+- React `WorkspaceSurface` abstraction and feature-gated native child WebView lifecycle/bounds/navigation backend.
+
+Current safety gate before native workspace becomes default:
+
+- verify overlay/chrome composition and z-order on WebView2, WKWebView and WebKitGTK;
+- verify focus/input routing and keyboard shortcuts;
+- verify DPI/logical-pixel bounds, window resize/minimize/restore and multi-monitor movement;
+- verify reconnect/crash cleanup and no orphan child WebViews;
+- keep iframe fallback until those policies pass.
 
 Next integration work:
 
-- secure native drain transport without granting generic Tauri IPC to untrusted localhost pages.
-- DOM/AX tree depth expansion.
-- computed-style packets.
-- geometry delta subscription.
-- deterministic click/type executor.
-- daemon event subscription transport.
+- DOM/AX tree depth expansion beyond interactive-only nodes.
+- bounded computed-style packets.
+- geometry delta subscription and visibility/occlusion state.
+- richer semantic snapshot/state delta transport into the daemon/MCP surface.
+- source/runtime correlation hooks.
 
-**Done when:** an agent can list interactive elements, inspect one element, click/type it and receive only state deltas.
+**Done when:** an agent can list a bounded semantic tree, inspect one element, click/type it, and receive only relevant semantic/layout/runtime deltas through an isolated LocalView surface.
 
 ## Wave 2 — Visual runtime
 
@@ -53,12 +66,18 @@ Next integration work:
 
 ## Wave 3 — Runtime telemetry
 
-- WebView console bridge.
-- request/response metadata and failed-request packets.
+Foundation already landed in Wave 1:
+
+- console warning/error/exception bridge;
+- fetch/XHR request metadata and failed-request evidence;
+- long-task/layout-shift observation.
+
+Remaining integration:
+
 - action → request → UI response correlation.
-- network failure/delay/mock layer.
-- HMR timeline.
-- performance-lite sampling.
+- network failure/delay/mock layer wired to live sessions.
+- HMR timeline and settle detection.
+- performance-lite sampling and budget packets.
 
 ## Wave 4 — Layout + responsive intelligence
 
@@ -71,7 +90,7 @@ Next integration work:
 
 ## Wave 5 — Source intelligence
 
-- sourcemap consumer.
+- sourcemap consumer wired to live runtime nodes.
 - React component ownership adapter.
 - Vue/Svelte adapters.
 - CSS declaration/specificity tracing.
@@ -111,6 +130,10 @@ Next integration work:
 - mutation challenge suite.
 - predicted versus actual impact.
 - proof receipts and partial revalidation.
+
+## Later expanded-spec phases
+
+The V2/V3 causal, proof-carrying, multi-agent, content-addressed and attested-proof phases remain future vertical slices. Existing data structures or primitives that anticipate those phases are not counted as end-to-end completion until they are connected to the live runtime, persistence and verification loop.
 
 ## Hard constraints across all waves
 
