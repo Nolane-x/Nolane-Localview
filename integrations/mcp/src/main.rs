@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::io::{self, BufRead, Write};
+use std::{
+    io::{self, BufRead, Write},
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -113,12 +116,14 @@ fn tool_definitions() -> Vec<Value> {
         json!({"name":"runtime.resume","description":"Resume localhost discovery","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"events.recent","description":"Return recent daemon runtime events","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"observer.recent","description":"Read recent in-page observer events for one session","inputSchema":session_schema()}),
+        json!({"name":"page.snapshot","description":"Return a completed privacy-bounded semantic, ARIA, style and geometry snapshot from the active LocalView page bridge","inputSchema":session_schema()}),
+        json!({"name":"page.inspect","description":"Return completed semantic, ARIA, computed-style and geometry details for one stable LocalView element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"}},"required":["session","reference"]}}),
         json!({"name":"action.click","description":"Queue a click against a stable LocalView element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"}},"required":["session","reference"]}}),
         json!({"name":"action.type","description":"Queue text input against a stable element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"},"text":{"type":"string"},"clear_first":{"type":"boolean","default":false}},"required":["session","reference","text"]}}),
         json!({"name":"action.key","description":"Queue a keyboard event","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"},"key":{"type":"string"},"modifiers":{"type":"array","items":{"type":"string"}}},"required":["session","key"]}}),
         json!({"name":"action.scroll","description":"Queue a deterministic scroll offset","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}},"required":["session","x","y"]}}),
         json!({"name":"action.focus","description":"Queue focus for a stable element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"}},"required":["session","reference"]}}),
-        json!({"name":"action.snapshot","description":"Ask the page bridge for a privacy-scrubbed semantic/layout snapshot","inputSchema":session_schema()}),
+        json!({"name":"action.snapshot","description":"Queue a privacy-scrubbed semantic/layout snapshot without waiting for completion","inputSchema":session_schema()}),
         json!({"name":"action.results","description":"Read recent page action results","inputSchema":session_schema()}),
     ]
 }
@@ -136,6 +141,34 @@ async fn call_tool(params: &Value) -> Result<Value> {
         .unwrap_or_else(|_| "http://127.0.0.1:45454".into());
     let token = read_token().await?;
     let client = reqwest::Client::new();
+
+    if name == "page.snapshot" {
+        let session = string_arg(&args, "session")?;
+        let payload = execute_page_action(
+            &client,
+            &base,
+            &token,
+            session,
+            None,
+            json!({"type":"snapshot"}),
+        )
+        .await?;
+        return tool_content(payload);
+    }
+    if name == "page.inspect" {
+        let session = string_arg(&args, "session")?;
+        let reference = string_arg(&args, "reference")?;
+        let payload = execute_page_action(
+            &client,
+            &base,
+            &token,
+            session,
+            Some(reference),
+            json!({"type":"inspect"}),
+        )
+        .await?;
+        return tool_content(payload);
+    }
 
     let response = match name {
         "session.list" => authed_get(&client, &base, &token, "/v1/sessions").await?,
@@ -289,6 +322,61 @@ async fn call_tool(params: &Value) -> Result<Value> {
     } else {
         response.json::<Value>().await?
     };
+    tool_content(content)
+}
+
+async fn execute_page_action(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    session: &str,
+    reference: Option<&str>,
+    action: Value,
+) -> Result<Value> {
+    let queued = post_action(client, base, token, session, reference, action)
+        .await?
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
+    let action_id = queued
+        .get("id")
+        .and_then(Value::as_str)
+        .context("LocalView action response did not contain an id")?
+        .to_owned();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+
+    loop {
+        let response = authed_get(
+            client,
+            base,
+            token,
+            &format!("/v1/sessions/{session}/actions/results"),
+        )
+        .await?
+        .error_for_status()?;
+        let results = response.json::<Vec<Value>>().await?;
+        if let Some(result) = results.iter().rev().find(|result| {
+            result.get("action_id").and_then(Value::as_str) == Some(action_id.as_str())
+        }) {
+            if result.get("ok").and_then(Value::as_bool) == Some(true) {
+                return Ok(result.get("payload").cloned().unwrap_or(Value::Null));
+            }
+            let message = result
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("LocalView page action failed");
+            return Err(anyhow::anyhow!(message.to_owned()));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(anyhow::anyhow!(
+                "LocalView page bridge did not complete action {action_id} within 2 seconds"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn tool_content(content: Value) -> Result<Value> {
     Ok(json!({
         "content": [{"type":"text","text":serde_json::to_string_pretty(&content)?}]
     }))
