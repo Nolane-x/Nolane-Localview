@@ -5,6 +5,10 @@ on:
     branches: [main, verify/rust-tauri-ci]
   pull_request:
 
+concurrency:
+  group: localview-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
