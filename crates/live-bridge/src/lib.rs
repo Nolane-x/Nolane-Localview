@@ -84,6 +84,25 @@ pub struct BridgeActionResult {
     pub completed_at: DateTime<Utc>,
 }
 
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub enum CompletionOrigin {
+    Session(SessionId),
+    Action(BridgeAction),
+}
+
+impl From<SessionId> for CompletionOrigin {
+    fn from(session_id: SessionId) -> Self {
+        Self::Session(session_id)
+    }
+}
+
+impl From<&BridgeAction> for CompletionOrigin {
+    fn from(action: &BridgeAction) -> Self {
+        Self::Action(action.clone())
+    }
+}
+
 #[derive(Debug, Default)]
 struct SessionBridgeState {
     generation: u64,
@@ -91,6 +110,7 @@ struct SessionBridgeState {
     events: VecDeque<ObserverEvent>,
     actions: VecDeque<BridgeAction>,
     inflight: VecDeque<BridgeAction>,
+    claimed: VecDeque<BridgeAction>,
     results: VecDeque<BridgeActionResult>,
 }
 
@@ -220,21 +240,46 @@ impl LiveBridge {
             .inflight
             .iter()
             .position(|action| action.id == action_id)?;
-        state.inflight.remove(index)
+        let action = state.inflight.remove(index)?;
+        state.claimed.push_back(action.clone());
+        while state.claimed.len() > self.action_capacity {
+            state.claimed.pop_front();
+        }
+        Some(action)
     }
 
-    pub async fn complete_action(&self, action: &BridgeAction, mut result: BridgeActionResult) {
-        if let BridgeActionKind::TypeText { text, .. } = &action.action {
-            result.payload = Value::Null;
-            if !text.is_empty() {
-                result.error = result
-                    .error
-                    .map(|error| error.replace(text, "[REDACTED]"));
-            }
-        }
-
+    pub async fn complete_action(
+        &self,
+        origin: impl Into<CompletionOrigin>,
+        mut result: BridgeActionResult,
+    ) {
         let mut states = self.inner.write().await;
-        let state = states.entry(action.session_id).or_default();
+        let origin = origin.into();
+        let session_id = match &origin {
+            CompletionOrigin::Session(session_id) => *session_id,
+            CompletionOrigin::Action(action) => action.session_id,
+        };
+        let state = states.entry(session_id).or_default();
+
+        let action = match origin {
+            CompletionOrigin::Action(action) => {
+                if let Some(index) = state
+                    .claimed
+                    .iter()
+                    .position(|claimed| claimed.id == action.id)
+                {
+                    state.claimed.remove(index);
+                }
+                Some(action)
+            }
+            CompletionOrigin::Session(_) => state
+                .claimed
+                .iter()
+                .position(|claimed| claimed.id == result.action_id)
+                .and_then(|index| state.claimed.remove(index)),
+        };
+
+        sanitize_result_for_storage(action.as_ref(), &mut result);
         state.results.push_back(result);
         while state.results.len() > self.result_capacity {
             state.results.pop_front();
@@ -266,6 +311,27 @@ impl LiveBridge {
 
     pub async fn release_session(&self, session_id: SessionId) {
         self.inner.write().await.remove(&session_id);
+    }
+}
+
+fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut BridgeActionResult) {
+    match action.map(|action| &action.action) {
+        Some(BridgeActionKind::TypeText { text, .. }) => {
+            result.payload = Value::Null;
+            if !text.is_empty() {
+                result.error = result
+                    .error
+                    .take()
+                    .map(|error| error.replace(text, "[REDACTED]"));
+            }
+        }
+        Some(_) => {}
+        None => {
+            result.payload = Value::Null;
+            if result.error.is_some() {
+                result.error = Some("[REDACTED: action origin unavailable]".into());
+            }
+        }
     }
 }
 
