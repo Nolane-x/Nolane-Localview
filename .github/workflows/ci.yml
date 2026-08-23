@@ -2,11 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main, verify/rust-tauri-ci]
+    branches: [main]
   pull_request:
 
 concurrency:
-  group: localview-ci-${{ github.ref }}
+  group: localview-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
