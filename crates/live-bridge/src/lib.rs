@@ -90,6 +90,7 @@ struct SessionBridgeState {
     last_seq: Option<u64>,
     events: VecDeque<ObserverEvent>,
     actions: VecDeque<BridgeAction>,
+    inflight: VecDeque<BridgeAction>,
     results: VecDeque<BridgeActionResult>,
 }
 
@@ -198,7 +199,28 @@ impl LiveBridge {
             return Vec::new();
         };
         let count = limit.min(state.actions.len());
-        state.actions.drain(..count).collect()
+        let actions = state.actions.drain(..count).collect::<Vec<_>>();
+        for action in &actions {
+            state.inflight.push_back(action.clone());
+        }
+        while state.inflight.len() > self.action_capacity {
+            state.inflight.pop_front();
+        }
+        actions
+    }
+
+    pub async fn claim_action(
+        &self,
+        session_id: SessionId,
+        action_id: Uuid,
+    ) -> Option<BridgeAction> {
+        let mut states = self.inner.write().await;
+        let state = states.get_mut(&session_id)?;
+        let index = state
+            .inflight
+            .iter()
+            .position(|action| action.id == action_id)?;
+        state.inflight.remove(index)
     }
 
     pub async fn complete_action(&self, session_id: SessionId, result: BridgeActionResult) {
@@ -295,7 +317,33 @@ mod tests {
             })
             .await;
         assert_eq!(report.accepted, 2);
-        assert_eq!(accepted.iter().map(|item| item.seq).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(
+            accepted.iter().map(|item| item.seq).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[tokio::test]
+    async fn action_origin_is_bounded_and_claimed_once() {
+        let bridge = LiveBridge::new(32, 8);
+        let id = Uuid::new_v4();
+        let action = bridge
+            .enqueue_action(
+                id,
+                Some("@e1".into()),
+                BridgeActionKind::TypeText {
+                    text: "private value".into(),
+                    clear_first: true,
+                },
+            )
+            .await;
+        let taken = bridge.take_actions(id, 8).await;
+        assert_eq!(taken.len(), 1);
+        assert_eq!(
+            bridge.claim_action(id, action.id).await.map(|item| item.id),
+            Some(action.id)
+        );
+        assert!(bridge.claim_action(id, action.id).await.is_none());
     }
 
     #[tokio::test]
