@@ -114,15 +114,35 @@ impl From<&BridgeAction> for CompletionOrigin {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionScope {
+    Public,
+    InternalCapture,
+}
+
+impl ActionScope {
+    fn from_action(action: &BridgeAction) -> Self {
+        if action.action.is_internal_capture_action() {
+            Self::InternalCapture
+        } else {
+            Self::Public
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct SessionBridgeState {
     generation: u64,
     last_seq: Option<u64>,
     events: VecDeque<ObserverEvent>,
     actions: VecDeque<BridgeAction>,
+    capture_actions: VecDeque<BridgeAction>,
     inflight: VecDeque<BridgeAction>,
+    capture_inflight: VecDeque<BridgeAction>,
     claimed: VecDeque<BridgeAction>,
+    capture_claimed: VecDeque<BridgeAction>,
     results: VecDeque<BridgeActionResult>,
+    capture_results: VecDeque<BridgeActionResult>,
 }
 
 #[derive(Clone, Debug)]
@@ -187,18 +207,7 @@ impl LiveBridge {
         let states = self.inner.read().await;
         states
             .get(&session_id)
-            .map(|state| {
-                state
-                    .events
-                    .iter()
-                    .rev()
-                    .take(limit)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect()
-            })
+            .map(|state| recent_from(&state.events, limit))
             .unwrap_or_default()
     }
 
@@ -215,11 +224,16 @@ impl LiveBridge {
             action,
             created_at: Utc::now(),
         };
+        let scope = ActionScope::from_action(&action);
         let mut states = self.inner.write().await;
         let state = states.entry(session_id).or_default();
-        state.actions.push_back(action.clone());
-        while state.actions.len() > self.action_capacity {
-            state.actions.pop_front();
+        match scope {
+            ActionScope::Public => push_bounded(&mut state.actions, action.clone(), self.action_capacity),
+            ActionScope::InternalCapture => push_bounded(
+                &mut state.capture_actions,
+                action.clone(),
+                self.action_capacity,
+            ),
         }
         action
     }
@@ -233,7 +247,16 @@ impl LiveBridge {
         session_id: SessionId,
         limit: usize,
     ) -> Vec<BridgeAction> {
-        self.take_actions_by_scope(session_id, limit, false).await
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return Vec::new();
+        };
+        drain_actions(
+            &mut state.actions,
+            &mut state.inflight,
+            limit,
+            self.action_capacity,
+        )
     }
 
     pub async fn take_internal_capture_actions(
@@ -241,33 +264,16 @@ impl LiveBridge {
         session_id: SessionId,
         limit: usize,
     ) -> Vec<BridgeAction> {
-        self.take_actions_by_scope(session_id, limit, true).await
-    }
-
-    async fn take_actions_by_scope(
-        &self,
-        session_id: SessionId,
-        limit: usize,
-        internal_capture: bool,
-    ) -> Vec<BridgeAction> {
         let mut states = self.inner.write().await;
         let Some(state) = states.get_mut(&session_id) else {
             return Vec::new();
         };
-
-        let mut selected = Vec::with_capacity(limit.min(state.actions.len()));
-        let mut remaining = VecDeque::with_capacity(state.actions.len());
-        while let Some(action) = state.actions.pop_front() {
-            let scope_matches = action.action.is_internal_capture_action() == internal_capture;
-            if scope_matches && selected.len() < limit {
-                selected.push(action);
-            } else {
-                remaining.push_back(action);
-            }
-        }
-        state.actions = remaining;
-        move_to_inflight(state, &selected, self.action_capacity);
-        selected
+        drain_actions(
+            &mut state.capture_actions,
+            &mut state.capture_inflight,
+            limit,
+            self.action_capacity,
+        )
     }
 
     pub async fn claim_action(
@@ -277,16 +283,21 @@ impl LiveBridge {
     ) -> Option<BridgeAction> {
         let mut states = self.inner.write().await;
         let state = states.get_mut(&session_id)?;
-        let index = state
-            .inflight
-            .iter()
-            .position(|action| action.id == action_id)?;
-        let action = state.inflight.remove(index)?;
-        state.claimed.push_back(action.clone());
-        while state.claimed.len() > self.action_capacity {
-            state.claimed.pop_front();
+
+        if let Some(action) = claim_from_scope(
+            &mut state.capture_inflight,
+            &mut state.capture_claimed,
+            action_id,
+            self.action_capacity,
+        ) {
+            return Some(action);
         }
-        Some(action)
+        claim_from_scope(
+            &mut state.inflight,
+            &mut state.claimed,
+            action_id,
+            self.action_capacity,
+        )
     }
 
     pub async fn complete_action(
@@ -302,28 +313,21 @@ impl LiveBridge {
         };
         let state = states.entry(session_id).or_default();
 
-        let action = match origin {
+        let completed = match origin {
             CompletionOrigin::Action(action) => {
-                if let Some(index) = state
-                    .claimed
-                    .iter()
-                    .position(|claimed| claimed.id == action.id)
-                {
-                    state.claimed.remove(index);
-                }
-                Some(action)
+                let scope = ActionScope::from_action(&action);
+                remove_claimed_for_scope(state, scope, action.id);
+                Some((action, scope))
             }
-            CompletionOrigin::Session(_) => state
-                .claimed
-                .iter()
-                .position(|claimed| claimed.id == result.action_id)
-                .and_then(|index| state.claimed.remove(index)),
+            CompletionOrigin::Session(_) => take_claimed_by_id(state, result.action_id),
         };
 
-        sanitize_result_for_storage(action.as_ref(), &mut result);
-        state.results.push_back(result);
-        while state.results.len() > self.result_capacity {
-            state.results.pop_front();
+        sanitize_result_for_storage(completed.as_ref().map(|(action, _)| action), &mut result);
+        match completed.map(|(_, scope)| scope).unwrap_or(ActionScope::Public) {
+            ActionScope::Public => push_bounded(&mut state.results, result, self.result_capacity),
+            ActionScope::InternalCapture => {
+                push_bounded(&mut state.capture_results, result, self.result_capacity)
+            }
         }
     }
 
@@ -335,18 +339,19 @@ impl LiveBridge {
         let states = self.inner.read().await;
         states
             .get(&session_id)
-            .map(|state| {
-                state
-                    .results
-                    .iter()
-                    .rev()
-                    .take(limit)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect()
-            })
+            .map(|state| recent_from(&state.results, limit))
+            .unwrap_or_default()
+    }
+
+    pub async fn recent_internal_capture_results(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<BridgeActionResult> {
+        let states = self.inner.read().await;
+        states
+            .get(&session_id)
+            .map(|state| recent_from(&state.capture_results, limit))
             .unwrap_or_default()
     }
 
@@ -355,17 +360,80 @@ impl LiveBridge {
     }
 }
 
-fn move_to_inflight(
+fn drain_actions(
+    queue: &mut VecDeque<BridgeAction>,
+    inflight: &mut VecDeque<BridgeAction>,
+    limit: usize,
+    capacity: usize,
+) -> Vec<BridgeAction> {
+    let count = limit.min(queue.len());
+    let actions = queue.drain(..count).collect::<Vec<_>>();
+    for action in &actions {
+        push_bounded(inflight, action.clone(), capacity);
+    }
+    actions
+}
+
+fn claim_from_scope(
+    inflight: &mut VecDeque<BridgeAction>,
+    claimed: &mut VecDeque<BridgeAction>,
+    action_id: Uuid,
+    capacity: usize,
+) -> Option<BridgeAction> {
+    let index = inflight.iter().position(|action| action.id == action_id)?;
+    let action = inflight.remove(index)?;
+    push_bounded(claimed, action.clone(), capacity);
+    Some(action)
+}
+
+fn remove_claimed_for_scope(state: &mut SessionBridgeState, scope: ActionScope, action_id: Uuid) {
+    let claimed = match scope {
+        ActionScope::Public => &mut state.claimed,
+        ActionScope::InternalCapture => &mut state.capture_claimed,
+    };
+    if let Some(index) = claimed.iter().position(|action| action.id == action_id) {
+        claimed.remove(index);
+    }
+}
+
+fn take_claimed_by_id(
     state: &mut SessionBridgeState,
-    actions: &[BridgeAction],
-    action_capacity: usize,
-) {
-    for action in actions {
-        state.inflight.push_back(action.clone());
+    action_id: Uuid,
+) -> Option<(BridgeAction, ActionScope)> {
+    if let Some(index) = state
+        .capture_claimed
+        .iter()
+        .position(|action| action.id == action_id)
+    {
+        return state
+            .capture_claimed
+            .remove(index)
+            .map(|action| (action, ActionScope::InternalCapture));
     }
-    while state.inflight.len() > action_capacity {
-        state.inflight.pop_front();
+    let index = state.claimed.iter().position(|action| action.id == action_id)?;
+    state
+        .claimed
+        .remove(index)
+        .map(|action| (action, ActionScope::Public))
+}
+
+fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) {
+    queue.push_back(value);
+    while queue.len() > capacity {
+        queue.pop_front();
     }
+}
+
+fn recent_from<T: Clone>(queue: &VecDeque<T>, limit: usize) -> Vec<T> {
+    queue
+        .iter()
+        .rev()
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut BridgeActionResult) {
