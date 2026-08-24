@@ -1,8 +1,5 @@
 use localview_protocol::Rect;
-use localview_visual::{
-    crop_png_css_rect, crop_rgba_css_rect, decode_png_rgba, encode_png_rgba, RgbaImage,
-    VisualError,
-};
+use localview_visual::{crop_png_css_rect, decode_png_rgba, encode_png_rgba, RgbaImage, VisualError};
 
 fn source_image() -> RgbaImage {
     let mut data = Vec::new();
@@ -45,28 +42,28 @@ fn crops_css_region_to_matching_native_pixels() {
 #[test]
 fn crops_many_regions_directly_from_one_decoded_rgba_frame() {
     let image = source_image();
-    let top_left = crop_rgba_css_rect(
-        &image,
-        (4.0, 4.0),
-        &Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 2.0,
-            height: 2.0,
-        },
-    )
-    .expect("crop first region from decoded frame");
-    let bottom_right = crop_rgba_css_rect(
-        &image,
-        (4.0, 4.0),
-        &Rect {
-            x: 2.0,
-            y: 2.0,
-            width: 2.0,
-            height: 2.0,
-        },
-    )
-    .expect("crop second region from same decoded frame");
+    let top_left = image
+        .crop_css_rect(
+            (4.0, 4.0),
+            &Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 2.0,
+                height: 2.0,
+            },
+        )
+        .expect("crop first region from decoded frame");
+    let bottom_right = image
+        .crop_css_rect(
+            (4.0, 4.0),
+            &Rect {
+                x: 2.0,
+                y: 2.0,
+                width: 2.0,
+                height: 2.0,
+            },
+        )
+        .expect("crop second region from same decoded frame");
 
     let first_reds: Vec<u8> = top_left
         .data
@@ -87,17 +84,17 @@ fn crops_many_regions_directly_from_one_decoded_rgba_frame() {
 fn direct_rgba_crop_rejects_invalid_geometry_without_mutating_source() {
     let image = source_image();
     let original = image.data.clone();
-    let error = crop_rgba_css_rect(
-        &image,
-        (4.0, 4.0),
-        &Rect {
-            x: 8.0,
-            y: 8.0,
-            width: 2.0,
-            height: 2.0,
-        },
-    )
-    .expect_err("fully offscreen region must fail closed");
+    let error = image
+        .crop_css_rect(
+            (4.0, 4.0),
+            &Rect {
+                x: 8.0,
+                y: 8.0,
+                width: 2.0,
+                height: 2.0,
+            },
+        )
+        .expect_err("fully offscreen region must fail closed");
 
     assert!(matches!(error, VisualError::InvalidRegionGeometry));
     assert_eq!(image.data, original);
