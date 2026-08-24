@@ -266,13 +266,10 @@ fn coalesce_regions(mut pending: Vec<DiffRegion>) -> Vec<DiffRegion> {
     let mut merged = Vec::<DiffRegion>::new();
 
     while let Some(mut current) = pending.pop() {
-        loop {
-            let Some(index) = pending
-                .iter()
-                .position(|candidate| regions_overlap_or_edge_touch(&current, candidate))
-            else {
-                break;
-            };
+        while let Some(index) = pending
+            .iter()
+            .position(|candidate| regions_overlap_or_edge_touch(&current, candidate))
+        {
             let other = pending.swap_remove(index);
             current = merge_regions(current, other);
         }
