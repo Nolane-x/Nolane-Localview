@@ -340,20 +340,17 @@ pub fn resolve_progressive_targets(
         );
     }
 
-    push_unique_target(
-        &mut targets,
-        ProgressiveResolvedTarget {
-            kind: ProgressiveTargetKind::Viewport,
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: viewport.0 as f64,
-                height: viewport.1 as f64,
-            },
-            provenance: ProgressiveTargetProvenance::ViewportFallback,
-            confidence_milli: 1000,
+    targets.push(ProgressiveResolvedTarget {
+        kind: ProgressiveTargetKind::Viewport,
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: viewport.0 as f64,
+            height: viewport.1 as f64,
         },
-    );
+        provenance: ProgressiveTargetProvenance::ViewportFallback,
+        confidence_milli: 1000,
+    });
 
     Ok(ProgressiveTargetPlan {
         reference: reference.to_owned(),
