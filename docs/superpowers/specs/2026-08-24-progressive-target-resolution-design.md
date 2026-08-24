@@ -60,7 +60,7 @@ The section rect must contain the target element, be finite/positive, and inters
 
 ## Viewport semantics
 
-Viewport is always the final fallback and is exactly `(0, 0, viewport.width, viewport.height)`. Duplicate rectangles produced by element/component/section collapsing to the same bounds are removed while preserving the strongest earlier target kind.
+Viewport is always the final explicit fallback and is exactly `(0, 0, viewport.width, viewport.height)`. Duplicate rectangles among element/component/section levels are removed while preserving the strongest earlier target kind, but the `viewport` level is never deduplicated away even when a section occupies the exact viewport bounds. This keeps an explicit caller-selectable fallback level.
 
 ## Freshness and drift
 
@@ -111,7 +111,7 @@ Required deterministic tests:
 - source-backed nearest component ancestor;
 - no fabricated component without source evidence;
 - explicit section/landmark ancestor;
-- duplicate removal/order stability;
+- duplicate removal/order stability while retaining explicit viewport fallback;
 - invalid/offscreen geometry fail-closed;
 - missing ref fail-closed.
 
