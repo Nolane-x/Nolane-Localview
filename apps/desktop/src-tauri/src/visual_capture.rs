@@ -888,3 +888,158 @@ async fn persist_and_register(
         region: target.region(),
     })
 }
+
+use localview_capture::{
+    resolve_progressive_targets, ProgressiveTargetError, ProgressiveTargetKind,
+    ProgressiveTargetProvenance,
+};
+use localview_protocol::{ElementRef, PageSnapshot};
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProgressiveTargetCaptureReceipt {
+    pub capture: VisualCaptureReceipt,
+    pub level: ProgressiveTargetKind,
+    pub provenance: ProgressiveTargetProvenance,
+    pub confidence_milli: u16,
+    pub snapshot_version: u64,
+    pub snapshot_route: String,
+}
+
+#[tauri::command]
+pub async fn capture_progressive_target(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, VisualCaptureState>,
+    session_id: SessionId,
+    reference: ElementRef,
+    viewport: ViewportMeta,
+    revision: Option<String>,
+    level: ProgressiveTargetKind,
+) -> Result<ProgressiveTargetCaptureReceipt, String> {
+    validate_viewport(&viewport)?;
+    preflight_managed_surface(&app, session_id)?;
+
+    let capture_gate = session_capture_gate(&state, session_id).await?;
+    let _capture_guard = capture_gate.lock().await;
+
+    let snapshot = fresh_semantic_snapshot(session_id).await?;
+    let plan = resolve_progressive_targets(&snapshot, &reference).map_err(progressive_target_error)?;
+    if snapshot.viewport != (viewport.css_width, viewport.css_height) {
+        return Err("progressive target viewport does not match fresh semantic snapshot".into());
+    }
+
+    let resolved = plan
+        .targets
+        .iter()
+        .find(|target| target.kind == level)
+        .cloned()
+        .ok_or_else(|| "requested progressive target level is unavailable".to_string())?;
+    let target = match level {
+        ProgressiveTargetKind::Viewport => RequestedCaptureTarget::Viewport,
+        _ => RequestedCaptureTarget::Region(resolved.rect.clone()),
+    };
+
+    let (frame, freeze) =
+        capture_redacted_viewport_after_gate(app, session_id, viewport, revision).await?;
+    validate_progressive_live_state(&frame, &freeze, &snapshot)?;
+    let frame = apply_capture_target(frame, &freeze, &target)?;
+    let capture = persist_and_register(&state, session_id, frame, &target).await?;
+
+    Ok(ProgressiveTargetCaptureReceipt {
+        capture,
+        level,
+        provenance: resolved.provenance,
+        confidence_milli: resolved.confidence_milli,
+        snapshot_version: plan.snapshot_version,
+        snapshot_route: plan.route,
+    })
+}
+
+async fn fresh_semantic_snapshot(session_id: SessionId) -> Result<PageSnapshot, String> {
+    let token = read_token().await?;
+    control_client()?
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/semantic-snapshot/fresh"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json::<PageSnapshot>()
+        .await
+        .map_err(err)
+}
+
+fn progressive_target_error(error: ProgressiveTargetError) -> String {
+    match error {
+        ProgressiveTargetError::InvalidViewport => {
+            "fresh semantic snapshot viewport is invalid".to_string()
+        }
+        ProgressiveTargetError::ReferenceNotFound => {
+            "progressive target reference is unavailable in fresh semantic snapshot".to_string()
+        }
+        ProgressiveTargetError::InvalidElementGeometry => {
+            "progressive target element geometry is unavailable".to_string()
+        }
+    }
+}
+
+fn validate_progressive_live_state(
+    frame: &CapturedFrame,
+    freeze: &FreezeVisualStateReceipt,
+    snapshot: &PageSnapshot,
+) -> Result<(), String> {
+    let (snapshot_width, snapshot_height) = snapshot.viewport;
+    if frame.viewport.css_width != snapshot_width
+        || frame.viewport.css_height != snapshot_height
+        || freeze.viewport_css_width != snapshot_width as f64
+        || freeze.viewport_css_height != snapshot_height as f64
+    {
+        return Err(
+            "progressive target live viewport drifted from fresh semantic snapshot; pixels discarded"
+                .into(),
+        );
+    }
+
+    if progressive_route_signature(&frame.route)? != progressive_route_signature(&snapshot.route)? {
+        return Err(
+            "progressive target live route drifted from fresh semantic snapshot; pixels discarded"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn progressive_route_signature(
+    route: &str,
+) -> Result<(String, Option<String>, Option<u16>, String, Vec<(String, String)>), String> {
+    let url = url::Url::parse(route)
+        .map_err(|_| "progressive target route is not a valid URL".to_string())?;
+    let mut query = Vec::new();
+    let mut sensitive_keys = std::collections::BTreeSet::new();
+    for (key, value) in url.query_pairs() {
+        let key = key.into_owned();
+        let lower = key.to_ascii_lowercase();
+        let sensitive = lower.contains("token")
+            || lower.contains("key")
+            || lower.contains("secret")
+            || lower.contains("password")
+            || lower.contains("authorization");
+        if sensitive {
+            if sensitive_keys.insert(key.clone()) {
+                query.push((key, "[REDACTED]".to_string()));
+            }
+        } else {
+            query.push((key, value.into_owned()));
+        }
+    }
+
+    Ok((
+        url.scheme().to_string(),
+        url.host_str().map(ToOwned::to_owned),
+        url.port_or_known_default(),
+        url.path().to_string(),
+        query,
+    ))
+}
