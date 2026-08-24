@@ -45,6 +45,37 @@ pub struct VisualCaptureReceipt {
     pub pixel_height: u32,
     pub revision: Option<String>,
     pub captured_at_unix_ms: u64,
+    pub target: String,
+    pub region: Option<Rect>,
+}
+
+#[derive(Debug, Clone)]
+enum RequestedCaptureTarget {
+    Viewport,
+    Region(Rect),
+}
+
+impl RequestedCaptureTarget {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Viewport => "viewport",
+            Self::Region(_) => "region",
+        }
+    }
+
+    fn region(&self) -> Option<Rect> {
+        match self {
+            Self::Viewport => None,
+            Self::Region(rect) => Some(rect.clone()),
+        }
+    }
+
+    fn evidence_suffix(&self) -> &'static str {
+        match self {
+            Self::Viewport => "visual",
+            Self::Region(_) => "visual-region",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -58,6 +89,8 @@ struct VisualEvidenceRequest {
     revision: Option<String>,
     captured_at_unix_ms: i64,
     target: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    region: Option<Rect>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,7 +119,49 @@ pub async fn capture_viewport(
     viewport: ViewportMeta,
     revision: Option<String>,
 ) -> Result<VisualCaptureReceipt, String> {
+    capture_target(
+        app,
+        state,
+        session_id,
+        viewport,
+        revision,
+        RequestedCaptureTarget::Viewport,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn capture_region(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, VisualCaptureState>,
+    session_id: SessionId,
+    viewport: ViewportMeta,
+    region: Rect,
+    revision: Option<String>,
+) -> Result<VisualCaptureReceipt, String> {
+    capture_target(
+        app,
+        state,
+        session_id,
+        viewport,
+        revision,
+        RequestedCaptureTarget::Region(region),
+    )
+    .await
+}
+
+async fn capture_target(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, VisualCaptureState>,
+    session_id: SessionId,
+    viewport: ViewportMeta,
+    revision: Option<String>,
+    target: RequestedCaptureTarget,
+) -> Result<VisualCaptureReceipt, String> {
     validate_viewport(&viewport)?;
+    if let RequestedCaptureTarget::Region(rect) = &target {
+        validate_region(rect, viewport.css_width as f64, viewport.css_height as f64)?;
+    }
     preflight_managed_surface(&app, session_id)?;
 
     let capture_gate = session_capture_gate(&state, session_id).await?;
@@ -107,8 +182,9 @@ pub async fn capture_viewport(
         }
     };
     let frame = redact_private_pixels(frame, &freeze)?;
+    let frame = apply_capture_target(frame, &freeze, &target)?;
 
-    persist_and_register(&state, session_id, frame).await
+    persist_and_register(&state, session_id, frame, &target).await
 }
 
 async fn session_capture_gate(
@@ -139,6 +215,31 @@ fn validate_viewport(viewport: &ViewportMeta) -> Result<(), String> {
         || viewport.device_scale_factor > 8.0
     {
         return Err("visual capture device scale factor is outside the safety range".into());
+    }
+    Ok(())
+}
+
+fn validate_region(rect: &Rect, css_width: f64, css_height: f64) -> Result<(), String> {
+    let right = rect.x + rect.width;
+    let bottom = rect.y + rect.height;
+    if !css_width.is_finite()
+        || !css_height.is_finite()
+        || css_width <= 0.0
+        || css_height <= 0.0
+        || !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || !right.is_finite()
+        || !bottom.is_finite()
+        || rect.x < 0.0
+        || rect.y < 0.0
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+        || right > css_width
+        || bottom > css_height
+    {
+        return Err("visual capture region is outside the bounded CSS viewport".into());
     }
     Ok(())
 }
@@ -308,6 +409,36 @@ fn redact_private_pixels(
     Ok(frame)
 }
 
+fn apply_capture_target(
+    mut frame: CapturedFrame,
+    freeze: &FreezeVisualStateReceipt,
+    target: &RequestedCaptureTarget,
+) -> Result<CapturedFrame, String> {
+    let RequestedCaptureTarget::Region(rect) = target else {
+        return Ok(frame);
+    };
+
+    validate_region(
+        rect,
+        freeze.viewport_css_width,
+        freeze.viewport_css_height,
+    )?;
+    let cropped = localview_visual::crop_png_css_rect(
+        &frame.png,
+        (frame.pixel_width, frame.pixel_height),
+        (freeze.viewport_css_width, freeze.viewport_css_height),
+        rect,
+    )
+    .map_err(|_| "native visual region crop failed; pixels discarded".to_string())?;
+    let decoded = localview_visual::decode_png_rgba(&cropped)
+        .map_err(|_| "native visual region crop verification failed; pixels discarded".to_string())?;
+
+    frame.png = cropped;
+    frame.pixel_width = decoded.width;
+    frame.pixel_height = decoded.height;
+    Ok(frame)
+}
+
 async fn restore_visual_state(session_id: SessionId, token: &str) -> Result<(), String> {
     if token.is_empty() {
         return Err("visual restore token is empty".into());
@@ -405,6 +536,7 @@ async fn persist_and_register(
     state: &VisualCaptureState,
     session_id: SessionId,
     frame: CapturedFrame,
+    target: &RequestedCaptureTarget,
 ) -> Result<VisualCaptureReceipt, String> {
     let CapturedFrame {
         png,
@@ -449,13 +581,15 @@ async fn persist_and_register(
         viewport: viewport.clone(),
         revision: revision.clone(),
         captured_at_unix_ms: captured_at_for_api,
-        target: "viewport",
+        target: target.name(),
+        region: target.region(),
     };
 
     let token = read_token().await?;
     let evidence = control_client()?
         .post(format!(
-            "http://127.0.0.1:45454/v1/sessions/{session_id}/evidence/visual"
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/evidence/{}",
+            target.evidence_suffix()
         ))
         .bearer_auth(token)
         .json(&metadata)
@@ -479,5 +613,7 @@ async fn persist_and_register(
         pixel_height,
         revision,
         captured_at_unix_ms,
+        target: target.name().to_owned(),
+        region: target.region(),
     })
 }
