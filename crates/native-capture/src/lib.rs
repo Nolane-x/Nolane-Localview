@@ -95,6 +95,21 @@ pub fn capture_webview(
     platform::capture(webview, request, Box::new(completion));
 }
 
+#[cfg(all(target_os = "macos", feature = "gui-smoke"))]
+#[doc(hidden)]
+pub fn capture_wk_webview_for_gui_smoke(
+    view: &objc2_web_kit::WKWebView,
+    request: CaptureRequest,
+    completion: impl FnOnce(Result<CapturedFrame, NativeCaptureError>) + Send + 'static,
+) {
+    if request.target != CaptureTarget::Viewport {
+        completion(Err(NativeCaptureError::UnsupportedTarget));
+        return;
+    }
+
+    platform::capture_wk_webview_for_gui_smoke(view, request, Box::new(completion));
+}
+
 pub fn validate_frame_size(bytes: usize) -> Result<(), NativeCaptureError> {
     if bytes > MAX_PNG_BYTES {
         return Err(NativeCaptureError::FrameTooLarge {

@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+gui-smoke = []
+
 [dependencies]
 localview-capture = { path = "../capture" }
 serde.workspace = true
@@ -23,10 +26,15 @@ cairo-rs = { version = "0.18", features = ["png"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSDictionary", "NSError"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep"] }
-objc2-web-kit = { version = "0.3", default-features = false, features = ["objc2-app-kit", "block2", "WKWebView", "WKSnapshotConfiguration"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSDate", "NSDictionary", "NSError", "NSGeometry", "NSRunLoop", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSBitmapImageRep", "NSGraphics", "NSImage", "NSImageRep", "NSResponder", "NSView", "NSWindow"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["objc2-app-kit", "block2", "WKNavigation", "WKSnapshotConfiguration", "WKWebView"] }
 
 [dev-dependencies]
 localview-visual = { path = "../visual" }
 serde_json.workspace = true
+
+[[test]]
+name = "macos_gui_smoke"
+path = "tests/macos_gui_smoke.rs"
+harness = false

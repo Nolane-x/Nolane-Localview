@@ -38,3 +38,12 @@ pub(crate) fn capture(
         completion(Err(crate::NativeCaptureError::UnsupportedPlatform));
     }
 }
+
+#[cfg(all(target_os = "macos", feature = "gui-smoke"))]
+pub(crate) fn capture_wk_webview_for_gui_smoke(
+    view: &objc2_web_kit::WKWebView,
+    request: CaptureRequest,
+    completion: CaptureCompletion,
+) {
+    macos::capture_view(view, request, completion);
+}

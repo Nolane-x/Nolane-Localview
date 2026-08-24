@@ -61,6 +61,18 @@ jobs:
           LOCALVIEW_GUI_SMOKE: "1"
         run: xvfb-run -a cargo test -p localview-native-capture webkitgtk_visible_snapshot_returns_real_rendered_pixels -- --ignored --nocapture
 
+  native-gui-smoke-macos:
+    name: Native GUI smoke (WKWebView)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Real WKWebView rendered-pixel smoke
+        env:
+          LOCALVIEW_GUI_SMOKE: "1"
+        run: cargo test -p localview-native-capture --features gui-smoke --test macos_gui_smoke
+
   desktop-linux:
     name: Tauri + frontend
     runs-on: ubuntu-22.04
