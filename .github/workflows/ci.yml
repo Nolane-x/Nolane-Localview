@@ -45,6 +45,22 @@ jobs:
       - name: Native capture platform contract
         run: cargo test -p localview-native-capture
 
+  native-gui-smoke-linux:
+    name: Native GUI smoke (WebKitGTK)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install WebKitGTK GUI smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config xvfb
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Real WebKitGTK rendered-pixel smoke
+        env:
+          LOCALVIEW_GUI_SMOKE: "1"
+        run: xvfb-run -a cargo test -p localview-native-capture webkitgtk_visible_snapshot_returns_real_rendered_pixels -- --ignored --nocapture
+
   desktop-linux:
     name: Tauri + frontend
     runs-on: ubuntu-22.04
