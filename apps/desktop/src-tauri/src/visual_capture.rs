@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use localview_artifacts::ArtifactStore;
-use localview_capture::CaptureTarget;
+use localview_capture::{CaptureTarget, SettleDecision, SettleReason, StableCapturePolicy};
 use localview_native_capture::{
     capture_webview, CapturedFrame, CaptureRequest, NativeCaptureError, ViewportMeta,
 };
@@ -64,6 +64,8 @@ pub async fn capture_viewport(
     revision: Option<String>,
 ) -> Result<VisualCaptureReceipt, String> {
     validate_viewport(&viewport)?;
+    preflight_managed_surface(&app, session_id)?;
+    wait_for_capture_settle(session_id).await?;
 
     let frame = capture_managed_surface(&app, session_id, viewport, revision).await?;
     persist_and_register(&state, session_id, frame).await
@@ -80,6 +82,91 @@ fn validate_viewport(viewport: &ViewportMeta) -> Result<(), String> {
         return Err("visual capture device scale factor is outside the safety range".into());
     }
     Ok(())
+}
+
+fn preflight_managed_surface(app: &tauri::AppHandle, session_id: SessionId) -> Result<(), String> {
+    let preview_label = workspace_surface::preview_surface_label(session_id);
+    if let Some(window) = app.get_webview_window(&preview_label) {
+        if !bridge_surface_label_allowed(window.label(), session_id) {
+            return Err("visual capture preview/session ownership mismatch".into());
+        }
+        let route_url = window.url().map_err(err)?;
+        if !workspace_navigation_allowed(&route_url) {
+            return Err("visual capture refuses a non-loopback managed surface".into());
+        }
+        return Ok(());
+    }
+
+    #[cfg(feature = "native-workspace")]
+    {
+        let workspace_label = workspace_surface::workspace_label(session_id);
+        if let Some(window) = app.get_webview(&workspace_label) {
+            if !bridge_surface_label_allowed(window.label(), session_id) {
+                return Err("visual capture workspace/session ownership mismatch".into());
+            }
+            let route_url = window.url().map_err(err)?;
+            if !workspace_navigation_allowed(&route_url) {
+                return Err("visual capture refuses a non-loopback managed surface".into());
+            }
+            return Ok(());
+        }
+    }
+
+    Err("no LocalView-managed native surface is open for this session".into())
+}
+
+async fn wait_for_capture_settle(session_id: SessionId) -> Result<(), String> {
+    let policy = StableCapturePolicy::default();
+    let last_reasons = Arc::new(Mutex::new(Vec::<SettleReason>::new()));
+    let reasons_for_poll = last_reasons.clone();
+
+    let settle_transaction = async move {
+        let token = read_token().await?;
+        let client = control_client()?;
+        loop {
+            let decision = client
+                .get(format!(
+                    "http://127.0.0.1:45454/v1/sessions/{session_id}/capture-settle"
+                ))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(err)?
+                .error_for_status()
+                .map_err(err)?
+                .json::<SettleDecision>()
+                .await
+                .map_err(err)?;
+
+            if decision.stable {
+                return Ok::<(), String>(());
+            }
+
+            *reasons_for_poll.lock().await = decision.reasons;
+            tokio::time::sleep(Duration::from_millis(
+                decision.retry_after_ms.clamp(25, 100),
+            ))
+            .await;
+        }
+    };
+
+    match tokio::time::timeout(
+        Duration::from_millis(policy.timeout_ms),
+        settle_transaction,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            let reasons = last_reasons.lock().await;
+            let reason_names =
+                serde_json::to_string(&*reasons).unwrap_or_else(|_| "[]".to_owned());
+            Err(format!(
+                "stable capture settle timed out after {} ms; last_reasons={reason_names}",
+                policy.timeout_ms
+            ))
+        }
+    }
 }
 
 async fn capture_managed_surface(
