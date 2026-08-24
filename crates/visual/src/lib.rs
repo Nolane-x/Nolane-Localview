@@ -1,8 +1,13 @@
 #![forbid(unsafe_code)]
 
+use std::io::{BufReader, Cursor};
+
 use localview_protocol::Rect;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+const MAX_ENCODED_PNG_BYTES: usize = 24 * 1024 * 1024;
+const MAX_DECODED_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum VisualError {
@@ -14,6 +19,16 @@ pub enum VisualError {
     InvalidViewport,
     #[error("mask geometry is invalid")]
     InvalidMaskGeometry,
+    #[error("PNG input exceeds the encoded byte budget")]
+    EncodedPngTooLarge,
+    #[error("decoded PNG exceeds the image byte budget")]
+    DecodedImageTooLarge,
+    #[error("PNG decoder returned an unsupported output format")]
+    UnsupportedPngOutput,
+    #[error("PNG decode failed: {0}")]
+    PngDecode(String),
+    #[error("PNG encode failed: {0}")]
+    PngEncode(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +40,13 @@ pub struct RgbaImage {
 
 impl RgbaImage {
     pub fn validate(&self) -> Result<(), VisualError> {
-        if self.data.len() != self.width as usize * self.height as usize * 4 {
+        let expected = self
+            .width
+            .checked_mul(self.height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .ok_or(VisualError::InvalidBuffer)?;
+        if self.width == 0 || self.height == 0 || self.data.len() != expected {
             return Err(VisualError::InvalidBuffer);
         }
         Ok(())
@@ -137,6 +158,125 @@ pub fn changed_tiles(
         y += tile;
     }
     Ok(regions)
+}
+
+/// Decodes one PNG frame into a bounded RGBA8 image.
+pub fn decode_png_rgba(bytes: &[u8]) -> Result<RgbaImage, VisualError> {
+    if bytes.len() > MAX_ENCODED_PNG_BYTES {
+        return Err(VisualError::EncodedPngTooLarge);
+    }
+
+    let mut limits = png::Limits::default();
+    limits.bytes = MAX_DECODED_IMAGE_BYTES;
+    let source = BufReader::new(Cursor::new(bytes));
+    let mut decoder = png::Decoder::new_with_limits(source, limits);
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder
+        .read_info()
+        .map_err(|error| VisualError::PngDecode(error.to_string()))?;
+    let output_size = reader
+        .output_buffer_size()
+        .ok_or(VisualError::DecodedImageTooLarge)?;
+    if output_size > MAX_DECODED_IMAGE_BYTES {
+        return Err(VisualError::DecodedImageTooLarge);
+    }
+
+    let mut buffer = vec![0; output_size];
+    let info = reader
+        .next_frame(&mut buffer)
+        .map_err(|error| VisualError::PngDecode(error.to_string()))?;
+    if info.bit_depth != png::BitDepth::Eight {
+        return Err(VisualError::UnsupportedPngOutput);
+    }
+    let frame = &buffer[..info.buffer_size()];
+    let pixels = usize::try_from(info.width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(info.height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .ok_or(VisualError::DecodedImageTooLarge)?;
+    let rgba_len = pixels
+        .checked_mul(4)
+        .ok_or(VisualError::DecodedImageTooLarge)?;
+    if rgba_len > MAX_DECODED_IMAGE_BYTES {
+        return Err(VisualError::DecodedImageTooLarge);
+    }
+
+    let mut rgba = Vec::with_capacity(rgba_len);
+    match info.color_type {
+        png::ColorType::Rgba => rgba.extend_from_slice(frame),
+        png::ColorType::Rgb => {
+            for pixel in frame.chunks_exact(3) {
+                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+        }
+        png::ColorType::Grayscale => {
+            for &gray in frame {
+                rgba.extend_from_slice(&[gray, gray, gray, 255]);
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            for pixel in frame.chunks_exact(2) {
+                rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
+            }
+        }
+        png::ColorType::Indexed => return Err(VisualError::UnsupportedPngOutput),
+    }
+    if rgba.len() != rgba_len {
+        return Err(VisualError::UnsupportedPngOutput);
+    }
+
+    let image = RgbaImage {
+        width: info.width,
+        height: info.height,
+        data: rgba,
+    };
+    image.validate()?;
+    Ok(image)
+}
+
+/// Encodes a bounded RGBA8 image as PNG.
+pub fn encode_png_rgba(image: &RgbaImage) -> Result<Vec<u8>, VisualError> {
+    image.validate()?;
+    if image.data.len() > MAX_DECODED_IMAGE_BYTES {
+        return Err(VisualError::DecodedImageTooLarge);
+    }
+
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, image.width, image.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|error| VisualError::PngEncode(error.to_string()))?;
+        writer
+            .write_image_data(&image.data)
+            .map_err(|error| VisualError::PngEncode(error.to_string()))?;
+    }
+    if encoded.len() > MAX_ENCODED_PNG_BYTES {
+        return Err(VisualError::EncodedPngTooLarge);
+    }
+    Ok(encoded)
+}
+
+/// Redacts viewport-relative CSS rectangles in native PNG pixels and re-encodes
+/// the frame. The decoded dimensions must exactly match native capture metadata.
+pub fn redact_png_css_rects(
+    png: &[u8],
+    expected_dimensions: (u32, u32),
+    css_viewport: (f64, f64),
+    rects: &[Rect],
+) -> Result<(Vec<u8>, usize), VisualError> {
+    let mut image = decode_png_rgba(png)?;
+    if (image.width, image.height) != expected_dimensions {
+        return Err(VisualError::DimensionMismatch);
+    }
+    let applied = redact_css_rects(&mut image, css_viewport, rects)?;
+    let encoded = encode_png_rgba(&image)?;
+    Ok((encoded, applied))
 }
 
 /// Redacts viewport-relative CSS rectangles directly in an RGBA image.
