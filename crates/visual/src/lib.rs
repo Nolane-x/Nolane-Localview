@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod baseline;
+pub use baseline::{VisualBaselineCache, VisualBaselineContext};
+
 use std::io::{BufReader, Cursor};
 
 use localview_protocol::Rect;
@@ -21,6 +24,10 @@ pub enum VisualError {
     InvalidMaskGeometry,
     #[error("capture region geometry is invalid")]
     InvalidRegionGeometry,
+    #[error("changed-region policy is invalid")]
+    InvalidChangePolicy,
+    #[error("visual baseline cache policy is invalid")]
+    InvalidBaselinePolicy,
     #[error("PNG input exceeds the encoded byte budget")]
     EncodedPngTooLarge,
     #[error("decoded PNG exceeds the image byte budget")]
@@ -69,6 +76,38 @@ pub struct VisualDiff {
     pub changed_pixels: u64,
     pub changed_ratio: f64,
     pub bounding_box: Option<DiffRegion>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ChangedRegionPolicy {
+    pub tile_px: u32,
+    pub threshold: u8,
+    pub max_regions: usize,
+    pub viewport_fallback_ratio: f64,
+}
+
+impl Default for ChangedRegionPolicy {
+    fn default() -> Self {
+        Self {
+            tile_px: 64,
+            threshold: 8,
+            max_regions: 8,
+            viewport_fallback_ratio: 0.35,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChangedRegionPlan {
+    Unchanged,
+    Regions {
+        regions: Vec<Rect>,
+        changed_ratio: f64,
+    },
+    Viewport {
+        changed_ratio: f64,
+    },
 }
 
 pub fn pixel_diff(
@@ -160,6 +199,124 @@ pub fn changed_tiles(
         y += tile;
     }
     Ok(regions)
+}
+
+pub fn plan_changed_css_regions(
+    before: &RgbaImage,
+    after: &RgbaImage,
+    css_viewport: (f64, f64),
+    policy: ChangedRegionPolicy,
+) -> Result<ChangedRegionPlan, VisualError> {
+    before.validate()?;
+    after.validate()?;
+    if before.width != after.width || before.height != after.height {
+        return Err(VisualError::DimensionMismatch);
+    }
+
+    let (css_width, css_height) = css_viewport;
+    if !css_width.is_finite()
+        || !css_height.is_finite()
+        || css_width <= 0.0
+        || css_height <= 0.0
+    {
+        return Err(VisualError::InvalidViewport);
+    }
+    if policy.tile_px == 0
+        || policy.max_regions == 0
+        || !policy.viewport_fallback_ratio.is_finite()
+        || policy.viewport_fallback_ratio <= 0.0
+        || policy.viewport_fallback_ratio > 1.0
+    {
+        return Err(VisualError::InvalidChangePolicy);
+    }
+
+    let diff = pixel_diff(before, after, policy.threshold)?;
+    if diff.changed_pixels == 0 {
+        return Ok(ChangedRegionPlan::Unchanged);
+    }
+    if diff.changed_ratio >= policy.viewport_fallback_ratio {
+        return Ok(ChangedRegionPlan::Viewport {
+            changed_ratio: diff.changed_ratio,
+        });
+    }
+
+    let tiles = changed_tiles(before, after, policy.tile_px, policy.threshold)?;
+    let regions = coalesce_regions(tiles);
+    if regions.len() > policy.max_regions {
+        return Ok(ChangedRegionPlan::Viewport {
+            changed_ratio: diff.changed_ratio,
+        });
+    }
+
+    let scale_x = css_width / before.width as f64;
+    let scale_y = css_height / before.height as f64;
+    let regions = regions
+        .into_iter()
+        .map(|region| Rect {
+            x: region.x as f64 * scale_x,
+            y: region.y as f64 * scale_y,
+            width: region.width as f64 * scale_x,
+            height: region.height as f64 * scale_y,
+        })
+        .collect();
+
+    Ok(ChangedRegionPlan::Regions {
+        regions,
+        changed_ratio: diff.changed_ratio,
+    })
+}
+
+fn coalesce_regions(mut pending: Vec<DiffRegion>) -> Vec<DiffRegion> {
+    pending.sort_by_key(|region| (region.y, region.x));
+    let mut merged = Vec::<DiffRegion>::new();
+
+    while let Some(mut current) = pending.pop() {
+        while let Some(index) = pending
+            .iter()
+            .position(|candidate| regions_overlap_or_edge_touch(&current, candidate))
+        {
+            let other = pending.swap_remove(index);
+            current = merge_regions(current, other);
+        }
+        merged.push(current);
+    }
+
+    merged.sort_by_key(|region| (region.y, region.x));
+    merged
+}
+
+fn regions_overlap_or_edge_touch(left: &DiffRegion, right: &DiffRegion) -> bool {
+    let left_right = left.x.saturating_add(left.width);
+    let left_bottom = left.y.saturating_add(left.height);
+    let right_right = right.x.saturating_add(right.width);
+    let right_bottom = right.y.saturating_add(right.height);
+
+    let x_overlap = left.x < right_right && right.x < left_right;
+    let y_overlap = left.y < right_bottom && right.y < left_bottom;
+    let x_touch = left_right == right.x || right_right == left.x;
+    let y_touch = left_bottom == right.y || right_bottom == left.y;
+
+    (x_overlap && y_overlap) || (x_touch && y_overlap) || (y_touch && x_overlap)
+}
+
+fn merge_regions(left: DiffRegion, right: DiffRegion) -> DiffRegion {
+    let x = left.x.min(right.x);
+    let y = left.y.min(right.y);
+    let right_edge = left
+        .x
+        .saturating_add(left.width)
+        .max(right.x.saturating_add(right.width));
+    let bottom_edge = left
+        .y
+        .saturating_add(left.height)
+        .max(right.y.saturating_add(right.height));
+    DiffRegion {
+        x,
+        y,
+        width: right_edge.saturating_sub(x),
+        height: bottom_edge.saturating_sub(y),
+        changed_pixels: left.changed_pixels.saturating_add(right.changed_pixels),
+    }
 }
 
 /// Decodes one PNG frame into a bounded RGBA8 image.

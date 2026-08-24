@@ -9,50 +9,65 @@ fn viewport_capture_serializes_per_session_and_orders_visual_transaction() {
     assert!(!module.contains("capture_gate: Mutex<()>"));
     assert!(!module.contains("global_capture_mutex"));
 
-    let start = module
+    let helper_start = module
+        .find("async fn capture_redacted_viewport_after_gate(")
+        .expect("shared redacted viewport transaction must exist");
+    let helper_end = module[helper_start..]
+        .find("\nasync fn capture_target(")
+        .map(|offset| helper_start + offset)
+        .expect("shared redacted viewport helper must end before target processing");
+    let helper = &module[helper_start..helper_end];
+
+    let settle = helper
+        .find("wait_for_capture_settle(session_id).await?")
+        .expect("capture must settle before freezing");
+    let freeze = helper
+        .find("freeze_visual_state(session_id).await?")
+        .expect("capture must freeze visual motion");
+    let pixels = helper
+        .find("capture_managed_surface(&app, session_id, viewport, revision).await")
+        .expect("native capture attempt must remain explicit");
+    let restore = helper
+        .find("restore_visual_state(session_id, &freeze.token).await")
+        .expect("capture must restore using the exact freeze token");
+    let redact = helper
+        .find("redact_private_pixels(frame, &freeze)?")
+        .expect("private masks must redact pixels before returning the frame");
+
+    assert_eq!(helper.matches("capture_managed_surface(").count(), 1);
+    assert!(settle < freeze);
+    assert!(freeze < pixels);
+    assert!(pixels < restore);
+    assert!(restore < redact);
+
+    let target_start = module
         .find("async fn capture_target(")
-        .expect("shared capture transaction must exist");
-    let end = module[start..]
-        .find("async fn session_capture_gate(")
-        .map(|offset| start + offset)
-        .expect("capture transaction must end before gate helper");
-    let transaction = &module[start..end];
+        .expect("shared target transaction must exist");
+    let target_end = module[target_start..]
+        .find("async fn compatible_changed_baseline(")
+        .map(|offset| target_start + offset)
+        .expect("target transaction must end before baseline helpers");
+    let transaction = &module[target_start..target_end];
 
     let gate = transaction
         .find("session_capture_gate(&state, session_id).await?")
         .expect("capture must acquire a session-scoped gate");
-    let settle = transaction
-        .find("wait_for_capture_settle(session_id).await?")
-        .expect("capture must settle before freezing");
-    let freeze = transaction
-        .find("freeze_visual_state(session_id).await?")
-        .expect("capture must freeze visual motion");
-    let pixels = transaction
-        .find("capture_managed_surface(&app, session_id, viewport, revision).await")
-        .expect("native capture attempt must remain explicit");
-    let restore = transaction
-        .find("restore_visual_state(session_id, &freeze.token).await")
-        .expect("capture must restore using the exact freeze token");
+    let shared = transaction
+        .find("capture_redacted_viewport_after_gate(")
+        .expect("target capture must use the shared redacted transaction");
     let consistency = transaction
         .find("validate_live_target_viewport(&frame, &freeze, &target)?")
-        .expect("region target must verify live viewport geometry after restore");
-    let redact = transaction
-        .find("redact_private_pixels(frame, &freeze)?")
-        .expect("private masks must redact pixels before target processing");
+        .expect("region target must verify live viewport geometry");
     let target = transaction
         .find("apply_capture_target(frame, &freeze, &target)?")
         .expect("capture must process the bounded target before persistence");
     let persist = transaction
         .find("persist_and_register(&state, session_id, frame, &target).await")
-        .expect("pixels may only be persisted after restore, validation, and redaction");
+        .expect("pixels may only be persisted after shared restoration/redaction and validation");
 
-    assert!(gate < settle);
-    assert!(settle < freeze);
-    assert!(freeze < pixels);
-    assert!(pixels < restore);
-    assert!(restore < consistency);
-    assert!(consistency < redact);
-    assert!(redact < target);
+    assert!(gate < shared);
+    assert!(shared < consistency);
+    assert!(consistency < target);
     assert!(target < persist);
 }
 
@@ -111,7 +126,7 @@ fn private_mask_redaction_reuses_bounded_visual_core_and_fails_closed() {
 }
 
 #[test]
-fn region_capture_rejects_live_viewport_drift_before_redaction_or_persistence() {
+fn region_capture_rejects_live_viewport_drift_before_persistence() {
     let module = include_str!("../src/visual_capture.rs");
 
     assert!(module.contains("validate_live_target_viewport"));

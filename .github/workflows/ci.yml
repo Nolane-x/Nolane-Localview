@@ -126,3 +126,5 @@ jobs:
         run: cargo test -p localview-desktop --test stable_capture_settle_contract
       - name: Visual freeze capture transaction contract
         run: cargo test -p localview-desktop --test visual_freeze_capture_contract
+      - name: Changed-region scheduling transaction contract
+        run: cargo test -p localview-desktop --test changed_region_schedule_contract
