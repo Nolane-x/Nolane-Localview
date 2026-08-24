@@ -158,7 +158,11 @@ fn component_is_not_fabricated_without_matching_source_ancestor() {
     let plan = resolve_progressive_targets(&snapshot(root), "@save").expect("resolve targets");
     assert_eq!(
         target_kinds(&plan),
-        vec![ProgressiveTargetKind::Element, ProgressiveTargetKind::Section, ProgressiveTargetKind::Viewport]
+        vec![
+            ProgressiveTargetKind::Element,
+            ProgressiveTargetKind::Section,
+            ProgressiveTargetKind::Viewport,
+        ]
     );
 }
 
@@ -221,14 +225,39 @@ fn duplicate_component_or_section_rect_is_removed_without_reordering() {
         Some("Card"),
         vec![],
     );
-    let component = node("@component", "div", None, Some(shared.clone()), Some("Card"), vec![target]);
-    let section = node("@section", "section", Some("region"), Some(shared), None, vec![component]);
-    let root = node("@root", "div", None, Some(rect(0.0, 0.0, 1000.0, 800.0)), None, vec![section]);
+    let component = node(
+        "@component",
+        "div",
+        None,
+        Some(shared.clone()),
+        Some("Card"),
+        vec![target],
+    );
+    let section = node(
+        "@section",
+        "section",
+        Some("region"),
+        Some(shared),
+        None,
+        vec![component],
+    );
+    let root = node(
+        "@root",
+        "div",
+        None,
+        Some(rect(0.0, 0.0, 1000.0, 800.0)),
+        None,
+        vec![section],
+    );
 
     let plan = resolve_progressive_targets(&snapshot(root), "@target").expect("resolve targets");
     assert_eq!(
         target_kinds(&plan),
-        vec![ProgressiveTargetKind::Element, ProgressiveTargetKind::Component, ProgressiveTargetKind::Viewport]
+        vec![
+            ProgressiveTargetKind::Element,
+            ProgressiveTargetKind::Component,
+            ProgressiveTargetKind::Viewport,
+        ]
     );
 }
 
@@ -285,4 +314,49 @@ fn missing_ref_or_invalid_target_geometry_fails_closed() {
     let error = resolve_progressive_targets(&snapshot(offscreen_root), "@offscreen")
         .expect_err("fully offscreen geometry must fail");
     assert!(matches!(error, ProgressiveTargetError::InvalidElementGeometry));
+}
+
+#[test]
+fn infinite_and_zero_sized_target_geometry_fail_closed() {
+    for bounds in [
+        rect(10.0, 10.0, f64::INFINITY, 40.0),
+        rect(10.0, 10.0, 100.0, f64::INFINITY),
+        rect(10.0, 10.0, 0.0, 40.0),
+        rect(10.0, 10.0, 100.0, 0.0),
+    ] {
+        let target = node("@bad", "button", None, Some(bounds), None, vec![]);
+        let root = node(
+            "@root",
+            "main",
+            Some("main"),
+            Some(rect(0.0, 0.0, 1000.0, 800.0)),
+            None,
+            vec![target],
+        );
+        let error = resolve_progressive_targets(&snapshot(root), "@bad")
+            .expect_err("infinite or zero-sized geometry must fail");
+        assert!(matches!(error, ProgressiveTargetError::InvalidElementGeometry));
+    }
+}
+
+#[test]
+fn zero_sized_snapshot_viewport_fails_closed_before_resolution() {
+    let target = node(
+        "@target",
+        "button",
+        None,
+        Some(rect(10.0, 10.0, 100.0, 40.0)),
+        None,
+        vec![],
+    );
+    let mut invalid = snapshot(target);
+    invalid.viewport = (0, 800);
+    let error = resolve_progressive_targets(&invalid, "@target")
+        .expect_err("zero-width viewport must fail closed");
+    assert!(matches!(error, ProgressiveTargetError::InvalidViewport));
+
+    invalid.viewport = (1000, 0);
+    let error = resolve_progressive_targets(&invalid, "@target")
+        .expect_err("zero-height viewport must fail closed");
+    assert!(matches!(error, ProgressiveTargetError::InvalidViewport));
 }
