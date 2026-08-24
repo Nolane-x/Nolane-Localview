@@ -63,6 +63,17 @@ pub enum BridgeActionKind {
     Scroll { x: f64, y: f64 },
     Focus,
     Snapshot,
+    FreezeVisuals,
+    RestoreVisuals { token: Uuid },
+}
+
+impl BridgeActionKind {
+    pub fn is_internal_capture_action(&self) -> bool {
+        matches!(
+            self,
+            Self::FreezeVisuals | Self::RestoreVisuals { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -323,6 +334,31 @@ fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut Bridg
                     .error
                     .take()
                     .map(|error| error.replace(text, "[REDACTED]"));
+            }
+        }
+        Some(BridgeActionKind::FreezeVisuals) => {
+            let paused_animations = result
+                .payload
+                .get("paused_animations")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let web_animations_supported = result
+                .payload
+                .get("web_animations_supported")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            result.payload = serde_json::json!({
+                "paused_animations": paused_animations,
+                "web_animations_supported": web_animations_supported,
+            });
+            if result.error.is_some() {
+                result.error = Some("visual freeze action failed".into());
+            }
+        }
+        Some(BridgeActionKind::RestoreVisuals { .. }) => {
+            result.payload = Value::Null;
+            if result.error.is_some() {
+                result.error = Some("visual restore action failed".into());
             }
         }
         Some(_) => {}
