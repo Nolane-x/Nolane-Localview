@@ -252,6 +252,11 @@ async fn stale_or_unrelated_results_cannot_satisfy_a_new_fresh_snapshot_request(
         .live
         .enqueue_action(session_id, None, BridgeActionKind::Snapshot)
         .await;
+    let dispatched = state.live.take_actions(session_id, 8).await;
+    let unrelated = dispatched
+        .into_iter()
+        .find(|action| action.id == unrelated.id)
+        .expect("unrelated snapshot must be dispatched before completion");
     let claimed = state
         .live
         .claim_action(session_id, unrelated.id)
