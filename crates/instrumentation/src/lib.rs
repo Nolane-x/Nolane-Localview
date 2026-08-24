@@ -56,6 +56,105 @@ pub fn bootstrap_script(config: &InstrumentationConfig) -> String {
             "      readyState: document.readyState,",
             "      readyState: document.readyState,\n      readiness: readinessPacket(),",
         )
+        .replace(
+            "  window.__LOCALVIEW__ = Object.freeze({",
+            r#"  const VISUAL_FREEZE_LEASE_MS = 8000;
+  let visualFreezeLease = null;
+
+  const restoreVisuals = (token) => {
+    token = String(token || '');
+    const lease = visualFreezeLease;
+    if (!lease || lease.token !== token) throw new Error('visual_freeze_token_mismatch');
+
+    clearTimeout(lease.timer);
+    if (lease.style?.isConnected) lease.style.remove();
+    const root = document.documentElement;
+    if (root?.getAttribute('data-localview-visual-freeze') === token) {
+      root.removeAttribute('data-localview-visual-freeze');
+    }
+    for (const record of lease.animations) {
+      if (!record.resume) continue;
+      try { record.animation.play(); } catch (_) {}
+    }
+    visualFreezeLease = null;
+    return { restored: true };
+  };
+
+  const freezeVisuals = async (token) => {
+    token = String(token || '');
+    if (!token) throw new Error('visual_freeze_token_required');
+    if (visualFreezeLease) {
+      const lease = visualFreezeLease;
+      if (lease.token !== token) throw new Error('visual_freeze_already_active');
+      return {
+        paused_animations: lease.pausedAnimations,
+        web_animations_supported: lease.webAnimationsSupported,
+      };
+    }
+
+    const root = document.documentElement;
+    if (!root) throw new Error('visual_freeze_root_unavailable');
+    const webAnimationsSupported = typeof document.getAnimations === 'function';
+    const animations = [];
+    let pausedAnimations = 0;
+    if (webAnimationsSupported) {
+      for (const animation of Array.from(document.getAnimations()).slice(0, 2048)) {
+        const playState = animation.playState;
+        const resume = playState === 'running' || playState === 'pending';
+        if (resume) {
+          try {
+            animation.pause();
+            pausedAnimations += 1;
+          } catch (_) {}
+        }
+        animations.push({ animation, resume });
+      }
+    }
+
+    const style = document.createElement('style');
+    style.setAttribute('data-localview-visual-freeze', '');
+    style.textContent = `
+html[data-localview-visual-freeze],
+html[data-localview-visual-freeze] *,
+html[data-localview-visual-freeze] *::before,
+html[data-localview-visual-freeze] *::after {
+  animation-play-state: paused !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+  caret-color: transparent !important;
+  scroll-behavior: auto !important;
+}`;
+    root.setAttribute('data-localview-visual-freeze', token);
+    (document.head || root).appendChild(style);
+
+    const lease = {
+      token,
+      style,
+      animations,
+      pausedAnimations,
+      webAnimationsSupported,
+      timer: 0,
+    };
+    visualFreezeLease = lease;
+    lease.timer = setTimeout(() => {
+      if (visualFreezeLease?.token !== token) return;
+      try { restoreVisuals(token); } catch (_) {}
+    }, VISUAL_FREEZE_LEASE_MS);
+
+    await new Promise(resolve => requestAnimationFrame(() => resolve()));
+    if (visualFreezeLease?.token !== token) throw new Error('visual_freeze_lease_lost');
+    return {
+      paused_animations: pausedAnimations,
+      web_animations_supported: webAnimationsSupported,
+    };
+  };
+
+  window.__LOCALVIEW__ = Object.freeze({"#,
+        )
+        .replace(
+            "    snapshot,\n    inspect(reference)",
+            "    snapshot,\n    freezeVisuals,\n    restoreVisuals,\n    inspect(reference)",
+        )
 }
 
 const SCRIPT: &str = r#"
