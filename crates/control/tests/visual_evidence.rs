@@ -103,14 +103,15 @@ fn valid_region_payload() -> serde_json::Value {
     })
 }
 
-async fn post_visual(
+async fn post_visual_to(
     state: ControlState,
     session_id: uuid::Uuid,
+    suffix: &str,
     payload: serde_json::Value,
 ) -> StatusCode {
     let request = Request::builder()
         .method("POST")
-        .uri(format!("/v1/sessions/{session_id}/evidence/visual"))
+        .uri(format!("/v1/sessions/{session_id}/evidence/{suffix}"))
         .header(header::AUTHORIZATION, "Bearer test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(payload.to_string()))
@@ -121,6 +122,22 @@ async fn post_visual(
         .await
         .expect("control router response")
         .status()
+}
+
+async fn post_visual(
+    state: ControlState,
+    session_id: uuid::Uuid,
+    payload: serde_json::Value,
+) -> StatusCode {
+    post_visual_to(state, session_id, "visual", payload).await
+}
+
+async fn post_region_visual(
+    state: ControlState,
+    session_id: uuid::Uuid,
+    payload: serde_json::Value,
+) -> StatusCode {
+    post_visual_to(state, session_id, "visual-region", payload).await
 }
 
 #[tokio::test]
@@ -143,7 +160,7 @@ async fn visual_evidence_metadata_is_ingested_without_pixel_payload() {
 #[tokio::test]
 async fn bounded_region_visual_evidence_preserves_css_target_metadata() {
     let (state, session_id, evidence) = test_state().await;
-    let status = post_visual(state, session_id, valid_region_payload()).await;
+    let status = post_region_visual(state, session_id, valid_region_payload()).await;
     assert_eq!(status, StatusCode::OK);
 
     let recent = evidence.recent_for_session(session_id, 10).await;
