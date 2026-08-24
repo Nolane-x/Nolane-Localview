@@ -69,7 +69,7 @@ pub enum BridgeActionKind {
     Scroll { x: f64, y: f64 },
     Focus,
     Snapshot,
-    FreezeVisuals { mask_selectors: Vec<String> },
+    FreezeVisuals,
     RestoreVisuals { token: Uuid },
 }
 
@@ -77,9 +77,14 @@ impl BridgeActionKind {
     pub fn is_internal_capture_action(&self) -> bool {
         matches!(
             self,
-            Self::FreezeVisuals { .. } | Self::RestoreVisuals { .. }
+            Self::FreezeVisuals | Self::RestoreVisuals { .. }
         )
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrivateCaptureActionData {
+    pub mask_selectors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -88,6 +93,8 @@ pub struct BridgeAction {
     pub session_id: SessionId,
     pub reference: Option<ElementRef>,
     pub action: BridgeActionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_capture: Option<PrivateCaptureActionData>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -223,11 +230,38 @@ impl LiveBridge {
         reference: Option<ElementRef>,
         action: BridgeActionKind,
     ) -> BridgeAction {
+        self.enqueue_prepared_action(session_id, reference, action, None)
+            .await
+    }
+
+    pub async fn enqueue_capture_freeze(
+        &self,
+        session_id: SessionId,
+        mask_selectors: Vec<String>,
+    ) -> BridgeAction {
+        let mask_selectors = sanitize_mask_selectors(mask_selectors);
+        self.enqueue_prepared_action(
+            session_id,
+            None,
+            BridgeActionKind::FreezeVisuals,
+            Some(PrivateCaptureActionData { mask_selectors }),
+        )
+        .await
+    }
+
+    async fn enqueue_prepared_action(
+        &self,
+        session_id: SessionId,
+        reference: Option<ElementRef>,
+        action: BridgeActionKind,
+        private_capture: Option<PrivateCaptureActionData>,
+    ) -> BridgeAction {
         let action = BridgeAction {
             id: Uuid::new_v4(),
             session_id,
             reference,
-            action: sanitize_action_for_queue(action),
+            action,
+            private_capture,
             created_at: Utc::now(),
         };
         let scope = ActionScope::from_action(&action);
@@ -366,18 +400,12 @@ impl LiveBridge {
     }
 }
 
-fn sanitize_action_for_queue(action: BridgeActionKind) -> BridgeActionKind {
-    match action {
-        BridgeActionKind::FreezeVisuals { mask_selectors } => {
-            let mask_selectors = mask_selectors
-                .into_iter()
-                .filter(|selector| !selector.is_empty() && selector.len() <= MAX_PRIVATE_MASK_SELECTOR_BYTES)
-                .take(MAX_PRIVATE_MASK_SELECTORS)
-                .collect();
-            BridgeActionKind::FreezeVisuals { mask_selectors }
-        }
-        other => other,
-    }
+fn sanitize_mask_selectors(mask_selectors: Vec<String>) -> Vec<String> {
+    mask_selectors
+        .into_iter()
+        .filter(|selector| !selector.is_empty() && selector.len() <= MAX_PRIVATE_MASK_SELECTOR_BYTES)
+        .take(MAX_PRIVATE_MASK_SELECTORS)
+        .collect()
 }
 
 fn drain_actions(
@@ -467,7 +495,7 @@ fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut Bridg
                     .map(|error| error.replace(text, "[REDACTED]"));
             }
         }
-        Some(BridgeActionKind::FreezeVisuals { .. }) => sanitize_visual_freeze_result(result),
+        Some(BridgeActionKind::FreezeVisuals) => sanitize_visual_freeze_result(result),
         Some(BridgeActionKind::RestoreVisuals { .. }) => {
             result.payload = Value::Null;
             if result.error.is_some() {
