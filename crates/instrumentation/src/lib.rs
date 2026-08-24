@@ -37,7 +37,25 @@ impl Default for InstrumentationConfig {
 
 pub fn bootstrap_script(config: &InstrumentationConfig) -> String {
     let config = serde_json::to_string(config).expect("instrumentation config is serializable");
-    SCRIPT.replace("__LOCALVIEW_CONFIG__", &config)
+    SCRIPT
+        .replace("__LOCALVIEW_CONFIG__", &config)
+        .replace(
+            "  const snapshot = () => {",
+            r#"  const readinessPacket = () => {
+    const images = Array.from(document.images || []);
+    return {
+      fonts: document.fonts?.status || 'unsupported',
+      pendingImages: images.reduce((count, image) => count + (image.complete ? 0 : 1), 0),
+      totalImages: images.length,
+    };
+  };
+
+  const snapshot = () => {"#,
+        )
+        .replace(
+            "      readyState: document.readyState,",
+            "      readyState: document.readyState,\n      readiness: readinessPacket(),",
+        )
 }
 
 const SCRIPT: &str = r#"

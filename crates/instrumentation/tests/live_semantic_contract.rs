@@ -34,6 +34,18 @@ fn semantic_packets_remain_privacy_bounded() {
 }
 
 #[test]
+fn semantic_snapshot_exposes_privacy_safe_capture_readiness() {
+    let script = bootstrap_script(&InstrumentationConfig::default());
+
+    assert!(script.contains("readinessPacket"));
+    assert!(script.contains("document.fonts"));
+    assert!(script.contains("pendingImages"));
+    assert!(script.contains("document.images"));
+    assert!(!script.contains("image.src"));
+    assert!(!script.contains("image.currentSrc"));
+}
+
+#[test]
 fn deep_semantic_names_do_not_force_inner_text_layout_scans() {
     let script = bootstrap_script(&InstrumentationConfig::default());
 

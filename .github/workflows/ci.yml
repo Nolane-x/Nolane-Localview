@@ -81,3 +81,5 @@ jobs:
         run: cargo test -p localview-desktop --test live_semantic_bridge_contract
       - name: Native visual capture desktop contract
         run: cargo test -p localview-desktop --test native_capture_contract
+      - name: Stable capture settle desktop contract
+        run: cargo test -p localview-desktop --test stable_capture_settle_contract
