@@ -1,5 +1,5 @@
 use tauri::webview::PlatformWebview;
-use webkit2gtk::{gio, SnapshotOptions, SnapshotRegion, WebViewExt};
+use webkit2gtk::{gio, SnapshotOptions, SnapshotRegion, WebView, WebViewExt};
 
 use crate::{
     build_frame, CaptureCompletion, CaptureRequest, NativeCaptureBackend, NativeCaptureError,
@@ -10,7 +10,10 @@ pub(crate) fn capture(
     request: CaptureRequest,
     completion: CaptureCompletion,
 ) {
-    let view = webview.inner();
+    capture_view(webview.inner(), request, completion);
+}
+
+fn capture_view(view: &WebView, request: CaptureRequest, completion: CaptureCompletion) {
     view.snapshot(
         SnapshotRegion::Visible,
         SnapshotOptions::NONE,
