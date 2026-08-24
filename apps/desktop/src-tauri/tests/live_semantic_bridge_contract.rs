@@ -17,17 +17,32 @@ fn preview_bridge_executes_internal_visual_freeze_actions_through_localview_api(
         .find("freezeVisuals?.(")
         .expect("private freeze action must call the LocalView freeze API");
     let freeze_tail = &source[freeze_call..];
-    let token = freeze_tail
-        .find("queued.id")
-        .expect("freeze call must carry the private action token");
-    let selectors = freeze_tail
-        .find("queued.private_capture?.mask_selectors")
-        .expect("freeze call must carry the private selector envelope");
-    assert!(token < selectors, "freeze token must precede selector payload");
+    assert!(freeze_tail.contains("queued.id"));
+    assert!(freeze_tail.contains("privateMaskGeometry"));
+    assert!(freeze_tail.contains("queued.private_capture?.mask_selectors"));
+    assert!(source.contains("restoreVisuals?.(queued.id)"));
     assert!(source.contains("case 'restore_visuals':"));
     assert!(source.contains("restoreVisuals?.(String(action.token"));
     assert!(!source.contains("eval(action"));
     assert!(!source.contains("evaluate_script(action"));
+}
+
+#[test]
+fn preview_private_mask_geometry_is_bounded_and_selector_free_in_results() {
+    let source = include_str!("../src/lib.rs");
+    assert!(source.contains("const privateMaskGeometry"));
+    assert!(source.contains("MAX_PRIVATE_MASK_SELECTORS"));
+    assert!(source.contains("MAX_PRIVATE_MASK_ELEMENTS"));
+    assert!(source.contains("MAX_PRIVATE_MASK_RECTS"));
+    assert!(source.contains("document.querySelectorAll(selector)"));
+    assert!(source.contains("element.getClientRects()"));
+    assert!(source.contains("visual_mask_selector_invalid"));
+    assert!(source.contains("visual_mask_geometry_budget_exceeded"));
+    assert!(source.contains("viewport_css_width"));
+    assert!(source.contains("viewport_css_height"));
+    assert!(source.contains("masked_elements"));
+    assert!(source.contains("mask_rects"));
+    assert!(!source.contains("mask_selectors: selectors"));
 }
 
 #[test]
