@@ -4,7 +4,7 @@ use tauri::webview::PlatformWebview;
 use webview2_com::{
     CapturePreviewCompletedHandler,
     Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_15, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+        ICoreWebView2, ICoreWebView2_15, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
     },
 };
 use windows::{
@@ -29,6 +29,21 @@ fn finish(state: &CompletionState, result: Result<crate::CapturedFrame, NativeCa
 
 pub(crate) fn capture(
     webview: PlatformWebview,
+    request: CaptureRequest,
+    completion: CaptureCompletion,
+) {
+    // SAFETY: The Tauri platform handle owns a live WebView2 controller for the
+    // duration of this `with_webview` call. We only clone the COM interface and
+    // then pass it into the shared CapturePreview implementation below.
+    let core = unsafe { webview.controller().CoreWebView2() };
+    match core {
+        Ok(core) => capture_core(&core, request, completion),
+        Err(error) => completion(Err(NativeCaptureError::Platform(error.to_string()))),
+    }
+}
+
+pub(crate) fn capture_core(
+    webview: &ICoreWebView2,
     request: CaptureRequest,
     completion: CaptureCompletion,
 ) {
@@ -118,21 +133,17 @@ pub(crate) fn capture(
         Ok(())
     }));
 
-    // SAFETY: The Tauri platform handle owns a live WebView2 controller on the
-    // WebView main thread. The COM interfaces and handler remain strongly owned
-    // through this call and WebView2 retains the completion handler as required.
+    // SAFETY: `webview` is a live CoreWebView2 interface borrowed by the caller.
+    // Casting to the versioned interface preserves the same COM object, and
+    // WebView2 retains the completion handler for the asynchronous operation.
     let start_result = unsafe {
-        webview
-            .controller()
-            .CoreWebView2()
-            .and_then(|core| core.cast::<ICoreWebView2_15>())
-            .and_then(|core| {
-                core.CapturePreview(
-                    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
-                    &write_stream,
-                    &handler,
-                )
-            })
+        webview.cast::<ICoreWebView2_15>().and_then(|core| {
+            core.CapturePreview(
+                COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+                &write_stream,
+                &handler,
+            )
+        })
     };
 
     if let Err(error) = start_result {
