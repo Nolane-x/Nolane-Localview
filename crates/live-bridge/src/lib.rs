@@ -225,14 +225,7 @@ impl LiveBridge {
     }
 
     pub async fn take_actions(&self, session_id: SessionId, limit: usize) -> Vec<BridgeAction> {
-        let mut states = self.inner.write().await;
-        let Some(state) = states.get_mut(&session_id) else {
-            return Vec::new();
-        };
-        let count = limit.min(state.actions.len());
-        let actions = state.actions.drain(..count).collect::<Vec<_>>();
-        move_to_inflight(state, &actions, self.action_capacity);
-        actions
+        self.take_public_actions(session_id, limit).await
     }
 
     pub async fn take_public_actions(
