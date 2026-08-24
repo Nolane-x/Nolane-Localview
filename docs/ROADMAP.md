@@ -76,6 +76,7 @@ Landed native viewport path:
 - Authenticated daemon `Visual` evidence ingestion with artifact/session/route/viewport/revision/backend provenance.
 - Cross-platform compile/test contracts for native platform adapters plus a desktop integration contract.
 - Dedicated hosted Linux GUI smoke: Ubuntu/Xvfb starts a real GTK window and WebKitGTK WebView, renders deterministic localhost HTML, captures through the same visible-snapshot helper used by production, fully decodes the PNG and asserts the known center proof pixel. Ordinary headless test runs keep this test ignored; the dedicated GUI job explicitly enables it.
+- Dedicated hosted macOS GUI smoke: a custom harness owns the real AppKit main thread, initializes NSApplication, creates a real NSWindow + WKWebView, loads deterministic loopback HTML, pumps NSRunLoop, captures through the same WKWebView snapshot helper used by production, fully decodes the PNG and asserts the same known center proof pixel. This proof exposed a production ImageIO bug in direct NSImage representation encoding; the adapter now materializes snapshot pixels through TIFF → NSBitmapImageRep → PNG before frame validation.
 - Deterministic stable-settle evaluator with explicit reasons for DOM, fonts, images, optional HMR signals, DOM mutation, layout and network activity.
 - Privacy-safe semantic readiness metadata: document readiness, font status and image-completion counts without image URLs, response bodies, cookies or storage.
 - Authenticated capture-settle endpoint that requests an exact fresh semantic snapshot action for every sample; stale observer snapshots cannot satisfy readiness.
@@ -92,14 +93,14 @@ Landed native viewport path:
 
 Still required before the visual runtime is considered complete:
 
-- equivalent hosted or dedicated GUI rendered-pixel smoke for Windows WebView2 and macOS WKWebView; Linux/WebKitGTK proof is landed;
+- equivalent hosted or dedicated GUI rendered-pixel smoke for Windows WebView2; Linux/WebKitGTK and macOS/WKWebView proof are landed;
 - true network in-flight accounting beyond the current fetch/XHR completion quiet-period heuristic;
 - element/component/section capture execution beyond viewport capture;
 - progressive changed-region capture and token-aware visual packet selection;
 - guarded full-page stitching;
 - before/after and region diff wired into evidence and verification.
 
-**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, artifact/evidence registration, fail-closed fresh-snapshot settling, live freeze/restore, pre-persistence private-region redaction and Linux real rendered-pixel proof are now present; WebView2/WKWebView GUI proof, progressive-region execution and visual diff verification remain.
+**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, artifact/evidence registration, fail-closed fresh-snapshot settling, live freeze/restore, pre-persistence private-region redaction, Linux real rendered-pixel proof and macOS real rendered-pixel proof are now present; WebView2 GUI proof, progressive-region execution and visual diff verification remain.
 
 ## Wave 3 — Runtime telemetry
 
