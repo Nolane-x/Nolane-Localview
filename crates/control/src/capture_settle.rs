@@ -202,11 +202,11 @@ mod tests {
                 "readiness": {"fonts": "loading", "pendingImages": 2},
                 "secret": "never-copied"
             }),
-            completed_at: Utc.timestamp_millis_opt(1_900).single().unwrap(),
+            completed_at: Utc.timestamp_millis_opt(99_000).single().unwrap(),
         };
 
         let observation = settle_observation(&[stale_event], Some(&fresh), 2_000);
-        assert_eq!(observation.latest_semantic_at_unix_ms, Some(1_900));
+        assert_eq!(observation.latest_semantic_at_unix_ms, Some(2_000));
         assert_eq!(observation.ready_state.as_deref(), Some("interactive"));
         assert_eq!(observation.fonts_status.as_deref(), Some("loading"));
         assert_eq!(observation.pending_images, Some(2));
