@@ -1,5 +1,6 @@
 use localview_capture::{
-    evaluate_settle, SettleObservation, SettleReason, StableCapturePolicy,
+    build_plan, evaluate_settle, CaptureStage, CaptureTarget, SettleObservation, SettleReason,
+    StableCapturePolicy,
 };
 
 fn ready() -> SettleObservation {
@@ -93,4 +94,29 @@ fn future_event_timestamp_is_treated_as_recent() {
     observation.latest_layout_at_unix_ms = Some(10_100);
     let decision = evaluate_settle(&StableCapturePolicy::default(), &observation);
     assert!(decision.reasons.contains(&SettleReason::LayoutRecent));
+}
+
+#[test]
+fn default_capture_policy_masks_common_private_and_credential_surfaces() {
+    let policy = StableCapturePolicy::default();
+    let expected = [
+        "[data-localview-private]",
+        "[data-private]",
+        "[data-sensitive]",
+        "input[type=\"password\"]",
+        "input[autocomplete=\"current-password\"]",
+        "input[autocomplete=\"new-password\"]",
+        "input[autocomplete=\"one-time-code\"]",
+    ];
+
+    for selector in expected {
+        assert!(
+            policy.mask_selectors.iter().any(|candidate| candidate == selector),
+            "missing default private selector: {selector}"
+        );
+    }
+    assert!(policy.mask_selectors.len() <= 16);
+
+    let plan = build_plan(CaptureTarget::Viewport, policy);
+    assert!(plan.stages.contains(&CaptureStage::Masked));
 }

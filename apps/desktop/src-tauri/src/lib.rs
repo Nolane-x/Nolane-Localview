@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
     BridgeAction, BridgeActionResult, IngestReport, ObserverBatch, ObserverEvent,
+    PrivateBridgeAction,
 };
 use localview_protocol::{Health, Session, SessionId};
 use serde::Serialize;
@@ -213,12 +214,12 @@ async fn preview_ingest(
 async fn preview_take_actions(
     webview_window: tauri::WebviewWindow,
     session_id: SessionId,
-) -> Result<Vec<BridgeAction>, String> {
+) -> Result<Vec<serde_json::Value>, String> {
     ensure_preview_caller(&webview_window, session_id)?;
     let token = read_token().await?;
     let client = control_client()?;
 
-    let mut internal_actions = client
+    let internal_actions = client
         .get(format!(
             "http://127.0.0.1:45454/v1/sessions/{session_id}/capture-actions"
         ))
@@ -228,7 +229,7 @@ async fn preview_take_actions(
         .map_err(err)?
         .error_for_status()
         .map_err(err)?
-        .json::<Vec<BridgeAction>>()
+        .json::<Vec<PrivateBridgeAction>>()
         .await
         .map_err(err)?;
     let public_actions = client
@@ -244,8 +245,15 @@ async fn preview_take_actions(
         .json::<Vec<BridgeAction>>()
         .await
         .map_err(err)?;
-    internal_actions.extend(public_actions);
-    Ok(internal_actions)
+
+    let mut actions = Vec::with_capacity(internal_actions.len() + public_actions.len());
+    for action in internal_actions {
+        actions.push(serde_json::to_value(action).map_err(err)?);
+    }
+    for action in public_actions {
+        actions.push(serde_json::to_value(action).map_err(err)?);
+    }
+    Ok(actions)
 }
 
 #[tauri::command]
@@ -358,6 +366,12 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
   let running = true;
   let busy = false;
 
+  const MAX_PRIVATE_MASK_SELECTORS = 16;
+  const MAX_PRIVATE_MASK_SELECTOR_BYTES = 256;
+  const MAX_PRIVATE_MASK_ELEMENTS = 4096;
+  const MAX_PRIVATE_MASK_RECTS = 256;
+  const MAX_PRIVATE_MASK_VIEWPORT = 100000;
+
   const eventKind = (type) => ({
     dom_changed: 'dom_mutation',
     geometry_changed: 'layout',
@@ -440,6 +454,86 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     };
   };
 
+  const privateMaskGeometry = (rawSelectors) => {
+    const viewportWidth = Number(window.innerWidth);
+    const viewportHeight = Number(window.innerHeight);
+    if (!Number.isFinite(viewportWidth)
+      || !Number.isFinite(viewportHeight)
+      || viewportWidth <= 0
+      || viewportHeight <= 0
+      || viewportWidth > MAX_PRIVATE_MASK_VIEWPORT
+      || viewportHeight > MAX_PRIVATE_MASK_VIEWPORT) {
+      throw new Error('visual_mask_viewport_invalid');
+    }
+
+    const selectors = Array.isArray(rawSelectors) ? rawSelectors : [];
+    if (selectors.length > MAX_PRIVATE_MASK_SELECTORS) {
+      throw new Error('visual_mask_selector_budget_exceeded');
+    }
+
+    const seen = new Set();
+    const maskRects = [];
+    let maskedElements = 0;
+    for (const rawSelector of selectors) {
+      const selector = String(rawSelector || '');
+      if (!selector || new TextEncoder().encode(selector).length > MAX_PRIVATE_MASK_SELECTOR_BYTES) {
+        throw new Error('visual_mask_selector_invalid');
+      }
+
+      let matches;
+      try {
+        matches = document.querySelectorAll(selector);
+      } catch (_) {
+        throw new Error('visual_mask_selector_invalid');
+      }
+
+      for (const element of matches) {
+        if (seen.has(element)) continue;
+        seen.add(element);
+        maskedElements += 1;
+        if (maskedElements > MAX_PRIVATE_MASK_ELEMENTS) {
+          throw new Error('visual_mask_geometry_budget_exceeded');
+        }
+
+        for (const rawRect of Array.from(element.getClientRects())) {
+          const x = Number(rawRect.x);
+          const y = Number(rawRect.y);
+          const width = Number(rawRect.width);
+          const height = Number(rawRect.height);
+          if (![x, y, width, height].every(Number.isFinite)
+            || width < 0
+            || height < 0
+            || !Number.isFinite(x + width)
+            || !Number.isFinite(y + height)) {
+            throw new Error('visual_mask_geometry_invalid');
+          }
+
+          const left = Math.max(0, Math.min(viewportWidth, x));
+          const top = Math.max(0, Math.min(viewportHeight, y));
+          const right = Math.max(0, Math.min(viewportWidth, x + width));
+          const bottom = Math.max(0, Math.min(viewportHeight, y + height));
+          if (right <= left || bottom <= top) continue;
+          if (maskRects.length >= MAX_PRIVATE_MASK_RECTS) {
+            throw new Error('visual_mask_geometry_budget_exceeded');
+          }
+          maskRects.push({
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+          });
+        }
+      }
+    }
+
+    return {
+      viewport_css_width: viewportWidth,
+      viewport_css_height: viewportHeight,
+      masked_elements: maskedElements,
+      mask_rects: maskRects,
+    };
+  };
+
   const execute = async (queued) => {
     const action = queued.action || {};
     const target = queued.reference ? resolveRef(queued.reference) : null;
@@ -468,8 +562,17 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         return { reference: queued.reference };
       case 'snapshot':
         return window.__LOCALVIEW__?.snapshot?.() ?? null;
-      case 'freeze_visuals':
-        return await window.__LOCALVIEW__?.freezeVisuals?.(queued.id) ?? null;
+      case 'freeze_visuals': {
+        const frozen = await window.__LOCALVIEW__?.freezeVisuals?.(queued.id) ?? null;
+        if (!frozen) throw new Error('visual_freeze_ack_missing');
+        try {
+          const geometry = privateMaskGeometry(queued.private_capture?.mask_selectors || []);
+          return { ...frozen, ...geometry };
+        } catch (error) {
+          try { window.__LOCALVIEW__?.restoreVisuals?.(queued.id); } catch (_) {}
+          throw error;
+        }
+      }
       case 'restore_visuals':
         return window.__LOCALVIEW__?.restoreVisuals?.(String(action.token || '')) ?? null;
       case 'inspect': {

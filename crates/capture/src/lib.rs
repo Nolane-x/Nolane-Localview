@@ -38,7 +38,15 @@ impl Default for StableCapturePolicy {
             network_quiet_ms: Some(250),
             freeze_animation: true,
             freeze_transition: true,
-            mask_selectors: vec![],
+            mask_selectors: vec![
+                "[data-localview-private]".into(),
+                "[data-private]".into(),
+                "[data-sensitive]".into(),
+                "input[type=\"password\"]".into(),
+                "input[autocomplete=\"current-password\"]".into(),
+                "input[autocomplete=\"new-password\"]".into(),
+                "input[autocomplete=\"one-time-code\"]".into(),
+            ],
             timeout_ms: 5_000,
         }
     }

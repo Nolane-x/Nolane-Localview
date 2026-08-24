@@ -24,15 +24,19 @@ fn viewport_capture_serializes_per_session_and_orders_visual_transaction() {
     let restore = module
         .find("restore_visual_state(session_id, &freeze.token).await")
         .expect("capture must restore using the exact freeze token");
+    let redact = module
+        .find("redact_private_pixels(frame, &freeze)?")
+        .expect("private masks must redact pixels before persistence");
     let persist = module
         .find("persist_and_register(&state, session_id, frame).await")
-        .expect("pixels may only be persisted after restore");
+        .expect("pixels may only be persisted after restore and redaction");
 
     assert!(gate < settle);
     assert!(settle < freeze);
     assert!(freeze < pixels);
     assert!(pixels < restore);
-    assert!(restore < persist);
+    assert!(restore < redact);
+    assert!(redact < persist);
 }
 
 #[test]
@@ -65,6 +69,26 @@ fn visual_state_control_receipts_are_private_and_bounded() {
     assert!(module.contains("lease_ms"));
     assert!(module.contains("paused_animations"));
     assert!(module.contains("web_animations_supported"));
+    assert!(module.contains("viewport_css_width"));
+    assert!(module.contains("viewport_css_height"));
+    assert!(module.contains("masked_elements"));
+    assert!(module.contains("mask_rects"));
+    assert!(module.contains("MAX_VISUAL_MASK_RECTS"));
+    assert!(module.contains("MAX_MASKED_ELEMENTS"));
     assert!(!module.contains("pub token:"));
     assert!(!module.contains("freeze_token"));
+}
+
+#[test]
+fn private_mask_redaction_reuses_bounded_visual_core_and_fails_closed() {
+    let module = include_str!("../src/visual_capture.rs");
+
+    assert!(module.contains("localview_visual::redact_png_css_rects"));
+    assert!(module.contains("frame.pixel_width"));
+    assert!(module.contains("frame.pixel_height"));
+    assert!(module.contains("freeze.viewport_css_width"));
+    assert!(module.contains("freeze.viewport_css_height"));
+    assert!(module.contains("&freeze.mask_rects"));
+    assert!(module.contains("private visual mask redaction failed; pixels discarded"));
+    assert!(module.contains("private visual mask application was incomplete; pixels discarded"));
 }

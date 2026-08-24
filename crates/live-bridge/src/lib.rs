@@ -12,6 +12,12 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+const MAX_PRIVATE_MASK_SELECTORS: usize = 16;
+const MAX_PRIVATE_MASK_SELECTOR_BYTES: usize = 256;
+const MAX_VISUAL_MASK_RECTS: usize = 256;
+const MAX_MASKED_ELEMENTS: u64 = 4_096;
+const MAX_CSS_VIEWPORT_DIMENSION: f64 = 100_000.0;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ObserverEventKind {
@@ -76,6 +82,11 @@ impl BridgeActionKind {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrivateCaptureActionData {
+    pub mask_selectors: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BridgeAction {
     pub id: Uuid,
@@ -83,6 +94,30 @@ pub struct BridgeAction {
     pub reference: Option<ElementRef>,
     pub action: BridgeActionKind,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PrivateBridgeAction {
+    pub id: Uuid,
+    pub session_id: SessionId,
+    pub reference: Option<ElementRef>,
+    pub action: BridgeActionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_capture: Option<PrivateCaptureActionData>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl PrivateBridgeAction {
+    fn from_action(action: BridgeAction, private_capture: Option<PrivateCaptureActionData>) -> Self {
+        Self {
+            id: action.id,
+            session_id: action.session_id,
+            reference: action.reference,
+            action: action.action,
+            private_capture,
+            created_at: action.created_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -137,6 +172,7 @@ struct SessionBridgeState {
     events: VecDeque<ObserverEvent>,
     actions: VecDeque<BridgeAction>,
     capture_actions: VecDeque<BridgeAction>,
+    capture_private: VecDeque<(Uuid, PrivateCaptureActionData)>,
     inflight: VecDeque<BridgeAction>,
     capture_inflight: VecDeque<BridgeAction>,
     claimed: VecDeque<BridgeAction>,
@@ -238,6 +274,36 @@ impl LiveBridge {
         action
     }
 
+    pub async fn enqueue_capture_freeze(
+        &self,
+        session_id: SessionId,
+        mask_selectors: Vec<String>,
+    ) -> BridgeAction {
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id,
+            reference: None,
+            action: BridgeActionKind::FreezeVisuals,
+            created_at: Utc::now(),
+        };
+        let private = PrivateCaptureActionData {
+            mask_selectors: sanitize_mask_selectors(mask_selectors),
+        };
+        let mut states = self.inner.write().await;
+        let state = states.entry(session_id).or_default();
+        push_bounded(
+            &mut state.capture_actions,
+            action.clone(),
+            self.action_capacity,
+        );
+        push_bounded(
+            &mut state.capture_private,
+            (action.id, private),
+            self.action_capacity,
+        );
+        action
+    }
+
     pub async fn take_actions(&self, session_id: SessionId, limit: usize) -> Vec<BridgeAction> {
         self.take_public_actions(session_id, limit).await
     }
@@ -263,17 +329,24 @@ impl LiveBridge {
         &self,
         session_id: SessionId,
         limit: usize,
-    ) -> Vec<BridgeAction> {
+    ) -> Vec<PrivateBridgeAction> {
         let mut states = self.inner.write().await;
         let Some(state) = states.get_mut(&session_id) else {
             return Vec::new();
         };
-        drain_actions(
+        let actions = drain_actions(
             &mut state.capture_actions,
             &mut state.capture_inflight,
             limit,
             self.action_capacity,
-        )
+        );
+        actions
+            .into_iter()
+            .map(|action| {
+                let private_capture = take_private_capture(&mut state.capture_private, action.id);
+                PrivateBridgeAction::from_action(action, private_capture)
+            })
+            .collect()
     }
 
     pub async fn claim_action(
@@ -358,6 +431,22 @@ impl LiveBridge {
     pub async fn release_session(&self, session_id: SessionId) {
         self.inner.write().await.remove(&session_id);
     }
+}
+
+fn sanitize_mask_selectors(mask_selectors: Vec<String>) -> Vec<String> {
+    mask_selectors
+        .into_iter()
+        .filter(|selector| !selector.is_empty() && selector.len() <= MAX_PRIVATE_MASK_SELECTOR_BYTES)
+        .take(MAX_PRIVATE_MASK_SELECTORS)
+        .collect()
+}
+
+fn take_private_capture(
+    private: &mut VecDeque<(Uuid, PrivateCaptureActionData)>,
+    action_id: Uuid,
+) -> Option<PrivateCaptureActionData> {
+    let index = private.iter().position(|(id, _)| *id == action_id)?;
+    private.remove(index).map(|(_, data)| data)
 }
 
 fn drain_actions(
@@ -447,25 +536,7 @@ fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut Bridg
                     .map(|error| error.replace(text, "[REDACTED]"));
             }
         }
-        Some(BridgeActionKind::FreezeVisuals) => {
-            let paused_animations = result
-                .payload
-                .get("paused_animations")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let web_animations_supported = result
-                .payload
-                .get("web_animations_supported")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            result.payload = serde_json::json!({
-                "paused_animations": paused_animations,
-                "web_animations_supported": web_animations_supported,
-            });
-            if result.error.is_some() {
-                result.error = Some("visual freeze action failed".into());
-            }
-        }
+        Some(BridgeActionKind::FreezeVisuals) => sanitize_visual_freeze_result(result),
         Some(BridgeActionKind::RestoreVisuals { .. }) => {
             result.payload = Value::Null;
             if result.error.is_some() {
@@ -480,6 +551,98 @@ fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut Bridg
             }
         }
     }
+}
+
+fn sanitize_visual_freeze_result(result: &mut BridgeActionResult) {
+    if !result.ok {
+        result.payload = Value::Null;
+        result.error = Some("visual freeze action failed".into());
+        return;
+    }
+
+    let paused_animations = result
+        .payload
+        .get("paused_animations")
+        .and_then(Value::as_u64);
+    let web_animations_supported = result
+        .payload
+        .get("web_animations_supported")
+        .and_then(Value::as_bool);
+    let viewport_css_width = result
+        .payload
+        .get("viewport_css_width")
+        .and_then(Value::as_f64);
+    let viewport_css_height = result
+        .payload
+        .get("viewport_css_height")
+        .and_then(Value::as_f64);
+    let masked_elements = result
+        .payload
+        .get("masked_elements")
+        .and_then(Value::as_u64);
+    let mask_rects = sanitized_mask_rects(&result.payload);
+
+    let valid_viewport = viewport_css_width.is_some_and(|value| {
+        value.is_finite() && value > 0.0 && value <= MAX_CSS_VIEWPORT_DIMENSION
+    }) && viewport_css_height.is_some_and(|value| {
+        value.is_finite() && value > 0.0 && value <= MAX_CSS_VIEWPORT_DIMENSION
+    });
+    let valid_counts = paused_animations.is_some()
+        && web_animations_supported.is_some()
+        && masked_elements.is_some_and(|value| value <= MAX_MASKED_ELEMENTS)
+        && mask_rects.is_some();
+
+    if !valid_viewport || !valid_counts {
+        result.ok = false;
+        result.payload = Value::Null;
+        result.error = Some("visual freeze action failed".into());
+        return;
+    }
+
+    result.payload = serde_json::json!({
+        "paused_animations": paused_animations.expect("validated above"),
+        "web_animations_supported": web_animations_supported.expect("validated above"),
+        "viewport_css_width": viewport_css_width.expect("validated above"),
+        "viewport_css_height": viewport_css_height.expect("validated above"),
+        "masked_elements": masked_elements.expect("validated above"),
+        "mask_rects": mask_rects.expect("validated above"),
+    });
+    result.error = None;
+}
+
+fn sanitized_mask_rects(payload: &Value) -> Option<Vec<Value>> {
+    let rects = payload.get("mask_rects")?.as_array()?;
+    if rects.len() > MAX_VISUAL_MASK_RECTS {
+        return None;
+    }
+
+    let mut sanitized = Vec::with_capacity(rects.len());
+    for rect in rects {
+        let x = rect.get("x")?.as_f64()?;
+        let y = rect.get("y")?.as_f64()?;
+        let width = rect.get("width")?.as_f64()?;
+        let height = rect.get("height")?.as_f64()?;
+        let right = x + width;
+        let bottom = y + height;
+        if !x.is_finite()
+            || !y.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || !right.is_finite()
+            || !bottom.is_finite()
+            || width <= 0.0
+            || height <= 0.0
+        {
+            return None;
+        }
+        sanitized.push(serde_json::json!({
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+        }));
+    }
+    Some(sanitized)
 }
 
 impl Default for LiveBridge {
