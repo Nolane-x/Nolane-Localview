@@ -74,8 +74,10 @@ fn events_at_or_outside_quiet_windows_do_not_block() {
 
 #[test]
 fn disabled_policy_gate_removes_only_its_reason() {
-    let mut policy = StableCapturePolicy::default();
-    policy.wait_fonts = false;
+    let policy = StableCapturePolicy {
+        wait_fonts: false,
+        ..StableCapturePolicy::default()
+    };
     let mut observation = ready();
     observation.fonts_status = Some("loading".into());
     observation.pending_images = Some(1);
