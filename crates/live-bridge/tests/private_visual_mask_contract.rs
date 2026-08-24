@@ -13,13 +13,7 @@ async fn private_freeze_carries_selectors_but_stores_only_bounded_geometry() {
     ];
 
     let action = bridge
-        .enqueue_action(
-            session_id,
-            None,
-            BridgeActionKind::FreezeVisuals {
-                mask_selectors: selectors.clone(),
-            },
-        )
+        .enqueue_capture_freeze(session_id, selectors.clone())
         .await;
 
     let drained = bridge
@@ -27,12 +21,14 @@ async fn private_freeze_carries_selectors_but_stores_only_bounded_geometry() {
         .await;
     assert_eq!(drained.len(), 1);
     assert_eq!(drained[0].id, action.id);
-    match &drained[0].action {
-        BridgeActionKind::FreezeVisuals { mask_selectors } => {
-            assert_eq!(mask_selectors, &selectors);
-        }
-        other => panic!("expected private freeze action, got {other:?}"),
-    }
+    assert!(matches!(drained[0].action, BridgeActionKind::FreezeVisuals));
+    assert_eq!(
+        drained[0]
+            .private_capture
+            .as_ref()
+            .map(|private| &private.mask_selectors),
+        Some(&selectors)
+    );
 
     let claimed = bridge
         .claim_action(session_id, action.id)
