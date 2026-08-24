@@ -10,7 +10,7 @@ pub(crate) fn capture(
     request: CaptureRequest,
     completion: CaptureCompletion,
 ) {
-    capture_view(webview.inner(), request, completion);
+    capture_view(&webview.inner(), request, completion);
 }
 
 fn capture_view(view: &WebView, request: CaptureRequest, completion: CaptureCompletion) {
