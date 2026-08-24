@@ -68,3 +68,67 @@ async fn public_and_internal_drains_never_steal_each_others_actions() {
         .iter()
         .all(|action| action.action.is_internal_capture_action()));
 }
+
+#[tokio::test]
+async fn public_queue_pressure_cannot_evict_queued_internal_capture_actions() {
+    let bridge = LiveBridge::new(64, 8);
+    let session_id = Uuid::from_u128(8);
+    let freeze = bridge
+        .enqueue_action(session_id, None, BridgeActionKind::FreezeVisuals)
+        .await;
+
+    for _ in 0..32 {
+        bridge
+            .enqueue_action(session_id, None, BridgeActionKind::Click)
+            .await;
+    }
+
+    let internal = bridge.take_internal_capture_actions(session_id, 8).await;
+    assert_eq!(internal.len(), 1);
+    assert_eq!(internal[0].id, freeze.id);
+}
+
+#[tokio::test]
+async fn public_inflight_pressure_cannot_evict_internal_capture_origin() {
+    let bridge = LiveBridge::new(64, 8);
+    let session_id = Uuid::from_u128(9);
+    let freeze = bridge
+        .enqueue_action(session_id, None, BridgeActionKind::FreezeVisuals)
+        .await;
+    let internal = bridge.take_internal_capture_actions(session_id, 8).await;
+    assert_eq!(internal.len(), 1);
+
+    for _ in 0..24 {
+        bridge
+            .enqueue_action(session_id, None, BridgeActionKind::Click)
+            .await;
+        let _ = bridge.take_public_actions(session_id, 8).await;
+    }
+
+    assert_eq!(
+        bridge
+            .claim_action(session_id, freeze.id)
+            .await
+            .map(|action| action.id),
+        Some(freeze.id)
+    );
+}
+
+#[tokio::test]
+async fn internal_queue_pressure_cannot_evict_queued_public_actions() {
+    let bridge = LiveBridge::new(64, 8);
+    let session_id = Uuid::from_u128(10);
+    let click = bridge
+        .enqueue_action(session_id, Some("@button".into()), BridgeActionKind::Click)
+        .await;
+
+    for _ in 0..24 {
+        bridge
+            .enqueue_action(session_id, None, BridgeActionKind::FreezeVisuals)
+            .await;
+    }
+
+    let public = bridge.take_public_actions(session_id, 8).await;
+    assert_eq!(public.len(), 1);
+    assert_eq!(public[0].id, click.id);
+}
