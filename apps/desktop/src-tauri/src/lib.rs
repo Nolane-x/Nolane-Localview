@@ -451,6 +451,10 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         return { reference: queued.reference };
       case 'snapshot':
         return window.__LOCALVIEW__?.snapshot?.() ?? null;
+      case 'freeze_visuals':
+        return await window.__LOCALVIEW__?.freezeVisuals?.(queued.id) ?? null;
+      case 'restore_visuals':
+        return window.__LOCALVIEW__?.restoreVisuals?.(String(action.token || '')) ?? null;
       case 'inspect': {
         if (!queued.reference) throw new Error('inspect requires an element reference');
         const api = window.__LOCALVIEW__;
