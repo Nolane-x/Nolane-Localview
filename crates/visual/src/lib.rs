@@ -166,8 +166,9 @@ pub fn decode_png_rgba(bytes: &[u8]) -> Result<RgbaImage, VisualError> {
         return Err(VisualError::EncodedPngTooLarge);
     }
 
-    let mut limits = png::Limits::default();
-    limits.bytes = MAX_DECODED_IMAGE_BYTES;
+    let limits = png::Limits {
+        bytes: MAX_DECODED_IMAGE_BYTES,
+    };
     let source = BufReader::new(Cursor::new(bytes));
     let mut decoder = png::Decoder::new_with_limits(source, limits);
     decoder.set_transformations(png::Transformations::normalize_to_color8());
