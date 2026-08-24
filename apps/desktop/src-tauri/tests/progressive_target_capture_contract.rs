@@ -116,3 +116,48 @@ fn progressive_target_capture_privacy_order_remains_restore_redact_then_crop() {
     assert!(command.contains("apply_capture_target("));
     assert!(command.contains("persist_and_register"));
 }
+
+#[test]
+fn progressive_target_capture_fails_closed_on_snapshot_and_live_drift() {
+    let module = include_str!("../src/visual_capture.rs");
+
+    assert!(module.contains("progressive target viewport does not match fresh semantic snapshot"));
+    assert!(module.contains(
+        "progressive target live viewport drifted from fresh semantic snapshot; pixels discarded"
+    ));
+    assert!(module.contains(
+        "progressive target live route drifted from fresh semantic snapshot; pixels discarded"
+    ));
+    assert!(module.contains("progressive_route_signature(&frame.route)?"));
+    assert!(module.contains("progressive_route_signature(&snapshot.route)?"));
+    assert!(module.contains("url.port_or_known_default()"));
+    assert!(module.contains("\"[REDACTED]\".to_string()"));
+}
+
+#[test]
+fn progressive_target_capture_never_widens_missing_component_or_section_requests() {
+    let module = include_str!("../src/visual_capture.rs");
+    let start = module
+        .find("pub async fn capture_progressive_target(")
+        .expect("progressive target command must exist");
+    let end = module[start..]
+        .find("\nasync fn ")
+        .map(|offset| start + offset)
+        .unwrap_or(module.len());
+    let command = &module[start..end];
+
+    let select = command
+        .find(".find(|target| target.kind == level)")
+        .expect("requested target level must be selected exactly");
+    let reject = command
+        .find("requested progressive target level is unavailable")
+        .expect("missing requested level must fail closed");
+    let map = command
+        .find("let target = match level")
+        .expect("only an already-resolved exact level may map to pixels");
+
+    assert!(select < reject);
+    assert!(reject < map);
+    assert!(!command.contains("ProgressiveTargetKind::Component => RequestedCaptureTarget::Viewport"));
+    assert!(!command.contains("ProgressiveTargetKind::Section => RequestedCaptureTarget::Viewport"));
+}
