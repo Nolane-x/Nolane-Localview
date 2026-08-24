@@ -375,7 +375,7 @@ async fn create_session_proof(
             source: "verification-runtime".into(),
             engine: Some("deterministic".into()),
             revision: proof.payload.revision.clone(),
-            parent_ids: Vec::new(),
+            parent_ids: proof.payload.evidence_ids.clone(),
             captured_at: Utc::now(),
         },
         confidence: if proof.payload.verdict == LiveVerificationVerdict::Pass {
