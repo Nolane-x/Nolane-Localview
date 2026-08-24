@@ -424,6 +424,35 @@ struct VisualViewport {
     device_scale_factor: f64,
 }
 
+fn valid_visual_artifact_id(value: &str) -> bool {
+    let Some(digest) = value.strip_prefix("lv-") else {
+        return false;
+    };
+    digest.len() == 16
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_visual_backend(value: &str) -> bool {
+    matches!(value, "webview2" | "wk_web_view" | "web_kit_gtk")
+}
+
+fn valid_visual_route(value: &str) -> bool {
+    let Ok(route) = url::Url::parse(value) else {
+        return false;
+    };
+    if !matches!(route.scheme(), "http" | "https") {
+        return false;
+    }
+    route.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    })
+}
+
 async fn ingest_visual_evidence(
     State(state): State<ControlState>,
     headers: HeaderMap,
@@ -438,15 +467,16 @@ async fn ingest_visual_evidence(
     }
 
     if request.target != "viewport"
-        || request.artifact_id.trim().is_empty()
-        || request.backend.trim().is_empty()
+        || !valid_visual_artifact_id(&request.artifact_id)
+        || !valid_visual_backend(&request.backend)
         || request.pixel_width == 0
         || request.pixel_height == 0
         || request.viewport.css_width == 0
         || request.viewport.css_height == 0
         || !request.viewport.device_scale_factor.is_finite()
         || request.viewport.device_scale_factor <= 0.0
-        || url::Url::parse(&request.route).is_err()
+        || !valid_visual_route(&request.route)
+        || request.captured_at_unix_ms < 0
     {
         return (
             StatusCode::BAD_REQUEST,
