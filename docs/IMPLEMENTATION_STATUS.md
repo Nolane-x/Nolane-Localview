@@ -14,6 +14,7 @@ LocalView is being implemented as a sequence of independently verifiable vertica
 - Native viewport capture adapters exist for Windows WebView2, macOS WKWebView and Linux WebKitGTK behind an isolated platform boundary.
 - Bounded local visual artifact persistence and daemon Visual evidence metadata registration are connected to the desktop capture path.
 - Cross-platform CI covers the Rust core on Ubuntu, macOS and Windows plus the Linux Tauri/frontend compiler and desktop contract gates.
+- A dedicated Linux GUI smoke gate launches a real WebKitGTK WebView under Xvfb, renders deterministic HTML, captures through the same snapshot helper used by production, decodes the PNG and asserts a known rendered pixel. The GUI test is ignored in ordinary headless test runs and is explicitly enabled only by the dedicated CI job.
 
 ## Native workspace safety gate
 
@@ -45,13 +46,15 @@ Internal `freeze_visuals` / `restore_visuals` actions are not exposed through th
 
 The settle/freeze/private-geometry/restore/redaction transaction is covered by cross-platform Rust compile/test gates and the Linux Tauri/frontend contract suite. The contracts verify private/public action isolation, bounded selector transport, geometry-only freeze acknowledgements, restore-after-native-failure, restore-before-redaction, redaction-before-persistence, bounded PNG processing and fail-closed malformed geometry/dimension handling.
 
-The native screenshot adapter remains **Partial**, not Implemented, because hosted CI currently proves compilation and deterministic contracts rather than real rendered-pixel acquisition in a GUI session on all three native WebView backends. Cross-platform GUI smoke remains the completion gate for that capability.
+Linux/WebKitGTK additionally has hosted **rendered-pixel proof**: a dedicated Ubuntu GUI smoke job starts a real GTK window and WebKitGTK WebView under Xvfb, loads deterministic localhost HTML, invokes the production-shared visible-snapshot helper, fully decodes the returned PNG and verifies that the center pixel belongs to the known rendered proof region. A missing display, load failure, snapshot failure, invalid/trivial PNG or wrong rendered pixel fails the job.
+
+The native screenshot adapter remains **Partial**, not Implemented, because equivalent real rendered-pixel GUI proof is still missing for Windows WebView2 and macOS WKWebView. Compile/contracts on those platforms are not treated as substitutes for GUI acquisition evidence.
 
 ## Next vertical slices
 
 The strongest remaining capture/perception gates are:
 
-1. hosted or dedicated GUI smoke for real WebView2/WKWebView/WebKitGTK rendered-pixel capture;
+1. hosted or dedicated GUI smoke for real WebView2 and WKWebView rendered-pixel capture, matching the landed WebKitGTK proof contract;
 2. element/component/section native pixel execution plus changed-region scheduling;
 3. true network in-flight accounting plus framework-specific live HMR signals;
 4. capture → visual region diff → deterministic verification as one end-to-end loop;
