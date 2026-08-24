@@ -58,3 +58,34 @@ fn css_mask_rects_are_clamped_and_invalid_viewports_fail_closed() {
     let error = redact_css_rects(&mut image, (0.0, 2.0), &rects).unwrap_err();
     assert!(matches!(error, VisualError::InvalidViewport));
 }
+
+#[test]
+fn malformed_mask_geometry_fails_closed_before_any_pixel_is_changed() {
+    for rect in [
+        Rect {
+            x: f64::NAN,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: -1.0,
+            height: 1.0,
+        },
+        Rect {
+            x: 0.0,
+            y: f64::INFINITY,
+            width: 1.0,
+            height: 1.0,
+        },
+    ] {
+        let original = solid_rgba(4, 4, [11, 22, 33, 255]);
+        let mut image = original.clone();
+        let error = redact_css_rects(&mut image, (2.0, 2.0), &[rect]).unwrap_err();
+
+        assert!(matches!(error, VisualError::InvalidMaskGeometry));
+        assert_eq!(image.data, original.data);
+    }
+}
