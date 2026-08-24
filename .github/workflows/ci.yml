@@ -77,3 +77,5 @@ jobs:
         run: cargo test -p localview-desktop --test workspace_surface_policy
       - name: Live semantic bridge contract
         run: cargo test -p localview-desktop --test live_semantic_bridge_contract
+      - name: Native visual capture desktop contract
+        run: cargo test -p localview-desktop --test native_capture_contract
