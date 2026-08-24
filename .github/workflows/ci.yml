@@ -73,6 +73,19 @@ jobs:
           LOCALVIEW_GUI_SMOKE: "1"
         run: cargo test -p localview-native-capture --features gui-smoke --test macos_gui_smoke
 
+  native-gui-smoke-windows:
+    name: Native GUI smoke (WebView2)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Real WebView2 rendered-pixel smoke
+        env:
+          LOCALVIEW_GUI_SMOKE: "1"
+        run: cargo test -p localview-native-capture --features gui-smoke --test windows_gui_smoke
+
   desktop-linux:
     name: Tauri + frontend
     runs-on: ubuntu-22.04

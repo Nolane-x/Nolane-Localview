@@ -110,6 +110,21 @@ pub fn capture_wk_webview_for_gui_smoke(
     platform::capture_wk_webview_for_gui_smoke(view, request, Box::new(completion));
 }
 
+#[cfg(all(windows, feature = "gui-smoke"))]
+#[doc(hidden)]
+pub fn capture_webview2_for_gui_smoke(
+    webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
+    request: CaptureRequest,
+    completion: impl FnOnce(Result<CapturedFrame, NativeCaptureError>) + Send + 'static,
+) {
+    if request.target != CaptureTarget::Viewport {
+        completion(Err(NativeCaptureError::UnsupportedTarget));
+        return;
+    }
+
+    platform::capture_webview2_for_gui_smoke(webview, request, Box::new(completion));
+}
+
 pub fn validate_frame_size(bytes: usize) -> Result<(), NativeCaptureError> {
     if bytes > MAX_PNG_BYTES {
         return Err(NativeCaptureError::FrameTooLarge {

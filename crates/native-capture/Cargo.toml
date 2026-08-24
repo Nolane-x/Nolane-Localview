@@ -16,7 +16,7 @@ tauri = { version = "=2.11.5", default-features = false, features = ["wry"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18", features = ["v3_24"] }
@@ -37,4 +37,9 @@ serde_json.workspace = true
 [[test]]
 name = "macos_gui_smoke"
 path = "tests/macos_gui_smoke.rs"
+harness = false
+
+[[test]]
+name = "windows_gui_smoke"
+path = "tests/windows_gui_smoke.rs"
 harness = false

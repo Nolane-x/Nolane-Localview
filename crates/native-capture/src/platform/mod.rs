@@ -47,3 +47,12 @@ pub(crate) fn capture_wk_webview_for_gui_smoke(
 ) {
     macos::capture_view(view, request, completion);
 }
+
+#[cfg(all(windows, feature = "gui-smoke"))]
+pub(crate) fn capture_webview2_for_gui_smoke(
+    webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
+    request: CaptureRequest,
+    completion: CaptureCompletion,
+) {
+    windows::capture_core(webview, request, completion);
+}

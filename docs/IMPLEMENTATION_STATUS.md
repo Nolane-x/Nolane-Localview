@@ -14,7 +14,7 @@ LocalView is being implemented as a sequence of independently verifiable vertica
 - Native viewport capture adapters exist for Windows WebView2, macOS WKWebView and Linux WebKitGTK behind an isolated platform boundary.
 - Bounded local visual artifact persistence and daemon Visual evidence metadata registration are connected to the desktop capture path.
 - Cross-platform CI covers the Rust core on Ubuntu, macOS and Windows plus the Linux Tauri/frontend compiler and desktop contract gates.
-- Dedicated GUI smoke gates now prove real rendered pixels for Linux/WebKitGTK and macOS/WKWebView through production-shared snapshot helpers. Linux runs a real GTK/WebKitGTK surface under Xvfb; macOS owns the real AppKit main thread, creates NSApplication + NSWindow + WKWebView, pumps NSRunLoop and verifies a deterministic rendered pixel after native snapshot/PNG decode.
+- Dedicated GUI smoke gates now prove real rendered pixels for Windows/WebView2, macOS/WKWebView and Linux/WebKitGTK through production-shared snapshot helpers. Windows creates a real Win32 parent window, initializes an STA COM WebView2 environment/controller, navigates to a deterministic loopback HTTP fixture with exact URI/navigation correlation, verifies live DOM/CSS/geometry, captures through production-shared `CapturePreview`, fully decodes the PNG and checks the known rendered center pixel. Linux runs a real GTK/WebKitGTK surface under Xvfb; macOS owns the real AppKit main thread, creates NSApplication + NSWindow + WKWebView, pumps NSRunLoop and verifies the same deterministic rendered-pixel contract after native snapshot/PNG decode.
 
 ## Native workspace safety gate
 
@@ -48,19 +48,20 @@ The settle/freeze/private-geometry/restore/redaction transaction is covered by c
 
 Linux/WebKitGTK has hosted **rendered-pixel proof**: a dedicated Ubuntu GUI smoke job starts a real GTK window and WebKitGTK WebView under Xvfb, loads deterministic localhost HTML, invokes the production-shared visible-snapshot helper, fully decodes the returned PNG and verifies that the center pixel belongs to the known rendered proof region. A missing display, load failure, snapshot failure, invalid/trivial PNG or wrong rendered pixel fails the job.
 
-macOS/WKWebView now has equivalent hosted **rendered-pixel proof**. A custom `harness = false` test owns the actual macOS main thread, initializes AppKit, creates a real NSWindow + WKWebView, loads the same deterministic loopback fixture, pumps NSRunLoop until the page is ready, invokes the same WKWebView snapshot helper used by the Tauri adapter, fully decodes the produced PNG and verifies the known center proof pixel. The real GUI test exposed and fixed a production bug where WKWebView's returned NSImage representations were not directly PNG-encodable by ImageIO; production now materializes the snapshot through `NSImage.TIFFRepresentation → NSBitmapImageRep → PNG` before frame validation.
+macOS/WKWebView has equivalent hosted **rendered-pixel proof**. A custom `harness = false` test owns the actual macOS main thread, initializes AppKit, creates a real NSWindow + WKWebView, loads the same deterministic loopback fixture, pumps NSRunLoop until the page is ready, invokes the same WKWebView snapshot helper used by the Tauri adapter, fully decodes the produced PNG and verifies the known center proof pixel. The real GUI test exposed and fixed a production bug where WKWebView's returned NSImage representations were not directly PNG-encodable by ImageIO; production now materializes the snapshot through `NSImage.TIFFRepresentation → NSBitmapImageRep → PNG` before frame validation.
 
-The native screenshot adapter remains **Partial**, not Implemented, because equivalent real rendered-pixel GUI proof is still missing for Windows WebView2. Windows compile/contracts are not treated as substitutes for GUI acquisition evidence.
+Windows/WebView2 now has the matching hosted **rendered-pixel proof**. A custom Windows GUI smoke creates a real Win32 parent window and installed WebView2 controller on an STA COM thread, serves a deterministic fixture from `127.0.0.1`, correlates the exact fixture URI and NavigationId, requires successful navigation, verifies `document.readyState`, route, computed proof color, viewport and proof geometry, then invokes the production-shared `ICoreWebView2::CapturePreview` path. The returned PNG is bounded, fully decoded and required to contain the known red proof region at its center. The harness retains navigation and HTTP request traces in failure diagnostics so future runtime regressions fail with causal evidence rather than timing guesses.
+
+The viewport **Native screenshot adapter is Implemented**: all three production platform backends now have live rendered-pixel acquisition evidence in dedicated hosted GUI gates, in addition to the compile/contracts coverage. This status applies to viewport native acquisition itself; element/component/section pixel execution, changed-region scheduling and the complete capture → diff → verification loop remain separate Partial capabilities.
 
 ## Next vertical slices
 
 The strongest remaining capture/perception gates are:
 
-1. hosted or dedicated GUI smoke for real Windows WebView2 rendered-pixel capture, matching the landed WebKitGTK and WKWebView proof contracts;
-2. element/component/section native pixel execution plus changed-region scheduling;
-3. true network in-flight accounting plus framework-specific live HMR signals;
-4. capture → visual region diff → deterministic verification as one end-to-end loop;
-5. deeper source/runtime ownership correlation and interactive point-and-select inspector wiring;
-6. native workspace composition/focus/DPI/crash safety gates before promoting the child WebView surface from feature-gated to default.
+1. element/component/section native pixel execution plus changed-region scheduling;
+2. true network in-flight accounting plus framework-specific live HMR signals;
+3. capture → visual region diff → deterministic verification as one end-to-end loop;
+4. deeper source/runtime ownership correlation and interactive point-and-select inspector wiring;
+5. native workspace composition/focus/DPI/crash safety gates before promoting the child WebView surface from feature-gated to default.
 
 The repository should not claim the complete V1/V2/V3 specification is implemented until these live adapters and later verification phases are end-to-end, not merely represented by crates or data models.
