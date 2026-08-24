@@ -28,4 +28,5 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-web-kit = { version = "0.3", default-features = false, features = ["objc2-app-kit", "block2", "WKWebView", "WKSnapshotConfiguration"] }
 
 [dev-dependencies]
+localview-visual = { path = "../visual" }
 serde_json.workspace = true
