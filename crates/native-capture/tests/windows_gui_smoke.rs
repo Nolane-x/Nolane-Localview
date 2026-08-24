@@ -160,8 +160,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         let (tx, rx) = mpsc::channel();
         let handler = ExecuteScriptCompletedHandler::create(Box::new(move |error_code, result| {
             error_code?;
-            tx.send(webview2_com::string_from_pcwstr(&result))
-                .expect("send WebView2 script result");
+            tx.send(result).expect("send WebView2 script result");
             Ok(())
         }));
         let script_wide = wide(script);
