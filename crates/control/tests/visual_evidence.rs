@@ -176,6 +176,42 @@ async fn bounded_region_visual_evidence_preserves_css_target_metadata() {
 }
 
 #[tokio::test]
+async fn region_visual_evidence_rejects_spoofed_or_unbounded_targets() {
+    let (state, session_id, evidence) = test_state().await;
+
+    let mut spoofed_target = valid_region_payload();
+    spoofed_target["target"] = serde_json::json!("viewport");
+    assert_eq!(
+        post_region_visual(state.clone(), session_id, spoofed_target).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut zero_width = valid_region_payload();
+    zero_width["region"]["width"] = serde_json::json!(0.0);
+    assert_eq!(
+        post_region_visual(state.clone(), session_id, zero_width).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut out_of_bounds = valid_region_payload();
+    out_of_bounds["region"]["x"] = serde_json::json!(1200.0);
+    out_of_bounds["region"]["width"] = serde_json::json!(200.0);
+    assert_eq!(
+        post_region_visual(state.clone(), session_id, out_of_bounds).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut zero_pixels = valid_region_payload();
+    zero_pixels["pixel_width"] = serde_json::json!(0);
+    assert_eq!(
+        post_region_visual(state, session_id, zero_pixels).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    assert!(evidence.recent_for_session(session_id, 10).await.is_empty());
+}
+
+#[tokio::test]
 async fn visual_evidence_rejects_non_loopback_route() {
     let (state, session_id, evidence) = test_state().await;
     let mut payload = valid_payload();
