@@ -9,8 +9,10 @@ fn main() {
 #[cfg(all(windows, feature = "gui-smoke"))]
 mod windows_smoke {
     use std::{
+        cell::Cell,
         io::{Read, Write},
         net::TcpListener,
+        rc::Rc,
         sync::mpsc,
         thread,
     };
@@ -24,7 +26,7 @@ mod windows_smoke {
     use windows::{
         core::{w, PCWSTR},
         Win32::{
-            Foundation::{E_POINTER, HWND, RECT},
+            Foundation::{BOOL, E_POINTER, HWND, RECT},
             System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DestroyWindow, ShowWindow, CW_USEDEFAULT, SW_SHOW,
@@ -133,25 +135,80 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
     }
 
     fn navigate_and_wait(webview: &ICoreWebView2, route: &str) {
+        let expected_navigation_id = Rc::new(Cell::new(None::<u64>));
+
+        let starting_navigation_id = expected_navigation_id.clone();
+        let starting_handler = NavigationStartingEventHandler::create(Box::new(
+            move |_sender, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let mut navigation_id = 0_u64;
+                unsafe {
+                    args.NavigationId(&mut navigation_id)?;
+                }
+                starting_navigation_id.set(Some(navigation_id));
+                Ok(())
+            },
+        ));
+
         let (tx, rx) = mpsc::channel();
-        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
-            tx.send(()).expect("send WebView2 navigation completion");
-            Ok(())
-        }));
-        let mut token = 0_i64;
+        let completed_navigation_id = expected_navigation_id.clone();
+        let completed_handler = NavigationCompletedEventHandler::create(Box::new(
+            move |_sender, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let mut navigation_id = 0_u64;
+                unsafe {
+                    args.NavigationId(&mut navigation_id)?;
+                }
+                if completed_navigation_id.get() != Some(navigation_id) {
+                    return Ok(());
+                }
+
+                let mut is_success = BOOL::default();
+                unsafe {
+                    args.IsSuccess(&mut is_success)?;
+                }
+                tx.send(is_success.as_bool())
+                    .expect("send correlated WebView2 navigation completion");
+                Ok(())
+            },
+        ));
+
+        let mut starting_token = 0_i64;
+        let mut completed_token = 0_i64;
         let route_wide = wide(route);
         unsafe {
             webview
-                .add_NavigationCompleted(&handler, &mut token)
+                .add_NavigationStarting(&starting_handler, &mut starting_token)
+                .expect("subscribe WebView2 navigation starting");
+            webview
+                .add_NavigationCompleted(&completed_handler, &mut completed_token)
                 .expect("subscribe WebView2 navigation completion");
             webview
                 .Navigate(PCWSTR(route_wide.as_ptr()))
                 .expect("navigate WebView2 to loopback fixture");
         }
-        webview2_com::wait_with_pump(rx).expect("WebView2 loopback fixture must finish loading");
+
+        let navigation_succeeded = webview2_com::wait_with_pump(rx)
+            .expect("correlated WebView2 loopback fixture navigation must complete");
+        assert!(
+            navigation_succeeded,
+            "correlated WebView2 loopback fixture navigation must succeed"
+        );
+        assert!(
+            expected_navigation_id.get().is_some(),
+            "fixture NavigationStarting must establish a navigation id"
+        );
+
         unsafe {
             webview
-                .remove_NavigationCompleted(token)
+                .remove_NavigationStarting(starting_token)
+                .expect("remove WebView2 navigation starting handler");
+            webview
+                .remove_NavigationCompleted(completed_token)
                 .expect("remove WebView2 navigation completion handler");
         }
     }
@@ -172,12 +229,12 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         webview2_com::wait_with_pump(rx).expect("WebView2 readiness diagnostic must complete")
     }
 
-    fn assert_fixture_dom_ready(webview: &ICoreWebView2) {
+    fn assert_fixture_dom_ready(webview: &ICoreWebView2, route: &str) {
         let result = execute_script(
             webview,
             r#"(() => {
                 const proof = document.getElementById('proof');
-                if (!proof) return { ready: document.readyState, missing: true };
+                if (!proof) return { ready: document.readyState, missing: true, href: location.href };
                 const rect = proof.getBoundingClientRect();
                 return {
                     ready: document.readyState,
@@ -193,6 +250,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
             serde_json::from_str(&result).expect("WebView2 diagnostic must be valid JSON");
         assert_eq!(value["ready"], "complete", "unexpected DOM readiness: {value}");
         assert_eq!(value["missing"], false, "proof node missing: {value}");
+        assert_eq!(value["href"], route, "unexpected fixture route: {value}");
         assert_eq!(
             value["color"], "rgb(220, 40, 60)",
             "proof CSS did not apply: {value}"
@@ -246,7 +304,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         let (route, server) = start_fixture_server();
         navigate_and_wait(&webview, &route);
         server.join().expect("loopback fixture server must finish");
-        assert_fixture_dom_ready(&webview);
+        assert_fixture_dom_ready(&webview, &route);
 
         let request = CaptureRequest {
             target: CaptureTarget::Viewport,
