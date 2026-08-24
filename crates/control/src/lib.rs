@@ -10,6 +10,8 @@ use anyhow::Result;
 use axum::Router;
 
 pub use runtime::{ControlState, EventEnvelope};
+#[doc(hidden)]
+pub use runtime::serve as legacy_serve;
 
 pub fn router(state: ControlState) -> Router {
     runtime::router(state.clone()).merge(capture_settle::router(state))
