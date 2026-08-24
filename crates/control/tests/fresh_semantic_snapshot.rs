@@ -130,7 +130,12 @@ fn raw_snapshot_payload() -> Value {
     })
 }
 
-async fn complete_next_snapshot(state: ControlState, session_id: uuid::Uuid, payload: Value) {
+async fn complete_next_snapshot(
+    state: ControlState,
+    session_id: uuid::Uuid,
+    ok: bool,
+    payload: Value,
+) {
     for _ in 0..120 {
         let actions = state.live.take_actions(session_id, 8).await;
         if let Some(action) = actions
@@ -148,8 +153,8 @@ async fn complete_next_snapshot(state: ControlState, session_id: uuid::Uuid, pay
                     &claimed,
                     BridgeActionResult {
                         action_id: claimed.id,
-                        ok: true,
-                        error: None,
+                        ok,
+                        error: (!ok).then(|| "snapshot execution failed".to_string()),
                         payload,
                         completed_at: Utc::now(),
                     },
@@ -185,18 +190,27 @@ async fn get_fresh(
     (status, value)
 }
 
+async fn get_fresh_with_action_result(
+    state: ControlState,
+    session_id: uuid::Uuid,
+    ok: bool,
+    payload: Value,
+) -> (StatusCode, Value) {
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot(executor_state, session_id, ok, payload).await;
+    });
+    let response = get_fresh(state, session_id, true).await;
+    executor.await.expect("snapshot executor task");
+    response
+}
+
 async fn get_fresh_with_result(
     state: ControlState,
     session_id: uuid::Uuid,
     payload: Value,
 ) -> (StatusCode, Value) {
-    let executor_state = state.clone();
-    let executor = tokio::spawn(async move {
-        complete_next_snapshot(executor_state, session_id, payload).await;
-    });
-    let response = get_fresh(state, session_id, true).await;
-    executor.await.expect("snapshot executor task");
-    response
+    get_fresh_with_action_result(state, session_id, true, payload).await
 }
 
 #[tokio::test]
@@ -224,11 +238,33 @@ async fn fresh_semantic_snapshot_projects_the_matching_new_action_result() {
     assert_eq!(body["root"]["reference"], "@root");
     assert_eq!(body["root"]["children"][0]["reference"], "@card");
     assert_eq!(body["root"]["children"][0]["source"]["file"], "SettingsCard.tsx");
-    assert_eq!(body["root"]["children"][0]["source"]["component"], "SettingsCard.tsx");
+    assert_eq!(
+        body["root"]["children"][0]["source"]["component"],
+        "SettingsCard.tsx:10"
+    );
     assert_eq!(body["root"]["children"][0]["children"][0]["reference"], "@save");
+    assert_eq!(
+        body["root"]["children"][0]["children"][0]["source"]["component"],
+        "SettingsCard.tsx:35"
+    );
     assert!(body["captured_at"].is_string());
     assert_eq!(body["console_errors"], serde_json::json!([]));
     assert_eq!(body["failed_requests"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn failed_matching_snapshot_action_result_fails_closed() {
+    let (state, session_id) = test_state().await;
+    let (status, body) = get_fresh_with_action_result(
+        state,
+        session_id,
+        false,
+        raw_snapshot_payload(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["error"], "fresh_semantic_snapshot_failed");
 }
 
 #[tokio::test]
