@@ -75,10 +75,12 @@ Landed native viewport path:
 - PNG bytes are persisted locally as `visual/png`, then dropped before daemon registration; command receipts expose metadata and IDs rather than pixel bytes or filesystem paths.
 - Authenticated daemon `Visual` evidence ingestion with artifact/session/route/viewport/revision/backend provenance.
 - Cross-platform compile/test contracts for native platform adapters plus a desktop integration contract.
-- Deterministic stable-settle evaluator with explicit reasons for DOM, fonts, images, HMR, DOM mutation, layout and network activity.
+- Deterministic stable-settle evaluator with explicit reasons for DOM, fonts, images, optional HMR signals, DOM mutation, layout and network activity.
 - Privacy-safe semantic readiness metadata: document readiness, font status and image-completion counts without image URLs, response bodies, cookies or storage.
 - Authenticated capture-settle endpoint that requests an exact fresh semantic snapshot action for every sample; stale observer snapshots cannot satisfy readiness.
-- HMR quiet window of 300 ms, DOM/layout quiet window of 200 ms and metadata-based network quiet window from capture policy (250 ms by default).
+- Fresh snapshot presence is timestamped by the daemon at evaluation time rather than trusting the page-provided action completion clock.
+- DOM/layout quiet window of 200 ms and metadata-based fetch/XHR completion quiet window from capture policy (250 ms by default).
+- The evaluator applies a 300 ms HMR quiet window when an HMR observer signal exists; framework-specific live HMR signal production remains Wave 3 work and is not claimed as complete here.
 - Desktop managed-surface preflight followed by a five-second fail-closed settle transaction before native pixel acquisition; unstable timeout never falls through to capture.
 - Settle retry is bounded to 25–100 ms, while the native three-second capture timeout remains a separate post-settle budget.
 - The managed WebView route is read and loopback-validated again inside native acquisition after settle, closing the preflight/navigation race.
@@ -88,7 +90,7 @@ Still required before the visual runtime is considered complete:
 - hosted GUI smoke tests that render a real managed WebView and prove non-empty PNG capture on Windows, macOS and Linux runners or equivalent controlled hosts;
 - animation/transition freeze and restoration wired into the live capture transaction;
 - screenshot masking for private selectors before agent exposure/persistence;
-- richer network in-flight accounting beyond the current metadata quiet-period heuristic;
+- true network in-flight accounting beyond the current fetch/XHR completion quiet-period heuristic;
 - element/component/section capture execution beyond viewport capture;
 - progressive changed-region capture and token-aware visual packet selection;
 - guarded full-page stitching;
@@ -108,7 +110,7 @@ Remaining integration:
 
 - action → request → UI response correlation.
 - network failure/delay/mock layer wired to live sessions.
-- HMR timeline and settle detection.
+- framework-specific HMR signal production, timeline and settle detection.
 - performance-lite sampling and budget packets.
 
 ## Wave 4 — Layout + responsive intelligence
