@@ -13,8 +13,17 @@ fn preview_bridge_normalizes_semantic_and_geometry_events() {
 fn preview_bridge_executes_internal_visual_freeze_actions_through_localview_api() {
     let source = include_str!("../src/lib.rs");
     assert!(source.contains("case 'freeze_visuals':"));
-    assert!(source.contains("queued.private_capture?.mask_selectors"));
-    assert!(source.contains("freezeVisuals?.(queued.id,"));
+    let freeze_call = source
+        .find("freezeVisuals?.(")
+        .expect("private freeze action must call the LocalView freeze API");
+    let freeze_tail = &source[freeze_call..];
+    let token = freeze_tail
+        .find("queued.id")
+        .expect("freeze call must carry the private action token");
+    let selectors = freeze_tail
+        .find("queued.private_capture?.mask_selectors")
+        .expect("freeze call must carry the private selector envelope");
+    assert!(token < selectors, "freeze token must precede selector payload");
     assert!(source.contains("case 'restore_visuals':"));
     assert!(source.contains("restoreVisuals?.(String(action.token"));
     assert!(!source.contains("eval(action"));
