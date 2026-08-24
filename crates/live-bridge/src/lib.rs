@@ -231,13 +231,50 @@ impl LiveBridge {
         };
         let count = limit.min(state.actions.len());
         let actions = state.actions.drain(..count).collect::<Vec<_>>();
-        for action in &actions {
-            state.inflight.push_back(action.clone());
-        }
-        while state.inflight.len() > self.action_capacity {
-            state.inflight.pop_front();
-        }
+        move_to_inflight(state, &actions, self.action_capacity);
         actions
+    }
+
+    pub async fn take_public_actions(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<BridgeAction> {
+        self.take_actions_by_scope(session_id, limit, false).await
+    }
+
+    pub async fn take_internal_capture_actions(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<BridgeAction> {
+        self.take_actions_by_scope(session_id, limit, true).await
+    }
+
+    async fn take_actions_by_scope(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+        internal_capture: bool,
+    ) -> Vec<BridgeAction> {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return Vec::new();
+        };
+
+        let mut selected = Vec::with_capacity(limit.min(state.actions.len()));
+        let mut remaining = VecDeque::with_capacity(state.actions.len());
+        while let Some(action) = state.actions.pop_front() {
+            let scope_matches = action.action.is_internal_capture_action() == internal_capture;
+            if scope_matches && selected.len() < limit {
+                selected.push(action);
+            } else {
+                remaining.push_back(action);
+            }
+        }
+        state.actions = remaining;
+        move_to_inflight(state, &selected, self.action_capacity);
+        selected
     }
 
     pub async fn claim_action(
@@ -322,6 +359,19 @@ impl LiveBridge {
 
     pub async fn release_session(&self, session_id: SessionId) {
         self.inner.write().await.remove(&session_id);
+    }
+}
+
+fn move_to_inflight(
+    state: &mut SessionBridgeState,
+    actions: &[BridgeAction],
+    action_capacity: usize,
+) {
+    for action in actions {
+        state.inflight.push_back(action.clone());
+    }
+    while state.inflight.len() > action_capacity {
+        state.inflight.pop_front();
     }
 }
 
