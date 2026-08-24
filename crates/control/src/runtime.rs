@@ -642,6 +642,15 @@ async fn queue_action(
     if let Err(error) = ensure_session(&state, id).await {
         return error.into_response();
     }
+    if request.action.is_internal_capture_action() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "internal_capture_action_not_public"
+            })),
+        )
+            .into_response();
+    }
     let action = state
         .live
         .enqueue_action(id, request.reference, request.action)
