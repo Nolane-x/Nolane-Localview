@@ -13,11 +13,21 @@ fn preview_bridge_normalizes_semantic_and_geometry_events() {
 fn preview_bridge_executes_internal_visual_freeze_actions_through_localview_api() {
     let source = include_str!("../src/lib.rs");
     assert!(source.contains("case 'freeze_visuals':"));
-    assert!(source.contains("freezeVisuals?.(queued.id)"));
+    assert!(source.contains("queued.private_capture?.mask_selectors"));
+    assert!(source.contains("freezeVisuals?.(queued.id,"));
     assert!(source.contains("case 'restore_visuals':"));
     assert!(source.contains("restoreVisuals?.(String(action.token"));
     assert!(!source.contains("eval(action"));
     assert!(!source.contains("evaluate_script(action"));
+}
+
+#[test]
+fn preview_action_drain_preserves_private_capture_envelope_without_widening_public_actions() {
+    let source = include_str!("../src/lib.rs");
+    assert!(source.contains("PrivateBridgeAction"));
+    assert!(source.contains(".json::<Vec<PrivateBridgeAction>>()"));
+    assert!(source.contains(".json::<Vec<BridgeAction>>()"));
+    assert!(source.contains("serde_json::to_value"));
 }
 
 #[test]
