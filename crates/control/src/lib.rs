@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod capture_settle;
+mod fresh_snapshot;
 #[path = "runtime.rs"]
 mod runtime;
 mod visual_region;
@@ -17,6 +18,7 @@ pub use runtime::serve as legacy_serve;
 pub fn router(state: ControlState) -> Router {
     runtime::router(state.clone())
         .merge(capture_settle::router(state.clone()))
+        .merge(fresh_snapshot::router(state.clone()))
         .merge(visual_region::router(state))
 }
 
