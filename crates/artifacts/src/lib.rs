@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     hash::{Hash, Hasher},
     path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
@@ -29,18 +30,24 @@ impl ArtifactStore {
     pub async fn open(root: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
         let root = root.into();
         tokio::fs::create_dir_all(&root).await?;
-        Ok(Self {
+        let mut store = Self {
             root,
             max_bytes,
             index: BTreeMap::new(),
             lru: VecDeque::new(),
             used: 0,
-        })
+        };
+        store.restore_existing().await?;
+        store.gc().await?;
+        Ok(store)
     }
 
     pub async fn put(&mut self, kind: &str, bytes: &[u8]) -> Result<ArtifactMeta> {
         let id = content_id(bytes);
-        if let Some(existing) = self.index.get(&id) {
+        if let Some(existing) = self.index.get_mut(&id) {
+            if existing.kind == "retained" {
+                existing.kind = kind.into();
+            }
             return Ok(existing.clone());
         }
         let path = self.root.join(&id);
@@ -51,11 +58,49 @@ impl ArtifactStore {
             bytes: bytes.len() as u64,
             path: path.to_string_lossy().into_owned(),
         };
-        self.used += meta.bytes;
+        self.used = self.used.saturating_add(meta.bytes);
         self.index.insert(id.clone(), meta.clone());
         self.lru.push_back(id);
         self.gc().await?;
         Ok(meta)
+    }
+
+    async fn restore_existing(&mut self) -> Result<()> {
+        let mut entries = tokio::fs::read_dir(&self.root).await?;
+        let mut restored = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            let file_type = entry.file_type().await?;
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if !is_content_id(&id) {
+                continue;
+            }
+            let metadata = entry.metadata().await?;
+            let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+            let meta = ArtifactMeta {
+                id: id.clone(),
+                kind: "retained".into(),
+                bytes: metadata.len(),
+                path: entry.path().to_string_lossy().into_owned(),
+            };
+            restored.push((modified, id, meta));
+        }
+
+        restored.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        for (_, id, meta) in restored {
+            self.used = self.used.saturating_add(meta.bytes);
+            self.lru.push_back(id.clone());
+            self.index.insert(id, meta);
+        }
+        Ok(())
     }
 
     async fn gc(&mut self) -> Result<()> {
@@ -72,6 +117,12 @@ impl ArtifactStore {
     }
 }
 
+fn is_content_id(value: &str) -> bool {
+    value.len() == 19
+        && value.starts_with("lv-")
+        && value[3..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn content_id(bytes: &[u8]) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut h);
@@ -81,7 +132,6 @@ fn content_id(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn test_dir(name: &str) -> PathBuf {
         let nonce = SystemTime::now()
