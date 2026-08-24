@@ -74,13 +74,18 @@ Landed native visual path:
 - Desktop `capture_viewport` coordinator with a lazily opened 256 MiB local visual `ArtifactStore`.
 - Desktop `capture_region` reuses the exact native viewport acquisition path and performs bounded Rust-side region processing only after exact restore and private redaction; it does not introduce separate platform-specific region screenshot APIs.
 - Region targets require finite positive in-viewport CSS geometry and are revalidated against the live CSS viewport reported during freeze. A resize/drift race discards pixels after restore and before persistence.
+- Authenticated `GET /v1/sessions/{id}/semantic-snapshot/fresh` requests a newly completed snapshot action for the exact session, accepts only the matching action result and projects it into a bounded `PageSnapshot`. Stale observer history, unrelated action results and malformed payloads cannot satisfy the request.
+- Pure `localview-capture` progressive resolution now turns one stable `ElementRef` from that fresh snapshot into ordered evidence-backed `element → component → section → viewport` targets. Element geometry is expanded by the existing 120 CSS-pixel policy and clamped; component ownership requires corroborated explicit `source.component` evidence on an ancestor; section ownership requires an explicit semantic section/landmark ancestor; equal intermediate rectangles are deduplicated while the viewport remains an explicit final fallback.
+- Desktop `capture_progressive_target` executes one exact caller-requested target level. It acquires the per-session gate before the fresh snapshot, rejects caller/snapshot viewport mismatch and missing component/section levels rather than silently widening, then reuses one shared settle → freeze → native viewport acquisition → restore → private redaction transaction. After acquisition it rejects live route/viewport drift, crops only the already-redacted image for non-viewport levels and returns provenance/confidence/snapshot version/route with the visual evidence receipt.
+- Platform adapters remain viewport-only for progressive targeting; no WebView2/WKWebView/WebKitGTK element/component/section capture APIs were added.
 - Desktop `capture_changed_regions` uses that same auditable viewport transaction once per scheduling pass: settle → private freeze → one native viewport acquisition → exact restore → private redaction → one RGBA decode → baseline comparison → bounded region/viewport evidence emission.
 - Changed-region baselines are already-private-redacted `Arc<RgbaImage>` frames held only in a deterministic 96 MiB / 32-entry LRU cache. Compatibility is bound to route, CSS viewport, device-scale factor and native pixel dimensions; incompatible contexts are invalidated rather than diffed.
 - Changed-region planning is deterministic and bounded: an unchanged frame emits no new visual artifact; a missing compatible baseline emits one viewport `baseline_reset`; localized change emits bounded CSS regions; broad or excessively fragmented change falls back to one viewport packet.
 - Multiple changed regions are cropped from the same decoded private-redacted frame, so region count does not multiply native acquisition or PNG decode cost. The baseline advances only after the entire selected evidence emission succeeds; partial evidence failure leaves the prior baseline authoritative.
 - PNG bytes are persisted locally as `visual/png`, then dropped before daemon registration; command receipts expose metadata and IDs rather than pixel bytes or filesystem paths.
 - Authenticated daemon `Visual` evidence ingestion with artifact/session/route/viewport/revision/backend provenance, plus a separate fail-closed `/evidence/visual-region` schema for bounded region metadata.
-- Cross-platform compile/test contracts for native platform adapters plus desktop transaction, target-ordering, region-evidence and changed-region scheduling integration contracts.
+- Cross-platform compile/test contracts for native platform adapters plus desktop transaction, target-ordering, region-evidence, fresh-snapshot, progressive-target and changed-region scheduling integration contracts.
+- Progressive resolver adversarial tests cover missing refs, NaN/infinite/zero/offscreen geometry, invalid viewport, mismatched source ownership and duplicate component/section rectangles. Desktop authority locks exact-level selection, one native acquisition, route/viewport drift rejection and restore → redaction → crop → persistence ordering.
 - Dedicated hosted Linux GUI smoke: Ubuntu/Xvfb starts a real GTK window and WebKitGTK WebView, renders deterministic localhost HTML, captures through the same visible-snapshot helper used by production, fully decodes the PNG and asserts the known center proof pixel. Ordinary headless test runs keep this test ignored; the dedicated GUI job explicitly enables it.
 - Dedicated hosted macOS GUI smoke: a custom harness owns the real AppKit main thread, initializes NSApplication, creates a real NSWindow + WKWebView, loads deterministic loopback HTML, pumps NSRunLoop, captures through the same WKWebView snapshot helper used by production, fully decodes the PNG and asserts the same known center proof pixel. This proof exposed a production ImageIO bug in direct NSImage representation encoding; the adapter now materializes snapshot pixels through TIFF → NSBitmapImageRep → PNG before frame validation.
 - Dedicated hosted Windows GUI smoke: a real Win32 parent window and installed WebView2 controller run on an STA COM thread, navigate to a deterministic `127.0.0.1` HTTP fixture with exact URI/NavigationId correlation, verify DOM/CSS/geometry and capture through production-shared `CapturePreview`. The fixture server is bounded but tolerates WebView2 speculative zero-byte preconnects; successful navigation, full PNG decode and the known center rendered pixel are still mandatory.
@@ -101,12 +106,13 @@ Landed native visual path:
 Still required before the visual runtime is considered complete:
 
 - true network in-flight accounting beyond the current fetch/XHR completion quiet-period heuristic;
-- automatic element/component/section target resolution into the live bounded region path;
-- token-aware visual packet selection and higher-level progressive-capture policy over the live changed-region scheduler;
+- framework-specific/sourcemap-backed ownership beyond current explicit source evidence;
+- token-aware visual packet selection and higher-level progressive-capture policy over the live semantic-target and changed-region paths;
 - guarded full-page stitching;
-- before/after and region diff wired through evidence into deterministic verification.
+- before/after and region diff wired through evidence into deterministic verification;
+- responsive sweep/contact-sheet execution over the same bounded capture authority.
 
-**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling, live freeze/restore, pre-persistence private-region redaction, bounded CSS-region execution and baseline-driven changed-region scheduling are now present. Automatic ownership-driven progressive targeting, token-aware visual packet selection, guarded stitching and the capture → diff → deterministic verification loop remain.
+**Done when:** one button edit normally costs an evidence-backed crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling, live freeze/restore, pre-persistence private-region redaction, bounded CSS-region execution, evidence-backed progressive semantic targeting and baseline-driven changed-region scheduling are now present. Token-aware progressive policy, deeper framework/source ownership, guarded stitching, responsive execution and the capture → diff → deterministic verification loop remain.
 
 ## Wave 3 — Runtime telemetry
 
@@ -138,7 +144,8 @@ Landed foundation:
 
 - stack/data-source ranking primitives;
 - source-region/dependency graph primitives;
-- live explicit `data-source` / `data-component-source` propagation into semantic nodes.
+- live explicit `data-source` / `data-component-source` propagation into semantic nodes;
+- progressive component targeting consumes corroborated explicit `source.component` ancestry without fabricating ownership from tag/class/depth heuristics.
 
 Remaining integration:
 
