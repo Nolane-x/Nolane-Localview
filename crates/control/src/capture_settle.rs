@@ -14,6 +14,7 @@ use localview_live_bridge::{
 };
 use localview_protocol::SessionId;
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::time::{sleep, Instant};
 use uuid::Uuid;
 
@@ -24,6 +25,9 @@ const VISUAL_STATE_TIMEOUT: Duration = Duration::from_millis(1_200);
 const ACTION_RESULT_POLL: Duration = Duration::from_millis(20);
 const VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
 const MAX_PAUSED_ANIMATIONS: u64 = 2_048;
+const MAX_VISUAL_MASK_RECTS: usize = 256;
+const MAX_MASKED_ELEMENTS: u64 = 4_096;
+const MAX_CSS_VIEWPORT_DIMENSION: f64 = 100_000.0;
 const MAX_INTERNAL_CAPTURE_ACTION_DRAIN: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
@@ -126,7 +130,7 @@ async fn session_capture_freeze(
 
     let action = state
         .live
-        .enqueue_action(id, None, BridgeActionKind::FreezeVisuals)
+        .enqueue_capture_freeze(id, StableCapturePolicy::default().mask_selectors)
         .await;
     let Some(result) = wait_for_action_result(
         &state,
@@ -146,27 +150,82 @@ async fn session_capture_freeze(
     let paused_animations = result
         .payload
         .get("paused_animations")
-        .and_then(serde_json::Value::as_u64);
+        .and_then(Value::as_u64);
     let web_animations_supported = result
         .payload
         .get("web_animations_supported")
-        .and_then(serde_json::Value::as_bool);
-    let (Some(paused_animations), Some(web_animations_supported)) =
-        (paused_animations, web_animations_supported)
-    else {
-        return bounded_error(StatusCode::BAD_GATEWAY, "invalid_visual_freeze_ack");
-    };
-    if paused_animations > MAX_PAUSED_ANIMATIONS {
+        .and_then(Value::as_bool);
+    let viewport_css_width = result
+        .payload
+        .get("viewport_css_width")
+        .and_then(Value::as_f64);
+    let viewport_css_height = result
+        .payload
+        .get("viewport_css_height")
+        .and_then(Value::as_f64);
+    let masked_elements = result
+        .payload
+        .get("masked_elements")
+        .and_then(Value::as_u64);
+    let mask_rects = validated_mask_rects(&result.payload);
+
+    let valid_viewport = viewport_css_width.is_some_and(|value| {
+        value.is_finite() && value > 0.0 && value <= MAX_CSS_VIEWPORT_DIMENSION
+    }) && viewport_css_height.is_some_and(|value| {
+        value.is_finite() && value > 0.0 && value <= MAX_CSS_VIEWPORT_DIMENSION
+    });
+    let valid_counts = paused_animations.is_some_and(|value| value <= MAX_PAUSED_ANIMATIONS)
+        && web_animations_supported.is_some()
+        && masked_elements.is_some_and(|value| value <= MAX_MASKED_ELEMENTS)
+        && mask_rects.is_some();
+    if !valid_viewport || !valid_counts {
         return bounded_error(StatusCode::BAD_GATEWAY, "invalid_visual_freeze_ack");
     }
 
     Json(serde_json::json!({
         "token": action.id,
-        "paused_animations": paused_animations,
-        "web_animations_supported": web_animations_supported,
+        "paused_animations": paused_animations.expect("validated above"),
+        "web_animations_supported": web_animations_supported.expect("validated above"),
+        "viewport_css_width": viewport_css_width.expect("validated above"),
+        "viewport_css_height": viewport_css_height.expect("validated above"),
+        "masked_elements": masked_elements.expect("validated above"),
+        "mask_rects": mask_rects.expect("validated above"),
         "lease_ms": VISUAL_FREEZE_LEASE_MS,
     }))
     .into_response()
+}
+
+fn validated_mask_rects(payload: &Value) -> Option<Vec<Value>> {
+    let rects = payload.get("mask_rects")?.as_array()?;
+    if rects.len() > MAX_VISUAL_MASK_RECTS {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(rects.len());
+    for rect in rects {
+        let x = rect.get("x")?.as_f64()?;
+        let y = rect.get("y")?.as_f64()?;
+        let width = rect.get("width")?.as_f64()?;
+        let height = rect.get("height")?.as_f64()?;
+        if !x.is_finite()
+            || !y.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || !(x + width).is_finite()
+            || !(y + height).is_finite()
+            || width <= 0.0
+            || height <= 0.0
+        {
+            return None;
+        }
+        out.push(serde_json::json!({
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+        }));
+    }
+    Some(out)
 }
 
 #[derive(Debug, Deserialize)]
