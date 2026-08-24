@@ -91,6 +91,23 @@ async fn post(
     (status, value)
 }
 
+async fn get(state: ControlState, uri: String, authorized: bool) -> (StatusCode, Value) {
+    let mut builder = Request::builder().method("GET").uri(uri);
+    if authorized {
+        builder = builder.header(header::AUTHORIZATION, "Bearer test-token");
+    }
+    let response = router(state)
+        .oneshot(builder.body(Body::empty()).expect("visual state GET request"))
+        .await
+        .expect("control router response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("bounded response body");
+    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
 async fn complete_next_freeze(state: ControlState, session_id: Uuid) -> Uuid {
     for _ in 0..100 {
         let actions = state.live.take_actions(session_id, 8).await;
@@ -247,4 +264,52 @@ async fn generic_action_queue_rejects_internal_visual_state_actions() {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "internal_capture_action_not_public");
     }
+}
+
+#[tokio::test]
+async fn public_action_drain_cannot_observe_or_steal_internal_capture_actions() {
+    let (state, session_id) = test_state().await;
+    let click = state
+        .live
+        .enqueue_action(session_id, Some("@button".into()), BridgeActionKind::Click)
+        .await;
+    let freeze = state
+        .live
+        .enqueue_action(session_id, None, BridgeActionKind::FreezeVisuals)
+        .await;
+    let restore = state
+        .live
+        .enqueue_action(
+            session_id,
+            None,
+            BridgeActionKind::RestoreVisuals { token: freeze.id },
+        )
+        .await;
+
+    let (public_status, public_body) = get(
+        state.clone(),
+        format!("/v1/sessions/{session_id}/actions"),
+        true,
+    )
+    .await;
+    assert_eq!(public_status, StatusCode::OK);
+    let public = public_body.as_array().expect("public action array");
+    assert_eq!(public.len(), 1);
+    assert_eq!(public[0]["id"], click.id.to_string());
+    assert_eq!(public[0]["action"]["type"], "click");
+    assert!(!public_body.to_string().contains(&freeze.id.to_string()));
+
+    let (internal_status, internal_body) = get(
+        state,
+        format!("/v1/sessions/{session_id}/capture-actions"),
+        true,
+    )
+    .await;
+    assert_eq!(internal_status, StatusCode::OK);
+    let internal = internal_body.as_array().expect("internal capture action array");
+    assert_eq!(internal.len(), 2);
+    assert_eq!(internal[0]["id"], freeze.id.to_string());
+    assert_eq!(internal[1]["id"], restore.id.to_string());
+    assert_eq!(internal[0]["action"]["type"], "freeze_visuals");
+    assert_eq!(internal[1]["action"]["type"], "restore_visuals");
 }
