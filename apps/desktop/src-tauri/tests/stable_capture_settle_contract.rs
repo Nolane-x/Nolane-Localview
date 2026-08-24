@@ -16,11 +16,17 @@ fn viewport_capture_waits_for_bounded_stable_settle_before_native_pixels() {
         .find("wait_for_capture_settle(session_id).await?")
         .expect("capture must wait for settle");
     let capture = module
-        .find("capture_managed_surface(&app, session_id, viewport, revision).await?")
+        .find("capture_managed_surface(&app, session_id, viewport, revision).await")
         .expect("native capture call must remain explicit");
 
-    assert!(preflight < settle, "surface preflight must happen before settle polling");
-    assert!(settle < capture, "native pixels must never be captured before settle succeeds");
+    assert!(
+        preflight < settle,
+        "surface preflight must happen before settle polling"
+    );
+    assert!(
+        settle < capture,
+        "native pixels must never be captured before settle succeeds"
+    );
     assert!(module.contains("Duration::from_millis(policy.timeout_ms)"));
     assert!(module.contains("tokio::time::timeout"));
     assert!(!module.contains("settle timeout fallback"));
