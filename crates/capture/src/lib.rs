@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use localview_protocol::{ElementRef, Rect};
+use localview_protocol::{ElementRef, PageSnapshot, Rect, SemanticNode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -11,6 +11,49 @@ pub enum CaptureTarget {
     Element { reference: ElementRef },
     Region { rect: Rect },
     Responsive { viewports: Vec<(u32, u32)> },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressiveTargetKind {
+    Element,
+    Component,
+    Section,
+    Viewport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProgressiveTargetProvenance {
+    StableElementRef { reference: ElementRef },
+    SourceComponent { component: String, owner_ref: ElementRef },
+    SemanticSection { owner_ref: ElementRef, boundary: String },
+    ViewportFallback,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProgressiveResolvedTarget {
+    pub kind: ProgressiveTargetKind,
+    pub rect: Rect,
+    pub provenance: ProgressiveTargetProvenance,
+    pub confidence_milli: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProgressiveTargetPlan {
+    pub reference: ElementRef,
+    pub snapshot_version: u64,
+    pub route: String,
+    pub viewport: (u32, u32),
+    pub targets: Vec<ProgressiveResolvedTarget>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressiveTargetError {
+    InvalidViewport,
+    ReferenceNotFound,
+    InvalidElementGeometry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -225,6 +268,230 @@ pub fn build_plan(target: CaptureTarget, policy: StableCapturePolicy) -> Capture
         policy,
         stages,
     }
+}
+
+pub fn resolve_progressive_targets(
+    snapshot: &PageSnapshot,
+    reference: &str,
+) -> Result<ProgressiveTargetPlan, ProgressiveTargetError> {
+    let viewport = snapshot.viewport;
+    if viewport.0 == 0 || viewport.1 == 0 {
+        return Err(ProgressiveTargetError::InvalidViewport);
+    }
+
+    let mut path = Vec::new();
+    if !find_semantic_path(&snapshot.root, reference, &mut path) {
+        return Err(ProgressiveTargetError::ReferenceNotFound);
+    }
+    let target = path
+        .last()
+        .copied()
+        .ok_or(ProgressiveTargetError::ReferenceNotFound)?;
+    let raw_element = target
+        .rect
+        .as_ref()
+        .ok_or(ProgressiveTargetError::InvalidElementGeometry)?;
+    let element_rect = validate_and_clip(raw_element, viewport)
+        .ok_or(ProgressiveTargetError::InvalidElementGeometry)?;
+
+    let component = resolve_component_ancestor(&path, &element_rect, viewport);
+    let section = resolve_section_ancestor(&path, &element_rect, viewport);
+
+    let mut targets = Vec::with_capacity(4);
+    push_unique_target(
+        &mut targets,
+        ProgressiveResolvedTarget {
+            kind: ProgressiveTargetKind::Element,
+            rect: expand(&element_rect, 120.0, viewport),
+            provenance: ProgressiveTargetProvenance::StableElementRef {
+                reference: target.reference.clone(),
+            },
+            confidence_milli: 1000,
+        },
+    );
+
+    if let Some((owner, rect, component_name)) = component {
+        push_unique_target(
+            &mut targets,
+            ProgressiveResolvedTarget {
+                kind: ProgressiveTargetKind::Component,
+                rect,
+                provenance: ProgressiveTargetProvenance::SourceComponent {
+                    component: component_name,
+                    owner_ref: owner.reference.clone(),
+                },
+                confidence_milli: 950,
+            },
+        );
+    }
+
+    if let Some((owner, rect, boundary)) = section {
+        push_unique_target(
+            &mut targets,
+            ProgressiveResolvedTarget {
+                kind: ProgressiveTargetKind::Section,
+                rect,
+                provenance: ProgressiveTargetProvenance::SemanticSection {
+                    owner_ref: owner.reference.clone(),
+                    boundary,
+                },
+                confidence_milli: 850,
+            },
+        );
+    }
+
+    push_unique_target(
+        &mut targets,
+        ProgressiveResolvedTarget {
+            kind: ProgressiveTargetKind::Viewport,
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: viewport.0 as f64,
+                height: viewport.1 as f64,
+            },
+            provenance: ProgressiveTargetProvenance::ViewportFallback,
+            confidence_milli: 1000,
+        },
+    );
+
+    Ok(ProgressiveTargetPlan {
+        reference: reference.to_owned(),
+        snapshot_version: snapshot.version,
+        route: snapshot.route.clone(),
+        viewport,
+        targets,
+    })
+}
+
+fn find_semantic_path<'a>(
+    node: &'a SemanticNode,
+    reference: &str,
+    path: &mut Vec<&'a SemanticNode>,
+) -> bool {
+    path.push(node);
+    if node.reference == reference {
+        return true;
+    }
+    for child in &node.children {
+        if find_semantic_path(child, reference, path) {
+            return true;
+        }
+    }
+    path.pop();
+    false
+}
+
+fn resolve_component_ancestor<'a>(
+    path: &[&'a SemanticNode],
+    element: &Rect,
+    viewport: (u32, u32),
+) -> Option<(&'a SemanticNode, Rect, String)> {
+    let target = *path.last()?;
+    let component_name = target.source.as_ref()?.component.as_deref()?;
+    path[..path.len().saturating_sub(1)]
+        .iter()
+        .rev()
+        .copied()
+        .find_map(|ancestor| {
+            let ancestor_component = ancestor.source.as_ref()?.component.as_deref()?;
+            if ancestor_component != component_name {
+                return None;
+            }
+            let rect = validate_and_clip(ancestor.rect.as_ref()?, viewport)?;
+            if !contains_rect(&rect, element) {
+                return None;
+            }
+            Some((ancestor, rect, component_name.to_owned()))
+        })
+}
+
+fn resolve_section_ancestor<'a>(
+    path: &[&'a SemanticNode],
+    element: &Rect,
+    viewport: (u32, u32),
+) -> Option<(&'a SemanticNode, Rect, String)> {
+    path[..path.len().saturating_sub(1)]
+        .iter()
+        .rev()
+        .copied()
+        .find_map(|ancestor| {
+            let boundary = semantic_section_boundary(ancestor)?;
+            let rect = validate_and_clip(ancestor.rect.as_ref()?, viewport)?;
+            if !contains_rect(&rect, element) {
+                return None;
+            }
+            Some((ancestor, rect, boundary))
+        })
+}
+
+fn semantic_section_boundary(node: &SemanticNode) -> Option<String> {
+    let tag = node.tag.to_ascii_lowercase();
+    if matches!(tag.as_str(), "section" | "main" | "article" | "nav" | "aside" | "form") {
+        return Some(format!("tag:{tag}"));
+    }
+    let role = node.role.as_deref()?.to_ascii_lowercase();
+    if matches!(
+        role.as_str(),
+        "region" | "main" | "navigation" | "complementary" | "form"
+    ) {
+        return Some(format!("role:{role}"));
+    }
+    None
+}
+
+fn validate_and_clip(rect: &Rect, viewport: (u32, u32)) -> Option<Rect> {
+    if viewport.0 == 0
+        || viewport.1 == 0
+        || !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+    {
+        return None;
+    }
+    let right = rect.x + rect.width;
+    let bottom = rect.y + rect.height;
+    if !right.is_finite() || !bottom.is_finite() {
+        return None;
+    }
+
+    let left = rect.x.max(0.0);
+    let top = rect.y.max(0.0);
+    let clipped_right = right.min(viewport.0 as f64);
+    let clipped_bottom = bottom.min(viewport.1 as f64);
+    if clipped_right <= left || clipped_bottom <= top {
+        return None;
+    }
+    Some(Rect {
+        x: left,
+        y: top,
+        width: clipped_right - left,
+        height: clipped_bottom - top,
+    })
+}
+
+fn contains_rect(container: &Rect, child: &Rect) -> bool {
+    let container_right = container.x + container.width;
+    let container_bottom = container.y + container.height;
+    let child_right = child.x + child.width;
+    let child_bottom = child.y + child.height;
+    container.x <= child.x
+        && container.y <= child.y
+        && container_right >= child_right
+        && container_bottom >= child_bottom
+}
+
+fn push_unique_target(
+    targets: &mut Vec<ProgressiveResolvedTarget>,
+    target: ProgressiveResolvedTarget,
+) {
+    if targets.iter().any(|existing| existing.rect == target.rect) {
+        return;
+    }
+    targets.push(target);
 }
 
 pub fn progressive_regions(
