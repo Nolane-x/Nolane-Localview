@@ -156,6 +156,56 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         }
     }
 
+    fn execute_script(webview: &ICoreWebView2, script: &str) -> String {
+        let (tx, rx) = mpsc::channel();
+        let handler = ExecuteScriptCompletedHandler::create(Box::new(move |error_code, result| {
+            error_code?;
+            tx.send(webview2_com::string_from_pcwstr(&result))
+                .expect("send WebView2 script result");
+            Ok(())
+        }));
+        let script_wide = wide(script);
+        unsafe {
+            webview
+                .ExecuteScript(PCWSTR(script_wide.as_ptr()), &handler)
+                .expect("execute WebView2 readiness diagnostic");
+        }
+        webview2_com::wait_with_pump(rx).expect("WebView2 readiness diagnostic must complete")
+    }
+
+    fn assert_fixture_dom_ready(webview: &ICoreWebView2) {
+        let result = execute_script(
+            webview,
+            r#"(() => {
+                const proof = document.getElementById('proof');
+                if (!proof) return { ready: document.readyState, missing: true };
+                const rect = proof.getBoundingClientRect();
+                return {
+                    ready: document.readyState,
+                    missing: false,
+                    color: getComputedStyle(proof).backgroundColor,
+                    rect: [rect.left, rect.top, rect.width, rect.height],
+                    viewport: [innerWidth, innerHeight],
+                    href: location.href
+                };
+            })()"#,
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&result).expect("WebView2 diagnostic must be valid JSON");
+        assert_eq!(value["ready"], "complete", "unexpected DOM readiness: {value}");
+        assert_eq!(value["missing"], false, "proof node missing: {value}");
+        assert_eq!(
+            value["color"], "rgb(220, 40, 60)",
+            "proof CSS did not apply: {value}"
+        );
+        assert_eq!(value["viewport"][0], SMOKE_WIDTH, "unexpected viewport: {value}");
+        assert_eq!(value["viewport"][1], SMOKE_HEIGHT, "unexpected viewport: {value}");
+        assert_eq!(value["rect"][0], 80.0, "unexpected proof geometry: {value}");
+        assert_eq!(value["rect"][1], 45.0, "unexpected proof geometry: {value}");
+        assert_eq!(value["rect"][2], 160.0, "unexpected proof geometry: {value}");
+        assert_eq!(value["rect"][3], 90.0, "unexpected proof geometry: {value}");
+    }
+
     pub fn run() {
         assert!(
             std::env::var_os("LOCALVIEW_GUI_SMOKE").is_some(),
@@ -197,6 +247,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         let (route, server) = start_fixture_server();
         navigate_and_wait(&webview, &route);
         server.join().expect("loopback fixture server must finish");
+        assert_fixture_dom_ready(&webview);
 
         let request = CaptureRequest {
             target: CaptureTarget::Viewport,
