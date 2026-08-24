@@ -216,7 +216,22 @@ async fn preview_take_actions(
 ) -> Result<Vec<BridgeAction>, String> {
     ensure_preview_caller(&webview_window, session_id)?;
     let token = read_token().await?;
-    control_client()?
+    let client = control_client()?;
+
+    let mut internal_actions = client
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/capture-actions"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json::<Vec<BridgeAction>>()
+        .await
+        .map_err(err)?;
+    let public_actions = client
         .get(format!(
             "http://127.0.0.1:45454/v1/sessions/{session_id}/actions"
         ))
@@ -228,7 +243,9 @@ async fn preview_take_actions(
         .map_err(err)?
         .json::<Vec<BridgeAction>>()
         .await
-        .map_err(err)
+        .map_err(err)?;
+    internal_actions.extend(public_actions);
+    Ok(internal_actions)
 }
 
 #[tauri::command]
