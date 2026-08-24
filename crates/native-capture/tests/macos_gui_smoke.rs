@@ -18,6 +18,7 @@ mod macos {
         capture_wk_webview_for_gui_smoke, CaptureRequest, NativeCaptureBackend, ViewportMeta,
     };
     use localview_visual::decode_png_rgba;
+    use objc2::MainThreadOnly;
     use objc2_app_kit::{NSApplication, NSBackingStoreType, NSWindow, NSWindowStyleMask};
     use objc2_foundation::{
         MainThreadMarker, NSDate, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSURL,
