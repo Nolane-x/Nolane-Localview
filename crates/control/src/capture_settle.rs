@@ -112,8 +112,7 @@ fn settle_observation(
     now_unix_ms: i64,
 ) -> SettleObservation {
     let snapshot = fresh_snapshot.map(|result| &result.payload);
-    let latest_semantic_at_unix_ms =
-        fresh_snapshot.map(|result| result.completed_at.timestamp_millis());
+    let latest_semantic_at_unix_ms = fresh_snapshot.map(|_| now_unix_ms);
     let ready_state = snapshot
         .and_then(|value| value.get("readyState"))
         .and_then(|value| value.as_str())
