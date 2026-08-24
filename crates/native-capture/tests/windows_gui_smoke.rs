@@ -24,7 +24,7 @@ mod windows_smoke {
     use localview_visual::decode_png_rgba;
     use webview2_com::{Microsoft::Web::WebView2::Win32::*, *};
     use windows::{
-        core::{w, PCWSTR},
+        core::{w, PCWSTR, PWSTR},
         Win32::{
             Foundation::{E_POINTER, HWND, RECT},
             System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
@@ -136,6 +136,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
 
     fn navigate_and_wait(webview: &ICoreWebView2, route: &str) {
         let expected_navigation_id = Rc::new(Cell::new(None::<u64>));
+        let expected_route = route.to_owned();
 
         let starting_navigation_id = expected_navigation_id.clone();
         let starting_handler = NavigationStartingEventHandler::create(Box::new(
@@ -143,6 +144,15 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                 let Some(args) = args else {
                     return Ok(());
                 };
+                let mut uri = PWSTR::null();
+                unsafe {
+                    args.Uri(&mut uri)?;
+                }
+                let uri = webview2_com::take_pwstr(uri);
+                if uri != expected_route {
+                    return Ok(());
+                }
+
                 let mut navigation_id = 0_u64;
                 unsafe {
                     args.NavigationId(&mut navigation_id)?;
@@ -168,10 +178,12 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                 }
 
                 let mut is_success = Default::default();
+                let mut web_error_status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
                 unsafe {
                     args.IsSuccess(&mut is_success)?;
+                    args.WebErrorStatus(&mut web_error_status)?;
                 }
-                tx.send(is_success.as_bool())
+                tx.send((is_success.as_bool(), web_error_status))
                     .expect("send correlated WebView2 navigation completion");
                 Ok(())
             },
@@ -192,11 +204,11 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                 .expect("navigate WebView2 to loopback fixture");
         }
 
-        let navigation_succeeded = webview2_com::wait_with_pump(rx)
+        let (navigation_succeeded, web_error_status) = webview2_com::wait_with_pump(rx)
             .expect("correlated WebView2 loopback fixture navigation must complete");
         assert!(
             navigation_succeeded,
-            "correlated WebView2 loopback fixture navigation must succeed"
+            "correlated WebView2 loopback fixture navigation must succeed; WebErrorStatus={web_error_status:?}"
         );
         assert!(
             expected_navigation_id.get().is_some(),
