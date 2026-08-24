@@ -26,7 +26,7 @@ mod windows_smoke {
     use windows::{
         core::{w, PCWSTR},
         Win32::{
-            Foundation::{BOOL, E_POINTER, HWND, RECT},
+            Foundation::{E_POINTER, HWND, RECT},
             System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DestroyWindow, ShowWindow, CW_USEDEFAULT, SW_SHOW,
@@ -167,7 +167,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                     return Ok(());
                 }
 
-                let mut is_success = BOOL::default();
+                let mut is_success = Default::default();
                 unsafe {
                     args.IsSuccess(&mut is_success)?;
                 }
