@@ -26,6 +26,12 @@ const VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
 const MAX_PAUSED_ANIMATIONS: u64 = 2_048;
 const MAX_INTERNAL_CAPTURE_ACTION_DRAIN: usize = 16;
 
+#[derive(Debug, Clone, Copy)]
+enum ActionResultScope {
+    Public,
+    InternalCapture,
+}
+
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
         .route(
@@ -68,6 +74,7 @@ async fn session_capture_settle(
         id,
         snapshot_action.id,
         FRESH_SNAPSHOT_TIMEOUT,
+        ActionResultScope::Public,
     )
     .await
     .filter(|result| result.ok);
@@ -121,7 +128,15 @@ async fn session_capture_freeze(
         .live
         .enqueue_action(id, None, BridgeActionKind::FreezeVisuals)
         .await;
-    let Some(result) = wait_for_action_result(&state, id, action.id, VISUAL_STATE_TIMEOUT).await else {
+    let Some(result) = wait_for_action_result(
+        &state,
+        id,
+        action.id,
+        VISUAL_STATE_TIMEOUT,
+        ActionResultScope::InternalCapture,
+    )
+    .await
+    else {
         return bounded_error(StatusCode::GATEWAY_TIMEOUT, "visual_freeze_ack_timeout");
     };
     if !result.ok {
@@ -183,7 +198,15 @@ async fn session_capture_restore(
             },
         )
         .await;
-    let Some(result) = wait_for_action_result(&state, id, action.id, VISUAL_STATE_TIMEOUT).await else {
+    let Some(result) = wait_for_action_result(
+        &state,
+        id,
+        action.id,
+        VISUAL_STATE_TIMEOUT,
+        ActionResultScope::InternalCapture,
+    )
+    .await
+    else {
         return bounded_error(StatusCode::GATEWAY_TIMEOUT, "visual_restore_ack_timeout");
     };
     if !result.ok {
@@ -198,13 +221,20 @@ async fn wait_for_action_result(
     session_id: SessionId,
     action_id: Uuid,
     timeout: Duration,
+    scope: ActionResultScope,
 ) -> Option<BridgeActionResult> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(result) = state
-            .live
-            .recent_results(session_id, 64)
-            .await
+        let results = match scope {
+            ActionResultScope::Public => state.live.recent_results(session_id, 64).await,
+            ActionResultScope::InternalCapture => {
+                state
+                    .live
+                    .recent_internal_capture_results(session_id, 64)
+                    .await
+            }
+        };
+        if let Some(result) = results
             .into_iter()
             .rev()
             .find(|result| result.action_id == action_id)
