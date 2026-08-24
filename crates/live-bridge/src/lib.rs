@@ -93,9 +93,31 @@ pub struct BridgeAction {
     pub session_id: SessionId,
     pub reference: Option<ElementRef>,
     pub action: BridgeActionKind,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PrivateBridgeAction {
+    pub id: Uuid,
+    pub session_id: SessionId,
+    pub reference: Option<ElementRef>,
+    pub action: BridgeActionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_capture: Option<PrivateCaptureActionData>,
     pub created_at: DateTime<Utc>,
+}
+
+impl PrivateBridgeAction {
+    fn from_action(action: BridgeAction, private_capture: Option<PrivateCaptureActionData>) -> Self {
+        Self {
+            id: action.id,
+            session_id: action.session_id,
+            reference: action.reference,
+            action: action.action,
+            private_capture,
+            created_at: action.created_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -150,6 +172,7 @@ struct SessionBridgeState {
     events: VecDeque<ObserverEvent>,
     actions: VecDeque<BridgeAction>,
     capture_actions: VecDeque<BridgeAction>,
+    capture_private: VecDeque<(Uuid, PrivateCaptureActionData)>,
     inflight: VecDeque<BridgeAction>,
     capture_inflight: VecDeque<BridgeAction>,
     claimed: VecDeque<BridgeAction>,
@@ -230,38 +253,11 @@ impl LiveBridge {
         reference: Option<ElementRef>,
         action: BridgeActionKind,
     ) -> BridgeAction {
-        self.enqueue_prepared_action(session_id, reference, action, None)
-            .await
-    }
-
-    pub async fn enqueue_capture_freeze(
-        &self,
-        session_id: SessionId,
-        mask_selectors: Vec<String>,
-    ) -> BridgeAction {
-        let mask_selectors = sanitize_mask_selectors(mask_selectors);
-        self.enqueue_prepared_action(
-            session_id,
-            None,
-            BridgeActionKind::FreezeVisuals,
-            Some(PrivateCaptureActionData { mask_selectors }),
-        )
-        .await
-    }
-
-    async fn enqueue_prepared_action(
-        &self,
-        session_id: SessionId,
-        reference: Option<ElementRef>,
-        action: BridgeActionKind,
-        private_capture: Option<PrivateCaptureActionData>,
-    ) -> BridgeAction {
         let action = BridgeAction {
             id: Uuid::new_v4(),
             session_id,
             reference,
             action,
-            private_capture,
             created_at: Utc::now(),
         };
         let scope = ActionScope::from_action(&action);
@@ -275,6 +271,36 @@ impl LiveBridge {
                 self.action_capacity,
             ),
         }
+        action
+    }
+
+    pub async fn enqueue_capture_freeze(
+        &self,
+        session_id: SessionId,
+        mask_selectors: Vec<String>,
+    ) -> BridgeAction {
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id,
+            reference: None,
+            action: BridgeActionKind::FreezeVisuals,
+            created_at: Utc::now(),
+        };
+        let private = PrivateCaptureActionData {
+            mask_selectors: sanitize_mask_selectors(mask_selectors),
+        };
+        let mut states = self.inner.write().await;
+        let state = states.entry(session_id).or_default();
+        push_bounded(
+            &mut state.capture_actions,
+            action.clone(),
+            self.action_capacity,
+        );
+        push_bounded(
+            &mut state.capture_private,
+            (action.id, private),
+            self.action_capacity,
+        );
         action
     }
 
@@ -303,17 +329,24 @@ impl LiveBridge {
         &self,
         session_id: SessionId,
         limit: usize,
-    ) -> Vec<BridgeAction> {
+    ) -> Vec<PrivateBridgeAction> {
         let mut states = self.inner.write().await;
         let Some(state) = states.get_mut(&session_id) else {
             return Vec::new();
         };
-        drain_actions(
+        let actions = drain_actions(
             &mut state.capture_actions,
             &mut state.capture_inflight,
             limit,
             self.action_capacity,
-        )
+        );
+        actions
+            .into_iter()
+            .map(|action| {
+                let private_capture = take_private_capture(&mut state.capture_private, action.id);
+                PrivateBridgeAction::from_action(action, private_capture)
+            })
+            .collect()
     }
 
     pub async fn claim_action(
@@ -406,6 +439,14 @@ fn sanitize_mask_selectors(mask_selectors: Vec<String>) -> Vec<String> {
         .filter(|selector| !selector.is_empty() && selector.len() <= MAX_PRIVATE_MASK_SELECTOR_BYTES)
         .take(MAX_PRIVATE_MASK_SELECTORS)
         .collect()
+}
+
+fn take_private_capture(
+    private: &mut VecDeque<(Uuid, PrivateCaptureActionData)>,
+    action_id: Uuid,
+) -> Option<PrivateCaptureActionData> {
+    let index = private.iter().position(|(id, _)| *id == action_id)?;
+    private.remove(index).map(|(_, data)| data)
 }
 
 fn drain_actions(
