@@ -12,6 +12,8 @@ pub enum VisualError {
     DimensionMismatch,
     #[error("CSS viewport dimensions are invalid")]
     InvalidViewport,
+    #[error("mask geometry is invalid")]
+    InvalidMaskGeometry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,10 +141,11 @@ pub fn changed_tiles(
 
 /// Redacts viewport-relative CSS rectangles directly in an RGBA image.
 ///
-/// Rectangle coordinates are expressed in CSS pixels. The function scales them
-/// to the native pixel dimensions, clamps them to the frame, and fills every
-/// affected pixel with opaque black. It returns the number of rectangles that
-/// intersected the captured frame.
+/// Rectangle coordinates are expressed in CSS pixels. The function first
+/// validates the entire mask set, then scales it to native pixel dimensions,
+/// clamps it to the captured frame, and fills every affected pixel with opaque
+/// black. Validation happens before mutation so malformed geometry fails closed
+/// without leaving a partially redacted frame.
 pub fn redact_css_rects(
     image: &mut RgbaImage,
     css_viewport: (f64, f64),
@@ -159,21 +162,27 @@ pub fn redact_css_rects(
         return Err(VisualError::InvalidViewport);
     }
 
+    for rect in rects {
+        let right = rect.x + rect.width;
+        let bottom = rect.y + rect.height;
+        if !rect.x.is_finite()
+            || !rect.y.is_finite()
+            || !rect.width.is_finite()
+            || !rect.height.is_finite()
+            || !right.is_finite()
+            || !bottom.is_finite()
+            || rect.width <= 0.0
+            || rect.height <= 0.0
+        {
+            return Err(VisualError::InvalidMaskGeometry);
+        }
+    }
+
     let scale_x = image.width as f64 / css_width;
     let scale_y = image.height as f64 / css_height;
     let mut applied = 0usize;
 
     for rect in rects {
-        if !rect.x.is_finite()
-            || !rect.y.is_finite()
-            || !rect.width.is_finite()
-            || !rect.height.is_finite()
-            || rect.width <= 0.0
-            || rect.height <= 0.0
-        {
-            continue;
-        }
-
         let css_left = rect.x.max(0.0).min(css_width);
         let css_top = rect.y.max(0.0).min(css_height);
         let css_right = (rect.x + rect.width).max(0.0).min(css_width);
