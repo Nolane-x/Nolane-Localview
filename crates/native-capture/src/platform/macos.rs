@@ -22,6 +22,20 @@ pub(crate) fn capture(
         return;
     }
 
+    // SAFETY: Tauri exposes the native pointer of the managed WKWebView. The
+    // pointer is checked non-null above and this function is invoked from
+    // `with_webview`, which guarantees the platform webview is alive for this
+    // native call. The shared helper only starts WebKit's async snapshot work;
+    // WebKit copies/retains the completion block for that work.
+    let native = unsafe { &*raw.cast::<WKWebView>() };
+    capture_view(native, request, completion);
+}
+
+pub(crate) fn capture_view(
+    view: &WKWebView,
+    request: CaptureRequest,
+    completion: CaptureCompletion,
+) {
     let completion = Mutex::new(Some(completion));
     let request = Mutex::new(Some(request));
     let block = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
@@ -74,13 +88,10 @@ pub(crate) fn capture(
         }
     });
 
-    // SAFETY: Tauri exposes the native pointer of the managed WKWebView. The
-    // pointer is checked non-null above and this function is invoked from
-    // `with_webview`, which guarantees the platform webview is alive for the
-    // native call. WebKit copies/retains the completion block for the async work.
+    // SAFETY: `view` is a live WKWebView borrowed by the caller. WebKit copies
+    // or retains the completion block for the asynchronous snapshot operation.
     unsafe {
-        let native = &*raw.cast::<WKWebView>();
-        native.takeSnapshotWithConfiguration_completionHandler(
+        view.takeSnapshotWithConfiguration_completionHandler(
             None::<&WKSnapshotConfiguration>,
             &block,
         );
