@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;
@@ -13,19 +13,42 @@ use localview_live_bridge::{
     BridgeActionKind, BridgeActionResult, ObserverEvent, ObserverEventKind,
 };
 use localview_protocol::SessionId;
+use serde::Deserialize;
 use tokio::time::{sleep, Instant};
 use uuid::Uuid;
 
 use crate::ControlState;
 
 const FRESH_SNAPSHOT_TIMEOUT: Duration = Duration::from_millis(650);
-const FRESH_SNAPSHOT_POLL: Duration = Duration::from_millis(20);
+const VISUAL_STATE_TIMEOUT: Duration = Duration::from_millis(1_200);
+const ACTION_RESULT_POLL: Duration = Duration::from_millis(20);
+const VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
+const MAX_PAUSED_ANIMATIONS: u64 = 2_048;
+const MAX_INTERNAL_CAPTURE_ACTION_DRAIN: usize = 16;
+
+#[derive(Debug, Clone, Copy)]
+enum ActionResultScope {
+    Public,
+    InternalCapture,
+}
 
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
         .route(
             "/v1/sessions/{id}/capture-settle",
             get(session_capture_settle),
+        )
+        .route(
+            "/v1/sessions/{id}/capture-actions",
+            get(session_capture_actions),
+        )
+        .route(
+            "/v1/sessions/{id}/capture-freeze",
+            post(session_capture_freeze),
+        )
+        .route(
+            "/v1/sessions/{id}/capture-restore",
+            post(session_capture_restore),
         )
         .with_state(state)
 }
@@ -38,19 +61,23 @@ async fn session_capture_settle(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if state.sessions.get(id).await.is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "session_not_found"})),
-        )
-            .into_response();
+    if !session_exists(&state, id).await {
+        return session_not_found();
     }
 
     let snapshot_action = state
         .live
         .enqueue_action(id, None, BridgeActionKind::Snapshot)
         .await;
-    let fresh_snapshot = wait_for_snapshot_result(&state, id, snapshot_action.id).await;
+    let fresh_snapshot = wait_for_action_result(
+        &state,
+        id,
+        snapshot_action.id,
+        FRESH_SNAPSHOT_TIMEOUT,
+        ActionResultScope::Public,
+    )
+    .await
+    .filter(|result| result.ok);
     let events = state.live.recent(id, 2048).await;
     let observation = settle_observation(
         &events,
@@ -64,30 +91,167 @@ async fn session_capture_settle(
     .into_response()
 }
 
-async fn wait_for_snapshot_result(
+async fn session_capture_actions(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if !session_exists(&state, id).await {
+        return session_not_found();
+    }
+
+    Json(
+        state
+            .live
+            .take_internal_capture_actions(id, MAX_INTERNAL_CAPTURE_ACTION_DRAIN)
+            .await,
+    )
+    .into_response()
+}
+
+async fn session_capture_freeze(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if !session_exists(&state, id).await {
+        return session_not_found();
+    }
+
+    let action = state
+        .live
+        .enqueue_action(id, None, BridgeActionKind::FreezeVisuals)
+        .await;
+    let Some(result) = wait_for_action_result(
+        &state,
+        id,
+        action.id,
+        VISUAL_STATE_TIMEOUT,
+        ActionResultScope::InternalCapture,
+    )
+    .await
+    else {
+        return bounded_error(StatusCode::GATEWAY_TIMEOUT, "visual_freeze_ack_timeout");
+    };
+    if !result.ok {
+        return bounded_error(StatusCode::BAD_GATEWAY, "visual_freeze_failed");
+    }
+
+    let paused_animations = result
+        .payload
+        .get("paused_animations")
+        .and_then(serde_json::Value::as_u64);
+    let web_animations_supported = result
+        .payload
+        .get("web_animations_supported")
+        .and_then(serde_json::Value::as_bool);
+    let (Some(paused_animations), Some(web_animations_supported)) =
+        (paused_animations, web_animations_supported)
+    else {
+        return bounded_error(StatusCode::BAD_GATEWAY, "invalid_visual_freeze_ack");
+    };
+    if paused_animations > MAX_PAUSED_ANIMATIONS {
+        return bounded_error(StatusCode::BAD_GATEWAY, "invalid_visual_freeze_ack");
+    }
+
+    Json(serde_json::json!({
+        "token": action.id,
+        "paused_animations": paused_animations,
+        "web_animations_supported": web_animations_supported,
+        "lease_ms": VISUAL_FREEZE_LEASE_MS,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureRestoreRequest {
+    token: Uuid,
+}
+
+async fn session_capture_restore(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+    Json(request): Json<CaptureRestoreRequest>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if !session_exists(&state, id).await {
+        return session_not_found();
+    }
+
+    let action = state
+        .live
+        .enqueue_action(
+            id,
+            None,
+            BridgeActionKind::RestoreVisuals {
+                token: request.token,
+            },
+        )
+        .await;
+    let Some(result) = wait_for_action_result(
+        &state,
+        id,
+        action.id,
+        VISUAL_STATE_TIMEOUT,
+        ActionResultScope::InternalCapture,
+    )
+    .await
+    else {
+        return bounded_error(StatusCode::GATEWAY_TIMEOUT, "visual_restore_ack_timeout");
+    };
+    if !result.ok {
+        return bounded_error(StatusCode::BAD_GATEWAY, "visual_restore_failed");
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn wait_for_action_result(
     state: &ControlState,
     session_id: SessionId,
     action_id: Uuid,
+    timeout: Duration,
+    scope: ActionResultScope,
 ) -> Option<BridgeActionResult> {
-    let deadline = Instant::now() + FRESH_SNAPSHOT_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
-        if let Some(result) = state
-            .live
-            .recent_results(session_id, 64)
-            .await
+        let results = match scope {
+            ActionResultScope::Public => state.live.recent_results(session_id, 64).await,
+            ActionResultScope::InternalCapture => {
+                state
+                    .live
+                    .recent_internal_capture_results(session_id, 64)
+                    .await
+            }
+        };
+        if let Some(result) = results
             .into_iter()
             .rev()
             .find(|result| result.action_id == action_id)
         {
-            return result.ok.then_some(result);
+            return Some(result);
         }
 
         let now = Instant::now();
         if now >= deadline {
             return None;
         }
-        sleep(FRESH_SNAPSHOT_POLL.min(deadline.saturating_duration_since(now))).await;
+        sleep(ACTION_RESULT_POLL.min(deadline.saturating_duration_since(now))).await;
     }
+}
+
+async fn session_exists(state: &ControlState, id: SessionId) -> bool {
+    state.sessions.get(id).await.is_some()
 }
 
 fn authorized(headers: &HeaderMap, state: &ControlState) -> bool {
@@ -99,11 +263,15 @@ fn authorized(headers: &HeaderMap, state: &ControlState) -> bool {
 }
 
 fn denied() -> axum::response::Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(serde_json::json!({"error": "unauthorized"})),
-    )
-        .into_response()
+    bounded_error(StatusCode::UNAUTHORIZED, "unauthorized")
+}
+
+fn session_not_found() -> axum::response::Response {
+    bounded_error(StatusCode::NOT_FOUND, "session_not_found")
+}
+
+fn bounded_error(status: StatusCode, code: &'static str) -> axum::response::Response {
+    (status, Json(serde_json::json!({"error": code}))).into_response()
 }
 
 fn settle_observation(

@@ -642,6 +642,15 @@ async fn queue_action(
     if let Err(error) = ensure_session(&state, id).await {
         return error.into_response();
     }
+    if request.action.is_internal_capture_action() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "internal_capture_action_not_public"
+            })),
+        )
+            .into_response();
+    }
     let action = state
         .live
         .enqueue_action(id, request.reference, request.action)
@@ -855,6 +864,12 @@ fn sanitize_action_result(action: &BridgeAction, result: &BridgeActionResult) ->
         BridgeActionKind::Key { .. } => action_summary(action, result, "key", error),
         BridgeActionKind::Scroll { .. } => action_summary(action, result, "scroll", error),
         BridgeActionKind::Focus => action_summary(action, result, "focus", error),
+        BridgeActionKind::FreezeVisuals => {
+            action_summary(action, result, "freeze_visuals", error)
+        }
+        BridgeActionKind::RestoreVisuals { .. } => {
+            action_summary(action, result, "restore_visuals", error)
+        }
     }
 }
 

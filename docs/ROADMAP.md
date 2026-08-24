@@ -84,11 +84,11 @@ Landed native viewport path:
 - Desktop managed-surface preflight followed by a five-second fail-closed settle transaction before native pixel acquisition; unstable timeout never falls through to capture.
 - Settle retry is bounded to 25–100 ms, while the native three-second capture timeout remains a separate post-settle budget.
 - The managed WebView route is read and loopback-validated again inside native acquisition after settle, closing the preflight/navigation race.
+- Managed pages enter a bounded per-session freeze/capture/restore transaction: Web Animations are paused when available, CSS animation/transition motion is suppressed, an 8-second self-healing lease restores visual state if coordination is lost, and pixels are persisted only after exact-token restore acknowledgement succeeds.
 
 Still required before the visual runtime is considered complete:
 
 - hosted GUI smoke tests that render a real managed WebView and prove non-empty PNG capture on Windows, macOS and Linux runners or equivalent controlled hosts;
-- animation/transition freeze and restoration wired into the live capture transaction;
 - screenshot masking for private selectors before agent exposure/persistence;
 - true network in-flight accounting beyond the current fetch/XHR completion quiet-period heuristic;
 - element/component/section capture execution beyond viewport capture;
@@ -96,7 +96,7 @@ Still required before the visual runtime is considered complete:
 - guarded full-page stitching;
 - before/after and region diff wired into evidence and verification.
 
-**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, artifact/evidence registration and a fail-closed fresh-snapshot settle gate are now present; GUI pixel smoke, masking/freeze and progressive-region/diff execution remain.
+**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, artifact/evidence registration, a fail-closed fresh-snapshot settle gate and the live freeze/restore transaction are now present; GUI pixel smoke, masking, progressive-region execution and visual diff verification remain.
 
 ## Wave 3 — Runtime telemetry
 
