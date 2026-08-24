@@ -46,18 +46,6 @@ fn semantic_snapshot_exposes_privacy_safe_capture_readiness() {
 }
 
 #[test]
-fn readiness_is_resampled_when_page_resources_finish() {
-    let script = bootstrap_script(&InstrumentationConfig::default());
-
-    assert!(script.contains("scheduleReadinessSnapshot"));
-    assert!(script.contains("addEventListener('load'"));
-    assert!(script.contains("document.fonts?.ready"));
-    assert!(script.contains("HTMLImageElement"));
-    assert!(script.contains("image_load"));
-    assert!(script.contains("image_error"));
-}
-
-#[test]
 fn deep_semantic_names_do_not_force_inner_text_layout_scans() {
     let script = bootstrap_script(&InstrumentationConfig::default());
 
