@@ -79,6 +79,30 @@ fn valid_payload() -> serde_json::Value {
     })
 }
 
+fn valid_region_payload() -> serde_json::Value {
+    serde_json::json!({
+        "artifact_id": "lv-fedcba9876543210",
+        "pixel_width": 320,
+        "pixel_height": 180,
+        "backend": "webview2",
+        "route": "http://127.0.0.1:5173/",
+        "viewport": {
+            "css_width": 1280,
+            "css_height": 820,
+            "device_scale_factor": 1.0
+        },
+        "revision": "abc123",
+        "captured_at_unix_ms": 124,
+        "target": "region",
+        "region": {
+            "x": 80.0,
+            "y": 40.0,
+            "width": 320.0,
+            "height": 180.0
+        }
+    })
+}
+
 async fn post_visual(
     state: ControlState,
     session_id: uuid::Uuid,
@@ -114,6 +138,24 @@ async fn visual_evidence_metadata_is_ingested_without_pixel_payload() {
     let stored = visual.payload.to_string();
     assert!(!stored.contains("png"));
     assert!(!stored.contains("base64"));
+}
+
+#[tokio::test]
+async fn bounded_region_visual_evidence_preserves_css_target_metadata() {
+    let (state, session_id, evidence) = test_state().await;
+    let status = post_visual(state, session_id, valid_region_payload()).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let recent = evidence.recent_for_session(session_id, 10).await;
+    assert_eq!(recent.len(), 1);
+    let visual = &recent[0];
+    assert_eq!(visual.kind, EvidenceKind::Visual);
+    assert_eq!(visual.region.as_deref(), Some("region"));
+    assert_eq!(visual.payload["target"], "region");
+    assert_eq!(visual.payload["region"]["x"], 80.0);
+    assert_eq!(visual.payload["region"]["y"], 40.0);
+    assert_eq!(visual.payload["region"]["width"], 320.0);
+    assert_eq!(visual.payload["region"]["height"], 180.0);
 }
 
 #[tokio::test]
