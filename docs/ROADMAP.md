@@ -84,19 +84,21 @@ Landed native viewport path:
 - Desktop managed-surface preflight followed by a five-second fail-closed settle transaction before native pixel acquisition; unstable timeout never falls through to capture.
 - Settle retry is bounded to 25–100 ms, while the native three-second capture timeout remains a separate post-settle budget.
 - The managed WebView route is read and loopback-validated again inside native acquisition after settle, closing the preflight/navigation race.
-- Managed pages enter a bounded per-session freeze/capture/restore transaction: Web Animations are paused when available, CSS animation/transition motion is suppressed, an 8-second self-healing lease restores visual state if coordination is lost, and pixels are persisted only after exact-token restore acknowledgement succeeds.
+- Managed pages enter a bounded per-session freeze/capture/restore transaction: Web Animations are paused when available, CSS animation/transition motion is suppressed, an 8-second self-healing lease restores visual state if coordination is lost, and pixels continue only after exact-token restore acknowledgement succeeds.
+- Default private selectors travel only through the private capture-action envelope and are resolved inside the managed page to geometry-only receipts. The live bridge strips selectors and arbitrary page payload before daemon storage.
+- Private-region resolution is bounded to 16 selectors, 4,096 unique elements, 256 visible rectangles and a 100,000 × 100,000 CSS-pixel viewport; invalid selector/geometry/budget paths fail the capture instead of silently persisting an uncertain frame.
+- After exact restore, the desktop revalidates geometry and uses `localview-visual` to redact the native PNG in memory before the artifact store is reachable. PNG decode/encode budgets, native dimension checks and whole-mask validation make malformed/incomplete masking fail closed.
 
 Still required before the visual runtime is considered complete:
 
 - hosted GUI smoke tests that render a real managed WebView and prove non-empty PNG capture on Windows, macOS and Linux runners or equivalent controlled hosts;
-- screenshot masking for private selectors before agent exposure/persistence;
 - true network in-flight accounting beyond the current fetch/XHR completion quiet-period heuristic;
 - element/component/section capture execution beyond viewport capture;
 - progressive changed-region capture and token-aware visual packet selection;
 - guarded full-page stitching;
 - before/after and region diff wired into evidence and verification.
 
-**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, artifact/evidence registration, a fail-closed fresh-snapshot settle gate and the live freeze/restore transaction are now present; GUI pixel smoke, masking, progressive-region execution and visual diff verification remain.
+**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, artifact/evidence registration, fail-closed fresh-snapshot settling, live freeze/restore and pre-persistence private-region redaction are now present; GUI pixel smoke, progressive-region execution and visual diff verification remain.
 
 ## Wave 3 — Runtime telemetry
 
