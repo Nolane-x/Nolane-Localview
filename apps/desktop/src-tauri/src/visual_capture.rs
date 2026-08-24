@@ -181,6 +181,7 @@ async fn capture_target(
             );
         }
     };
+    validate_live_target_viewport(&frame, &freeze, &target)?;
     let frame = redact_private_pixels(frame, &freeze)?;
     let frame = apply_capture_target(frame, &freeze, &target)?;
 
@@ -240,6 +241,20 @@ fn validate_region(rect: &Rect, css_width: f64, css_height: f64) -> Result<(), S
         || bottom > css_height
     {
         return Err("visual capture region is outside the bounded CSS viewport".into());
+    }
+    Ok(())
+}
+
+fn validate_live_target_viewport(
+    frame: &CapturedFrame,
+    freeze: &FreezeVisualStateReceipt,
+    target: &RequestedCaptureTarget,
+) -> Result<(), String> {
+    if matches!(target, RequestedCaptureTarget::Region(_))
+        && (frame.viewport.css_width as f64 != freeze.viewport_css_width
+            || frame.viewport.css_height as f64 != freeze.viewport_css_height)
+    {
+        return Err("native visual region viewport changed during capture; pixels discarded".into());
     }
     Ok(())
 }
