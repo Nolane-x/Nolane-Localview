@@ -13,9 +13,9 @@ This ledger keeps implementation claims tied to the LocalView AI-Native Localhos
 | Lightweight native preview | Partial | Native WebView preview and feature-gated child workspace exist; iframe remains the conservative default until cross-platform composition/focus/DPI policy is validated |
 | Human View zero-clutter workspace | Partial | Full-canvas workspace and floating chrome exist; native child-WebView policy gate remains |
 | X-Ray / Inspector UI | Partial | Semantic/layout/source primitives and live inspect data exist; interactive point-and-select overlay is not yet fully wired |
-| Stable capture policy | Partial | `crates/capture` transaction/planning primitives exist; real WebView/OS pixel acquisition is not wired |
-| Progressive capture regions | Partial | element → component → section → viewport planning exists; live pixel capture execution is pending |
-| Pixel visual diff | Partial | `crates/visual` has pixel/diff primitives; end-to-end live capture → diff → evidence loop is pending |
+| Stable capture policy | Partial | Managed native viewport acquisition and bounded artifact/evidence registration are wired; HMR/layout/font/network settle transactions and instability receipts are still pending |
+| Progressive capture regions | Partial | element → component → section → viewport planning exists and native viewport execution is wired; element/component/section pixel execution and changed-region scheduling remain |
+| Pixel visual diff | Partial | Live native viewport pixels can now enter bounded artifacts/evidence and `crates/visual` has diff primitives; capture → region diff → verification is not yet one end-to-end loop |
 | Semantic snapshot model | Implemented | Managed WebViews emit bounded deep DOM/ARIA semantic trees with states, geometry, computed-style packets, visibility/occlusion and deltas; this is not claimed to be the native OS accessibility tree |
 | Stable element refs | Implemented | Injected observer fingerprints + live bridge/action paths |
 | State diff | Implemented | Live semantic added/removed/changed refs plus layout deltas are transported through the observer path |
@@ -32,15 +32,15 @@ This ledger keeps implementation claims tied to the LocalView AI-Native Localhos
 | Observation bus | Implemented | Bounded observer history plus authenticated native drain |
 | Diagnostics fusion | Partial | Deterministic/heuristic/subjective issue assembly exists; more live visual/source evidence still needs to feed it |
 | Reports | Partial | JSON/Markdown/HTML renderers exist; complete CI/headless report production is pending |
-| Artifact storage | Implemented | Bounded deduplicating local store primitives are wired for retained local evidence/artifacts where used |
+| Artifact storage | Implemented | Bounded deduplicating local store primitives are used by the native visual coordinator with a 256 MiB visual budget; capture receipts expose IDs/metadata rather than artifact paths |
 | Engine tier escalation | Partial | Static/lightweight/native WebView/Chromium policy exists; on-demand Tier-3 execution is not yet the default verified visual path |
 | Token budgeting | Partial | Compact/deep/minimal serialization budget primitives exist; active-perception budgeting across all tools remains |
-| Local permission/security model | Implemented | Bearer token, loopback control plane, caller/session ownership checks, navigation guard and redaction policy |
-| MCP control plane | Partial | stdio MCP exposes live sessions/observer/actions plus synchronous `page.snapshot` and `page.inspect`; visual/source/a11y/flow surfaces remain incomplete |
+| Local permission/security model | Implemented | Bearer token, loopback control plane, caller/session ownership checks, navigation guard and redaction policy; native capture is dashboard-only and resolves only exact session-owned managed surfaces |
+| MCP control plane | Partial | stdio MCP exposes live sessions/observer/actions plus synchronous `page.snapshot` and `page.inspect`; native visual/source/a11y/flow surfaces remain incomplete |
 | AI Critic / Point-and-Ask | Partial | UI/evidence architecture exists; point-select transport and optional model-provider execution are not complete |
 | Secure observer drain | Implemented | Managed preview/workspace WebViews drain bounded observer events through caller/session-validated Tauri commands into the authenticated local control plane |
 | Direct click/type agent actions | Implemented | Stable-ref click/type/key/scroll/focus/snapshot actions execute inside the managed WebView through the bounded queue/result bridge |
-| Native screenshot adapter | Planned | Capture planner exists; platform WebView pixel adapters are the next visual-runtime gate |
+| Native screenshot adapter | Partial | Real WebView2/WKWebView/WebKitGTK viewport adapters, bounded desktop artifact persistence and Visual evidence metadata path exist with cross-platform compile/test contracts; hosted GUI smoke proving real rendered pixels on all three platforms remains the completion gate |
 | Full replay / rich state timeline UI | Partial | Observation/action primitives exist; complete deterministic replay and desktop timeline are pending |
 | Full DevTools replacement | Explicitly out of scope for v1 | Product spec says not to build it |
 | Cloud accounts / collaborative remote browser | Explicitly out of scope for v1 | Local-first runtime by design |
