@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     hash::{Hash, Hasher},
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    time::UNIX_EPOCH,
 };
 
 use anyhow::Result;
@@ -132,6 +132,7 @@ fn content_id(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn test_dir(name: &str) -> PathBuf {
         let nonce = SystemTime::now()
