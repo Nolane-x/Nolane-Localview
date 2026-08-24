@@ -167,7 +167,7 @@ fn settle_observation(
 }
 
 fn update_latest(slot: &mut Option<i64>, candidate: i64) {
-    if slot.map_or(true, |current| candidate > current) {
+    if slot.is_none_or(|current| candidate > current) {
         *slot = Some(candidate);
     }
 }
