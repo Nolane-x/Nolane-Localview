@@ -110,7 +110,10 @@ async fn get(state: ControlState, uri: String, authorized: bool) -> (StatusCode,
 
 async fn complete_next_freeze(state: ControlState, session_id: Uuid) -> Uuid {
     for _ in 0..100 {
-        let actions = state.live.take_actions(session_id, 8).await;
+        let actions = state
+            .live
+            .take_internal_capture_actions(session_id, 8)
+            .await;
         if let Some(action) = actions
             .into_iter()
             .find(|action| matches!(&action.action, BridgeActionKind::FreezeVisuals))
@@ -147,7 +150,10 @@ async fn complete_next_freeze(state: ControlState, session_id: Uuid) -> Uuid {
 
 async fn complete_next_restore(state: ControlState, session_id: Uuid, expected_token: Uuid) {
     for _ in 0..100 {
-        let actions = state.live.take_actions(session_id, 8).await;
+        let actions = state
+            .live
+            .take_internal_capture_actions(session_id, 8)
+            .await;
         if let Some(action) = actions.into_iter().find(|action| {
             matches!(
                 &action.action,
