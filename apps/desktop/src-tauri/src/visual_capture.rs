@@ -11,7 +11,7 @@ use localview_capture::{CaptureTarget, SettleDecision, SettleReason, StableCaptu
 use localview_native_capture::{
     capture_webview, CaptureRequest, CapturedFrame, NativeCaptureError, ViewportMeta,
 };
-use localview_protocol::SessionId;
+use localview_protocol::{Rect, SessionId};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tokio::sync::{oneshot, Mutex};
@@ -23,6 +23,9 @@ const VISUAL_ARTIFACT_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CAPTURE_SESSION_GATES: usize = 128;
 const VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
 const MAX_PAUSED_ANIMATIONS: u64 = 2_048;
+const MAX_VISUAL_MASK_RECTS: usize = 256;
+const MAX_MASKED_ELEMENTS: u64 = 4_096;
+const MAX_CSS_VIEWPORT_DIMENSION: f64 = 100_000.0;
 
 #[derive(Default)]
 pub struct VisualCaptureState {
@@ -68,6 +71,10 @@ struct FreezeVisualStateReceipt {
     token: String,
     paused_animations: u64,
     web_animations_supported: bool,
+    viewport_css_width: f64,
+    viewport_css_height: f64,
+    masked_elements: u64,
+    mask_rects: Vec<Rect>,
     lease_ms: u64,
 }
 
@@ -99,6 +106,7 @@ pub async fn capture_viewport(
             );
         }
     };
+    let frame = redact_private_pixels(frame, &freeze)?;
 
     persist_and_register(&state, session_id, frame).await
 }
@@ -236,14 +244,68 @@ async fn freeze_visual_state(session_id: SessionId) -> Result<FreezeVisualStateR
         .await
         .map_err(err)?;
 
-    if receipt.token.is_empty()
-        || receipt.paused_animations > MAX_PAUSED_ANIMATIONS
-        || receipt.lease_ms != VISUAL_FREEZE_LEASE_MS
-    {
+    if !valid_freeze_receipt(&receipt) {
         return Err("invalid visual freeze acknowledgement".into());
     }
     let _ = receipt.web_animations_supported;
     Ok(receipt)
+}
+
+fn valid_freeze_receipt(receipt: &FreezeVisualStateReceipt) -> bool {
+    if receipt.token.is_empty()
+        || receipt.paused_animations > MAX_PAUSED_ANIMATIONS
+        || receipt.lease_ms != VISUAL_FREEZE_LEASE_MS
+        || receipt.masked_elements > MAX_MASKED_ELEMENTS
+        || receipt.mask_rects.len() > MAX_VISUAL_MASK_RECTS
+        || !receipt.viewport_css_width.is_finite()
+        || !receipt.viewport_css_height.is_finite()
+        || receipt.viewport_css_width <= 0.0
+        || receipt.viewport_css_height <= 0.0
+        || receipt.viewport_css_width > MAX_CSS_VIEWPORT_DIMENSION
+        || receipt.viewport_css_height > MAX_CSS_VIEWPORT_DIMENSION
+    {
+        return false;
+    }
+
+    receipt.mask_rects.iter().all(|rect| {
+        let right = rect.x + rect.width;
+        let bottom = rect.y + rect.height;
+        rect.x.is_finite()
+            && rect.y.is_finite()
+            && rect.width.is_finite()
+            && rect.height.is_finite()
+            && right.is_finite()
+            && bottom.is_finite()
+            && rect.x >= 0.0
+            && rect.y >= 0.0
+            && rect.width > 0.0
+            && rect.height > 0.0
+            && right <= receipt.viewport_css_width
+            && bottom <= receipt.viewport_css_height
+    })
+}
+
+fn redact_private_pixels(
+    mut frame: CapturedFrame,
+    freeze: &FreezeVisualStateReceipt,
+) -> Result<CapturedFrame, String> {
+    if freeze.mask_rects.is_empty() {
+        return Ok(frame);
+    }
+
+    let (redacted_png, applied) = localview_visual::redact_png_css_rects(
+        &frame.png,
+        (frame.pixel_width, frame.pixel_height),
+        (freeze.viewport_css_width, freeze.viewport_css_height),
+        &freeze.mask_rects,
+    )
+    .map_err(|_| "private visual mask redaction failed; pixels discarded".to_string())?;
+
+    if applied != freeze.mask_rects.len() {
+        return Err("private visual mask application was incomplete; pixels discarded".into());
+    }
+    frame.png = redacted_png;
+    Ok(frame)
 }
 
 async fn restore_visual_state(session_id: SessionId, token: &str) -> Result<(), String> {
