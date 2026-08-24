@@ -61,7 +61,7 @@ Remaining Wave 1 integration:
 
 ## Wave 2 — Visual runtime — active
 
-Landed first native viewport slice:
+Landed native viewport path:
 
 - Dedicated `localview-native-capture` platform boundary with a common PNG frame contract and a 24 MiB frame limit.
 - WebView2 `CapturePreview` backend on Windows.
@@ -75,18 +75,26 @@ Landed first native viewport slice:
 - PNG bytes are persisted locally as `visual/png`, then dropped before daemon registration; command receipts expose metadata and IDs rather than pixel bytes or filesystem paths.
 - Authenticated daemon `Visual` evidence ingestion with artifact/session/route/viewport/revision/backend provenance.
 - Cross-platform compile/test contracts for native platform adapters plus a desktop integration contract.
+- Deterministic stable-settle evaluator with explicit reasons for DOM, fonts, images, HMR, DOM mutation, layout and network activity.
+- Privacy-safe semantic readiness metadata: document readiness, font status and image-completion counts without image URLs, response bodies, cookies or storage.
+- Authenticated capture-settle endpoint that requests an exact fresh semantic snapshot action for every sample; stale observer snapshots cannot satisfy readiness.
+- HMR quiet window of 300 ms, DOM/layout quiet window of 200 ms and metadata-based network quiet window from capture policy (250 ms by default).
+- Desktop managed-surface preflight followed by a five-second fail-closed settle transaction before native pixel acquisition; unstable timeout never falls through to capture.
+- Settle retry is bounded to 25–100 ms, while the native three-second capture timeout remains a separate post-settle budget.
+- The managed WebView route is read and loopback-validated again inside native acquisition after settle, closing the preflight/navigation race.
 
-Still required before the native screenshot adapter is called fully implemented:
+Still required before the visual runtime is considered complete:
 
 - hosted GUI smoke tests that render a real managed WebView and prove non-empty PNG capture on Windows, macOS and Linux runners or equivalent controlled hosts;
-- stable settle transaction covering HMR/DOM/layout/font/network quiet windows and explicit instability reasons;
+- animation/transition freeze and restoration wired into the live capture transaction;
+- screenshot masking for private selectors before agent exposure/persistence;
+- richer network in-flight accounting beyond the current metadata quiet-period heuristic;
 - element/component/section capture execution beyond viewport capture;
 - progressive changed-region capture and token-aware visual packet selection;
 - guarded full-page stitching;
-- before/after and region diff wired into evidence and verification;
-- screenshot masking for private selectors before agent exposure/persistence.
+- before/after and region diff wired into evidence and verification.
 
-**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. The first native viewport acquisition + artifact/evidence path is now present, but the GUI smoke, settle and progressive-region gates above remain.
+**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, artifact/evidence registration and a fail-closed fresh-snapshot settle gate are now present; GUI pixel smoke, masking/freeze and progressive-region/diff execution remain.
 
 ## Wave 3 — Runtime telemetry
 
