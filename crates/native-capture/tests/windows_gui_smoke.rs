@@ -15,6 +15,7 @@ mod windows_smoke {
         rc::Rc,
         sync::mpsc,
         thread,
+        time::{Duration, Instant},
     };
 
     use localview_capture::CaptureTarget;
@@ -52,26 +53,82 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
 
     fn start_fixture_server() -> (String, thread::JoinHandle<()>, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind deterministic loopback fixture");
+        listener
+            .set_nonblocking(true)
+            .expect("make WebView2 fixture listener bounded");
         let address = listener.local_addr().expect("read fixture server address");
         let (request_tx, request_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept WebView2 fixture request");
-            let mut request = [0_u8; 2048];
-            let count = stream.read(&mut request).expect("read WebView2 fixture request");
-            let request_text = String::from_utf8_lossy(&request[..count]);
-            let request_line = request_text.lines().next().unwrap_or("<empty request>").to_owned();
-            request_tx
-                .send(format!("bytes={count}; line={request_line}"))
-                .expect("send WebView2 fixture request trace");
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{}",
-                FIXTURE_HTML.len(),
-                FIXTURE_HTML
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("write deterministic WebView2 fixture");
-            stream.flush().expect("flush deterministic WebView2 fixture");
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut connection_index = 0_u32;
+
+            loop {
+                assert!(
+                    Instant::now() < deadline,
+                    "WebView2 fixture server timed out waiting for a real HTTP request"
+                );
+
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(error) => panic!("accept WebView2 fixture request: {error}"),
+                };
+                connection_index = connection_index.saturating_add(1);
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("bound WebView2 fixture request read");
+
+                let mut request = [0_u8; 2048];
+                let count = match stream.read(&mut request) {
+                    Ok(count) => count,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        request_tx
+                            .send(format!(
+                                "conn={connection_index}; read_timeout={error}"
+                            ))
+                            .expect("send WebView2 fixture timeout trace");
+                        continue;
+                    }
+                    Err(error) => panic!("read WebView2 fixture request: {error}"),
+                };
+                let request_text = String::from_utf8_lossy(&request[..count]);
+                let request_line = request_text
+                    .lines()
+                    .next()
+                    .unwrap_or("<empty request>")
+                    .to_owned();
+                request_tx
+                    .send(format!(
+                        "conn={connection_index}; bytes={count}; line={request_line}"
+                    ))
+                    .expect("send WebView2 fixture request trace");
+
+                // WebView2 may open and immediately close a speculative TCP connection
+                // before issuing the actual localhost navigation. Keep the fixture alive
+                // for the real request instead of treating that preconnect as navigation.
+                if count == 0 {
+                    continue;
+                }
+
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{}",
+                    FIXTURE_HTML.len(),
+                    FIXTURE_HTML
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write deterministic WebView2 fixture");
+                stream.flush().expect("flush deterministic WebView2 fixture");
+                break;
+            }
         });
         (format!("http://{address}/"), handle, request_rx)
     }
@@ -220,9 +277,12 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         let (navigation_succeeded, web_error_status) = webview2_com::wait_with_pump(rx)
             .expect("correlated WebView2 loopback fixture navigation must complete");
         let trace = event_trace.borrow().join(" | ");
-        let request_trace = request_rx
-            .try_recv()
-            .unwrap_or_else(|_| "<no HTTP request observed before completion>".to_owned());
+        let request_traces: Vec<_> = request_rx.try_iter().collect();
+        let request_trace = if request_traces.is_empty() {
+            "<no HTTP request observed before completion>".to_owned()
+        } else {
+            request_traces.join(" | ")
+        };
         assert!(
             navigation_succeeded,
             "correlated WebView2 loopback fixture navigation must succeed; WebErrorStatus={web_error_status:?}; HTTP={request_trace}; events={trace}"
