@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod baseline;
+pub use baseline::{VisualBaselineCache, VisualBaselineContext};
+
 use std::io::{BufReader, Cursor};
 
 use localview_protocol::Rect;
@@ -23,6 +26,8 @@ pub enum VisualError {
     InvalidRegionGeometry,
     #[error("changed-region policy is invalid")]
     InvalidChangePolicy,
+    #[error("visual baseline cache policy is invalid")]
+    InvalidBaselinePolicy,
     #[error("PNG input exceeds the encoded byte budget")]
     EncodedPngTooLarge,
     #[error("decoded PNG exceeds the image byte budget")]
