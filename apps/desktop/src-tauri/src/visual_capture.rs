@@ -378,8 +378,8 @@ async fn emit_changed_capture_plan(
 
             let CapturedFrame {
                 png,
-                pixel_width,
-                pixel_height,
+                pixel_width: _,
+                pixel_height: _,
                 backend,
                 viewport,
                 route,
@@ -393,7 +393,6 @@ async fn emit_changed_capture_plan(
                 validate_region(rect, freeze.viewport_css_width, freeze.viewport_css_height)?;
                 let cropped = image
                     .crop_css_rect(
-                        (pixel_width, pixel_height),
                         (freeze.viewport_css_width, freeze.viewport_css_height),
                         rect,
                     )
