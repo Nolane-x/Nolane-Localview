@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
     BridgeAction, BridgeActionResult, IngestReport, ObserverBatch, ObserverEvent,
+    PrivateBridgeAction,
 };
 use localview_protocol::{Health, Session, SessionId};
 use serde::Serialize;
@@ -213,12 +214,12 @@ async fn preview_ingest(
 async fn preview_take_actions(
     webview_window: tauri::WebviewWindow,
     session_id: SessionId,
-) -> Result<Vec<BridgeAction>, String> {
+) -> Result<Vec<serde_json::Value>, String> {
     ensure_preview_caller(&webview_window, session_id)?;
     let token = read_token().await?;
     let client = control_client()?;
 
-    let mut internal_actions = client
+    let internal_actions = client
         .get(format!(
             "http://127.0.0.1:45454/v1/sessions/{session_id}/capture-actions"
         ))
@@ -228,7 +229,7 @@ async fn preview_take_actions(
         .map_err(err)?
         .error_for_status()
         .map_err(err)?
-        .json::<Vec<BridgeAction>>()
+        .json::<Vec<PrivateBridgeAction>>()
         .await
         .map_err(err)?;
     let public_actions = client
@@ -244,8 +245,15 @@ async fn preview_take_actions(
         .json::<Vec<BridgeAction>>()
         .await
         .map_err(err)?;
-    internal_actions.extend(public_actions);
-    Ok(internal_actions)
+
+    let mut actions = Vec::with_capacity(internal_actions.len() + public_actions.len());
+    for action in internal_actions {
+        actions.push(serde_json::to_value(action).map_err(err)?);
+    }
+    for action in public_actions {
+        actions.push(serde_json::to_value(action).map_err(err)?);
+    }
+    Ok(actions)
 }
 
 #[tauri::command]
@@ -469,7 +477,10 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
       case 'snapshot':
         return window.__LOCALVIEW__?.snapshot?.() ?? null;
       case 'freeze_visuals':
-        return await window.__LOCALVIEW__?.freezeVisuals?.(queued.id) ?? null;
+        return await window.__LOCALVIEW__?.freezeVisuals?.(
+          queued.id,
+          queued.private_capture?.mask_selectors || [],
+        ) ?? null;
       case 'restore_visuals':
         return window.__LOCALVIEW__?.restoreVisuals?.(String(action.token || '')) ?? null;
       case 'inspect': {
