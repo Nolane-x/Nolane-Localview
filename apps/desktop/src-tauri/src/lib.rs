@@ -686,6 +686,7 @@ pub fn run() {
             preview_take_actions,
             preview_complete_action,
             visual_capture::capture_viewport,
+            visual_capture::capture_region,
             workspace_surface::workspace_surface_open,
             workspace_surface::workspace_surface_set_bounds,
             workspace_surface::workspace_surface_navigate,

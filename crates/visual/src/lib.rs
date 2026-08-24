@@ -19,6 +19,8 @@ pub enum VisualError {
     InvalidViewport,
     #[error("mask geometry is invalid")]
     InvalidMaskGeometry,
+    #[error("capture region geometry is invalid")]
+    InvalidRegionGeometry,
     #[error("PNG input exceeds the encoded byte budget")]
     EncodedPngTooLarge,
     #[error("decoded PNG exceeds the image byte budget")]
@@ -261,6 +263,110 @@ pub fn encode_png_rgba(image: &RgbaImage) -> Result<Vec<u8>, VisualError> {
         return Err(VisualError::EncodedPngTooLarge);
     }
     Ok(encoded)
+}
+
+/// Crops one viewport-relative CSS rectangle from a native PNG and re-encodes
+/// it as a bounded PNG. The source dimensions must exactly match the native
+/// capture metadata so CSS-to-device scaling cannot silently drift.
+pub fn crop_png_css_rect(
+    png: &[u8],
+    expected_dimensions: (u32, u32),
+    css_viewport: (f64, f64),
+    rect: &Rect,
+) -> Result<Vec<u8>, VisualError> {
+    let image = decode_png_rgba(png)?;
+    if (image.width, image.height) != expected_dimensions {
+        return Err(VisualError::DimensionMismatch);
+    }
+
+    let (css_width, css_height) = css_viewport;
+    if !css_width.is_finite()
+        || !css_height.is_finite()
+        || css_width <= 0.0
+        || css_height <= 0.0
+    {
+        return Err(VisualError::InvalidViewport);
+    }
+
+    let rect_right = rect.x + rect.width;
+    let rect_bottom = rect.y + rect.height;
+    if !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || !rect_right.is_finite()
+        || !rect_bottom.is_finite()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+    {
+        return Err(VisualError::InvalidRegionGeometry);
+    }
+
+    let css_left = rect.x.max(0.0).min(css_width);
+    let css_top = rect.y.max(0.0).min(css_height);
+    let css_right = rect_right.max(0.0).min(css_width);
+    let css_bottom = rect_bottom.max(0.0).min(css_height);
+    if css_right <= css_left || css_bottom <= css_top {
+        return Err(VisualError::InvalidRegionGeometry);
+    }
+
+    let scale_x = image.width as f64 / css_width;
+    let scale_y = image.height as f64 / css_height;
+    let left = (css_left * scale_x).floor().max(0.0) as u32;
+    let top = (css_top * scale_y).floor().max(0.0) as u32;
+    let right = (css_right * scale_x)
+        .ceil()
+        .min(image.width as f64) as u32;
+    let bottom = (css_bottom * scale_y)
+        .ceil()
+        .min(image.height as f64) as u32;
+    if right <= left || bottom <= top {
+        return Err(VisualError::InvalidRegionGeometry);
+    }
+
+    let width = right - left;
+    let height = bottom - top;
+    let row_bytes = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or(VisualError::DecodedImageTooLarge)?;
+    let output_bytes = row_bytes
+        .checked_mul(usize::try_from(height).map_err(|_| VisualError::DecodedImageTooLarge)?)
+        .ok_or(VisualError::DecodedImageTooLarge)?;
+    if output_bytes > MAX_DECODED_IMAGE_BYTES {
+        return Err(VisualError::DecodedImageTooLarge);
+    }
+
+    let source_row_bytes = usize::try_from(image.width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or(VisualError::InvalidBuffer)?;
+    let left_bytes = usize::try_from(left)
+        .ok()
+        .and_then(|left| left.checked_mul(4))
+        .ok_or(VisualError::InvalidBuffer)?;
+    let mut data = Vec::with_capacity(output_bytes);
+    for y in top..bottom {
+        let row_start = usize::try_from(y)
+            .ok()
+            .and_then(|y| y.checked_mul(source_row_bytes))
+            .and_then(|offset| offset.checked_add(left_bytes))
+            .ok_or(VisualError::InvalidBuffer)?;
+        let row_end = row_start
+            .checked_add(row_bytes)
+            .ok_or(VisualError::InvalidBuffer)?;
+        let row = image
+            .data
+            .get(row_start..row_end)
+            .ok_or(VisualError::InvalidBuffer)?;
+        data.extend_from_slice(row);
+    }
+
+    encode_png_rgba(&RgbaImage {
+        width,
+        height,
+        data,
+    })
 }
 
 /// Redacts viewport-relative CSS rectangles in native PNG pixels and re-encodes

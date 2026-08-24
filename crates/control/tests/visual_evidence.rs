@@ -79,14 +79,39 @@ fn valid_payload() -> serde_json::Value {
     })
 }
 
-async fn post_visual(
+fn valid_region_payload() -> serde_json::Value {
+    serde_json::json!({
+        "artifact_id": "lv-fedcba9876543210",
+        "pixel_width": 320,
+        "pixel_height": 180,
+        "backend": "webview2",
+        "route": "http://127.0.0.1:5173/",
+        "viewport": {
+            "css_width": 1280,
+            "css_height": 820,
+            "device_scale_factor": 1.0
+        },
+        "revision": "abc123",
+        "captured_at_unix_ms": 124,
+        "target": "region",
+        "region": {
+            "x": 80.0,
+            "y": 40.0,
+            "width": 320.0,
+            "height": 180.0
+        }
+    })
+}
+
+async fn post_visual_to(
     state: ControlState,
     session_id: uuid::Uuid,
+    suffix: &str,
     payload: serde_json::Value,
 ) -> StatusCode {
     let request = Request::builder()
         .method("POST")
-        .uri(format!("/v1/sessions/{session_id}/evidence/visual"))
+        .uri(format!("/v1/sessions/{session_id}/evidence/{suffix}"))
         .header(header::AUTHORIZATION, "Bearer test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(payload.to_string()))
@@ -97,6 +122,22 @@ async fn post_visual(
         .await
         .expect("control router response")
         .status()
+}
+
+async fn post_visual(
+    state: ControlState,
+    session_id: uuid::Uuid,
+    payload: serde_json::Value,
+) -> StatusCode {
+    post_visual_to(state, session_id, "visual", payload).await
+}
+
+async fn post_region_visual(
+    state: ControlState,
+    session_id: uuid::Uuid,
+    payload: serde_json::Value,
+) -> StatusCode {
+    post_visual_to(state, session_id, "visual-region", payload).await
 }
 
 #[tokio::test]
@@ -114,6 +155,60 @@ async fn visual_evidence_metadata_is_ingested_without_pixel_payload() {
     let stored = visual.payload.to_string();
     assert!(!stored.contains("png"));
     assert!(!stored.contains("base64"));
+}
+
+#[tokio::test]
+async fn bounded_region_visual_evidence_preserves_css_target_metadata() {
+    let (state, session_id, evidence) = test_state().await;
+    let status = post_region_visual(state, session_id, valid_region_payload()).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let recent = evidence.recent_for_session(session_id, 10).await;
+    assert_eq!(recent.len(), 1);
+    let visual = &recent[0];
+    assert_eq!(visual.kind, EvidenceKind::Visual);
+    assert_eq!(visual.region.as_deref(), Some("region"));
+    assert_eq!(visual.payload["target"], "region");
+    assert_eq!(visual.payload["region"]["x"], 80.0);
+    assert_eq!(visual.payload["region"]["y"], 40.0);
+    assert_eq!(visual.payload["region"]["width"], 320.0);
+    assert_eq!(visual.payload["region"]["height"], 180.0);
+}
+
+#[tokio::test]
+async fn region_visual_evidence_rejects_spoofed_or_unbounded_targets() {
+    let (state, session_id, evidence) = test_state().await;
+
+    let mut spoofed_target = valid_region_payload();
+    spoofed_target["target"] = serde_json::json!("viewport");
+    assert_eq!(
+        post_region_visual(state.clone(), session_id, spoofed_target).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut zero_width = valid_region_payload();
+    zero_width["region"]["width"] = serde_json::json!(0.0);
+    assert_eq!(
+        post_region_visual(state.clone(), session_id, zero_width).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut out_of_bounds = valid_region_payload();
+    out_of_bounds["region"]["x"] = serde_json::json!(1200.0);
+    out_of_bounds["region"]["width"] = serde_json::json!(200.0);
+    assert_eq!(
+        post_region_visual(state.clone(), session_id, out_of_bounds).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut zero_pixels = valid_region_payload();
+    zero_pixels["pixel_width"] = serde_json::json!(0);
+    assert_eq!(
+        post_region_visual(state, session_id, zero_pixels).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    assert!(evidence.recent_for_session(session_id, 10).await.is_empty());
 }
 
 #[tokio::test]
