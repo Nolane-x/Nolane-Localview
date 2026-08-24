@@ -59,20 +59,34 @@ Remaining Wave 1 integration:
 
 **Done when:** an agent can list a bounded semantic tree, inspect one element, click/type it, and receive only relevant semantic/layout/runtime deltas through an isolated LocalView surface. The core path for that definition now exists; the remaining Wave 1 work deepens native accessibility and framework/source ownership rather than reopening the basic bridge.
 
-## Wave 2 — Visual runtime — next major vertical slice
+## Wave 2 — Visual runtime — active
 
-- Native viewport/element/region capture adapter abstraction.
-- WebView2 capture backend on Windows.
-- WKWebView snapshot backend on macOS.
-- WebKitGTK snapshot backend on Linux.
-- Stable capture transaction and settle contract.
-- progressive changed-region capture.
-- full-page guarded stitching.
-- visual packet format with route/viewport/ref/revision provenance.
-- before/after and region diff wired to evidence.
+Landed first native viewport slice:
+
+- Dedicated `localview-native-capture` platform boundary with a common PNG frame contract and a 24 MiB frame limit.
+- WebView2 `CapturePreview` backend on Windows.
+- WKWebView native snapshot backend on macOS.
+- WebKitGTK visible snapshot backend on Linux.
+- No DOM/canvas screenshot reconstruction or silent Chromium fallback in the native adapter path.
+- LocalView-managed surface selection only: exact session-owned preview first, feature-gated workspace child second.
+- Native route is read from the managed WebView itself and must remain HTTP(S) loopback; callers cannot supply an arbitrary capture window or route.
+- Three-second bounded native capture completion path.
+- Desktop `capture_viewport` coordinator with a lazily opened 256 MiB local visual `ArtifactStore`.
+- PNG bytes are persisted locally as `visual/png`, then dropped before daemon registration; command receipts expose metadata and IDs rather than pixel bytes or filesystem paths.
+- Authenticated daemon `Visual` evidence ingestion with artifact/session/route/viewport/revision/backend provenance.
+- Cross-platform compile/test contracts for native platform adapters plus a desktop integration contract.
+
+Still required before the native screenshot adapter is called fully implemented:
+
+- hosted GUI smoke tests that render a real managed WebView and prove non-empty PNG capture on Windows, macOS and Linux runners or equivalent controlled hosts;
+- stable settle transaction covering HMR/DOM/layout/font/network quiet windows and explicit instability reasons;
+- element/component/section capture execution beyond viewport capture;
+- progressive changed-region capture and token-aware visual packet selection;
+- guarded full-page stitching;
+- before/after and region diff wired into evidence and verification;
 - screenshot masking for private selectors before agent exposure/persistence.
 
-**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target.
+**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. The first native viewport acquisition + artifact/evidence path is now present, but the GUI smoke, settle and progressive-region gates above remain.
 
 ## Wave 3 — Runtime telemetry
 

@@ -17,7 +17,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use localview_evidence::{
     EvidenceDraft, EvidenceKind, EvidenceStore, Provenance, RetentionTier, UncertaintyClass,
 };
@@ -99,6 +99,10 @@ pub fn router(state: ControlState) -> Router {
         .route("/v1/sessions/{id}/coverage", get(session_coverage))
         .route("/v1/sessions/{id}/proof", post(create_session_proof))
         .route("/v1/sessions/{id}/evidence/recent", get(recent_evidence))
+        .route(
+            "/v1/sessions/{id}/evidence/visual",
+            post(ingest_visual_evidence),
+        )
         .route("/v1/evidence/{evidence_id}", get(get_evidence))
         .route("/v1/evidence/{evidence_id}/trace", get(trace_evidence))
         .route("/v1/proof/{evidence_id}/staleness", get(proof_evidence_staleness))
@@ -392,6 +396,133 @@ async fn create_session_proof(
         .await;
     Json(serde_json::json!({
         "proof": proof,
+        "evidence_id": stored.id,
+        "deduplicated": stored.deduplicated,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VisualEvidenceRequest {
+    artifact_id: String,
+    pixel_width: u32,
+    pixel_height: u32,
+    backend: String,
+    route: String,
+    viewport: VisualViewport,
+    revision: Option<String>,
+    captured_at_unix_ms: i64,
+    target: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VisualViewport {
+    css_width: u32,
+    css_height: u32,
+    device_scale_factor: f64,
+}
+
+fn valid_visual_artifact_id(value: &str) -> bool {
+    let Some(digest) = value.strip_prefix("lv-") else {
+        return false;
+    };
+    digest.len() == 16
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_visual_backend(value: &str) -> bool {
+    matches!(value, "webview2" | "wk_web_view" | "web_kit_gtk")
+}
+
+fn valid_visual_route(value: &str) -> bool {
+    let Ok(route) = url::Url::parse(value) else {
+        return false;
+    };
+    if !matches!(route.scheme(), "http" | "https") {
+        return false;
+    }
+    route.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    })
+}
+
+async fn ingest_visual_evidence(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+    Json(request): Json<VisualEvidenceRequest>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
+    }
+
+    if request.target != "viewport"
+        || !valid_visual_artifact_id(&request.artifact_id)
+        || !valid_visual_backend(&request.backend)
+        || request.pixel_width == 0
+        || request.pixel_height == 0
+        || request.viewport.css_width == 0
+        || request.viewport.css_height == 0
+        || !request.viewport.device_scale_factor.is_finite()
+        || request.viewport.device_scale_factor <= 0.0
+        || !valid_visual_route(&request.route)
+        || request.captured_at_unix_ms < 0
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid_visual_evidence"})),
+        )
+            .into_response();
+    }
+
+    let Some(captured_at) = Utc.timestamp_millis_opt(request.captured_at_unix_ms).single() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid_capture_timestamp"})),
+        )
+            .into_response();
+    };
+
+    let payload = serde_json::json!({
+        "artifact_id": request.artifact_id,
+        "pixel_width": request.pixel_width,
+        "pixel_height": request.pixel_height,
+        "backend": request.backend,
+        "route": request.route,
+        "viewport": request.viewport,
+        "target": "viewport",
+    });
+    let stored = state
+        .evidence
+        .insert(EvidenceDraft {
+            kind: EvidenceKind::Visual,
+            session_id: id,
+            region: Some("viewport".into()),
+            payload,
+            provenance: Provenance {
+                source: "native-capture".into(),
+                engine: Some(request.backend),
+                revision: request.revision,
+                parent_ids: Vec::new(),
+                captured_at,
+            },
+            confidence: 1.0,
+            uncertainty: UncertaintyClass::Observed,
+            secret_taint: false,
+        })
+        .await;
+
+    Json(serde_json::json!({
         "evidence_id": stored.id,
         "deduplicated": stored.deduplicated,
     }))

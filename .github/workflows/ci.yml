@@ -22,6 +22,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install native capture system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -37,6 +42,8 @@ jobs:
         run: cargo clippy --workspace --exclude localview-desktop --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace --exclude localview-desktop
+      - name: Native capture platform contract
+        run: cargo test -p localview-native-capture
 
   desktop-linux:
     name: Tauri + frontend
@@ -72,3 +79,5 @@ jobs:
         run: cargo test -p localview-desktop --test workspace_surface_policy
       - name: Live semantic bridge contract
         run: cargo test -p localview-desktop --test live_semantic_bridge_contract
+      - name: Native visual capture desktop contract
+        run: cargo test -p localview-desktop --test native_capture_contract

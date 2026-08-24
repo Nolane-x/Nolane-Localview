@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod visual_capture;
 pub mod workspace_surface;
 
 use std::path::PathBuf;
@@ -519,6 +520,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            let _ = app.manage(visual_capture::VisualCaptureState::default());
             let menu = MenuBuilder::new(app)
                 .text("show", "Open LocalView")
                 .separator()
@@ -559,6 +561,7 @@ pub fn run() {
             preview_ingest,
             preview_take_actions,
             preview_complete_action,
+            visual_capture::capture_viewport,
             workspace_surface::workspace_surface_open,
             workspace_surface::workspace_surface_set_bounds,
             workspace_surface::workspace_surface_navigate,

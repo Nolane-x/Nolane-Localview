@@ -24,8 +24,11 @@ tauri-build = { version = "2.6.3", features = [] }
 [dependencies]
 anyhow.workspace = true
 dirs.workspace = true
+localview-artifacts = { path = "../../../crates/artifacts" }
+localview-capture = { path = "../../../crates/capture" }
 localview-instrumentation = { path = "../../../crates/instrumentation" }
 localview-live-bridge = { path = "../../../crates/live-bridge" }
+localview-native-capture = { path = "../../../crates/native-capture" }
 localview-protocol = { path = "../../../crates/protocol" }
 reqwest.workspace = true
 serde.workspace = true
