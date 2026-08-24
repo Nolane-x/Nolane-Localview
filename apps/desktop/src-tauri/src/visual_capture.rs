@@ -12,6 +12,10 @@ use localview_native_capture::{
     capture_webview, CaptureRequest, CapturedFrame, NativeCaptureError, ViewportMeta,
 };
 use localview_protocol::{Rect, SessionId};
+use localview_visual::{
+    decode_png_rgba, encode_png_rgba, plan_changed_css_regions, ChangedRegionPlan,
+    ChangedRegionPolicy, RgbaImage, VisualBaselineCache, VisualBaselineContext,
+};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tokio::sync::{oneshot, Mutex};
@@ -20,6 +24,8 @@ use crate::{control_client, err, read_token, state_dir, workspace_surface};
 use workspace_surface::{bridge_surface_label_allowed, workspace_navigation_allowed};
 
 const VISUAL_ARTIFACT_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
+const VISUAL_BASELINE_BUDGET_BYTES: usize = 96 * 1024 * 1024;
+const MAX_VISUAL_BASELINES: usize = 32;
 const MAX_CAPTURE_SESSION_GATES: usize = 128;
 const VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
 const MAX_PAUSED_ANIMATIONS: u64 = 2_048;
@@ -31,6 +37,7 @@ const MAX_CSS_VIEWPORT_DIMENSION: f64 = 100_000.0;
 pub struct VisualCaptureState {
     pub(crate) artifacts: Mutex<Option<ArtifactStore>>,
     capture_gates: Mutex<BTreeMap<SessionId, Weak<Mutex<()>>>>,
+    baselines: Mutex<Option<VisualBaselineCache>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,6 +54,21 @@ pub struct VisualCaptureReceipt {
     pub captured_at_unix_ms: u64,
     pub target: String,
     pub region: Option<Rect>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangedRegionCaptureReceipt {
+    pub mode: &'static str,
+    pub changed_ratio: f64,
+    pub receipts: Vec<VisualCaptureReceipt>,
+    pub baseline_cached: bool,
+}
+
+#[derive(Debug)]
+struct ChangedCaptureEmission {
+    mode: &'static str,
+    changed_ratio: f64,
+    receipts: Vec<VisualCaptureReceipt>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +172,101 @@ pub async fn capture_region(
     .await
 }
 
+#[tauri::command]
+pub async fn capture_changed_regions(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, VisualCaptureState>,
+    session_id: SessionId,
+    viewport: ViewportMeta,
+    revision: Option<String>,
+) -> Result<ChangedRegionCaptureReceipt, String> {
+    validate_viewport(&viewport)?;
+    preflight_managed_surface(&app, session_id)?;
+
+    let capture_gate = session_capture_gate(&state, session_id).await?;
+    let _capture_guard = capture_gate.lock().await;
+
+    let (frame, freeze) =
+        capture_redacted_viewport_after_gate(app, session_id, viewport, revision).await?;
+    validate_changed_viewport(&frame, &freeze)?;
+
+    let image = Arc::new(
+        decode_png_rgba(&frame.png)
+            .map_err(|_| "changed-region visual decode failed; pixels discarded".to_string())?,
+    );
+    if (image.width, image.height) != (frame.pixel_width, frame.pixel_height) {
+        return Err("changed-region native pixel metadata mismatch; pixels discarded".into());
+    }
+
+    let context = changed_baseline_context(&frame);
+    let baseline = compatible_changed_baseline(&state, session_id, &context).await?;
+    let baseline_reset = baseline.is_none();
+    let plan = match baseline.as_deref() {
+        Some(before) => plan_changed_css_regions(
+            before,
+            image.as_ref(),
+            (freeze.viewport_css_width, freeze.viewport_css_height),
+            ChangedRegionPolicy::default(),
+        )
+        .map_err(|_| "changed-region visual planning failed; pixels discarded".to_string())?,
+        None => ChangedRegionPlan::Viewport {
+            changed_ratio: 1.0,
+        },
+    };
+
+    if let ChangedRegionPlan::Unchanged = &plan {
+        return Ok(ChangedRegionCaptureReceipt {
+            mode: "unchanged",
+            changed_ratio: 0.0,
+            receipts: Vec::new(),
+            baseline_cached: true,
+        });
+    }
+
+    let emission = emit_changed_capture_plan(
+        &state,
+        session_id,
+        frame,
+        image.as_ref(),
+        &freeze,
+        &plan,
+        baseline_reset,
+    )
+    .await?;
+    let baseline_cached = commit_changed_baseline(&state, session_id, context, image).await?;
+
+    Ok(ChangedRegionCaptureReceipt {
+        mode: emission.mode,
+        changed_ratio: emission.changed_ratio,
+        receipts: emission.receipts,
+        baseline_cached,
+    })
+}
+
+async fn capture_redacted_viewport_after_gate(
+    app: tauri::AppHandle,
+    session_id: SessionId,
+    viewport: ViewportMeta,
+    revision: Option<String>,
+) -> Result<(CapturedFrame, FreezeVisualStateReceipt), String> {
+    wait_for_capture_settle(session_id).await?;
+    let freeze = freeze_visual_state(session_id).await?;
+    let native_result = capture_managed_surface(&app, session_id, viewport, revision).await;
+    let restore_result = restore_visual_state(session_id, &freeze.token).await;
+
+    let frame = match (native_result, restore_result) {
+        (Ok(frame), Ok(())) => frame,
+        (Err(native_error), Ok(())) => return Err(native_error),
+        (Ok(_), Err(_)) | (Err(_), Err(_)) => {
+            return Err(
+                "visual capture restore acknowledgement failed; pixels discarded".to_string(),
+            );
+        }
+    };
+    let frame = redact_private_pixels(frame, &freeze)?;
+    Ok((frame, freeze))
+}
+
 async fn capture_target(
     app: tauri::AppHandle,
     state: tauri::State<'_, VisualCaptureState>,
@@ -167,25 +284,165 @@ async fn capture_target(
     let capture_gate = session_capture_gate(&state, session_id).await?;
     let _capture_guard = capture_gate.lock().await;
 
-    wait_for_capture_settle(session_id).await?;
-    let freeze = freeze_visual_state(session_id).await?;
-    let native_result = capture_managed_surface(&app, session_id, viewport, revision).await;
-    let restore_result = restore_visual_state(session_id, &freeze.token).await;
-
-    let frame = match (native_result, restore_result) {
-        (Ok(frame), Ok(())) => frame,
-        (Err(native_error), Ok(())) => return Err(native_error),
-        (Ok(_), Err(_)) | (Err(_), Err(_)) => {
-            return Err(
-                "visual capture restore acknowledgement failed; pixels discarded".to_string(),
-            );
-        }
-    };
+    let (frame, freeze) =
+        capture_redacted_viewport_after_gate(app, session_id, viewport, revision).await?;
     validate_live_target_viewport(&frame, &freeze, &target)?;
-    let frame = redact_private_pixels(frame, &freeze)?;
     let frame = apply_capture_target(frame, &freeze, &target)?;
 
     persist_and_register(&state, session_id, frame, &target).await
+}
+
+async fn compatible_changed_baseline(
+    state: &VisualCaptureState,
+    session_id: SessionId,
+    context: &VisualBaselineContext,
+) -> Result<Option<Arc<RgbaImage>>, String> {
+    let mut baselines = state.baselines.lock().await;
+    if baselines.is_none() {
+        *baselines = Some(
+            VisualBaselineCache::new(VISUAL_BASELINE_BUDGET_BYTES, MAX_VISUAL_BASELINES)
+                .map_err(|_| "visual baseline cache policy is invalid".to_string())?,
+        );
+    }
+    Ok(baselines
+        .as_mut()
+        .expect("visual baseline cache initialized above")
+        .get_compatible(session_id, context))
+}
+
+async fn commit_changed_baseline(
+    state: &VisualCaptureState,
+    session_id: SessionId,
+    context: VisualBaselineContext,
+    image: Arc<RgbaImage>,
+) -> Result<bool, String> {
+    let mut baselines = state.baselines.lock().await;
+    if baselines.is_none() {
+        *baselines = Some(
+            VisualBaselineCache::new(VISUAL_BASELINE_BUDGET_BYTES, MAX_VISUAL_BASELINES)
+                .map_err(|_| "visual baseline cache policy is invalid".to_string())?,
+        );
+    }
+    baselines
+        .as_mut()
+        .expect("visual baseline cache initialized above")
+        .insert(session_id, context, image)
+        .map_err(|_| "visual baseline cache rejected the captured frame".to_string())
+}
+
+fn changed_baseline_context(frame: &CapturedFrame) -> VisualBaselineContext {
+    VisualBaselineContext {
+        route: frame.route.clone(),
+        css_width: frame.viewport.css_width,
+        css_height: frame.viewport.css_height,
+        device_scale_factor: frame.viewport.device_scale_factor,
+        pixel_width: frame.pixel_width,
+        pixel_height: frame.pixel_height,
+    }
+}
+
+fn validate_changed_viewport(
+    frame: &CapturedFrame,
+    freeze: &FreezeVisualStateReceipt,
+) -> Result<(), String> {
+    if frame.viewport.css_width as f64 != freeze.viewport_css_width
+        || frame.viewport.css_height as f64 != freeze.viewport_css_height
+    {
+        return Err("changed-region viewport changed during capture; pixels discarded".into());
+    }
+    Ok(())
+}
+
+async fn emit_changed_capture_plan(
+    state: &VisualCaptureState,
+    session_id: SessionId,
+    frame: CapturedFrame,
+    image: &RgbaImage,
+    freeze: &FreezeVisualStateReceipt,
+    plan: &ChangedRegionPlan,
+    baseline_reset: bool,
+) -> Result<ChangedCaptureEmission, String> {
+    match plan {
+        ChangedRegionPlan::Unchanged => Ok(ChangedCaptureEmission {
+            mode: "unchanged",
+            changed_ratio: 0.0,
+            receipts: Vec::new(),
+        }),
+        ChangedRegionPlan::Regions {
+            regions,
+            changed_ratio,
+        } => {
+            if regions.is_empty() {
+                return Err("changed-region planner returned an empty region set".into());
+            }
+
+            let CapturedFrame {
+                png,
+                pixel_width,
+                pixel_height,
+                backend,
+                viewport,
+                route,
+                revision,
+                captured_at_unix_ms,
+            } = frame;
+            drop(png);
+
+            let mut receipts = Vec::with_capacity(regions.len());
+            for rect in regions {
+                validate_region(rect, freeze.viewport_css_width, freeze.viewport_css_height)?;
+                let cropped = image
+                    .crop_css_rect(
+                        (pixel_width, pixel_height),
+                        (freeze.viewport_css_width, freeze.viewport_css_height),
+                        rect,
+                    )
+                    .map_err(|_| {
+                        "changed-region native crop failed; pixels discarded".to_string()
+                    })?;
+                let png = encode_png_rgba(&cropped).map_err(|_| {
+                    "changed-region PNG encode failed; pixels discarded".to_string()
+                })?;
+                let region_frame = CapturedFrame {
+                    png,
+                    pixel_width: cropped.width,
+                    pixel_height: cropped.height,
+                    backend,
+                    viewport: viewport.clone(),
+                    route: route.clone(),
+                    revision: revision.clone(),
+                    captured_at_unix_ms,
+                };
+                let target = RequestedCaptureTarget::Region(rect.clone());
+                receipts.push(
+                    persist_and_register(state, session_id, region_frame, &target).await?,
+                );
+            }
+
+            Ok(ChangedCaptureEmission {
+                mode: "regions",
+                changed_ratio: *changed_ratio,
+                receipts,
+            })
+        }
+        ChangedRegionPlan::Viewport { changed_ratio } => {
+            let target = RequestedCaptureTarget::Viewport;
+            let receipt = persist_and_register(state, session_id, frame, &target).await?;
+            if baseline_reset {
+                Ok(ChangedCaptureEmission {
+                    mode: "baseline_reset",
+                    changed_ratio: *changed_ratio,
+                    receipts: vec![receipt],
+                })
+            } else {
+                Ok(ChangedCaptureEmission {
+                    mode: "viewport",
+                    changed_ratio: *changed_ratio,
+                    receipts: vec![receipt],
+                })
+            }
+        }
+    }
 }
 
 async fn session_capture_gate(
