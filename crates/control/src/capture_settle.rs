@@ -24,12 +24,17 @@ const VISUAL_STATE_TIMEOUT: Duration = Duration::from_millis(1_200);
 const ACTION_RESULT_POLL: Duration = Duration::from_millis(20);
 const VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
 const MAX_PAUSED_ANIMATIONS: u64 = 2_048;
+const MAX_INTERNAL_CAPTURE_ACTION_DRAIN: usize = 16;
 
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
         .route(
             "/v1/sessions/{id}/capture-settle",
             get(session_capture_settle),
+        )
+        .route(
+            "/v1/sessions/{id}/capture-actions",
+            get(session_capture_actions),
         )
         .route(
             "/v1/sessions/{id}/capture-freeze",
@@ -76,6 +81,27 @@ async fn session_capture_settle(
         &StableCapturePolicy::default(),
         &observation,
     ))
+    .into_response()
+}
+
+async fn session_capture_actions(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if !session_exists(&state, id).await {
+        return session_not_found();
+    }
+
+    Json(
+        state
+            .live
+            .take_internal_capture_actions(id, MAX_INTERNAL_CAPTURE_ACTION_DRAIN)
+            .await,
+    )
     .into_response()
 }
 
