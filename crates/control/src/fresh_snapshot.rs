@@ -240,7 +240,12 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
         None | Some(Value::Null) => None,
         Some(raw) => Some(u32::try_from(raw.as_u64()?).ok()?),
     };
-    let component = (origin == "data-component-source").then(|| file.clone());
+    // `data-component-source` is an explicit ownership hint, but a file alone is not a
+    // component identity: one file may contain many components. Bind the identity to the
+    // declared source line as well so only ancestors carrying the same explicit component
+    // source location can corroborate ownership. Column stays diagnostic, not identity.
+    let component =
+        (origin == "data-component-source").then(|| format!("{file}:{line}"));
 
     Some(Some(SourceLocation {
         file,
@@ -314,6 +319,6 @@ mod tests {
         let projected = project_source(Some(&source))
             .expect("valid component source hint")
             .expect("source location");
-        assert_eq!(projected.component.as_deref(), Some("SettingsCard.tsx"));
+        assert_eq!(projected.component.as_deref(), Some("SettingsCard.tsx:10"));
     }
 }
