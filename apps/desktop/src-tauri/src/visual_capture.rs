@@ -1,11 +1,15 @@
 #![forbid(unsafe_code)]
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use localview_artifacts::ArtifactStore;
 use localview_capture::{CaptureTarget, SettleDecision, SettleReason, StableCapturePolicy};
 use localview_native_capture::{
-    capture_webview, CapturedFrame, CaptureRequest, NativeCaptureError, ViewportMeta,
+    capture_webview, CaptureRequest, CapturedFrame, NativeCaptureError, ViewportMeta,
 };
 use localview_protocol::SessionId;
 use serde::{Deserialize, Serialize};
@@ -16,10 +20,14 @@ use crate::{control_client, err, read_token, state_dir, workspace_surface};
 use workspace_surface::{bridge_surface_label_allowed, workspace_navigation_allowed};
 
 const VISUAL_ARTIFACT_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_CAPTURE_SESSION_GATES: usize = 128;
+const VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
+const MAX_PAUSED_ANIMATIONS: u64 = 2_048;
 
 #[derive(Default)]
 pub struct VisualCaptureState {
     pub(crate) artifacts: Mutex<Option<ArtifactStore>>,
+    capture_gates: Mutex<BTreeMap<SessionId, Weak<Mutex<()>>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +63,14 @@ struct VisualEvidenceResponse {
     deduplicated: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct FreezeVisualStateReceipt {
+    token: String,
+    paused_animations: u64,
+    web_animations_supported: bool,
+    lease_ms: u64,
+}
+
 #[tauri::command]
 pub async fn capture_viewport(
     app: tauri::AppHandle,
@@ -65,10 +81,45 @@ pub async fn capture_viewport(
 ) -> Result<VisualCaptureReceipt, String> {
     validate_viewport(&viewport)?;
     preflight_managed_surface(&app, session_id)?;
-    wait_for_capture_settle(session_id).await?;
 
-    let frame = capture_managed_surface(&app, session_id, viewport, revision).await?;
+    let capture_gate = session_capture_gate(&state, session_id).await?;
+    let _capture_guard = capture_gate.lock().await;
+
+    wait_for_capture_settle(session_id).await?;
+    let freeze = freeze_visual_state(session_id).await?;
+    let native_result = capture_managed_surface(&app, session_id, viewport, revision).await;
+    let restore_result = restore_visual_state(session_id, &freeze.token).await;
+
+    let frame = match (native_result, restore_result) {
+        (Ok(frame), Ok(())) => frame,
+        (Err(native_error), Ok(())) => return Err(native_error),
+        (Ok(_), Err(_)) | (Err(_), Err(_)) => {
+            return Err(
+                "visual capture restore acknowledgement failed; pixels discarded".to_string(),
+            );
+        }
+    };
+
     persist_and_register(&state, session_id, frame).await
+}
+
+async fn session_capture_gate(
+    state: &VisualCaptureState,
+    session_id: SessionId,
+) -> Result<Arc<Mutex<()>>, String> {
+    let mut gates = state.capture_gates.lock().await;
+    gates.retain(|_, gate| gate.strong_count() > 0);
+
+    if let Some(gate) = gates.get(&session_id).and_then(Weak::upgrade) {
+        return Ok(gate);
+    }
+    if gates.len() >= MAX_CAPTURE_SESSION_GATES {
+        return Err("visual capture session gate capacity exceeded".into());
+    }
+
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(session_id, Arc::downgrade(&gate));
+    Ok(gate)
 }
 
 fn validate_viewport(viewport: &ViewportMeta) -> Result<(), String> {
@@ -167,6 +218,51 @@ async fn wait_for_capture_settle(session_id: SessionId) -> Result<(), String> {
             ))
         }
     }
+}
+
+async fn freeze_visual_state(session_id: SessionId) -> Result<FreezeVisualStateReceipt, String> {
+    let token = read_token().await?;
+    let receipt = control_client()?
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/capture-freeze"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json::<FreezeVisualStateReceipt>()
+        .await
+        .map_err(err)?;
+
+    if receipt.token.is_empty()
+        || receipt.paused_animations > MAX_PAUSED_ANIMATIONS
+        || receipt.lease_ms != VISUAL_FREEZE_LEASE_MS
+    {
+        return Err("invalid visual freeze acknowledgement".into());
+    }
+    let _ = receipt.web_animations_supported;
+    Ok(receipt)
+}
+
+async fn restore_visual_state(session_id: SessionId, token: &str) -> Result<(), String> {
+    if token.is_empty() {
+        return Err("visual restore token is empty".into());
+    }
+    let control_token = read_token().await?;
+    control_client()?
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/capture-restore"
+        ))
+        .bearer_auth(control_token)
+        .json(&serde_json::json!({"token": token}))
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?;
+    Ok(())
 }
 
 async fn capture_managed_surface(
