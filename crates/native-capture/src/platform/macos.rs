@@ -58,17 +58,25 @@ pub(crate) fn capture_view(
             return;
         };
 
+        // WKWebView can return an NSImage whose representation array is not
+        // directly encodable by ImageIO. Materialize the image through its TIFF
+        // representation first so NSBitmapImageRep owns concrete bitmap pixels,
+        // then encode that bitmap as PNG. The GUI smoke exercises this exact
+        // production path and fails if the resulting PNG cannot be decoded.
+        let Some(tiff) = image.TIFFRepresentation() else {
+            finish(Err(NativeCaptureError::InvalidImage));
+            return;
+        };
+        let Some(bitmap) = NSBitmapImageRep::imageRepWithData(&tiff) else {
+            finish(Err(NativeCaptureError::InvalidImage));
+            return;
+        };
         let properties = NSDictionary::new();
-        let representations = image.representations();
-        // SAFETY: `representations` comes directly from the immutable snapshot
-        // NSImage and the properties dictionary is empty but correctly typed for
-        // AppKit's PNG encoder.
+        // SAFETY: `bitmap` was created by AppKit from the snapshot's own TIFF
+        // data and `properties` is an empty dictionary with the API's expected
+        // property-key/value types.
         let Some(data) = (unsafe {
-            NSBitmapImageRep::representationOfImageRepsInArray_usingType_properties(
-                &representations,
-                NSBitmapImageFileType::PNG,
-                &properties,
-            )
+            bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
         }) else {
             finish(Err(NativeCaptureError::InvalidImage));
             return;
