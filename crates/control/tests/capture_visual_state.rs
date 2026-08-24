@@ -11,6 +11,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::Utc;
+use localview_capture::StableCapturePolicy;
 use localview_control::{router, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{BridgeActionKind, BridgeActionResult, LiveBridge};
@@ -118,6 +119,16 @@ async fn complete_next_freeze(state: ControlState, session_id: Uuid) -> Uuid {
             .into_iter()
             .find(|action| matches!(&action.action, BridgeActionKind::FreezeVisuals))
         {
+            let expected_selectors = StableCapturePolicy::default().mask_selectors;
+            assert_eq!(
+                action
+                    .private_capture
+                    .as_ref()
+                    .map(|private| &private.mask_selectors),
+                Some(&expected_selectors),
+                "capture freeze must carry the bounded default private selectors"
+            );
+
             let claimed = state
                 .live
                 .claim_action(session_id, action.id)
@@ -135,6 +146,14 @@ async fn complete_next_freeze(state: ControlState, session_id: Uuid) -> Uuid {
                         payload: serde_json::json!({
                             "paused_animations": 7,
                             "web_animations_supported": true,
+                            "viewport_css_width": 800.0,
+                            "viewport_css_height": 600.0,
+                            "masked_elements": 2,
+                            "mask_rects": [
+                                {"x": 10.0, "y": 20.0, "width": 100.0, "height": 30.0},
+                                {"x": 200.0, "y": 100.0, "width": 50.0, "height": 40.0}
+                            ],
+                            "mask_selectors": ["MUST-NOT-ESCAPE"],
                             "private_page_payload": "must-not-escape"
                         }),
                         completed_at: Utc::now(),
@@ -229,8 +248,14 @@ async fn capture_freeze_returns_only_bounded_acknowledged_metadata() {
     assert_eq!(body["token"], action_id.to_string());
     assert_eq!(body["paused_animations"], 7);
     assert_eq!(body["web_animations_supported"], true);
+    assert_eq!(body["viewport_css_width"], 800.0);
+    assert_eq!(body["viewport_css_height"], 600.0);
+    assert_eq!(body["masked_elements"], 2);
+    assert_eq!(body["mask_rects"].as_array().map(Vec::len), Some(2));
     assert_eq!(body["lease_ms"], 8_000);
     let encoded = body.to_string();
+    assert!(!encoded.contains("mask_selectors"));
+    assert!(!encoded.contains("MUST-NOT-ESCAPE"));
     assert!(!encoded.contains("private_page_payload"));
     assert!(!encoded.contains("must-not-escape"));
 }
