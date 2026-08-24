@@ -61,7 +61,7 @@ Remaining Wave 1 integration:
 
 ## Wave 2 — Visual runtime — active
 
-Landed native viewport path:
+Landed native visual path:
 
 - Dedicated `localview-native-capture` platform boundary with a common PNG frame contract and a 24 MiB frame limit.
 - WebView2 `CapturePreview` backend on Windows.
@@ -72,11 +72,14 @@ Landed native viewport path:
 - Native route is read from the managed WebView itself and must remain HTTP(S) loopback; callers cannot supply an arbitrary capture window or route.
 - Three-second bounded native capture completion path.
 - Desktop `capture_viewport` coordinator with a lazily opened 256 MiB local visual `ArtifactStore`.
+- Desktop `capture_region` reuses the exact native viewport acquisition path and performs bounded Rust-side region processing only after exact restore and private redaction; it does not introduce separate platform-specific region screenshot APIs.
+- Region targets require finite positive in-viewport CSS geometry and are revalidated against the live CSS viewport reported during freeze. A resize/drift race discards pixels after restore and before persistence.
 - PNG bytes are persisted locally as `visual/png`, then dropped before daemon registration; command receipts expose metadata and IDs rather than pixel bytes or filesystem paths.
-- Authenticated daemon `Visual` evidence ingestion with artifact/session/route/viewport/revision/backend provenance.
-- Cross-platform compile/test contracts for native platform adapters plus a desktop integration contract.
+- Authenticated daemon `Visual` evidence ingestion with artifact/session/route/viewport/revision/backend provenance, plus a separate fail-closed `/evidence/visual-region` schema for bounded region metadata.
+- Cross-platform compile/test contracts for native platform adapters plus desktop transaction, target-ordering and region-evidence integration contracts.
 - Dedicated hosted Linux GUI smoke: Ubuntu/Xvfb starts a real GTK window and WebKitGTK WebView, renders deterministic localhost HTML, captures through the same visible-snapshot helper used by production, fully decodes the PNG and asserts the known center proof pixel. Ordinary headless test runs keep this test ignored; the dedicated GUI job explicitly enables it.
 - Dedicated hosted macOS GUI smoke: a custom harness owns the real AppKit main thread, initializes NSApplication, creates a real NSWindow + WKWebView, loads deterministic loopback HTML, pumps NSRunLoop, captures through the same WKWebView snapshot helper used by production, fully decodes the PNG and asserts the same known center proof pixel. This proof exposed a production ImageIO bug in direct NSImage representation encoding; the adapter now materializes snapshot pixels through TIFF → NSBitmapImageRep → PNG before frame validation.
+- Dedicated hosted Windows GUI smoke: a real Win32 parent window and installed WebView2 controller run on an STA COM thread, navigate to a deterministic `127.0.0.1` HTTP fixture with exact URI/NavigationId correlation, verify DOM/CSS/geometry and capture through production-shared `CapturePreview`. The fixture server is bounded but tolerates WebView2 speculative zero-byte preconnects; successful navigation, full PNG decode and the known center rendered pixel are still mandatory.
 - Deterministic stable-settle evaluator with explicit reasons for DOM, fonts, images, optional HMR signals, DOM mutation, layout and network activity.
 - Privacy-safe semantic readiness metadata: document readiness, font status and image-completion counts without image URLs, response bodies, cookies or storage.
 - Authenticated capture-settle endpoint that requests an exact fresh semantic snapshot action for every sample; stale observer snapshots cannot satisfy readiness.
@@ -89,18 +92,17 @@ Landed native viewport path:
 - Managed pages enter a bounded per-session freeze/capture/restore transaction: Web Animations are paused when available, CSS animation/transition motion is suppressed, an 8-second self-healing lease restores visual state if coordination is lost, and pixels continue only after exact-token restore acknowledgement succeeds.
 - Default private selectors travel only through the private capture-action envelope and are resolved inside the managed page to geometry-only receipts. The live bridge strips selectors and arbitrary page payload before daemon storage.
 - Private-region resolution is bounded to 16 selectors, 4,096 unique elements, 256 visible rectangles and a 100,000 × 100,000 CSS-pixel viewport; invalid selector/geometry/budget paths fail the capture instead of silently persisting an uncertain frame.
-- After exact restore, the desktop revalidates geometry and uses `localview-visual` to redact the native PNG in memory before the artifact store is reachable. PNG decode/encode budgets, native dimension checks and whole-mask validation make malformed/incomplete masking fail closed.
+- After exact restore, the desktop revalidates live target geometry and uses `localview-visual` to redact the native viewport PNG in memory before the artifact store is reachable. Region crops occur only after that redaction. PNG decode/encode budgets, native dimension checks, whole-mask validation and crop verification make malformed/incomplete processing fail closed.
 
 Still required before the visual runtime is considered complete:
 
-- equivalent hosted or dedicated GUI rendered-pixel smoke for Windows WebView2; Linux/WebKitGTK and macOS/WKWebView proof are landed;
 - true network in-flight accounting beyond the current fetch/XHR completion quiet-period heuristic;
-- element/component/section capture execution beyond viewport capture;
-- progressive changed-region capture and token-aware visual packet selection;
+- automatic element/component/section target resolution into the live bounded region path;
+- progressive changed-region capture driven by a bounded real-pixel baseline and token-aware visual packet selection;
 - guarded full-page stitching;
-- before/after and region diff wired into evidence and verification.
+- before/after and region diff wired into evidence and deterministic verification.
 
-**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, artifact/evidence registration, fail-closed fresh-snapshot settling, live freeze/restore, pre-persistence private-region redaction, Linux real rendered-pixel proof and macOS real rendered-pixel proof are now present; WebView2 GUI proof, progressive-region execution and visual diff verification remain.
+**Done when:** one button edit normally costs a crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling, live freeze/restore, pre-persistence private-region redaction and bounded CSS-region execution are now present. Automatic ownership-driven progressive targeting, changed-region scheduling and visual diff verification remain.
 
 ## Wave 3 — Runtime telemetry
 
