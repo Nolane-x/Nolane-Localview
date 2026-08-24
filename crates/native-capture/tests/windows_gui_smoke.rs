@@ -9,7 +9,7 @@ fn main() {
 #[cfg(all(windows, feature = "gui-smoke"))]
 mod windows_smoke {
     use std::{
-        cell::Cell,
+        cell::{Cell, RefCell},
         io::{Read, Write},
         net::TcpListener,
         rc::Rc,
@@ -50,13 +50,19 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    fn start_fixture_server() -> (String, thread::JoinHandle<()>) {
+    fn start_fixture_server() -> (String, thread::JoinHandle<()>, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind deterministic loopback fixture");
         let address = listener.local_addr().expect("read fixture server address");
+        let (request_tx, request_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept WebView2 fixture request");
             let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request);
+            let count = stream.read(&mut request).expect("read WebView2 fixture request");
+            let request_text = String::from_utf8_lossy(&request[..count]);
+            let request_line = request_text.lines().next().unwrap_or("<empty request>").to_owned();
+            request_tx
+                .send(format!("bytes={count}; line={request_line}"))
+                .expect("send WebView2 fixture request trace");
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{}",
                 FIXTURE_HTML.len(),
@@ -67,7 +73,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                 .expect("write deterministic WebView2 fixture");
             stream.flush().expect("flush deterministic WebView2 fixture");
         });
-        (format!("http://{address}/"), handle)
+        (format!("http://{address}/"), handle, request_rx)
     }
 
     fn create_window() -> HWND {
@@ -134,54 +140,61 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
             .expect("WebView2 controller creation must succeed")
     }
 
-    fn navigate_and_wait(webview: &ICoreWebView2, route: &str) {
+    fn navigate_and_wait(
+        webview: &ICoreWebView2,
+        route: &str,
+        request_rx: &mpsc::Receiver<String>,
+    ) {
         let expected_navigation_id = Rc::new(Cell::new(None::<u64>));
+        let event_trace = Rc::new(RefCell::new(Vec::<String>::new()));
         let expected_route = route.to_owned();
 
         let starting_navigation_id = expected_navigation_id.clone();
+        let starting_trace = event_trace.clone();
         let starting_handler = NavigationStartingEventHandler::create(Box::new(
             move |_sender, args| {
                 let Some(args) = args else {
                     return Ok(());
                 };
                 let mut uri = PWSTR::null();
-                unsafe {
-                    args.Uri(&mut uri)?;
-                }
-                let uri = webview2_com::take_pwstr(uri);
-                if uri != expected_route {
-                    return Ok(());
-                }
-
                 let mut navigation_id = 0_u64;
                 unsafe {
+                    args.Uri(&mut uri)?;
                     args.NavigationId(&mut navigation_id)?;
                 }
-                starting_navigation_id.set(Some(navigation_id));
+                let uri = webview2_com::take_pwstr(uri);
+                starting_trace
+                    .borrow_mut()
+                    .push(format!("start id={navigation_id} uri={uri}"));
+                if uri == expected_route {
+                    starting_navigation_id.set(Some(navigation_id));
+                }
                 Ok(())
             },
         ));
 
         let (tx, rx) = mpsc::channel();
         let completed_navigation_id = expected_navigation_id.clone();
+        let completed_trace = event_trace.clone();
         let completed_handler = NavigationCompletedEventHandler::create(Box::new(
             move |_sender, args| {
                 let Some(args) = args else {
                     return Ok(());
                 };
                 let mut navigation_id = 0_u64;
-                unsafe {
-                    args.NavigationId(&mut navigation_id)?;
-                }
-                if completed_navigation_id.get() != Some(navigation_id) {
-                    return Ok(());
-                }
-
                 let mut is_success = Default::default();
                 let mut web_error_status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
                 unsafe {
+                    args.NavigationId(&mut navigation_id)?;
                     args.IsSuccess(&mut is_success)?;
                     args.WebErrorStatus(&mut web_error_status)?;
+                }
+                completed_trace.borrow_mut().push(format!(
+                    "complete id={navigation_id} success={} status={web_error_status:?}",
+                    is_success.as_bool()
+                ));
+                if completed_navigation_id.get() != Some(navigation_id) {
+                    return Ok(());
                 }
                 tx.send((is_success.as_bool(), web_error_status))
                     .expect("send correlated WebView2 navigation completion");
@@ -206,13 +219,17 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
 
         let (navigation_succeeded, web_error_status) = webview2_com::wait_with_pump(rx)
             .expect("correlated WebView2 loopback fixture navigation must complete");
+        let trace = event_trace.borrow().join(" | ");
+        let request_trace = request_rx
+            .try_recv()
+            .unwrap_or_else(|_| "<no HTTP request observed before completion>".to_owned());
         assert!(
             navigation_succeeded,
-            "correlated WebView2 loopback fixture navigation must succeed; WebErrorStatus={web_error_status:?}"
+            "correlated WebView2 loopback fixture navigation must succeed; WebErrorStatus={web_error_status:?}; HTTP={request_trace}; events={trace}"
         );
         assert!(
             expected_navigation_id.get().is_some(),
-            "fixture NavigationStarting must establish a navigation id"
+            "fixture NavigationStarting must establish a navigation id; events={trace}"
         );
 
         unsafe {
@@ -313,8 +330,8 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                 .expect("obtain real CoreWebView2 from controller")
         };
 
-        let (route, server) = start_fixture_server();
-        navigate_and_wait(&webview, &route);
+        let (route, server, request_rx) = start_fixture_server();
+        navigate_and_wait(&webview, &route, &request_rx);
         server.join().expect("loopback fixture server must finish");
         assert_fixture_dom_ready(&webview, &route);
 
