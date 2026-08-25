@@ -42,6 +42,28 @@ pub async fn capture_visual_packet(
     viewport: ViewportMeta,
     revision: Option<String>,
     budget: PerceptionBudgetContract,
+) -> Result<VisualPacketCaptureReceipt, String> {
+    capture_visual_packet_authorized(
+        app,
+        state,
+        session_id,
+        reference,
+        viewport,
+        revision,
+        budget,
+        None,
+    )
+    .await
+}
+
+async fn capture_visual_packet_authorized(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, VisualCaptureState>,
+    session_id: SessionId,
+    reference: Option<ElementRef>,
+    viewport: ViewportMeta,
+    revision: Option<String>,
+    budget: PerceptionBudgetContract,
     budget_escalation_reason: Option<BudgetEscalationReason>,
 ) -> Result<VisualPacketCaptureReceipt, String> {
     let started_at = Instant::now();
