@@ -10,8 +10,9 @@ use axum::{
 use localview_engine::{
     choose_engine_authorized, EngineAdmissionError, EngineDecision, EngineNeeds,
 };
-use localview_evidence::EvidenceKind;
+use localview_evidence::{EvidenceKind, EvidenceObject, UncertaintyClass};
 use localview_live_analysis::{diagnose_live, LiveDiagnosis, LiveUncertaintyClass};
+use localview_live_bridge::{ObserverEvent, ObserverEventKind};
 use localview_planner::{
     plan_budgeted_perception_cycle, BudgetedPerceptionCandidate, BudgetedPerceptionPlan,
     PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
@@ -81,7 +82,9 @@ pub(crate) async fn build_live_perception_plan(
         return Err(LivePerceptionPlanError::SessionNotFound);
     }
 
-    let events = state.live.recent(id, 2048).await;
+    let mut events = state.live.recent(id, 2048).await;
+    let retained = state.evidence.recent_for_session(id, 64).await;
+    append_retained_snapshot_observations(&mut events, &retained);
     let diagnosis = diagnose_live(&events);
     let signals = derive_signals(&diagnosis, request);
     let candidates = derive_candidates(&diagnosis, &signals, request.target.as_deref());
@@ -94,6 +97,53 @@ pub(crate) async fn build_live_perception_plan(
         plan,
         engine,
     })
+}
+
+fn append_retained_snapshot_observations(
+    events: &mut Vec<ObserverEvent>,
+    retained: &[EvidenceObject],
+) {
+    let mut next_seq = events.iter().map(|event| event.seq).max().unwrap_or(0);
+
+    for (evidence_kind, event_kind) in [
+        (EvidenceKind::Semantic, ObserverEventKind::SemanticSnapshot),
+        (EvidenceKind::Layout, ObserverEventKind::Layout),
+    ] {
+        if events.iter().any(|event| event.kind == event_kind) {
+            continue;
+        }
+
+        let Some(evidence) = retained
+            .iter()
+            .rev()
+            .find(|evidence| authoritative_native_snapshot(evidence, evidence_kind))
+        else {
+            continue;
+        };
+
+        next_seq = next_seq.saturating_add(1);
+        events.push(ObserverEvent {
+            seq: next_seq,
+            captured_at: evidence.provenance.captured_at,
+            kind: event_kind,
+            reference: evidence.region.clone(),
+            route: evidence
+                .payload
+                .get("route")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            payload: evidence.payload.clone(),
+        });
+    }
+}
+
+fn authoritative_native_snapshot(evidence: &EvidenceObject, kind: EvidenceKind) -> bool {
+    evidence.kind == kind
+        && evidence.provenance.source == "native-semantic-snapshot"
+        && evidence.provenance.engine.as_deref() == Some("native-webview")
+        && evidence.uncertainty == UncertaintyClass::Observed
+        && evidence.confidence >= 0.999
+        && !evidence.secret_taint
 }
 
 pub(crate) fn plan_error_response(error: LivePerceptionPlanError) -> axum::response::Response {
