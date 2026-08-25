@@ -49,11 +49,10 @@ fn current_native_visual_packet_records_zero_chromium_spawns_and_measured_usage(
 }
 
 #[test]
-fn budget_decision_and_escalation_reason_are_exposed_in_receipt_metadata() {
+fn budget_decision_and_escalation_reason_are_exposed_in_the_receipt() {
     let module = include_str!("../src/visual_packet_impl.rs");
 
     assert!(module.contains("pub budget_decision: PerceptionBudgetDecision"));
-    assert!(module.contains("budget_decision: &budget_decision"));
     assert!(module.contains("budget_decision,"));
 }
 
