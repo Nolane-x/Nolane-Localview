@@ -6,4 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+localview-planner = { path = "../planner" }
+localview-token-budget = { path = "../token-budget" }
 serde.workspace = true
