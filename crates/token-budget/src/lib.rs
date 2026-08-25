@@ -54,6 +54,9 @@ pub struct VisualPacketCandidate {
 pub struct SelectedVisualEvidence {
     pub source: VisualPacketSource,
     pub rect: Rect,
+    pub information_gain_milli: u16,
+    pub confidence_milli: u16,
+    pub relevance_milli: u16,
     pub normalized_cost_milli: u32,
     pub utility_score: u64,
 }
@@ -98,9 +101,6 @@ impl Error for VisualPacketSelectionError {}
 #[derive(Debug, Clone)]
 struct ScoredCandidate {
     selected: SelectedVisualEvidence,
-    information_gain_milli: u16,
-    confidence_milli: u16,
-    relevance_milli: u16,
 }
 
 pub fn select_visual_packet(
@@ -206,12 +206,12 @@ fn score_candidate(candidate: &VisualPacketCandidate, viewport: (u32, u32)) -> S
         selected: SelectedVisualEvidence {
             source: candidate.source,
             rect: candidate.rect.clone(),
+            information_gain_milli: candidate.information_gain_milli,
+            confidence_milli: candidate.confidence_milli,
+            relevance_milli: candidate.relevance_milli,
             normalized_cost_milli,
             utility_score,
         },
-        information_gain_milli: candidate.information_gain_milli,
-        confidence_milli: candidate.confidence_milli,
-        relevance_milli: candidate.relevance_milli,
     }
 }
 
@@ -240,10 +240,29 @@ fn compare_scored_candidates(left: &ScoredCandidate, right: &ScoredCandidate) ->
         .selected
         .utility_score
         .cmp(&left.selected.utility_score)
-        .then_with(|| right.information_gain_milli.cmp(&left.information_gain_milli))
-        .then_with(|| right.confidence_milli.cmp(&left.confidence_milli))
-        .then_with(|| right.relevance_milli.cmp(&left.relevance_milli))
-        .then_with(|| left.selected.normalized_cost_milli.cmp(&right.selected.normalized_cost_milli))
+        .then_with(|| {
+            right
+                .selected
+                .information_gain_milli
+                .cmp(&left.selected.information_gain_milli)
+        })
+        .then_with(|| {
+            right
+                .selected
+                .confidence_milli
+                .cmp(&left.selected.confidence_milli)
+        })
+        .then_with(|| {
+            right
+                .selected
+                .relevance_milli
+                .cmp(&left.selected.relevance_milli)
+        })
+        .then_with(|| {
+            left.selected
+                .normalized_cost_milli
+                .cmp(&right.selected.normalized_cost_milli)
+        })
         .then_with(|| source_rank(left.selected.source).cmp(&source_rank(right.selected.source)))
         .then_with(|| compare_rect(&left.selected.rect, &right.selected.rect))
 }
@@ -272,7 +291,7 @@ fn overlap_fraction_of_smaller(left: &Rect, right: &Rect) -> f64 {
     let right_bottom = right.y + right.height;
 
     let overlap_width = left_right.min(right_right) - left.x.max(right.x);
-    let overlap_height = left_bottom.min(right_bottom) - left.y.max(right.y);
+    let overlap_height = left_bottom.min(right.bottom()) - left.y.max(right.y);
     if overlap_width <= 0.0 || overlap_height <= 0.0 {
         return 0.0;
     }
@@ -331,6 +350,18 @@ fn trim_json(mut value: serde_json::Value, max_chars: usize) -> serde_json::Valu
 mod tests {
     use super::*;
 
+    fn selected(source: VisualPacketSource, rect: Rect, utility_score: u64) -> SelectedVisualEvidence {
+        SelectedVisualEvidence {
+            source,
+            rect,
+            information_gain_milli: 1000,
+            confidence_milli: 1000,
+            relevance_milli: 1000,
+            normalized_cost_milli: 30,
+            utility_score,
+        }
+    }
+
     #[test]
     fn token_estimate_is_bounded() {
         assert_eq!(approximate_tokens("12345678"), 2);
@@ -338,28 +369,26 @@ mod tests {
 
     #[test]
     fn nested_context_is_redundant_when_it_fully_contains_local_evidence() {
-        let local = SelectedVisualEvidence {
-            source: VisualPacketSource::ChangedRegion,
-            rect: Rect {
+        let local = selected(
+            VisualPacketSource::ChangedRegion,
+            Rect {
                 x: 50.0,
                 y: 50.0,
                 width: 40.0,
                 height: 20.0,
             },
-            normalized_cost_milli: 30,
-            utility_score: 100,
-        };
-        let context = SelectedVisualEvidence {
-            source: VisualPacketSource::ProgressiveComponent,
-            rect: Rect {
+            100,
+        );
+        let context = selected(
+            VisualPacketSource::ProgressiveComponent,
+            Rect {
                 x: 0.0,
                 y: 0.0,
                 width: 200.0,
                 height: 160.0,
             },
-            normalized_cost_milli: 120,
-            utility_score: 50,
-        };
+            50,
+        );
         assert!(evidence_is_redundant(&local, &context));
     }
 }
