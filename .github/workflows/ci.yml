@@ -52,6 +52,8 @@ jobs:
         run: cargo test -p localview-token-budget --test visual_packet_selection
       - name: Perception budget contract
         run: cargo test -p localview-token-budget --test perception_budget_contract
+      - name: Planner-owned perception budget authority
+        run: cargo test -p localview-planner --test perception_budget_authority
 
   native-gui-smoke-linux:
     name: Native GUI smoke (WebKitGTK)
@@ -142,3 +144,5 @@ jobs:
         run: cargo test -p localview-desktop --test visual_packet_capture_contract
       - name: Perception budget capture contract
         run: cargo test -p localview-desktop --test perception_budget_capture_contract
+      - name: Perception budget authorization contract
+        run: cargo test -p localview-desktop --test perception_budget_authorization_contract
