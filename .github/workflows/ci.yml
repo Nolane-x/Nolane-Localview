@@ -60,6 +60,8 @@ jobs:
         run: cargo test -p localview-control --test live_perception_plan
       - name: Live perception execution contract
         run: cargo test -p localview-control --test live_perception_execution
+      - name: Retained perception feedback contract
+        run: cargo test -p localview-control --test perception_retained_feedback_loop
 
   native-gui-smoke-linux:
     name: Native GUI smoke (WebKitGTK)
