@@ -22,9 +22,10 @@ fn positive_image_path_evaluates_budget_before_any_selected_evidence_is_persiste
     let select = command
         .find("select_visual_packet(")
         .expect("packet selection must happen before budget admission");
-    let evaluate = command
+    let evaluate = command[select..]
         .find("evaluate_perception_budget(")
-        .expect("full perception budget must be evaluated");
+        .map(|offset| select + offset)
+        .expect("positive image path must evaluate the full perception budget");
     let persist = command
         .find("persist_visual_packet_selection(")
         .expect("selected evidence must persist only after budget admission");
