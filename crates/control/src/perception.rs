@@ -7,7 +7,9 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use localview_engine::{choose_engine_authorized, EngineDecision, EngineNeeds};
+use localview_engine::{
+    choose_engine_authorized, EngineAdmissionError, EngineDecision, EngineNeeds,
+};
 use localview_evidence::EvidenceKind;
 use localview_live_analysis::{diagnose_live, LiveDiagnosis, LiveUncertaintyClass};
 use localview_planner::{
@@ -22,21 +24,27 @@ use crate::ControlState;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LivePerceptionPlanRequest {
-    budget: PerceptionBudgetContract,
+pub(crate) struct LivePerceptionPlanRequest {
+    pub(crate) budget: PerceptionBudgetContract,
     #[serde(default)]
-    deep_mode: bool,
+    pub(crate) deep_mode: bool,
     #[serde(default)]
-    compatibility_requested: bool,
-    target: Option<String>,
+    pub(crate) compatibility_requested: bool,
+    pub(crate) target: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct LivePerceptionPlanResponse {
-    diagnosis: LiveDiagnosis,
-    signals: PerceptionCycleSignals,
-    plan: BudgetedPerceptionPlan,
-    engine: Option<EngineDecision>,
+pub(crate) struct LivePerceptionPlanResponse {
+    pub(crate) diagnosis: LiveDiagnosis,
+    pub(crate) signals: PerceptionCycleSignals,
+    pub(crate) plan: BudgetedPerceptionPlan,
+    pub(crate) engine: Option<EngineDecision>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LivePerceptionPlanError {
+    SessionNotFound,
+    EngineAdmission(EngineAdmissionError),
 }
 
 pub(crate) fn router(state: ControlState) -> Router {
@@ -57,41 +65,53 @@ async fn plan_live_perception(
     if !authorized(&headers, &state) {
         return denied();
     }
+
+    match build_live_perception_plan(&state, id, &request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => plan_error_response(error),
+    }
+}
+
+pub(crate) async fn build_live_perception_plan(
+    state: &ControlState,
+    id: SessionId,
+    request: &LivePerceptionPlanRequest,
+) -> Result<LivePerceptionPlanResponse, LivePerceptionPlanError> {
     if state.sessions.get(id).await.is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "session_not_found"})),
-        )
-            .into_response();
+        return Err(LivePerceptionPlanError::SessionNotFound);
     }
 
     let events = state.live.recent(id, 2048).await;
     let diagnosis = diagnose_live(&events);
-    let signals = derive_signals(&diagnosis, &request);
+    let signals = derive_signals(&diagnosis, request);
     let candidates = derive_candidates(&diagnosis, &signals, request.target.as_deref());
     let plan = plan_budgeted_perception_cycle(&candidates, &request.budget, &signals);
+    let engine = selected_engine(&plan).map_err(LivePerceptionPlanError::EngineAdmission)?;
 
-    let engine = match selected_engine(&plan) {
-        Ok(engine) => engine,
-        Err(error) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "engine_admission_failed",
-                    "reason": error,
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    Json(LivePerceptionPlanResponse {
+    Ok(LivePerceptionPlanResponse {
         diagnosis,
         signals,
         plan,
         engine,
     })
-    .into_response()
+}
+
+pub(crate) fn plan_error_response(error: LivePerceptionPlanError) -> axum::response::Response {
+    match error {
+        LivePerceptionPlanError::SessionNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "session_not_found"})),
+        )
+            .into_response(),
+        LivePerceptionPlanError::EngineAdmission(reason) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "engine_admission_failed",
+                "reason": reason,
+            })),
+        )
+            .into_response(),
+    }
 }
 
 fn derive_signals(
@@ -265,7 +285,7 @@ fn candidate(
 
 fn selected_engine(
     plan: &BudgetedPerceptionPlan,
-) -> Result<Option<EngineDecision>, localview_engine::EngineAdmissionError> {
+) -> Result<Option<EngineDecision>, EngineAdmissionError> {
     let Some(selected) = plan.actions.first() else {
         return Ok(None);
     };
@@ -303,7 +323,7 @@ fn has_unknown(diagnosis: &LiveDiagnosis, class: LiveUncertaintyClass) -> bool {
     diagnosis.unknowns.iter().any(|unknown| unknown.class == class)
 }
 
-fn authorized(headers: &HeaderMap, state: &ControlState) -> bool {
+pub(crate) fn authorized(headers: &HeaderMap, state: &ControlState) -> bool {
     let expected = format!("Bearer {}", state.token);
     headers
         .get(axum::http::header::AUTHORIZATION)
@@ -311,7 +331,7 @@ fn authorized(headers: &HeaderMap, state: &ControlState) -> bool {
         .is_some_and(|value| value == expected)
 }
 
-fn denied() -> axum::response::Response {
+pub(crate) fn denied() -> axum::response::Response {
     (
         StatusCode::UNAUTHORIZED,
         Json(serde_json::json!({"error": "unauthorized"})),
