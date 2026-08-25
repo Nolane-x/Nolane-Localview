@@ -1043,3 +1043,5 @@ fn progressive_route_signature(
         query,
     ))
 }
+
+include!("visual_packet_impl.rs");
