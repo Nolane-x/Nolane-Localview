@@ -118,9 +118,9 @@ fn insufficient_evidence_authorizes_one_bounded_overrun_and_records_the_reason()
             usage(1_600, 200, 1, 0),
         ),
         candidate(
-            "viewport",
+            "weak-fallback",
             PerceptionActionKind::ViewportCapture,
-            0.9,
+            0.1,
             usage(100, 100, 1, 0),
         ),
     ];
@@ -134,7 +134,7 @@ fn insufficient_evidence_authorizes_one_bounded_overrun_and_records_the_reason()
     assert_eq!(
         plan.actions.len(),
         1,
-        "planner must stop after the first budget overrun"
+        "planner must stop after the first authorized budget overrun"
     );
     assert_eq!(plan.actions[0].action.id, "region");
     assert_eq!(
