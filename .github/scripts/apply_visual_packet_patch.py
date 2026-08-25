@@ -28,26 +28,3 @@ replace_once(
     "            visual_capture::capture_progressive_target,\n"
     "            visual_capture::capture_visual_packet,\n",
 )
-
-replace_once(
-    ".github/workflows/ci.yml",
-    "      - name: Native capture platform contract\n"
-    "        run: cargo test -p localview-native-capture\n",
-    "      - name: Native capture platform contract\n"
-    "        run: cargo test -p localview-native-capture\n"
-    "      - name: Token-aware visual packet policy contract\n"
-    "        run: cargo test -p localview-token-budget --test visual_packet_selection\n",
-)
-
-replace_once(
-    ".github/workflows/ci.yml",
-    "      - name: Progressive target capture contract\n"
-    "        run: cargo test -p localview-desktop --test progressive_target_capture_contract\n",
-    "      - name: Progressive target capture contract\n"
-    "        run: cargo test -p localview-desktop --test progressive_target_capture_contract\n"
-    "      - name: Visual packet capture contract\n"
-    "        run: cargo test -p localview-desktop --test visual_packet_capture_contract\n",
-)
-
-Path(".github/scripts/apply_visual_packet_patch.py").unlink()
-Path(".github/workflows/apply-visual-packet-patch.yml").unlink()
