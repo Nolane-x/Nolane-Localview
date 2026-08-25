@@ -172,6 +172,21 @@ async fn missing_state_prefers_a_cheap_semantic_observation_before_visual_captur
 }
 
 #[tokio::test]
+async fn compatibility_intent_waits_for_cheap_state_before_browser_authority() {
+    let (state, session_id) = test_state().await;
+    let (status, body) = post_plan(state, session_id, true, request_body(false, true)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["signals"]["browser_specific_suspicion"], false);
+    assert_eq!(body["plan"]["actions"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        body["plan"]["actions"][0]["action"]["kind"],
+        "semantic_snapshot"
+    );
+    assert_eq!(body["engine"]["tier"], "Lightweight");
+}
+
+#[tokio::test]
 async fn explicit_compatibility_goal_can_derive_browser_specific_authority_after_cheap_state_is_known() {
     let (state, session_id) = test_state().await;
     seed_semantic_and_layout(&state, session_id).await;
