@@ -11,7 +11,9 @@ use axum::{
 };
 use chrono::Utc;
 use localview_control::{router, ControlState};
-use localview_evidence::{EvidenceKind, EvidenceStore};
+use localview_evidence::{
+    EvidenceDraft, EvidenceKind, EvidenceStore, Provenance, UncertaintyClass,
+};
 use localview_live_bridge::{BridgeActionKind, BridgeActionResult, LiveBridge};
 use localview_observation::ObservationBus;
 use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
@@ -141,6 +143,16 @@ async fn post_step(state: ControlState, session_id: uuid::Uuid) -> (StatusCode, 
     .await
 }
 
+async fn post_plan(state: ControlState, session_id: uuid::Uuid) -> (StatusCode, Value) {
+    post_json(
+        state,
+        Method::POST,
+        format!("/v1/sessions/{session_id}/perception/plan"),
+        step_body(),
+    )
+    .await
+}
+
 async fn complete_next_snapshot_through_control(state: ControlState, session_id: uuid::Uuid) {
     for _ in 0..120 {
         let actions = state.live.take_actions(session_id, 8).await;
@@ -168,6 +180,30 @@ async fn complete_next_snapshot_through_control(state: ControlState, session_id:
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     panic!("perception step did not enqueue a semantic snapshot");
+}
+
+async fn insert_untrusted_snapshot_evidence(state: &ControlState, session_id: uuid::Uuid) {
+    for kind in [EvidenceKind::Semantic, EvidenceKind::Layout] {
+        state
+            .evidence
+            .insert(EvidenceDraft {
+                kind,
+                session_id,
+                region: None,
+                payload: raw_snapshot_payload(),
+                provenance: Provenance {
+                    source: "untrusted-test-source".into(),
+                    engine: Some("native-webview".into()),
+                    revision: None,
+                    parent_ids: Vec::new(),
+                    captured_at: Utc::now(),
+                },
+                confidence: 1.0,
+                uncertainty: UncertaintyClass::Observed,
+                secret_taint: false,
+            })
+            .await;
+    }
 }
 
 #[tokio::test]
@@ -206,4 +242,19 @@ async fn executed_semantic_snapshot_becomes_retained_planner_evidence_for_the_ne
     assert!(second_body["engine"].is_null());
     assert!(second_body["execution"].is_null());
     assert!(state.live.take_actions(session_id, 8).await.is_empty());
+}
+
+#[tokio::test]
+async fn arbitrary_retained_semantic_and_layout_evidence_cannot_suppress_required_observation() {
+    let (state, session_id) = test_state().await;
+    insert_untrusted_snapshot_evidence(&state, session_id).await;
+
+    let (status, body) = post_plan(state, session_id).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["plan"]["actions"][0]["action"]["kind"],
+        "semantic_snapshot",
+        "retained evidence without native snapshot provenance must not become perception authority"
+    );
 }
