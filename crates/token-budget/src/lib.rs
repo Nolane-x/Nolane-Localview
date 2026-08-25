@@ -291,7 +291,7 @@ fn overlap_fraction_of_smaller(left: &Rect, right: &Rect) -> f64 {
     let right_bottom = right.y + right.height;
 
     let overlap_width = left_right.min(right_right) - left.x.max(right.x);
-    let overlap_height = left_bottom.min(right.bottom()) - left.y.max(right.y);
+    let overlap_height = left_bottom.min(right_bottom) - left.y.max(right.y);
     if overlap_width <= 0.0 || overlap_height <= 0.0 {
         return 0.0;
     }
