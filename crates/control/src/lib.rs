@@ -2,6 +2,7 @@
 
 mod capture_settle;
 mod fresh_snapshot;
+mod perception;
 #[path = "runtime.rs"]
 mod runtime;
 mod visual_region;
@@ -19,6 +20,7 @@ pub fn router(state: ControlState) -> Router {
     runtime::router(state.clone())
         .merge(capture_settle::router(state.clone()))
         .merge(fresh_snapshot::router(state.clone()))
+        .merge(perception::router(state.clone()))
         .merge(visual_region::router(state))
 }
 
