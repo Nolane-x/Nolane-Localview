@@ -1,9 +1,19 @@
 #[test]
-fn visual_packet_accepts_the_full_spec_budget_and_explicit_escalation_reason() {
+fn visual_packet_accepts_the_full_spec_budget_while_escalation_stays_internal() {
     let module = include_str!("../src/visual_packet_impl.rs");
+    let public_start = module
+        .find("pub async fn capture_visual_packet(")
+        .expect("public visual packet command must exist");
+    let authorized_start = module
+        .find("\nasync fn capture_visual_packet_authorized(")
+        .map(|offset| offset + 1)
+        .expect("internal authorized visual packet path must exist");
+    let public_command = &module[public_start..authorized_start];
+    let authorized = &module[authorized_start..];
 
-    assert!(module.contains("budget: PerceptionBudgetContract"));
-    assert!(module.contains("budget_escalation_reason: Option<BudgetEscalationReason>"));
+    assert!(public_command.contains("budget: PerceptionBudgetContract"));
+    assert!(!public_command.contains("budget_escalation_reason:"));
+    assert!(authorized.contains("budget_escalation_reason: Option<BudgetEscalationReason>"));
     assert!(module.contains("budget.visual_packet_budget(DetailLevel::Normal)"));
 }
 
@@ -11,8 +21,8 @@ fn visual_packet_accepts_the_full_spec_budget_and_explicit_escalation_reason() {
 fn positive_image_path_evaluates_budget_before_any_selected_evidence_is_persisted() {
     let module = include_str!("../src/visual_packet_impl.rs");
     let start = module
-        .find("pub async fn capture_visual_packet(")
-        .expect("visual packet command must exist");
+        .find("async fn capture_visual_packet_authorized(")
+        .expect("authorized visual packet path must exist");
     let end = module[start..]
         .find("\nfn changed_plan_ratio")
         .map(|offset| start + offset)
@@ -61,8 +71,8 @@ fn budget_decision_and_escalation_reason_are_exposed_in_the_receipt() {
 fn zero_image_budget_still_runs_the_budget_contract_without_native_capture() {
     let module = include_str!("../src/visual_packet_impl.rs");
     let start = module
-        .find("pub async fn capture_visual_packet(")
-        .expect("visual packet command must exist");
+        .find("async fn capture_visual_packet_authorized(")
+        .expect("authorized visual packet path must exist");
     let end = module[start..]
         .find("let capture_gate = session_capture_gate")
         .map(|offset| start + offset)

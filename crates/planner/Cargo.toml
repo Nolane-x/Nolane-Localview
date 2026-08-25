@@ -7,4 +7,5 @@ license.workspace = true
 
 [dependencies]
 localview-evidence = { path = "../evidence" }
+localview-token-budget = { path = "../token-budget" }
 serde.workspace = true
