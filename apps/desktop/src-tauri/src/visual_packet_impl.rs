@@ -1,7 +1,12 @@
+use std::time::Instant;
+
 use localview_capture::ProgressiveTargetPlan;
+use localview_protocol::DetailLevel;
 use localview_token_budget::{
-    select_visual_packet, serialize_with_budget, SelectedVisualEvidence, VisualPacketBudget,
-    VisualPacketCandidate, VisualPacketSelection, VisualPacketSelectionMode, VisualPacketSource,
+    approximate_tokens, evaluate_perception_budget, select_visual_packet, serialize_with_budget,
+    BudgetEscalationReason, PerceptionBudgetContract, PerceptionBudgetDecision,
+    PerceptionBudgetUsage, SelectedVisualEvidence, VisualPacketCandidate, VisualPacketSelection,
+    VisualPacketSelectionMode, VisualPacketSource,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -15,6 +20,7 @@ pub struct VisualPacketCaptureReceipt {
     pub capture_performed: bool,
     pub snapshot_version: Option<u64>,
     pub snapshot_route: Option<String>,
+    pub budget_decision: PerceptionBudgetDecision,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,10 +41,12 @@ pub async fn capture_visual_packet(
     reference: Option<ElementRef>,
     viewport: ViewportMeta,
     revision: Option<String>,
-    budget: VisualPacketBudget,
+    budget: PerceptionBudgetContract,
+    budget_escalation_reason: Option<BudgetEscalationReason>,
 ) -> Result<VisualPacketCaptureReceipt, String> {
+    let started_at = Instant::now();
     validate_viewport(&viewport)?;
-    preflight_managed_surface(&app, session_id)?;
+    let visual_budget = budget.visual_packet_budget(DetailLevel::Normal);
 
     if budget.image_regions == 0 {
         let selection = VisualPacketSelection {
@@ -53,8 +61,20 @@ pub async fn capture_visual_packet(
                 "selection": selection,
                 "capture_performed": false
             }),
-            &budget.text,
+            &visual_budget.text,
         );
+        let usage = PerceptionBudgetUsage {
+            latency_ms: elapsed_ms(started_at),
+            text_tokens: visual_packet_text_tokens(&packet),
+            image_regions: selection.selected.len(),
+            chromium_spawns: 0,
+        };
+        let budget_decision = evaluate_perception_budget(
+            &budget,
+            &usage,
+            budget_escalation_reason,
+        )
+        .map_err(perception_budget_violation)?;
         return Ok(VisualPacketCaptureReceipt {
             mode: VisualPacketSelectionMode::MetadataOnly,
             changed_ratio: 0.0,
@@ -65,9 +85,11 @@ pub async fn capture_visual_packet(
             capture_performed: false,
             snapshot_version: None,
             snapshot_route: None,
+            budget_decision,
         });
     }
 
+    preflight_managed_surface(&app, session_id)?;
     let capture_gate = session_capture_gate(&state, session_id).await?;
     let _capture_guard = capture_gate.lock().await;
 
@@ -124,21 +146,10 @@ pub async fn capture_visual_packet(
     let selection = select_visual_packet(
         (frame.viewport.css_width, frame.viewport.css_height),
         &candidates,
-        &budget,
+        &visual_budget,
     )
     .map_err(|error| error.to_string())?;
     let changed_ratio = changed_plan_ratio(&changed_plan);
-
-    let receipts = persist_visual_packet_selection(
-        &state,
-        session_id,
-        &frame,
-        image.as_ref(),
-        &freeze,
-        &selection,
-    )
-    .await?;
-    let baseline_cached = commit_changed_baseline(&state, session_id, context, image).await?;
 
     let snapshot_version = progressive.as_ref().map(|(snapshot, _)| snapshot.version);
     let snapshot_route = progressive
@@ -152,7 +163,30 @@ pub async fn capture_visual_packet(
         snapshot_version,
         snapshot_route: snapshot_route.as_deref(),
     };
-    let packet = serialize_with_budget(&metadata, &budget.text);
+    let packet = serialize_with_budget(&metadata, &visual_budget.text);
+    let usage = PerceptionBudgetUsage {
+        latency_ms: elapsed_ms(started_at),
+        text_tokens: visual_packet_text_tokens(&packet),
+        image_regions: selection.selected.len(),
+        chromium_spawns: 0,
+    };
+    let budget_decision = evaluate_perception_budget(
+        &budget,
+        &usage,
+        budget_escalation_reason,
+    )
+    .map_err(perception_budget_violation)?;
+
+    let receipts = persist_visual_packet_selection(
+        &state,
+        session_id,
+        &frame,
+        image.as_ref(),
+        &freeze,
+        &selection,
+    )
+    .await?;
+    let baseline_cached = commit_changed_baseline(&state, session_id, context, image).await?;
 
     Ok(VisualPacketCaptureReceipt {
         mode: selection.mode,
@@ -164,7 +198,22 @@ pub async fn capture_visual_packet(
         capture_performed: true,
         snapshot_version,
         snapshot_route,
+        budget_decision,
     })
+}
+
+fn elapsed_ms(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn visual_packet_text_tokens(packet: &serde_json::Value) -> usize {
+    approximate_tokens(&serde_json::to_string(packet).unwrap_or_default())
+}
+
+fn perception_budget_violation(
+    violation: localview_token_budget::PerceptionBudgetViolation,
+) -> String {
+    format!("{}: {:?}", violation, violation.exceeded)
 }
 
 fn changed_plan_ratio(plan: &ChangedRegionPlan) -> f64 {

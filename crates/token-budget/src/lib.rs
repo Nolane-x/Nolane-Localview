@@ -25,6 +25,139 @@ pub fn serialize_with_budget<T: Serialize>(
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PerceptionBudgetContract {
+    pub latency_ms: u64,
+    pub text_tokens: usize,
+    pub image_regions: usize,
+    pub chromium_spawns: u32,
+}
+
+impl PerceptionBudgetContract {
+    pub fn visual_packet_budget(self, detail: DetailLevel) -> VisualPacketBudget {
+        VisualPacketBudget {
+            text: TokenBudget {
+                max_tokens: self.text_tokens,
+                detail,
+            },
+            image_regions: self.image_regions,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PerceptionBudgetUsage {
+    pub latency_ms: u64,
+    pub text_tokens: usize,
+    pub image_regions: usize,
+    pub chromium_spawns: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetDimension {
+    LatencyMs,
+    TextTokens,
+    ImageRegions,
+    ChromiumSpawns,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetEscalationReason {
+    CriticalIssue,
+    ExplicitDeepMode,
+    InsufficientEvidence,
+    BrowserSpecificSuspicion,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PerceptionBudgetDecisionStatus {
+    WithinBudget,
+    Escalated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PerceptionBudgetDecision {
+    pub status: PerceptionBudgetDecisionStatus,
+    pub budget: PerceptionBudgetContract,
+    pub usage: PerceptionBudgetUsage,
+    pub exceeded: Vec<BudgetDimension>,
+    pub budget_escalation_reason: Option<BudgetEscalationReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PerceptionBudgetViolation {
+    pub budget: PerceptionBudgetContract,
+    pub usage: PerceptionBudgetUsage,
+    pub exceeded: Vec<BudgetDimension>,
+}
+
+impl fmt::Display for PerceptionBudgetViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "perception budget exceeded without an allowed escalation reason"
+        )
+    }
+}
+
+impl Error for PerceptionBudgetViolation {}
+
+pub fn evaluate_perception_budget(
+    budget: &PerceptionBudgetContract,
+    usage: &PerceptionBudgetUsage,
+    escalation_reason: Option<BudgetEscalationReason>,
+) -> Result<PerceptionBudgetDecision, PerceptionBudgetViolation> {
+    let exceeded = exceeded_dimensions(budget, usage);
+    if exceeded.is_empty() {
+        return Ok(PerceptionBudgetDecision {
+            status: PerceptionBudgetDecisionStatus::WithinBudget,
+            budget: *budget,
+            usage: *usage,
+            exceeded,
+            budget_escalation_reason: None,
+        });
+    }
+
+    let Some(reason) = escalation_reason else {
+        return Err(PerceptionBudgetViolation {
+            budget: *budget,
+            usage: *usage,
+            exceeded,
+        });
+    };
+
+    Ok(PerceptionBudgetDecision {
+        status: PerceptionBudgetDecisionStatus::Escalated,
+        budget: *budget,
+        usage: *usage,
+        exceeded,
+        budget_escalation_reason: Some(reason),
+    })
+}
+
+fn exceeded_dimensions(
+    budget: &PerceptionBudgetContract,
+    usage: &PerceptionBudgetUsage,
+) -> Vec<BudgetDimension> {
+    let mut exceeded = Vec::with_capacity(4);
+    if usage.latency_ms > budget.latency_ms {
+        exceeded.push(BudgetDimension::LatencyMs);
+    }
+    if usage.text_tokens > budget.text_tokens {
+        exceeded.push(BudgetDimension::TextTokens);
+    }
+    if usage.image_regions > budget.image_regions {
+        exceeded.push(BudgetDimension::ImageRegions);
+    }
+    if usage.chromium_spawns > budget.chromium_spawns {
+        exceeded.push(BudgetDimension::ChromiumSpawns);
+    }
+    exceeded
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VisualPacketBudget {
     pub text: TokenBudget,
