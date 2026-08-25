@@ -116,7 +116,11 @@ pub async fn capture_visual_packet(
     };
 
     let progressive_plan = progressive.as_ref().map(|(_, plan)| plan);
-    let candidates = visual_packet_candidates(&changed_plan, progressive_plan);
+    let candidates = visual_packet_candidates(
+        &changed_plan,
+        progressive_plan,
+        (frame.viewport.css_width, frame.viewport.css_height),
+    );
     let selection = select_visual_packet(
         (frame.viewport.css_width, frame.viewport.css_height),
         &candidates,
@@ -174,6 +178,7 @@ fn changed_plan_ratio(plan: &ChangedRegionPlan) -> f64 {
 fn visual_packet_candidates(
     changed_plan: &ChangedRegionPlan,
     progressive: Option<&ProgressiveTargetPlan>,
+    viewport: (u32, u32),
 ) -> Vec<VisualPacketCandidate> {
     let mut candidates = Vec::new();
     let focus = progressive.and_then(|plan| {
@@ -197,20 +202,18 @@ fn visual_packet_candidates(
             }
         }
         ChangedRegionPlan::Viewport { .. } => {
-            if let Some(plan) = progressive {
-                candidates.push(VisualPacketCandidate {
-                    source: VisualPacketSource::ViewportFallback,
-                    rect: Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: plan.viewport.0 as f64,
-                        height: plan.viewport.1 as f64,
-                    },
-                    information_gain_milli: 700,
-                    confidence_milli: 1000,
-                    relevance_milli: 550,
-                });
-            }
+            candidates.push(VisualPacketCandidate {
+                source: VisualPacketSource::ViewportFallback,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: viewport.0 as f64,
+                    height: viewport.1 as f64,
+                },
+                information_gain_milli: 700,
+                confidence_milli: 1000,
+                relevance_milli: if progressive.is_some() { 550 } else { 700 },
+            });
         }
     }
 
@@ -238,19 +241,6 @@ fn visual_packet_candidates(
                 relevance_milli,
             });
         }
-    } else if let ChangedRegionPlan::Viewport { .. } = changed_plan {
-        candidates.push(VisualPacketCandidate {
-            source: VisualPacketSource::ViewportFallback,
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            information_gain_milli: 700,
-            confidence_milli: 1000,
-            relevance_milli: 700,
-        });
     }
 
     candidates
@@ -285,21 +275,28 @@ async fn persist_visual_packet_selection(
     let mut receipts = Vec::with_capacity(selection.selected.len());
     for selected in &selection.selected {
         let target = visual_packet_requested_target(selected);
-        let selected_image = match &target {
-            RequestedCaptureTarget::Viewport => image.clone(),
-            RequestedCaptureTarget::Region(rect) => image
-                .crop_css_rect(
-                    (freeze.viewport_css_width, freeze.viewport_css_height),
-                    rect,
-                )
-                .map_err(|_| "visual packet crop failed; pixels discarded".to_string())?,
+        let (png, pixel_width, pixel_height) = match &target {
+            RequestedCaptureTarget::Viewport => {
+                let png = encode_png_rgba(image)
+                    .map_err(|_| "visual packet PNG encode failed; pixels discarded".to_string())?;
+                (png, image.width, image.height)
+            }
+            RequestedCaptureTarget::Region(rect) => {
+                let cropped = image
+                    .crop_css_rect(
+                        (freeze.viewport_css_width, freeze.viewport_css_height),
+                        rect,
+                    )
+                    .map_err(|_| "visual packet crop failed; pixels discarded".to_string())?;
+                let png = encode_png_rgba(&cropped)
+                    .map_err(|_| "visual packet PNG encode failed; pixels discarded".to_string())?;
+                (png, cropped.width, cropped.height)
+            }
         };
-        let png = encode_png_rgba(&selected_image)
-            .map_err(|_| "visual packet PNG encode failed; pixels discarded".to_string())?;
         let selected_frame = CapturedFrame {
             png,
-            pixel_width: selected_image.width,
-            pixel_height: selected_image.height,
+            pixel_width,
+            pixel_height,
             backend: frame.backend,
             viewport: frame.viewport.clone(),
             route: frame.route.clone(),
