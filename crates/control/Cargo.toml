@@ -10,14 +10,17 @@ anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true
 localview-capture = { path = "../capture" }
+localview-engine = { path = "../engine" }
 localview-evidence = { path = "../evidence" }
 localview-live-analysis = { path = "../live-analysis" }
 localview-live-bridge = { path = "../live-bridge" }
 localview-observation = { path = "../observation" }
+localview-planner = { path = "../planner" }
 localview-project-state = { path = "../project-state" }
 localview-protocol = { path = "../protocol" }
 localview-security = { path = "../security" }
 localview-sessions = { path = "../sessions" }
+localview-token-budget = { path = "../token-budget" }
 localview-verification = { path = "../verification" }
 serde.workspace = true
 serde_json.workspace = true
