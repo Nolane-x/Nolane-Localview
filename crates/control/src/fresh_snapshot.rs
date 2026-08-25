@@ -31,6 +31,14 @@ const MAX_ATTRIBUTE_KEY_BYTES: usize = 128;
 const MAX_ATTRIBUTE_VALUE_BYTES: usize = 256;
 const MAX_SOURCE_FILE_BYTES: usize = 260;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FreshSnapshotError {
+    SessionNotFound,
+    Timeout,
+    Failed,
+    Invalid,
+}
+
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
         .route(
@@ -48,32 +56,46 @@ async fn session_fresh_semantic_snapshot(
     if !authorized(&headers, &state) {
         return bounded_error(StatusCode::UNAUTHORIZED, "unauthorized");
     }
+
+    match acquire_fresh_semantic_snapshot(&state, id).await {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(FreshSnapshotError::SessionNotFound) => {
+            bounded_error(StatusCode::NOT_FOUND, "session_not_found")
+        }
+        Err(FreshSnapshotError::Timeout) => bounded_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "fresh_semantic_snapshot_timeout",
+        ),
+        Err(FreshSnapshotError::Failed) => {
+            bounded_error(StatusCode::BAD_GATEWAY, "fresh_semantic_snapshot_failed")
+        }
+        Err(FreshSnapshotError::Invalid) => bounded_error(
+            StatusCode::BAD_GATEWAY,
+            "invalid_fresh_semantic_snapshot",
+        ),
+    }
+}
+
+pub(crate) async fn acquire_fresh_semantic_snapshot(
+    state: &ControlState,
+    id: SessionId,
+) -> Result<PageSnapshot, FreshSnapshotError> {
     if state.sessions.get(id).await.is_none() {
-        return bounded_error(StatusCode::NOT_FOUND, "session_not_found");
+        return Err(FreshSnapshotError::SessionNotFound);
     }
 
     let action = state
         .live
         .enqueue_action(id, None, BridgeActionKind::Snapshot)
         .await;
-    let Some(result) = wait_for_matching_result(&state, id, action.id).await else {
-        return bounded_error(
-            StatusCode::GATEWAY_TIMEOUT,
-            "fresh_semantic_snapshot_timeout",
-        );
-    };
+    let result = wait_for_matching_result(state, id, action.id)
+        .await
+        .ok_or(FreshSnapshotError::Timeout)?;
     if !result.ok {
-        return bounded_error(StatusCode::BAD_GATEWAY, "fresh_semantic_snapshot_failed");
+        return Err(FreshSnapshotError::Failed);
     }
 
-    let Some(snapshot) = project_snapshot(&result.payload, result.completed_at) else {
-        return bounded_error(
-            StatusCode::BAD_GATEWAY,
-            "invalid_fresh_semantic_snapshot",
-        );
-    };
-
-    Json(snapshot).into_response()
+    project_snapshot(&result.payload, result.completed_at).ok_or(FreshSnapshotError::Invalid)
 }
 
 async fn wait_for_matching_result(
