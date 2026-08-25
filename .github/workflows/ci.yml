@@ -56,6 +56,8 @@ jobs:
         run: cargo test -p localview-planner --test perception_budget_authority
       - name: Tier-3 perception authority contract
         run: cargo test -p localview-engine --test tier3_perception_authority
+      - name: Live perception planning contract
+        run: cargo test -p localview-control --test live_perception_plan
 
   native-gui-smoke-linux:
     name: Native GUI smoke (WebKitGTK)
