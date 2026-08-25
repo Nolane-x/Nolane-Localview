@@ -1,10 +1,12 @@
 use localview_engine::{choose_engine_authorized, EngineAdmissionError, EngineNeeds, EngineTier};
-use localview_evidence::EvidenceKind;
 use localview_planner::{
-    plan_budgeted_perception_cycle, BudgetedPerceptionCandidate, PerceptionActionKind,
-    PerceptionCandidate, PerceptionCycleSignals,
+    plan_budgeted_perception_cycle, BudgetedPerceptionCandidate, BudgetedPerceptionPlan,
+    PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
 };
-use localview_token_budget::{PerceptionBudgetContract, PerceptionBudgetUsage};
+use localview_token_budget::{
+    BudgetDimension, BudgetEscalationReason, PerceptionBudgetContract, PerceptionBudgetDecision,
+    PerceptionBudgetDecisionStatus, PerceptionBudgetUsage,
+};
 
 fn budget(chromium_spawns: u32) -> PerceptionBudgetContract {
     PerceptionBudgetContract {
@@ -21,7 +23,7 @@ fn chromium_candidate() -> BudgetedPerceptionCandidate {
             id: "chromium-compatibility-check".into(),
             kind: PerceptionActionKind::ChromiumEscalation,
             target: Some("save-button".into()),
-            expected_evidence: vec![EvidenceKind::Visual],
+            expected_evidence: Vec::new(),
             uncertainty_reduction: 1.0,
             risk_relevance: 1.0,
             estimated_cpu_ms: 20,
@@ -94,7 +96,7 @@ fn a_non_chromium_planner_action_cannot_be_reused_to_unlock_tier_three() {
             id: "region".into(),
             kind: PerceptionActionKind::RegionCapture,
             target: Some("save-button".into()),
-            expected_evidence: vec![EvidenceKind::Visual],
+            expected_evidence: Vec::new(),
             uncertainty_reduction: 1.0,
             risk_relevance: 1.0,
             estimated_cpu_ms: 10,
@@ -134,4 +136,28 @@ fn chromium_budget_alone_does_not_bypass_browser_specific_planner_authority() {
     let error = choose_engine_authorized(&chromium_needs(), Some(&plan))
         .expect_err("budget capacity without browser suspicion is not authority");
     assert_eq!(error, EngineAdmissionError::PlannerAuthorizationRequired);
+}
+
+#[test]
+fn malformed_escalated_chromium_decision_with_a_non_browser_reason_is_rejected() {
+    let plan = BudgetedPerceptionPlan {
+        actions: vec![chromium_candidate()],
+        rejected: Vec::new(),
+        budget_decision: PerceptionBudgetDecision {
+            status: PerceptionBudgetDecisionStatus::Escalated,
+            budget: budget(0),
+            usage: PerceptionBudgetUsage {
+                latency_ms: 300,
+                text_tokens: 100,
+                image_regions: 0,
+                chromium_spawns: 1,
+            },
+            exceeded: vec![BudgetDimension::ChromiumSpawns],
+            budget_escalation_reason: Some(BudgetEscalationReason::ExplicitDeepMode),
+        },
+    };
+
+    let error = choose_engine_authorized(&chromium_needs(), Some(&plan))
+        .expect_err("Tier 3 must reject malformed/non-browser escalation authority");
+    assert_eq!(error, EngineAdmissionError::InvalidPlannerAuthorization);
 }
