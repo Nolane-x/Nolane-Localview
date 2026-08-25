@@ -50,6 +50,8 @@ jobs:
         run: cargo test -p localview-native-capture
       - name: Token-aware visual packet policy contract
         run: cargo test -p localview-token-budget --test visual_packet_selection
+      - name: Perception budget contract
+        run: cargo test -p localview-token-budget --test perception_budget_contract
 
   native-gui-smoke-linux:
     name: Native GUI smoke (WebKitGTK)
@@ -138,3 +140,5 @@ jobs:
         run: cargo test -p localview-desktop --test progressive_target_capture_contract
       - name: Visual packet capture contract
         run: cargo test -p localview-desktop --test visual_packet_capture_contract
+      - name: Perception budget capture contract
+        run: cargo test -p localview-desktop --test perception_budget_capture_contract
