@@ -3,6 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use localview_evidence::EvidenceKind;
+use localview_token_budget::{
+    evaluate_perception_budget, BudgetEscalationReason, PerceptionBudgetContract,
+    PerceptionBudgetDecision, PerceptionBudgetUsage,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -116,6 +120,170 @@ pub fn plan_perception(candidates: &[PerceptionCandidate], budget: &PerceptionBu
         plan.actions.push(candidate);
     }
     plan
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BudgetedPerceptionCandidate {
+    pub action: PerceptionCandidate,
+    /// Forecast of the diagnose/fix cycle usage if this next observation is admitted.
+    pub estimated_usage: PerceptionBudgetUsage,
+}
+
+impl BudgetedPerceptionCandidate {
+    fn effective_usage(&self) -> PerceptionBudgetUsage {
+        let mut usage = self.estimated_usage;
+        if self.action.kind == PerceptionActionKind::ChromiumEscalation {
+            // One planner action represents one Tier-3 browser spawn. Do not trust a
+            // caller-supplied zero here and do not silently turn one action into a pool.
+            usage.chromium_spawns = 1;
+        }
+        usage
+    }
+
+    fn budgeted_information_gain_score(&self, budget: &PerceptionBudgetContract) -> f32 {
+        let usage = self.effective_usage();
+        let normalized_cost = 1.0
+            + normalized_ratio_u64(usage.latency_ms, budget.latency_ms)
+            + normalized_ratio_usize(usage.text_tokens, budget.text_tokens)
+            + normalized_ratio_usize(usage.image_regions, budget.image_regions)
+            + if usage.chromium_spawns == 0 {
+                0.0
+            } else {
+                // Tier 3 remains intentionally expensive even when an explicit
+                // browser-specific signal later authorizes the budget overrun.
+                4.0 * usage.chromium_spawns as f32
+            };
+        self.action.information_gain_score() / normalized_cost.max(1.0)
+    }
+}
+
+fn normalized_ratio_u64(value: u64, limit: u64) -> f32 {
+    if value == 0 {
+        0.0
+    } else if limit == 0 {
+        value as f32
+    } else {
+        value as f32 / limit as f32
+    }
+}
+
+fn normalized_ratio_usize(value: usize, limit: usize) -> f32 {
+    if value == 0 {
+        0.0
+    } else if limit == 0 {
+        value as f32
+    } else {
+        value as f32 / limit as f32
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PerceptionCycleSignals {
+    pub critical_issue: bool,
+    pub explicit_deep_mode: bool,
+    pub insufficient_evidence: bool,
+    pub browser_specific_suspicion: bool,
+}
+
+impl PerceptionCycleSignals {
+    fn general_escalation_reason(self) -> Option<BudgetEscalationReason> {
+        if self.critical_issue {
+            Some(BudgetEscalationReason::CriticalIssue)
+        } else if self.explicit_deep_mode {
+            Some(BudgetEscalationReason::ExplicitDeepMode)
+        } else if self.insufficient_evidence {
+            Some(BudgetEscalationReason::InsufficientEvidence)
+        } else if self.browser_specific_suspicion {
+            Some(BudgetEscalationReason::BrowserSpecificSuspicion)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PerceptionPlanRejectionReason {
+    BudgetExceededWithoutAuthorizedEscalation,
+    ChromiumRequiresBrowserSpecificSuspicion,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PerceptionPlanRejection {
+    pub candidate_id: String,
+    pub reason: PerceptionPlanRejectionReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BudgetedPerceptionPlan {
+    /// Exactly one next observation is chosen. The planner re-runs after new evidence.
+    pub actions: Vec<BudgetedPerceptionCandidate>,
+    pub rejected: Vec<PerceptionPlanRejection>,
+    pub budget_decision: PerceptionBudgetDecision,
+}
+
+pub fn plan_budgeted_perception_cycle(
+    candidates: &[BudgetedPerceptionCandidate],
+    budget: &PerceptionBudgetContract,
+    signals: &PerceptionCycleSignals,
+) -> BudgetedPerceptionPlan {
+    let mut ordered = candidates.to_vec();
+    ordered.sort_by(|left, right| {
+        right
+            .budgeted_information_gain_score(budget)
+            .total_cmp(&left.budgeted_information_gain_score(budget))
+            .then_with(|| left.action.id.cmp(&right.action.id))
+    });
+
+    let mut rejected = Vec::new();
+    for candidate in ordered {
+        let is_chromium = candidate.action.kind == PerceptionActionKind::ChromiumEscalation;
+        if is_chromium && !signals.browser_specific_suspicion {
+            rejected.push(PerceptionPlanRejection {
+                candidate_id: candidate.action.id.clone(),
+                reason: PerceptionPlanRejectionReason::ChromiumRequiresBrowserSpecificSuspicion,
+            });
+            continue;
+        }
+
+        let usage = candidate.effective_usage();
+        let escalation_reason = if is_chromium {
+            Some(BudgetEscalationReason::BrowserSpecificSuspicion)
+        } else {
+            signals.general_escalation_reason()
+        };
+
+        match evaluate_perception_budget(budget, &usage, escalation_reason) {
+            Ok(budget_decision) => {
+                return BudgetedPerceptionPlan {
+                    actions: vec![candidate],
+                    rejected,
+                    budget_decision,
+                };
+            }
+            Err(_) => rejected.push(PerceptionPlanRejection {
+                candidate_id: candidate.action.id.clone(),
+                reason: PerceptionPlanRejectionReason::BudgetExceededWithoutAuthorizedEscalation,
+            }),
+        }
+    }
+
+    BudgetedPerceptionPlan {
+        actions: Vec::new(),
+        rejected,
+        budget_decision: zero_usage_decision(budget),
+    }
+}
+
+fn zero_usage_decision(budget: &PerceptionBudgetContract) -> PerceptionBudgetDecision {
+    let zero = PerceptionBudgetUsage {
+        latency_ms: 0,
+        text_tokens: 0,
+        image_regions: 0,
+        chromium_spawns: 0,
+    };
+    evaluate_perception_budget(budget, &zero, None)
+        .expect("zero usage is always within a nonnegative perception budget")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
