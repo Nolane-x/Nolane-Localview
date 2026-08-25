@@ -48,6 +48,8 @@ jobs:
         run: cargo test -p localview-control --test fresh_semantic_snapshot
       - name: Native capture platform contract
         run: cargo test -p localview-native-capture
+      - name: Token-aware visual packet policy contract
+        run: cargo test -p localview-token-budget --test visual_packet_selection
 
   native-gui-smoke-linux:
     name: Native GUI smoke (WebKitGTK)
@@ -134,3 +136,5 @@ jobs:
         run: cargo test -p localview-desktop --test changed_region_schedule_contract
       - name: Progressive target capture contract
         run: cargo test -p localview-desktop --test progressive_target_capture_contract
+      - name: Visual packet capture contract
+        run: cargo test -p localview-desktop --test visual_packet_capture_contract
