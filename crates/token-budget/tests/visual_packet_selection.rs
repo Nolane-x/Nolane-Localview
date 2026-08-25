@@ -70,6 +70,9 @@ fn local_high_information_evidence_beats_expensive_viewport_fallback() {
     assert_eq!(selected.mode, VisualPacketSelectionMode::Images);
     assert_eq!(selected.selected.len(), 1);
     assert_eq!(selected.selected[0].source, VisualPacketSource::ChangedRegion);
+    assert_eq!(selected.selected[0].information_gain_milli, 1000);
+    assert_eq!(selected.selected[0].confidence_milli, 1000);
+    assert_eq!(selected.selected[0].relevance_milli, 1000);
     assert!(selected.selected[0].normalized_cost_milli < 250);
     assert_eq!(selected.dropped_candidates, 2);
 }
