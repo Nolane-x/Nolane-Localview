@@ -477,6 +477,33 @@ impl LiveBridge {
         Some(request)
     }
 
+    pub async fn expire_native_executor_active_before(
+        &self,
+        session_id: SessionId,
+        cutoff: DateTime<Utc>,
+    ) -> usize {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return 0;
+        };
+
+        let before = state
+            .native_executor_inflight
+            .len()
+            .saturating_add(state.native_executor_claimed.len());
+        state
+            .native_executor_inflight
+            .retain(|request| request.created_at >= cutoff);
+        state
+            .native_executor_claimed
+            .retain(|request| request.created_at >= cutoff);
+        let after = state
+            .native_executor_inflight
+            .len()
+            .saturating_add(state.native_executor_claimed.len());
+        before.saturating_sub(after)
+    }
+
     pub async fn complete_action(
         &self,
         origin: impl Into<CompletionOrigin>,
