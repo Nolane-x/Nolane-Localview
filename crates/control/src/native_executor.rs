@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use localview_live_bridge::NativeExecutorResult;
 use localview_protocol::SessionId;
 
@@ -16,6 +17,7 @@ use crate::{
 };
 
 const MAX_NATIVE_EXECUTOR_POLL_BATCH: usize = 8;
+const NATIVE_EXECUTOR_ACTIVE_LEASE_SECS: i64 = 15;
 
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
@@ -41,6 +43,14 @@ async fn take_native_executor_requests(
     if state.sessions.get(id).await.is_none() {
         return session_not_found();
     }
+
+    state
+        .live
+        .expire_native_executor_active_before(
+            id,
+            Utc::now() - chrono::Duration::seconds(NATIVE_EXECUTOR_ACTIVE_LEASE_SECS),
+        )
+        .await;
 
     Json(
         state
