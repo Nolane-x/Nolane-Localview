@@ -14,8 +14,8 @@ use localview_evidence::{EvidenceKind, EvidenceObject, UncertaintyClass};
 use localview_live_analysis::{diagnose_live, LiveDiagnosis, LiveUncertaintyClass};
 use localview_live_bridge::{ObserverEvent, ObserverEventKind};
 use localview_planner::{
-    plan_budgeted_perception_cycle, BudgetedPerceptionCandidate, BudgetedPerceptionPlan,
-    PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
+    plan_budgeted_perception_cycle_with_usage, BudgetedPerceptionCandidate,
+    BudgetedPerceptionPlan, PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
 };
 use localview_protocol::SessionId;
 use localview_token_budget::{PerceptionBudgetContract, PerceptionBudgetUsage};
@@ -78,6 +78,21 @@ pub(crate) async fn build_live_perception_plan(
     id: SessionId,
     request: &LivePerceptionPlanRequest,
 ) -> Result<LivePerceptionPlanResponse, LivePerceptionPlanError> {
+    let zero = PerceptionBudgetUsage {
+        latency_ms: 0,
+        text_tokens: 0,
+        image_regions: 0,
+        chromium_spawns: 0,
+    };
+    build_live_perception_plan_with_usage(state, id, request, &zero).await
+}
+
+pub(crate) async fn build_live_perception_plan_with_usage(
+    state: &ControlState,
+    id: SessionId,
+    request: &LivePerceptionPlanRequest,
+    spent: &PerceptionBudgetUsage,
+) -> Result<LivePerceptionPlanResponse, LivePerceptionPlanError> {
     if state.sessions.get(id).await.is_none() {
         return Err(LivePerceptionPlanError::SessionNotFound);
     }
@@ -88,7 +103,12 @@ pub(crate) async fn build_live_perception_plan(
     let diagnosis = diagnose_live(&events);
     let signals = derive_signals(&diagnosis, request);
     let candidates = derive_candidates(&diagnosis, &signals, request.target.as_deref());
-    let plan = plan_budgeted_perception_cycle(&candidates, &request.budget, &signals);
+    let plan = plan_budgeted_perception_cycle_with_usage(
+        &candidates,
+        &request.budget,
+        spent,
+        &signals,
+    );
     let engine = selected_engine(&plan).map_err(LivePerceptionPlanError::EngineAdmission)?;
 
     Ok(LivePerceptionPlanResponse {
