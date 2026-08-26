@@ -419,17 +419,20 @@ impl LiveBridge {
         let Some(state) = states.get_mut(&session_id) else {
             return Vec::new();
         };
-        let count = limit.min(state.native_executor_requests.len());
+        let active = state
+            .native_executor_inflight
+            .len()
+            .saturating_add(state.native_executor_claimed.len());
+        let available = self.action_capacity.saturating_sub(active);
+        let count = limit
+            .min(state.native_executor_requests.len())
+            .min(available);
         let requests = state
             .native_executor_requests
             .drain(..count)
             .collect::<Vec<_>>();
         for request in &requests {
-            push_bounded(
-                &mut state.native_executor_inflight,
-                request.clone(),
-                self.action_capacity,
-            );
+            state.native_executor_inflight.push_back(request.clone());
         }
         requests
     }
@@ -470,11 +473,7 @@ impl LiveBridge {
             .iter()
             .position(|request| request.id == request_id)?;
         let request = state.native_executor_inflight.remove(index)?;
-        push_bounded(
-            &mut state.native_executor_claimed,
-            request.clone(),
-            self.action_capacity,
-        );
+        state.native_executor_claimed.push_back(request.clone());
         Some(request)
     }
 
