@@ -87,9 +87,9 @@ async fn result_requires_exact_claimed_native_origin_and_session() {
         .expect("exact native request becomes claimable only after take");
     assert_eq!(claimed.id, request.id);
 
-    bridge
+    assert!(bridge
         .complete_native_executor(session_id, result(request.id))
-        .await;
+        .await);
     let results = bridge.recent_native_executor_results(session_id, 8).await;
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].request_id, request.id);
@@ -108,4 +108,61 @@ async fn native_executor_queue_is_bounded_by_action_capacity() {
 
     let taken = bridge.take_native_executor_requests(session_id, 64).await;
     assert_eq!(taken.len(), 8);
+}
+
+#[tokio::test]
+async fn active_native_origins_are_never_evicted_by_later_polls() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+
+    let mut first_ids = Vec::new();
+    for _ in 0..8 {
+        first_ids.push(
+            bridge
+                .enqueue_native_executor(session_id, visual_action())
+                .await
+                .id,
+        );
+    }
+    let first_taken = bridge.take_native_executor_requests(session_id, 8).await;
+    assert_eq!(first_taken.len(), 8);
+
+    for _ in 0..8 {
+        bridge
+            .enqueue_native_executor(session_id, visual_action())
+            .await;
+    }
+
+    assert!(
+        bridge
+            .take_native_executor_requests(session_id, 8)
+            .await
+            .is_empty(),
+        "pending work must wait instead of evicting active inflight origins"
+    );
+
+    let first = first_ids[0];
+    assert!(bridge.claim_native_executor(session_id, first).await.is_some());
+    assert!(bridge
+        .complete_native_executor(session_id, result(first))
+        .await);
+
+    let newly_available = bridge.take_native_executor_requests(session_id, 8).await;
+    assert_eq!(
+        newly_available.len(),
+        1,
+        "exactly one pending request may enter inflight after one active origin completes"
+    );
+
+    let still_active = first_ids[1];
+    assert!(
+        bridge
+            .claim_native_executor(session_id, still_active)
+            .await
+            .is_some(),
+        "older inflight origin must remain claimable after later polls"
+    );
+    assert!(bridge
+        .complete_native_executor(session_id, result(still_active))
+        .await);
 }
