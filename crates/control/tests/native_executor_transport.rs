@@ -232,3 +232,21 @@ async fn native_result_requires_exact_taken_origin_before_completion() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].request_id, queued.id);
 }
+
+#[test]
+fn native_executor_poll_expires_stale_active_authority_before_taking_more_work() {
+    let source = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native_executor.rs"),
+    )
+    .expect("native executor transport source");
+    let expire = source
+        .find("expire_native_executor_active_before")
+        .expect("poll transport must expire stale native executor authority");
+    let take = source
+        .find("take_native_executor_requests")
+        .expect("poll transport must take native executor requests");
+
+    assert!(expire < take, "stale active origins must be expired before taking more work");
+    assert!(source.contains("NATIVE_EXECUTOR_ACTIVE_LEASE_SECS"));
+    assert!(source.contains("chrono::Duration::seconds(NATIVE_EXECUTOR_ACTIVE_LEASE_SECS)"));
+}
