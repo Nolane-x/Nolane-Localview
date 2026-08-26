@@ -243,7 +243,7 @@ fn native_executor_poll_expires_stale_active_authority_before_taking_more_work()
         .find("expire_native_executor_active_before")
         .expect("poll transport must expire stale native executor authority");
     let take = source
-        .find("take_native_executor_requests")
+        .find(".take_native_executor_requests(")
         .expect("poll transport must take native executor requests");
 
     assert!(expire < take, "stale active origins must be expired before taking more work");
