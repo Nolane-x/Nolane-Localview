@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod native_executor_worker;
 pub mod visual_capture;
 pub mod workspace_surface;
 
@@ -645,6 +646,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let _ = app.manage(visual_capture::VisualCaptureState::default());
+            native_executor_worker::spawn(app.handle().clone());
             let menu = MenuBuilder::new(app)
                 .text("show", "Open LocalView")
                 .separator()
