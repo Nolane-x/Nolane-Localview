@@ -23,6 +23,7 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 dirs.workspace = true
 localview-artifacts = { path = "../../../crates/artifacts" }
 localview-capture = { path = "../../../crates/capture" }
