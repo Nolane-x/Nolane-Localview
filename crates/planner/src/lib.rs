@@ -201,6 +201,19 @@ impl PerceptionCycleSignals {
     }
 }
 
+pub fn perception_escalation_reason(
+    kind: PerceptionActionKind,
+    signals: &PerceptionCycleSignals,
+) -> Option<BudgetEscalationReason> {
+    if kind == PerceptionActionKind::ChromiumEscalation {
+        signals
+            .browser_specific_suspicion
+            .then_some(BudgetEscalationReason::BrowserSpecificSuspicion)
+    } else {
+        signals.general_escalation_reason()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PerceptionPlanRejectionReason {
@@ -227,11 +240,27 @@ pub fn plan_budgeted_perception_cycle(
     budget: &PerceptionBudgetContract,
     signals: &PerceptionCycleSignals,
 ) -> BudgetedPerceptionPlan {
+    let zero = PerceptionBudgetUsage {
+        latency_ms: 0,
+        text_tokens: 0,
+        image_regions: 0,
+        chromium_spawns: 0,
+    };
+    plan_budgeted_perception_cycle_with_usage(candidates, budget, &zero, signals)
+}
+
+pub fn plan_budgeted_perception_cycle_with_usage(
+    candidates: &[BudgetedPerceptionCandidate],
+    budget: &PerceptionBudgetContract,
+    spent: &PerceptionBudgetUsage,
+    signals: &PerceptionCycleSignals,
+) -> BudgetedPerceptionPlan {
+    let scoring_budget = remaining_budget(budget, spent);
     let mut ordered = candidates.to_vec();
     ordered.sort_by(|left, right| {
         right
-            .budgeted_information_gain_score(budget)
-            .total_cmp(&left.budgeted_information_gain_score(budget))
+            .budgeted_information_gain_score(&scoring_budget)
+            .total_cmp(&left.budgeted_information_gain_score(&scoring_budget))
             .then_with(|| left.action.id.cmp(&right.action.id))
     });
 
@@ -246,14 +275,11 @@ pub fn plan_budgeted_perception_cycle(
             continue;
         }
 
-        let usage = candidate.effective_usage();
-        let escalation_reason = if is_chromium {
-            Some(BudgetEscalationReason::BrowserSpecificSuspicion)
-        } else {
-            signals.general_escalation_reason()
-        };
+        let next_usage = candidate.effective_usage();
+        let cumulative_usage = add_usage(spent, &next_usage);
+        let escalation_reason = perception_escalation_reason(candidate.action.kind, signals);
 
-        match evaluate_perception_budget(budget, &usage, escalation_reason) {
+        match evaluate_perception_budget(budget, &cumulative_usage, escalation_reason) {
             Ok(budget_decision) => {
                 return BudgetedPerceptionPlan {
                     actions: vec![candidate],
@@ -272,6 +298,30 @@ pub fn plan_budgeted_perception_cycle(
         actions: Vec::new(),
         rejected,
         budget_decision: zero_usage_decision(budget),
+    }
+}
+
+fn add_usage(
+    spent: &PerceptionBudgetUsage,
+    next: &PerceptionBudgetUsage,
+) -> PerceptionBudgetUsage {
+    PerceptionBudgetUsage {
+        latency_ms: spent.latency_ms.saturating_add(next.latency_ms),
+        text_tokens: spent.text_tokens.saturating_add(next.text_tokens),
+        image_regions: spent.image_regions.saturating_add(next.image_regions),
+        chromium_spawns: spent.chromium_spawns.saturating_add(next.chromium_spawns),
+    }
+}
+
+fn remaining_budget(
+    budget: &PerceptionBudgetContract,
+    spent: &PerceptionBudgetUsage,
+) -> PerceptionBudgetContract {
+    PerceptionBudgetContract {
+        latency_ms: budget.latency_ms.saturating_sub(spent.latency_ms),
+        text_tokens: budget.text_tokens.saturating_sub(spent.text_tokens),
+        image_regions: budget.image_regions.saturating_sub(spent.image_regions),
+        chromium_spawns: budget.chromium_spawns.saturating_sub(spent.chromium_spawns),
     }
 }
 

@@ -1,7 +1,8 @@
 use localview_evidence::EvidenceKind;
 use localview_planner::{
-    plan_budgeted_perception_cycle, BudgetedPerceptionCandidate, PerceptionActionKind,
-    PerceptionCandidate, PerceptionCycleSignals, PerceptionPlanRejectionReason,
+    plan_budgeted_perception_cycle, plan_budgeted_perception_cycle_with_usage,
+    BudgetedPerceptionCandidate, PerceptionActionKind, PerceptionCandidate,
+    PerceptionCycleSignals, PerceptionPlanRejectionReason,
 };
 use localview_token_budget::{
     BudgetEscalationReason, PerceptionBudgetContract, PerceptionBudgetDecisionStatus,
@@ -252,5 +253,132 @@ fn equal_candidate_sets_produce_the_same_plan_regardless_of_input_order() {
         .map(|item| item.action.id.as_str())
         .collect();
     assert_eq!(forward_ids, reversed_ids);
+    assert_eq!(forward.budget_decision, reversed.budget_decision);
+}
+
+#[test]
+fn cumulative_spend_can_reject_an_individually_affordable_action() {
+    let spent = usage(100, 750, 0, 0);
+    let candidates = vec![candidate(
+        "region",
+        PerceptionActionKind::RegionCapture,
+        1.0,
+        usage(100, 100, 1, 0),
+    )];
+
+    let plan = plan_budgeted_perception_cycle_with_usage(
+        &candidates,
+        &budget(),
+        &spent,
+        &PerceptionCycleSignals::default(),
+    );
+
+    assert!(plan.actions.is_empty());
+    assert_eq!(plan.rejected.len(), 1);
+    assert_eq!(
+        plan.rejected[0].reason,
+        PerceptionPlanRejectionReason::BudgetExceededWithoutAuthorizedEscalation
+    );
+}
+
+#[test]
+fn cumulative_overrun_uses_planner_owned_reason_and_reports_total_usage() {
+    let spent = usage(1_000, 750, 0, 0);
+    let candidates = vec![candidate(
+        "region",
+        PerceptionActionKind::RegionCapture,
+        1.0,
+        usage(600, 100, 1, 0),
+    )];
+    let signals = PerceptionCycleSignals {
+        insufficient_evidence: true,
+        ..Default::default()
+    };
+
+    let plan = plan_budgeted_perception_cycle_with_usage(
+        &candidates,
+        &budget(),
+        &spent,
+        &signals,
+    );
+
+    assert_eq!(plan.actions.len(), 1);
+    assert_eq!(plan.budget_decision.usage, usage(1_600, 850, 1, 0));
+    assert_eq!(
+        plan.budget_decision.status,
+        PerceptionBudgetDecisionStatus::Escalated
+    );
+    assert_eq!(
+        plan.budget_decision.budget_escalation_reason,
+        Some(BudgetEscalationReason::InsufficientEvidence)
+    );
+}
+
+#[test]
+fn cumulative_chromium_usage_counts_the_normalized_next_spawn() {
+    let mut chromium_budget = budget();
+    chromium_budget.chromium_spawns = 1;
+    let spent = usage(200, 100, 0, 1);
+    let candidates = vec![candidate(
+        "chromium",
+        PerceptionActionKind::ChromiumEscalation,
+        1.0,
+        usage(300, 100, 0, 0),
+    )];
+    let signals = PerceptionCycleSignals {
+        browser_specific_suspicion: true,
+        ..Default::default()
+    };
+
+    let plan = plan_budgeted_perception_cycle_with_usage(
+        &candidates,
+        &chromium_budget,
+        &spent,
+        &signals,
+    );
+
+    assert_eq!(plan.actions.len(), 1);
+    assert_eq!(plan.budget_decision.usage.chromium_spawns, 2);
+    assert_eq!(
+        plan.budget_decision.status,
+        PerceptionBudgetDecisionStatus::Escalated
+    );
+    assert_eq!(
+        plan.budget_decision.budget_escalation_reason,
+        Some(BudgetEscalationReason::BrowserSpecificSuspicion)
+    );
+}
+
+#[test]
+fn nonzero_spend_preserves_input_order_independent_selection() {
+    let spent = usage(200, 200, 0, 0);
+    let left = candidate(
+        "a",
+        PerceptionActionKind::RegionCapture,
+        0.8,
+        usage(100, 100, 1, 0),
+    );
+    let right = candidate(
+        "b",
+        PerceptionActionKind::RegionCapture,
+        0.8,
+        usage(100, 100, 1, 0),
+    );
+
+    let forward = plan_budgeted_perception_cycle_with_usage(
+        &[left.clone(), right.clone()],
+        &budget(),
+        &spent,
+        &PerceptionCycleSignals::default(),
+    );
+    let reversed = plan_budgeted_perception_cycle_with_usage(
+        &[right, left],
+        &budget(),
+        &spent,
+        &PerceptionCycleSignals::default(),
+    );
+
+    assert_eq!(forward.actions[0].action.id, "a");
+    assert_eq!(reversed.actions[0].action.id, "a");
     assert_eq!(forward.budget_decision, reversed.budget_decision);
 }
