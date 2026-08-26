@@ -44,6 +44,8 @@ jobs:
         run: cargo test --workspace --exclude localview-desktop
       - name: Native executor queue contract
         run: cargo test -p localview-live-bridge --test native_executor_queue
+      - name: Native executor transport contract
+        run: cargo test -p localview-control --test native_executor_transport
       - name: Progressive semantic target resolver contract
         run: cargo test -p localview-capture --test progressive_target_resolution
       - name: Fresh semantic snapshot control contract
@@ -66,6 +68,8 @@ jobs:
         run: cargo test -p localview-control --test perception_retained_feedback_loop
       - name: Whole-cycle perception budget contract
         run: cargo test -p localview-control --test perception_cycle_budget
+      - name: Native visual perception cycle contract
+        run: cargo test -p localview-control --test native_visual_perception_cycle
 
   native-gui-smoke-linux:
     name: Native GUI smoke (WebKitGTK)
