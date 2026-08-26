@@ -294,14 +294,20 @@ async fn post_execution_latency_overrun_is_rechecked_with_planner_owned_reason()
 }
 
 #[tokio::test]
-async fn selected_visual_action_remains_fail_closed_and_queues_no_generic_page_action() {
+async fn selected_visual_action_without_viewport_fails_closed_and_queues_nothing() {
     let (state, session_id) = test_state().await;
     seed_semantic(&state, session_id).await;
 
     let (status, body) = post_cycle(state.clone(), session_id, cycle_body(1_500)).await;
 
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["error"], "perception_executor_unavailable");
-    assert_eq!(body["action_kind"], "region_capture");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "perception_visual_viewport_required");
     assert!(state.live.take_actions(session_id, 8).await.is_empty());
+    assert!(
+        state
+            .live
+            .take_native_executor_requests(session_id, 8)
+            .await
+            .is_empty()
+    );
 }
