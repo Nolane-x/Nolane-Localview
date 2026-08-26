@@ -720,7 +720,11 @@ fn sanitize_native_executor_result(
 
     if let Some(error) = result.error.as_mut() {
         if error.len() > MAX_NATIVE_EXECUTOR_ERROR_BYTES {
-            error.truncate(MAX_NATIVE_EXECUTOR_ERROR_BYTES);
+            let mut end = MAX_NATIVE_EXECUTOR_ERROR_BYTES;
+            while end > 0 && !error.is_char_boundary(end) {
+                end -= 1;
+            }
+            error.truncate(end);
         }
     }
 }
