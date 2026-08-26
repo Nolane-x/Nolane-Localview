@@ -269,10 +269,28 @@ async fn post_execution_latency_overrun_is_rechecked_with_planner_owned_reason()
             .is_some_and(|items| items.iter().any(|item| item == "latency_ms"))
     );
     assert!(body["usage"]["latency_ms"].as_u64().is_some_and(|value| value > 1));
+
+    let step_decision = &body["steps"][0]["post_execution_budget_decision"];
+    assert_eq!(step_decision["status"], body["budget_decision"]["status"]);
+    assert_eq!(step_decision["budget"], body["budget_decision"]["budget"]);
     assert_eq!(
-        body["steps"][0]["post_execution_budget_decision"],
-        body["budget_decision"]
+        step_decision["budget_escalation_reason"],
+        body["budget_decision"]["budget_escalation_reason"]
     );
+    assert_eq!(step_decision["exceeded"], body["budget_decision"]["exceeded"]);
+    assert_eq!(step_decision["usage"]["text_tokens"], body["usage"]["text_tokens"]);
+    assert_eq!(step_decision["usage"]["image_regions"], body["usage"]["image_regions"]);
+    assert_eq!(
+        step_decision["usage"]["chromium_spawns"],
+        body["usage"]["chromium_spawns"]
+    );
+    let step_latency = step_decision["usage"]["latency_ms"]
+        .as_u64()
+        .expect("post-execution latency");
+    let final_latency = body["usage"]["latency_ms"]
+        .as_u64()
+        .expect("completion latency");
+    assert!(final_latency >= step_latency);
 }
 
 #[tokio::test]
