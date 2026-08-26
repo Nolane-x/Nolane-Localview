@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use localview_control::ControlState;
+use localview_control::{runtime_resource_governor_for_sessions, ControlState};
 use localview_core::RuntimeConfig;
 use localview_discovery::{CommandListenerSource, DiscoveryEngine};
 use localview_evidence::EvidenceStore;
@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
 
     let config = RuntimeConfig::default();
     let sessions = Arc::new(SessionManager::new(config.disconnect_grace));
+    let resources = runtime_resource_governor_for_sessions(&sessions);
     let observations = ObservationBus::new(1024);
     let live = LiveBridge::default();
     let evidence = EvidenceStore::default();
@@ -94,6 +95,7 @@ async fn main() -> Result<()> {
                         for id in result.removed {
                             live.release_session(id).await;
                             evidence.release_session(id).await;
+                            resources.release_session(&id.to_string());
                         }
                     }
                     Err(error) => warn!(%error, "discovery scan failed"),
