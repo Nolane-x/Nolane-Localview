@@ -6,6 +6,7 @@ mod native_executor;
 mod perception;
 mod perception_cycle;
 mod perception_execution;
+mod resource_runtime;
 #[path = "runtime.rs"]
 mod runtime;
 mod visual_region;
@@ -15,6 +16,7 @@ use std::net::SocketAddr;
 use anyhow::Result;
 use axum::Router;
 
+pub use localview_resource_governor::RuntimeResourceGovernor;
 pub use runtime::{ControlState, EventEnvelope};
 #[doc(hidden)]
 pub use runtime::serve as legacy_serve;
@@ -27,6 +29,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(perception::router(state.clone()))
         .merge(perception_execution::router(state.clone()))
         .merge(perception_cycle::router(state.clone()))
+        .merge(resource_runtime::router(state.clone()))
         .merge(visual_region::router(state))
 }
 
