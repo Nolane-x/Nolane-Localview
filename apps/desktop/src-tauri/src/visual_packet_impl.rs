@@ -1,6 +1,8 @@
 use std::time::Instant;
 
+use chrono::Utc;
 use localview_capture::ProgressiveTargetPlan;
+use localview_live_bridge::{NativeExecutorAction, NativeExecutorRequest, NativeExecutorResult};
 use localview_protocol::DetailLevel;
 use localview_token_budget::{
     approximate_tokens, evaluate_perception_budget, select_visual_packet, serialize_with_budget,
@@ -389,4 +391,79 @@ fn visual_packet_requested_target(selected: &SelectedVisualEvidence) -> Requeste
             RequestedCaptureTarget::Region(selected.rect.clone())
         }
     }
+}
+
+pub(crate) async fn execute_native_visual_packet(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, VisualCaptureState>,
+    request: NativeExecutorRequest,
+) -> NativeExecutorResult {
+    let request_id = request.id;
+    let completed = match request.action {
+        NativeExecutorAction::VisualPacket {
+            reference,
+            viewport,
+            revision,
+            budget,
+            budget_escalation_reason,
+        } => {
+            capture_visual_packet_authorized(
+                app,
+                state,
+                request.session_id,
+                reference,
+                viewport,
+                revision,
+                budget,
+                budget_escalation_reason,
+            )
+            .await
+        }
+    };
+
+    match completed {
+        Ok(receipt) => {
+            let usage = receipt.budget_decision.usage;
+            let payload = serde_json::json!({
+                "mode": receipt.mode,
+                "capture_performed": receipt.capture_performed,
+                "selected_regions": receipt.selection.selected.len(),
+                "evidence_ids": receipt
+                    .receipts
+                    .iter()
+                    .map(|receipt| receipt.evidence_id.clone())
+                    .collect::<Vec<_>>(),
+                "baseline_cached": receipt.baseline_cached,
+                "snapshot_version": receipt.snapshot_version,
+            });
+            NativeExecutorResult {
+                request_id,
+                ok: true,
+                error: None,
+                usage: Some(usage),
+                payload,
+                completed_at: Utc::now(),
+            }
+        }
+        Err(error) => NativeExecutorResult {
+            request_id,
+            ok: false,
+            error: Some(bounded_native_executor_error(error)),
+            usage: None,
+            payload: serde_json::Value::Null,
+            completed_at: Utc::now(),
+        },
+    }
+}
+
+fn bounded_native_executor_error(error: String) -> String {
+    const MAX_ERROR_BYTES: usize = 1_024;
+    if error.len() <= MAX_ERROR_BYTES {
+        return error;
+    }
+    let mut end = MAX_ERROR_BYTES;
+    while !error.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    error[..end].to_owned()
 }
