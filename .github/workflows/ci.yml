@@ -70,6 +70,8 @@ jobs:
         run: cargo test -p localview-control --test perception_cycle_budget
       - name: Native visual perception cycle contract
         run: cargo test -p localview-control --test native_visual_perception_cycle
+      - name: Native visual evidence correlation contract
+        run: cargo test -p localview-control --test native_visual_evidence_correlation
 
   native-gui-smoke-linux:
     name: Native GUI smoke (WebKitGTK)
