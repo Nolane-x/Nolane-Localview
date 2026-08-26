@@ -65,7 +65,7 @@ struct PerceptionCycleStepReceipt {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum PerceptionCycleExecutionReceipt {
     SemanticSnapshot {
-        snapshot: PageSnapshot,
+        snapshot: Box<PageSnapshot>,
     },
     NativeVisualPacket {
         request_id: uuid::Uuid,
@@ -154,7 +154,9 @@ async fn execute_live_perception_cycle(
                 // replace only latency with whole-cycle wall clock.
                 spent = planned.plan.budget_decision.usage;
                 spent.latency_ms = elapsed_ms(started_at);
-                PerceptionCycleExecutionReceipt::SemanticSnapshot { snapshot }
+                PerceptionCycleExecutionReceipt::SemanticSnapshot {
+                    snapshot: Box::new(snapshot),
+                }
             }
             PerceptionActionKind::RegionCapture => {
                 let Some(viewport) = request.viewport.clone() else {
@@ -183,7 +185,7 @@ async fn execute_live_perception_cycle(
                 if !result.ok {
                     return native_visual_failed_response(&result);
                 }
-                let Some(actual_usage) = result.usage.clone() else {
+                let Some(actual_usage) = result.usage else {
                     return native_visual_invalid_usage_response("native_visual_usage_missing");
                 };
                 if actual_usage.chromium_spawns != 0 || actual_usage.image_regions > 1 {
