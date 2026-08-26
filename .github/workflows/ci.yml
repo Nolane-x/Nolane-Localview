@@ -156,3 +156,5 @@ jobs:
         run: cargo test -p localview-desktop --test perception_budget_capture_contract
       - name: Perception budget authorization contract
         run: cargo test -p localview-desktop --test perception_budget_authorization_contract
+      - name: Native visual executor worker contract
+        run: cargo test -p localview-desktop --test native_visual_executor_worker_contract
