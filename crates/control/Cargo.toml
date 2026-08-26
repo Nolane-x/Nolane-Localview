@@ -18,6 +18,7 @@ localview-observation = { path = "../observation" }
 localview-planner = { path = "../planner" }
 localview-project-state = { path = "../project-state" }
 localview-protocol = { path = "../protocol" }
+localview-resource-governor = { path = "../resource-governor" }
 localview-security = { path = "../security" }
 localview-sessions = { path = "../sessions" }
 localview-token-budget = { path = "../token-budget" }
