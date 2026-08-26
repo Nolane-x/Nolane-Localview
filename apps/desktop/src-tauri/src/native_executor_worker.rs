@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use localview_live_bridge::{NativeExecutorRequest, NativeExecutorResult};
 use localview_protocol::{Session, SessionId};
+use tauri::Manager;
 
 use crate::{control_client, read_token, visual_capture};
 
