@@ -161,6 +161,7 @@ async fn execute_one_native_visual(
             "insufficient_evidence"
         );
 
+        let mut evidence_ids = Vec::new();
         if retain_visual_evidence {
             let captured_at = Utc::now().timestamp_millis();
             let (evidence_status, evidence) = send(
@@ -186,7 +187,12 @@ async fn execute_one_native_visual(
             )
             .await;
             assert_eq!(evidence_status, StatusCode::OK);
-            assert!(evidence["evidence_id"].as_str().is_some());
+            evidence_ids.push(
+                evidence["evidence_id"]
+                    .as_str()
+                    .expect("evidence id")
+                    .to_owned(),
+            );
         }
 
         let request_id = request["id"].as_str().expect("request id");
@@ -206,8 +212,9 @@ async fn execute_one_native_visual(
                 },
                 "payload": {
                     "selection_mode": "regions",
-                    "receipt_count": 1,
-                    "capture_performed": true
+                    "receipt_count": evidence_ids.len(),
+                    "capture_performed": true,
+                    "evidence_ids": evidence_ids
                 },
                 "completed_at": Utc::now()
             })),
@@ -305,5 +312,9 @@ async fn native_success_without_matching_retained_visual_evidence_fails_closed()
     worker.await.expect("native visual executor");
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert_eq!(body["error"], "native_visual_evidence_missing");
+    assert_eq!(body["error"], "native_visual_executor_failed");
+    assert_eq!(
+        body["reason"],
+        "native visual evidence correlation failed"
+    );
 }
