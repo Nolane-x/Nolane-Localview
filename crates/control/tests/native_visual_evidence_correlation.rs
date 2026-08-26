@@ -223,5 +223,9 @@ async fn native_visual_result_must_correlate_to_the_exact_reported_evidence_ids(
     worker.await.expect("native visual worker");
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert_eq!(body["error"], "native_visual_evidence_missing");
+    assert_eq!(body["error"], "native_visual_executor_failed");
+    assert_eq!(
+        body["reason"],
+        "native visual evidence correlation failed"
+    );
 }
