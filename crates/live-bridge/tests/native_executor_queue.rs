@@ -250,7 +250,7 @@ async fn native_executor_result_error_truncation_is_utf8_safe() {
 
     let mut unicode_result = result(request.id);
     unicode_result.ok = false;
-    unicode_result.error = Some("🙂".repeat(600));
+    unicode_result.error = Some("€".repeat(800));
     unicode_result.usage = None;
 
     assert!(bridge
@@ -259,5 +259,5 @@ async fn native_executor_result_error_truncation_is_utf8_safe() {
     let stored = bridge.recent_native_executor_results(session_id, 1).await;
     let error = stored[0].error.as_deref().expect("bounded error is retained");
     assert!(error.len() <= 2 * 1024);
-    assert!(error.chars().all(|character| character == '🙂'));
+    assert!(error.chars().all(|character| character == '€'));
 }
