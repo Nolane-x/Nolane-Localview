@@ -101,6 +101,13 @@ pub struct DiscoveredServer {
 pub struct Rect { pub x: f64, pub y: f64, pub width: f64, pub height: f64 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ViewportMeta {
+    pub css_width: u32,
+    pub css_height: u32,
+    pub device_scale_factor: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SemanticNode {
     pub reference: ElementRef,
     pub role: Option<String>,

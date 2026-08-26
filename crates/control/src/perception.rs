@@ -17,7 +17,7 @@ use localview_planner::{
     plan_budgeted_perception_cycle_with_usage, BudgetedPerceptionCandidate,
     BudgetedPerceptionPlan, PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
 };
-use localview_protocol::SessionId;
+use localview_protocol::{SessionId, ViewportMeta};
 use localview_token_budget::{PerceptionBudgetContract, PerceptionBudgetUsage};
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +32,10 @@ pub(crate) struct LivePerceptionPlanRequest {
     #[serde(default)]
     pub(crate) compatibility_requested: bool,
     pub(crate) target: Option<String>,
+    #[serde(default)]
+    pub(crate) viewport: Option<ViewportMeta>,
+    #[serde(default)]
+    pub(crate) revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,6 +97,19 @@ pub(crate) async fn build_live_perception_plan_with_usage(
     request: &LivePerceptionPlanRequest,
     spent: &PerceptionBudgetUsage,
 ) -> Result<LivePerceptionPlanResponse, LivePerceptionPlanError> {
+    build_live_perception_plan_with_usage_and_visual_satisfaction(
+        state, id, request, spent, false,
+    )
+    .await
+}
+
+pub(crate) async fn build_live_perception_plan_with_usage_and_visual_satisfaction(
+    state: &ControlState,
+    id: SessionId,
+    request: &LivePerceptionPlanRequest,
+    spent: &PerceptionBudgetUsage,
+    visual_satisfied: bool,
+) -> Result<LivePerceptionPlanResponse, LivePerceptionPlanError> {
     if state.sessions.get(id).await.is_none() {
         return Err(LivePerceptionPlanError::SessionNotFound);
     }
@@ -101,8 +118,13 @@ pub(crate) async fn build_live_perception_plan_with_usage(
     let retained = state.evidence.recent_for_session(id, 64).await;
     append_retained_snapshot_observations(&mut events, &retained);
     let diagnosis = diagnose_live(&events);
-    let signals = derive_signals(&diagnosis, request);
-    let candidates = derive_candidates(&diagnosis, &signals, request.target.as_deref());
+    let signals = derive_signals(&diagnosis, request, visual_satisfied);
+    let candidates = derive_candidates(
+        &diagnosis,
+        &signals,
+        request.target.as_deref(),
+        visual_satisfied,
+    );
     let plan = plan_budgeted_perception_cycle_with_usage(
         &candidates,
         &request.budget,
@@ -187,21 +209,26 @@ pub(crate) fn plan_error_response(error: LivePerceptionPlanError) -> axum::respo
 fn derive_signals(
     diagnosis: &LiveDiagnosis,
     request: &LivePerceptionPlanRequest,
+    visual_satisfied: bool,
 ) -> PerceptionCycleSignals {
     let state_unknown = has_unknown(diagnosis, LiveUncertaintyClass::State);
-    let visual_unknown = has_unknown(diagnosis, LiveUncertaintyClass::Visual);
+    let visual_unknown = has_unknown(diagnosis, LiveUncertaintyClass::Visual) && !visual_satisfied;
     let critical_issue = diagnosis
         .findings
         .iter()
         .any(|finding| finding.severity >= 3 && finding.confidence >= 80);
+    let insufficient_evidence = diagnosis
+        .unknowns
+        .iter()
+        .any(|unknown| !(visual_satisfied && unknown.class == LiveUncertaintyClass::Visual));
 
     PerceptionCycleSignals {
         critical_issue,
         explicit_deep_mode: request.deep_mode,
-        insufficient_evidence: !diagnosis.unknowns.is_empty(),
+        insufficient_evidence,
         // Compatibility intent is not authority by itself. Browser-specific
         // suspicion becomes actionable only after the cheaper semantic and
-        // layout evidence needed to identify the page state is already known.
+        // visual evidence needed to identify the page state is already known.
         browser_specific_suspicion: request.compatibility_requested
             && !state_unknown
             && !visual_unknown,
@@ -212,11 +239,12 @@ fn derive_candidates(
     diagnosis: &LiveDiagnosis,
     signals: &PerceptionCycleSignals,
     target: Option<&str>,
+    visual_satisfied: bool,
 ) -> Vec<BudgetedPerceptionCandidate> {
     let mut candidates = Vec::new();
     let target = target.map(str::to_owned);
     let state_unknown = has_unknown(diagnosis, LiveUncertaintyClass::State);
-    let visual_unknown = has_unknown(diagnosis, LiveUncertaintyClass::Visual);
+    let visual_unknown = has_unknown(diagnosis, LiveUncertaintyClass::Visual) && !visual_satisfied;
     let cause_unknown = has_unknown(diagnosis, LiveUncertaintyClass::Cause);
 
     if state_unknown {
@@ -244,7 +272,7 @@ fn derive_candidates(
             "visual-target-region",
             PerceptionActionKind::RegionCapture,
             target.clone(),
-            vec![EvidenceKind::Visual, EvidenceKind::Layout],
+            vec![EvidenceKind::Visual],
             0.55,
             0.8,
             60,

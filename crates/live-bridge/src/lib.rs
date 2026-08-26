@@ -6,7 +6,10 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use localview_protocol::{ElementRef, SessionId};
+use localview_protocol::{ElementRef, SessionId, ViewportMeta};
+use localview_token_budget::{
+    BudgetEscalationReason, PerceptionBudgetContract, PerceptionBudgetUsage,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -17,6 +20,8 @@ const MAX_PRIVATE_MASK_SELECTOR_BYTES: usize = 256;
 const MAX_VISUAL_MASK_RECTS: usize = 256;
 const MAX_MASKED_ELEMENTS: u64 = 4_096;
 const MAX_CSS_VIEWPORT_DIMENSION: f64 = 100_000.0;
+const MAX_NATIVE_EXECUTOR_RESULT_PAYLOAD_BYTES: usize = 64 * 1024;
+const MAX_NATIVE_EXECUTOR_ERROR_BYTES: usize = 2 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -130,6 +135,37 @@ pub struct BridgeActionResult {
     pub completed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NativeExecutorAction {
+    VisualPacket {
+        reference: Option<ElementRef>,
+        viewport: ViewportMeta,
+        revision: Option<String>,
+        budget: PerceptionBudgetContract,
+        budget_escalation_reason: Option<BudgetEscalationReason>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NativeExecutorRequest {
+    pub id: Uuid,
+    pub session_id: SessionId,
+    pub action: NativeExecutorAction,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NativeExecutorResult {
+    pub request_id: Uuid,
+    pub ok: bool,
+    pub error: Option<String>,
+    pub usage: Option<PerceptionBudgetUsage>,
+    #[serde(default)]
+    pub payload: Value,
+    pub completed_at: DateTime<Utc>,
+}
+
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub enum CompletionOrigin {
@@ -179,6 +215,10 @@ struct SessionBridgeState {
     capture_claimed: VecDeque<BridgeAction>,
     results: VecDeque<BridgeActionResult>,
     capture_results: VecDeque<BridgeActionResult>,
+    native_executor_requests: VecDeque<NativeExecutorRequest>,
+    native_executor_inflight: VecDeque<NativeExecutorRequest>,
+    native_executor_claimed: VecDeque<NativeExecutorRequest>,
+    native_executor_results: VecDeque<NativeExecutorResult>,
 }
 
 #[derive(Clone, Debug)]
@@ -304,6 +344,27 @@ impl LiveBridge {
         action
     }
 
+    pub async fn enqueue_native_executor(
+        &self,
+        session_id: SessionId,
+        action: NativeExecutorAction,
+    ) -> NativeExecutorRequest {
+        let request = NativeExecutorRequest {
+            id: Uuid::new_v4(),
+            session_id,
+            action,
+            created_at: Utc::now(),
+        };
+        let mut states = self.inner.write().await;
+        let state = states.entry(session_id).or_default();
+        push_bounded(
+            &mut state.native_executor_requests,
+            request.clone(),
+            self.action_capacity,
+        );
+        request
+    }
+
     pub async fn take_actions(&self, session_id: SessionId, limit: usize) -> Vec<BridgeAction> {
         self.take_public_actions(session_id, limit).await
     }
@@ -349,6 +410,33 @@ impl LiveBridge {
             .collect()
     }
 
+    pub async fn take_native_executor_requests(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<NativeExecutorRequest> {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return Vec::new();
+        };
+        let active = state
+            .native_executor_inflight
+            .len()
+            .saturating_add(state.native_executor_claimed.len());
+        let available = self.action_capacity.saturating_sub(active);
+        let count = limit
+            .min(state.native_executor_requests.len())
+            .min(available);
+        let requests = state
+            .native_executor_requests
+            .drain(..count)
+            .collect::<Vec<_>>();
+        for request in &requests {
+            state.native_executor_inflight.push_back(request.clone());
+        }
+        requests
+    }
+
     pub async fn claim_action(
         &self,
         session_id: SessionId,
@@ -371,6 +459,49 @@ impl LiveBridge {
             action_id,
             self.action_capacity,
         )
+    }
+
+    pub async fn claim_native_executor(
+        &self,
+        session_id: SessionId,
+        request_id: Uuid,
+    ) -> Option<NativeExecutorRequest> {
+        let mut states = self.inner.write().await;
+        let state = states.get_mut(&session_id)?;
+        let index = state
+            .native_executor_inflight
+            .iter()
+            .position(|request| request.id == request_id)?;
+        let request = state.native_executor_inflight.remove(index)?;
+        state.native_executor_claimed.push_back(request.clone());
+        Some(request)
+    }
+
+    pub async fn expire_native_executor_active_before(
+        &self,
+        session_id: SessionId,
+        cutoff: DateTime<Utc>,
+    ) -> usize {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return 0;
+        };
+
+        let before = state
+            .native_executor_inflight
+            .len()
+            .saturating_add(state.native_executor_claimed.len());
+        state
+            .native_executor_inflight
+            .retain(|request| request.created_at >= cutoff);
+        state
+            .native_executor_claimed
+            .retain(|request| request.created_at >= cutoff);
+        let after = state
+            .native_executor_inflight
+            .len()
+            .saturating_add(state.native_executor_claimed.len());
+        before.saturating_sub(after)
     }
 
     pub async fn complete_action(
@@ -404,6 +535,34 @@ impl LiveBridge {
         }
     }
 
+    pub async fn complete_native_executor(
+        &self,
+        session_id: SessionId,
+        mut result: NativeExecutorResult,
+    ) -> bool {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return false;
+        };
+        let Some(index) = state
+            .native_executor_claimed
+            .iter()
+            .position(|request| request.id == result.request_id && request.session_id == session_id)
+        else {
+            return false;
+        };
+        let Some(request) = state.native_executor_claimed.remove(index) else {
+            return false;
+        };
+        sanitize_native_executor_result(&request, &mut result);
+        push_bounded(
+            &mut state.native_executor_results,
+            result,
+            self.result_capacity,
+        );
+        true
+    }
+
     pub async fn recent_results(
         &self,
         session_id: SessionId,
@@ -425,6 +584,18 @@ impl LiveBridge {
         states
             .get(&session_id)
             .map(|state| recent_from(&state.capture_results, limit))
+            .unwrap_or_default()
+    }
+
+    pub async fn recent_native_executor_results(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<NativeExecutorResult> {
+        let states = self.inner.read().await;
+        states
+            .get(&session_id)
+            .map(|state| recent_from(&state.native_executor_results, limit))
             .unwrap_or_default()
     }
 
@@ -523,6 +694,39 @@ fn recent_from<T: Clone>(queue: &VecDeque<T>, limit: usize) -> Vec<T> {
         .into_iter()
         .rev()
         .collect()
+}
+
+fn sanitize_native_executor_result(
+    request: &NativeExecutorRequest,
+    result: &mut NativeExecutorResult,
+) {
+    if result.request_id != request.id {
+        result.ok = false;
+        result.usage = None;
+        result.payload = Value::Null;
+        result.error = Some("native executor result origin mismatch".into());
+        return;
+    }
+
+    if serde_json::to_vec(&result.payload)
+        .map(|bytes| bytes.len() > MAX_NATIVE_EXECUTOR_RESULT_PAYLOAD_BYTES)
+        .unwrap_or(true)
+    {
+        result.ok = false;
+        result.usage = None;
+        result.payload = Value::Null;
+        result.error = Some("native executor result payload exceeded bounded metadata limit".into());
+    }
+
+    if let Some(error) = result.error.as_mut() {
+        if error.len() > MAX_NATIVE_EXECUTOR_ERROR_BYTES {
+            let mut end = MAX_NATIVE_EXECUTOR_ERROR_BYTES;
+            while end > 0 && !error.is_char_boundary(end) {
+                end -= 1;
+            }
+            error.truncate(end);
+        }
+    }
 }
 
 fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut BridgeActionResult) {

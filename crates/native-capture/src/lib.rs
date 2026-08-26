@@ -8,6 +8,7 @@ use std::{
 };
 
 use localview_capture::CaptureTarget;
+pub use localview_protocol::ViewportMeta;
 use serde::{Deserialize, Serialize};
 use tauri::webview::PlatformWebview;
 use thiserror::Error;
@@ -25,13 +26,6 @@ pub struct CaptureRequest {
     pub viewport: ViewportMeta,
     pub route: String,
     pub revision: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ViewportMeta {
-    pub css_width: u32,
-    pub css_height: u32,
-    pub device_scale_factor: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

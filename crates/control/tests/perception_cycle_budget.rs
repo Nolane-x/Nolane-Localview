@@ -269,21 +269,45 @@ async fn post_execution_latency_overrun_is_rechecked_with_planner_owned_reason()
             .is_some_and(|items| items.iter().any(|item| item == "latency_ms"))
     );
     assert!(body["usage"]["latency_ms"].as_u64().is_some_and(|value| value > 1));
+
+    let step_decision = &body["steps"][0]["post_execution_budget_decision"];
+    assert_eq!(step_decision["status"], body["budget_decision"]["status"]);
+    assert_eq!(step_decision["budget"], body["budget_decision"]["budget"]);
     assert_eq!(
-        body["steps"][0]["post_execution_budget_decision"],
-        body["budget_decision"]
+        step_decision["budget_escalation_reason"],
+        body["budget_decision"]["budget_escalation_reason"]
     );
+    assert_eq!(step_decision["exceeded"], body["budget_decision"]["exceeded"]);
+    assert_eq!(step_decision["usage"]["text_tokens"], body["usage"]["text_tokens"]);
+    assert_eq!(step_decision["usage"]["image_regions"], body["usage"]["image_regions"]);
+    assert_eq!(
+        step_decision["usage"]["chromium_spawns"],
+        body["usage"]["chromium_spawns"]
+    );
+    let step_latency = step_decision["usage"]["latency_ms"]
+        .as_u64()
+        .expect("post-execution latency");
+    let final_latency = body["usage"]["latency_ms"]
+        .as_u64()
+        .expect("completion latency");
+    assert!(final_latency >= step_latency);
 }
 
 #[tokio::test]
-async fn selected_visual_action_remains_fail_closed_and_queues_no_generic_page_action() {
+async fn selected_visual_action_without_viewport_fails_closed_and_queues_nothing() {
     let (state, session_id) = test_state().await;
     seed_semantic(&state, session_id).await;
 
     let (status, body) = post_cycle(state.clone(), session_id, cycle_body(1_500)).await;
 
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["error"], "perception_executor_unavailable");
-    assert_eq!(body["action_kind"], "region_capture");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "perception_visual_viewport_required");
     assert!(state.live.take_actions(session_id, 8).await.is_empty());
+    assert!(
+        state
+            .live
+            .take_native_executor_requests(session_id, 8)
+            .await
+            .is_empty()
+    );
 }
