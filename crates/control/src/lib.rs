@@ -17,6 +17,7 @@ use anyhow::Result;
 use axum::Router;
 
 pub use localview_resource_governor::RuntimeResourceGovernor;
+pub use resource_runtime::runtime_resource_governor_for_sessions;
 pub use runtime::{ControlState, EventEnvelope};
 #[doc(hidden)]
 pub use runtime::serve as legacy_serve;
