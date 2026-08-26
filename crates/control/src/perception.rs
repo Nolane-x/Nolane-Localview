@@ -18,10 +18,14 @@ use localview_planner::{
     BudgetedPerceptionPlan, PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
 };
 use localview_protocol::{SessionId, ViewportMeta};
+use localview_resource_governor::{ResourceAdmissionDenial, ResourceWorkKind};
 use localview_token_budget::{PerceptionBudgetContract, PerceptionBudgetUsage};
 use serde::{Deserialize, Serialize};
 
-use crate::ControlState;
+use crate::{
+    resource_runtime::{denial_response as resource_denial_response, governor as resource_governor},
+    ControlState,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,10 +50,11 @@ pub(crate) struct LivePerceptionPlanResponse {
     pub(crate) engine: Option<EngineDecision>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum LivePerceptionPlanError {
     SessionNotFound,
     EngineAdmission(EngineAdmissionError),
+    ResourceGovernor(ResourceAdmissionDenial),
 }
 
 pub(crate) fn router(state: ControlState) -> Router {
@@ -131,6 +136,13 @@ pub(crate) async fn build_live_perception_plan_with_usage_and_visual_satisfactio
         spent,
         &signals,
     );
+    if plan.actions.first().is_some_and(|selected| {
+        selected.action.kind == PerceptionActionKind::ChromiumEscalation
+    }) {
+        resource_governor(state)
+            .check(ResourceWorkKind::Chromium)
+            .map_err(LivePerceptionPlanError::ResourceGovernor)?;
+    }
     let engine = selected_engine(&plan).map_err(LivePerceptionPlanError::EngineAdmission)?;
 
     Ok(LivePerceptionPlanResponse {
@@ -203,6 +215,7 @@ pub(crate) fn plan_error_response(error: LivePerceptionPlanError) -> axum::respo
             })),
         )
             .into_response(),
+        LivePerceptionPlanError::ResourceGovernor(denial) => resource_denial_response(denial),
     }
 }
 
@@ -226,9 +239,6 @@ fn derive_signals(
         critical_issue,
         explicit_deep_mode: request.deep_mode,
         insufficient_evidence,
-        // Compatibility intent is not authority by itself. Browser-specific
-        // suspicion becomes actionable only after the cheaper semantic and
-        // visual evidence needed to identify the page state is already known.
         browser_specific_suspicion: request.compatibility_requested
             && !state_unknown
             && !visual_unknown,
@@ -342,8 +352,6 @@ fn derive_candidates(
                 latency_ms: 500,
                 text_tokens: 200,
                 image_regions: 0,
-                // Planner owns normalization to exactly one spawn for a
-                // ChromiumEscalation action.
                 chromium_spawns: 0,
             },
         ));
@@ -418,7 +426,10 @@ fn selected_engine(
 }
 
 fn has_unknown(diagnosis: &LiveDiagnosis, class: LiveUncertaintyClass) -> bool {
-    diagnosis.unknowns.iter().any(|unknown| unknown.class == class)
+    diagnosis
+        .unknowns
+        .iter()
+        .any(|unknown| unknown.class == class)
 }
 
 pub(crate) fn authorized(headers: &HeaderMap, state: &ControlState) -> bool {
