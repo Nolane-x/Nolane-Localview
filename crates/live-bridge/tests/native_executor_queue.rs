@@ -166,3 +166,98 @@ async fn active_native_origins_are_never_evicted_by_later_polls() {
         .complete_native_executor(session_id, result(still_active))
         .await);
 }
+
+#[tokio::test]
+async fn expired_native_origins_release_capacity_and_reject_late_results() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+    let mut active_ids = Vec::new();
+    for _ in 0..8 {
+        active_ids.push(
+            bridge
+                .enqueue_native_executor(session_id, visual_action())
+                .await
+                .id,
+        );
+    }
+    assert_eq!(bridge.take_native_executor_requests(session_id, 8).await.len(), 8);
+    let claimed_id = active_ids[0];
+    assert!(bridge
+        .claim_native_executor(session_id, claimed_id)
+        .await
+        .is_some());
+
+    for _ in 0..8 {
+        bridge
+            .enqueue_native_executor(session_id, visual_action())
+            .await;
+    }
+
+    let expired = bridge
+        .expire_native_executor_active_before(
+            session_id,
+            Utc::now() + chrono::Duration::seconds(1),
+        )
+        .await;
+    assert_eq!(expired, 8, "all active inflight/claimed origins must expire");
+    assert!(
+        !bridge
+            .complete_native_executor(session_id, result(claimed_id))
+            .await,
+        "a late result must not resurrect an expired authority origin"
+    );
+    assert_eq!(
+        bridge.take_native_executor_requests(session_id, 8).await.len(),
+        8,
+        "pending work must regain all active capacity after stale origins expire"
+    );
+}
+
+#[tokio::test]
+async fn fresh_native_origins_survive_lease_cleanup() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+    let request = bridge
+        .enqueue_native_executor(session_id, visual_action())
+        .await;
+    assert_eq!(bridge.take_native_executor_requests(session_id, 1).await.len(), 1);
+
+    let expired = bridge
+        .expire_native_executor_active_before(
+            session_id,
+            Utc::now() - chrono::Duration::seconds(1),
+        )
+        .await;
+    assert_eq!(expired, 0);
+    assert!(bridge
+        .claim_native_executor(session_id, request.id)
+        .await
+        .is_some());
+}
+
+#[tokio::test]
+async fn native_executor_result_error_truncation_is_utf8_safe() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+    let request = bridge
+        .enqueue_native_executor(session_id, visual_action())
+        .await;
+    assert_eq!(bridge.take_native_executor_requests(session_id, 1).await.len(), 1);
+    assert!(bridge
+        .claim_native_executor(session_id, request.id)
+        .await
+        .is_some());
+
+    let mut unicode_result = result(request.id);
+    unicode_result.ok = false;
+    unicode_result.error = Some("🙂".repeat(600));
+    unicode_result.usage = None;
+
+    assert!(bridge
+        .complete_native_executor(session_id, unicode_result)
+        .await);
+    let stored = bridge.recent_native_executor_results(session_id, 1).await;
+    let error = stored[0].error.as_deref().expect("bounded error is retained");
+    assert!(error.len() <= 2 * 1024);
+    assert!(error.chars().all(|character| character == '🙂'));
+}
