@@ -72,6 +72,10 @@ jobs:
         run: cargo test -p localview-control --test native_visual_perception_cycle
       - name: Native visual evidence correlation contract
         run: cargo test -p localview-control --test native_visual_evidence_correlation
+      - name: Runtime resource governor authority contract
+        run: cargo test -p localview-control --test runtime_resource_governor
+      - name: Process resource telemetry contract
+        run: cargo test -p localview-resource-governor --test process_metrics
 
   native-gui-smoke-linux:
     name: Native GUI smoke (WebKitGTK)

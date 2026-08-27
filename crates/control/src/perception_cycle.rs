@@ -18,6 +18,7 @@ use localview_planner::{
     PerceptionCycleSignals,
 };
 use localview_protocol::{PageSnapshot, SessionId, ViewportMeta};
+use localview_resource_governor::ResourceWorkKind;
 use localview_token_budget::{
     evaluate_perception_budget, BudgetEscalationReason, PerceptionBudgetContract,
     PerceptionBudgetDecision, PerceptionBudgetUsage, PerceptionBudgetViolation,
@@ -30,6 +31,7 @@ use crate::{
         authorized, build_live_perception_plan_with_usage_and_visual_satisfaction, denied,
         plan_error_response, LivePerceptionPlanRequest,
     },
+    resource_runtime::{denial_response as resource_denial_response, governor as resource_governor},
     ControlState,
 };
 
@@ -161,6 +163,15 @@ async fn execute_live_perception_cycle(
             PerceptionActionKind::RegionCapture => {
                 let Some(viewport) = request.viewport.clone() else {
                     return visual_viewport_required_response();
+                };
+                let reservation_id = uuid::Uuid::new_v4();
+                let _resource_reservation = match resource_governor(&state).reserve(
+                    id.to_string(),
+                    reservation_id.to_string(),
+                    ResourceWorkKind::NativeVisualCapture,
+                ) {
+                    Ok(reservation) => reservation,
+                    Err(denial) => return resource_denial_response(denial),
                 };
                 let operation_budget = native_visual_operation_budget(&request.budget, &spent);
                 let native_request = state
@@ -321,12 +332,7 @@ async fn has_matching_native_visual_evidence(
         .iter()
         .rev()
         .any(|evidence| {
-            authoritative_native_visual_evidence(
-                evidence,
-                native_request,
-                viewport,
-                revision,
-            )
+            authoritative_native_visual_evidence(evidence, native_request, viewport, revision)
         })
 }
 
