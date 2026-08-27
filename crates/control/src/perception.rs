@@ -23,6 +23,7 @@ use localview_token_budget::{PerceptionBudgetContract, PerceptionBudgetUsage};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    chromium_runtime::canonical_chromium_route_identity,
     resource_runtime::{denial_response as resource_denial_response, governor as resource_governor},
     ControlState,
 };
@@ -115,16 +116,18 @@ pub(crate) async fn build_live_perception_plan_with_usage_and_visual_satisfactio
     spent: &PerceptionBudgetUsage,
     visual_satisfied: bool,
 ) -> Result<LivePerceptionPlanResponse, LivePerceptionPlanError> {
-    if state.sessions.get(id).await.is_none() {
+    let Some(session) = state.sessions.get(id).await else {
         return Err(LivePerceptionPlanError::SessionNotFound);
-    }
+    };
 
     let mut events = state.live.recent(id, 2048).await;
-    let current_route = events
-        .iter()
-        .rev()
-        .find_map(|event| event.route.as_deref())
-        .map(str::to_owned);
+    let current_route = session.endpoint.url().ok().and_then(|base| {
+        events
+            .iter()
+            .rev()
+            .find_map(|event| event.route.as_deref())
+            .and_then(|route| canonical_chromium_route_identity(&base, route))
+    });
     let retained = state.evidence.recent_for_session(id, 64).await;
     append_retained_snapshot_observations(&mut events, &retained);
     let diagnosis = diagnose_live(&events);
@@ -217,12 +220,17 @@ fn authoritative_chromium_compatibility(
     revision: Option<&str>,
     current_route: Option<&str>,
 ) -> bool {
-    evidence.kind == EvidenceKind::Visual
+    evidence.kind == EvidenceKind::Contract
         && evidence.provenance.source == "chromium-compatibility"
         && evidence.provenance.engine.as_deref() == Some("chromium")
         && evidence.uncertainty == UncertaintyClass::Observed
         && evidence.confidence >= 0.999
         && !evidence.secret_taint
+        && evidence
+            .payload
+            .get("probe")
+            .and_then(serde_json::Value::as_str)
+            == Some("page_load_dump_dom")
         && (revision.is_none() || evidence.provenance.revision.as_deref() == revision)
         && current_route.is_some_and(|route| {
             evidence
@@ -377,7 +385,7 @@ fn derive_candidates(
             "chromium-compatibility-check",
             PerceptionActionKind::ChromiumEscalation,
             target,
-            vec![EvidenceKind::Visual],
+            vec![EvidenceKind::Contract],
             1.0,
             1.0,
             20,
