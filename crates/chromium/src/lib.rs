@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    env,
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -38,6 +39,23 @@ pub struct ChromiumExecutionReceipt {
     pub stderr: BoundedProcessOutput,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChromiumPlatform {
+    Linux,
+    Macos,
+    Windows,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChromiumDiscoveryContext {
+    pub explicit_executable: Option<PathBuf>,
+    pub path_dirs: Vec<PathBuf>,
+    pub home_dir: Option<PathBuf>,
+    pub program_files: Option<PathBuf>,
+    pub program_files_x86: Option<PathBuf>,
+    pub local_app_data: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum ChromiumExecutorError {
     #[error("Chromium target must be loopback HTTP(S)")]
@@ -52,6 +70,181 @@ pub enum ChromiumExecutorError {
     Timeout,
     #[error("failed to remove ephemeral Chromium profile")]
     Cleanup,
+}
+
+pub fn discover_chromium_executable_with<F>(
+    platform: ChromiumPlatform,
+    context: &ChromiumDiscoveryContext,
+    mut is_file: F,
+) -> Option<PathBuf>
+where
+    F: FnMut(&Path) -> bool,
+{
+    chromium_executable_candidates(platform, context)
+        .into_iter()
+        .find(|candidate| is_file(candidate.as_path()))
+}
+
+pub fn discover_chromium_executable() -> Option<PathBuf> {
+    let platform = current_platform()?;
+    let context = ChromiumDiscoveryContext {
+        explicit_executable: env::var_os("LOCALVIEW_CHROMIUM_EXECUTABLE").map(PathBuf::from),
+        path_dirs: env::var_os("PATH")
+            .map(|value| env::split_paths(&value).collect())
+            .unwrap_or_default(),
+        home_dir: env::var_os("HOME")
+            .or_else(|| env::var_os("USERPROFILE"))
+            .map(PathBuf::from),
+        program_files: env::var_os("PROGRAMFILES").map(PathBuf::from),
+        program_files_x86: env::var_os("PROGRAMFILES(X86)").map(PathBuf::from),
+        local_app_data: env::var_os("LOCALAPPDATA").map(PathBuf::from),
+    };
+    discover_chromium_executable_with(platform, &context, Path::is_file)
+}
+
+fn current_platform() -> Option<ChromiumPlatform> {
+    if cfg!(target_os = "linux") {
+        Some(ChromiumPlatform::Linux)
+    } else if cfg!(target_os = "macos") {
+        Some(ChromiumPlatform::Macos)
+    } else if cfg!(target_os = "windows") {
+        Some(ChromiumPlatform::Windows)
+    } else {
+        None
+    }
+}
+
+fn chromium_executable_candidates(
+    platform: ChromiumPlatform,
+    context: &ChromiumDiscoveryContext,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(explicit) = context.explicit_executable.clone() {
+        push_unique(&mut candidates, explicit);
+    }
+
+    match platform {
+        ChromiumPlatform::Linux => {
+            push_path_candidates(
+                &mut candidates,
+                platform,
+                &context.path_dirs,
+                &[
+                    "google-chrome",
+                    "google-chrome-stable",
+                    "chromium",
+                    "chromium-browser",
+                ],
+            );
+        }
+        ChromiumPlatform::Macos => {
+            for bundle in [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            ] {
+                push_unique(&mut candidates, PathBuf::from(bundle));
+            }
+            if let Some(home) = context.home_dir.as_deref() {
+                for relative in [
+                    "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                    "Applications/Chromium.app/Contents/MacOS/Chromium",
+                ] {
+                    push_unique(
+                        &mut candidates,
+                        platform_join(ChromiumPlatform::Macos, home, relative),
+                    );
+                }
+            }
+            push_path_candidates(
+                &mut candidates,
+                platform,
+                &context.path_dirs,
+                &["google-chrome", "chromium"],
+            );
+        }
+        ChromiumPlatform::Windows => {
+            for root in [
+                context.local_app_data.as_deref(),
+                context.program_files.as_deref(),
+                context.program_files_x86.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                push_unique(
+                    &mut candidates,
+                    platform_join(
+                        ChromiumPlatform::Windows,
+                        root,
+                        r"Google\Chrome\Application\chrome.exe",
+                    ),
+                );
+            }
+            for root in [
+                context.local_app_data.as_deref(),
+                context.program_files.as_deref(),
+                context.program_files_x86.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                push_unique(
+                    &mut candidates,
+                    platform_join(
+                        ChromiumPlatform::Windows,
+                        root,
+                        r"Chromium\Application\chrome.exe",
+                    ),
+                );
+            }
+            push_path_candidates(
+                &mut candidates,
+                platform,
+                &context.path_dirs,
+                &["chrome.exe", "chromium.exe"],
+            );
+        }
+    }
+
+    candidates
+}
+
+fn push_path_candidates(
+    candidates: &mut Vec<PathBuf>,
+    platform: ChromiumPlatform,
+    path_dirs: &[PathBuf],
+    executable_names: &[&str],
+) {
+    for executable in executable_names {
+        for directory in path_dirs {
+            push_unique(
+                candidates,
+                platform_join(platform, directory.as_path(), executable),
+            );
+        }
+    }
+}
+
+fn platform_join(platform: ChromiumPlatform, base: &Path, relative: &str) -> PathBuf {
+    let base = base.to_string_lossy();
+    match platform {
+        ChromiumPlatform::Windows => PathBuf::from(format!(
+            "{}\\{}",
+            base.trim_end_matches(['\\', '/']),
+            relative.replace('/', "\\")
+        )),
+        ChromiumPlatform::Linux | ChromiumPlatform::Macos => PathBuf::from(format!(
+            "{}/{}",
+            base.trim_end_matches('/'),
+            relative.replace('\\', "/")
+        )),
+    }
+}
+
+fn push_unique(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !candidates.contains(&candidate) {
+        candidates.push(candidate);
+    }
 }
 
 pub fn validate_loopback_url(url: &Url) -> bool {
