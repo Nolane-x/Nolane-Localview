@@ -6,6 +6,7 @@ use localview_causal::{ProofCapsule, ProofVerdict};
 use localview_content_addressed::object_hash;
 use localview_contracts::{ContractResult, ContractVerdict};
 use localview_evidence::{EvidenceId, EvidenceKind, EvidenceObject};
+use localview_protocol::{VisualChangeExpectation, VisualDiffMetrics};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -416,6 +417,90 @@ pub enum LiveVerificationVerdict {
     Fail,
     Inconclusive,
     Stale,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VisualChangeDecision {
+    pub verdict: LiveVerificationVerdict,
+    pub changed_pixels: u64,
+    pub changed_ratio: f64,
+    pub reason: String,
+}
+
+pub fn verify_visual_change(
+    expectation: &VisualChangeExpectation,
+    metrics: &VisualDiffMetrics,
+) -> VisualChangeDecision {
+    if !valid_ratio(metrics.changed_ratio) {
+        return VisualChangeDecision {
+            verdict: LiveVerificationVerdict::Inconclusive,
+            changed_pixels: metrics.changed_pixels,
+            changed_ratio: metrics.changed_ratio,
+            reason: "invalid visual diff metrics".into(),
+        };
+    }
+
+    let (verdict, reason) = match expectation {
+        VisualChangeExpectation::Unchanged { max_changed_ratio } => {
+            if !valid_ratio(*max_changed_ratio) {
+                (
+                    LiveVerificationVerdict::Inconclusive,
+                    "invalid unchanged visual expectation".to_string(),
+                )
+            } else if metrics.changed_ratio <= *max_changed_ratio {
+                (
+                    LiveVerificationVerdict::Pass,
+                    format!(
+                        "changed ratio {:.6} is within maximum {:.6}",
+                        metrics.changed_ratio, max_changed_ratio
+                    ),
+                )
+            } else {
+                (
+                    LiveVerificationVerdict::Fail,
+                    format!(
+                        "changed ratio {:.6} exceeds maximum {:.6}",
+                        metrics.changed_ratio, max_changed_ratio
+                    ),
+                )
+            }
+        }
+        VisualChangeExpectation::Changed { min_changed_ratio } => {
+            if !valid_ratio(*min_changed_ratio) {
+                (
+                    LiveVerificationVerdict::Inconclusive,
+                    "invalid changed visual expectation".to_string(),
+                )
+            } else if metrics.changed_ratio >= *min_changed_ratio {
+                (
+                    LiveVerificationVerdict::Pass,
+                    format!(
+                        "changed ratio {:.6} meets minimum {:.6}",
+                        metrics.changed_ratio, min_changed_ratio
+                    ),
+                )
+            } else {
+                (
+                    LiveVerificationVerdict::Fail,
+                    format!(
+                        "changed ratio {:.6} is below minimum {:.6}",
+                        metrics.changed_ratio, min_changed_ratio
+                    ),
+                )
+            }
+        }
+    };
+
+    VisualChangeDecision {
+        verdict,
+        changed_pixels: metrics.changed_pixels,
+        changed_ratio: metrics.changed_ratio,
+        reason,
+    }
+}
+
+fn valid_ratio(value: f64) -> bool {
+    value.is_finite() && (0.0..=1.0).contains(&value)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
