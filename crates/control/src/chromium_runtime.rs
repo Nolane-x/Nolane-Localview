@@ -131,7 +131,7 @@ pub(crate) async fn execute_compatibility_probe(
             region,
             payload: serde_json::json!({
                 "probe": "page_load_dump_dom",
-                "target": public_target,
+                "target": public_target.clone(),
                 "exit_code": exit_code,
                 "stdout_total_bytes": execution.stdout.total_bytes,
                 "stdout_truncated": execution.stdout.truncated,
