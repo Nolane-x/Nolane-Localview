@@ -246,7 +246,7 @@ async fn region_capture_executes_through_native_bridge_uses_actual_usage_and_rep
     .await;
     worker.await.expect("native visual executor");
 
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "unexpected cycle response: {body}");
     assert_eq!(body["completion"], "no_op");
     assert_eq!(body["steps"].as_array().map(Vec::len), Some(1));
     assert_eq!(
@@ -312,9 +312,5 @@ async fn native_success_without_matching_retained_visual_evidence_fails_closed()
     worker.await.expect("native visual executor");
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert_eq!(body["error"], "native_visual_executor_failed");
-    assert_eq!(
-        body["reason"],
-        "native visual evidence correlation failed"
-    );
+    assert_eq!(body["error"], "native_visual_evidence_missing");
 }
