@@ -21,7 +21,8 @@ use localview_protocol::{PageSnapshot, SessionId, ViewportMeta};
 use localview_resource_governor::ResourceWorkKind;
 use localview_token_budget::{
     evaluate_perception_budget, BudgetEscalationReason, PerceptionBudgetContract,
-    PerceptionBudgetDecision, PerceptionBudgetUsage, PerceptionBudgetViolation,
+    PerceptionBudgetDecision, PerceptionBudgetDecisionStatus, PerceptionBudgetUsage,
+    PerceptionBudgetViolation,
 };
 use serde::Serialize;
 
@@ -232,16 +233,17 @@ async fn execute_live_perception_cycle(
                 }
             }
             PerceptionActionKind::ChromiumEscalation => {
-                let remaining_latency = request
-                    .budget
-                    .latency_ms
-                    .saturating_sub(elapsed_ms(started_at));
+                let timeout_cap = chromium_timeout_cap(
+                    &request.budget,
+                    started_at,
+                    &planned.plan.budget_decision,
+                );
                 let receipt = match execute_compatibility_probe(
                     &state,
                     id,
                     request.revision.as_deref(),
                     selected.action.target.clone(),
-                    Duration::from_millis(remaining_latency),
+                    timeout_cap,
                 )
                 .await
                 {
@@ -307,6 +309,27 @@ fn elapsed_ms(started_at: Instant) -> u64 {
         .elapsed()
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
+}
+
+fn chromium_timeout_cap(
+    budget: &PerceptionBudgetContract,
+    started_at: Instant,
+    decision: &PerceptionBudgetDecision,
+) -> Option<Duration> {
+    let planner_authorized_browser_escalation =
+        decision.status == PerceptionBudgetDecisionStatus::Escalated
+            && decision.budget_escalation_reason
+                == Some(BudgetEscalationReason::BrowserSpecificSuspicion);
+    if planner_authorized_browser_escalation {
+        None
+    } else {
+        Some(Duration::from_millis(
+            budget
+                .latency_ms
+                .saturating_sub(elapsed_ms(started_at))
+                .max(1),
+        ))
+    }
 }
 
 fn native_visual_operation_budget(
