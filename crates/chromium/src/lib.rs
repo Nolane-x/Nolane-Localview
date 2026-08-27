@@ -17,6 +17,11 @@ use tokio::{
 use url::{Host, Url};
 use uuid::Uuid;
 
+const MAX_SCREENSHOT_DIMENSION: u32 = 8_192;
+const MAX_SCREENSHOT_PIXELS: u64 = 33_554_432;
+const MAX_SCREENSHOT_BYTES: usize = 64 * 1024 * 1024;
+const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChromiumExecutionPolicy {
     pub timeout: Duration,
@@ -35,6 +40,23 @@ pub struct BoundedProcessOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChromiumExecutionReceipt {
     pub exit_code: Option<i32>,
+    pub stdout: BoundedProcessOutput,
+    pub stderr: BoundedProcessOutput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChromiumScreenshotRequest {
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub max_png_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChromiumRenderedScreenshotReceipt {
+    pub exit_code: Option<i32>,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub png: Vec<u8>,
     pub stdout: BoundedProcessOutput,
     pub stderr: BoundedProcessOutput,
 }
@@ -68,6 +90,10 @@ pub enum ChromiumExecutorError {
     Io,
     #[error("Chromium process timed out")]
     Timeout,
+    #[error("Chromium screenshot exceeded byte limit")]
+    ScreenshotTooLarge,
+    #[error("Chromium screenshot was invalid or had unexpected dimensions")]
+    InvalidScreenshot,
     #[error("failed to remove ephemeral Chromium profile")]
     Cleanup,
 }
@@ -299,8 +325,15 @@ pub async fn execute_ephemeral(
         }
     };
 
-    let stdout = child.stdout.take().ok_or(ChromiumExecutorError::Io)?;
-    let stderr = child.stderr.take().ok_or(ChromiumExecutorError::Io)?;
+    let (stdout, stderr) = match (child.stdout.take(), child.stderr.take()) {
+        (Some(stdout), Some(stderr)) => (stdout, stderr),
+        _ => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            cleanup_profile(&profile_dir).await?;
+            return Err(ChromiumExecutorError::Io);
+        }
+    };
     let stdout_task = tokio::spawn(read_bounded(stdout, policy.max_stdout_bytes));
     let stderr_task = tokio::spawn(read_bounded(stderr, policy.max_stderr_bytes));
 
@@ -333,6 +366,165 @@ pub async fn execute_ephemeral(
         stdout,
         stderr,
     })
+}
+
+pub async fn execute_rendered_screenshot(
+    executable: &Path,
+    target: &Url,
+    policy: &ChromiumExecutionPolicy,
+    request: &ChromiumScreenshotRequest,
+) -> Result<ChromiumRenderedScreenshotReceipt, ChromiumExecutorError> {
+    if !validate_loopback_url(target) {
+        return Err(ChromiumExecutorError::InvalidTarget);
+    }
+    validate_screenshot_request(request)?;
+
+    tokio::fs::create_dir_all(&policy.temp_root)
+        .await
+        .map_err(|_| ChromiumExecutorError::Profile)?;
+    let profile_dir = policy
+        .temp_root
+        .join(format!("localview-chromium-rendered-{}", Uuid::new_v4()));
+    tokio::fs::create_dir(&profile_dir)
+        .await
+        .map_err(|_| ChromiumExecutorError::Profile)?;
+    let screenshot_path = profile_dir.join("rendered.png");
+
+    let mut child = match Command::new(executable)
+        .arg("--headless=new")
+        .arg(format!(
+            "--window-size={},{}",
+            request.pixel_width, request.pixel_height
+        ))
+        .arg(format!("--screenshot={}", screenshot_path.display()))
+        .arg(format!("--user-data-dir={}", profile_dir.display()))
+        .arg(target.as_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => {
+            cleanup_profile(&profile_dir).await?;
+            return Err(ChromiumExecutorError::Spawn);
+        }
+    };
+
+    let (stdout, stderr) = match (child.stdout.take(), child.stderr.take()) {
+        (Some(stdout), Some(stderr)) => (stdout, stderr),
+        _ => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            cleanup_profile(&profile_dir).await?;
+            return Err(ChromiumExecutorError::Io);
+        }
+    };
+    let stdout_task = tokio::spawn(read_bounded(stdout, policy.max_stdout_bytes));
+    let stderr_task = tokio::spawn(read_bounded(stderr, policy.max_stderr_bytes));
+
+    let wait_result = timeout(policy.timeout, child.wait()).await;
+    let execution_result = match wait_result {
+        Ok(Ok(status)) => Ok(status.code()),
+        Ok(Err(_)) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            Err(ChromiumExecutorError::Io)
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            Err(ChromiumExecutorError::Timeout)
+        }
+    };
+
+    let stdout_result = join_output(stdout_task).await;
+    let stderr_result = join_output(stderr_task).await;
+    let screenshot_result = match execution_result {
+        Ok(_) => read_validated_screenshot(&screenshot_path, request).await,
+        Err(error) => Err(error),
+    };
+    let cleanup_result = cleanup_profile(&profile_dir).await;
+
+    let exit_code = execution_result?;
+    let stdout = stdout_result?;
+    let stderr = stderr_result?;
+    let (png, pixel_width, pixel_height) = screenshot_result?;
+    cleanup_result?;
+
+    Ok(ChromiumRenderedScreenshotReceipt {
+        exit_code,
+        pixel_width,
+        pixel_height,
+        png,
+        stdout,
+        stderr,
+    })
+}
+
+fn validate_screenshot_request(
+    request: &ChromiumScreenshotRequest,
+) -> Result<(), ChromiumExecutorError> {
+    if request.pixel_width == 0
+        || request.pixel_height == 0
+        || request.pixel_width > MAX_SCREENSHOT_DIMENSION
+        || request.pixel_height > MAX_SCREENSHOT_DIMENSION
+        || u64::from(request.pixel_width) * u64::from(request.pixel_height) > MAX_SCREENSHOT_PIXELS
+        || request.max_png_bytes == 0
+    {
+        return Err(ChromiumExecutorError::InvalidScreenshot);
+    }
+    Ok(())
+}
+
+async fn read_validated_screenshot(
+    screenshot_path: &Path,
+    request: &ChromiumScreenshotRequest,
+) -> Result<(Vec<u8>, u32, u32), ChromiumExecutorError> {
+    let effective_limit = request.max_png_bytes.min(MAX_SCREENSHOT_BYTES);
+    let metadata = tokio::fs::metadata(screenshot_path)
+        .await
+        .map_err(|_| ChromiumExecutorError::InvalidScreenshot)?;
+    if metadata.len() > effective_limit as u64 {
+        return Err(ChromiumExecutorError::ScreenshotTooLarge);
+    }
+
+    let file = tokio::fs::File::open(screenshot_path)
+        .await
+        .map_err(|_| ChromiumExecutorError::InvalidScreenshot)?;
+    let read_limit = effective_limit.saturating_add(1) as u64;
+    let mut limited = file.take(read_limit);
+    let mut png = Vec::with_capacity(effective_limit.min(256 * 1024));
+    limited
+        .read_to_end(&mut png)
+        .await
+        .map_err(|_| ChromiumExecutorError::Io)?;
+    if png.len() > effective_limit {
+        return Err(ChromiumExecutorError::ScreenshotTooLarge);
+    }
+
+    let (pixel_width, pixel_height) = png_dimensions(&png)?;
+    if pixel_width != request.pixel_width || pixel_height != request.pixel_height {
+        return Err(ChromiumExecutorError::InvalidScreenshot);
+    }
+    Ok((png, pixel_width, pixel_height))
+}
+
+fn png_dimensions(png: &[u8]) -> Result<(u32, u32), ChromiumExecutorError> {
+    if png.len() < 24
+        || png[..8] != PNG_SIGNATURE
+        || u32::from_be_bytes([png[8], png[9], png[10], png[11]]) != 13
+        || &png[12..16] != b"IHDR"
+    {
+        return Err(ChromiumExecutorError::InvalidScreenshot);
+    }
+    let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+    let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+    if width == 0 || height == 0 {
+        return Err(ChromiumExecutorError::InvalidScreenshot);
+    }
+    Ok((width, height))
 }
 
 async fn read_bounded<R>(
