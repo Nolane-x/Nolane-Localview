@@ -108,6 +108,19 @@ pub struct ViewportMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VisualChangeExpectation {
+    Unchanged { max_changed_ratio: f64 },
+    Changed { min_changed_ratio: f64 },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct VisualDiffMetrics {
+    pub changed_pixels: u64,
+    pub changed_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SemanticNode {
     pub reference: ElementRef,
     pub role: Option<String>,
