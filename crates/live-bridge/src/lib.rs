@@ -145,6 +145,11 @@ pub enum NativeExecutorAction {
         budget: PerceptionBudgetContract,
         budget_escalation_reason: Option<BudgetEscalationReason>,
     },
+    VisualDiff {
+        baseline_artifact_id: String,
+        candidate_artifact_id: String,
+        pixel_threshold: u8,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
