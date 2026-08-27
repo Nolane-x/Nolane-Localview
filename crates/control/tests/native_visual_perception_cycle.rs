@@ -293,7 +293,7 @@ async fn selected_visual_action_requires_internal_viewport_and_queues_nothing_wi
 }
 
 #[tokio::test]
-async fn native_success_without_matching_retained_visual_evidence_fails_closed() {
+async fn native_result_without_correlated_visual_evidence_is_rejected_by_executor_authority() {
     let (state, session_id) = test_state().await;
     seed_semantic(&state, session_id).await;
 
@@ -312,5 +312,9 @@ async fn native_success_without_matching_retained_visual_evidence_fails_closed()
     worker.await.expect("native visual executor");
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert_eq!(body["error"], "native_visual_evidence_missing");
+    assert_eq!(body["error"], "native_visual_executor_failed");
+    assert_eq!(
+        body["reason"],
+        "native visual evidence correlation failed"
+    );
 }
