@@ -88,11 +88,11 @@ async fn same_revision_chromium_evidence_does_not_suppress_a_new_route() {
     state
         .evidence
         .insert(EvidenceDraft {
-            kind: EvidenceKind::Visual,
+            kind: EvidenceKind::Contract,
             session_id,
             region: None,
             payload: serde_json::json!({
-                "probe": "headless_dump_dom",
+                "probe": "page_load_dump_dom",
                 "target": "http://127.0.0.1:5173/old-route",
                 "exit_code": 0
             }),
