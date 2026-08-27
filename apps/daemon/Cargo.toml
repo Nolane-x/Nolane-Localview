@@ -9,6 +9,7 @@ license.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 dirs.workspace = true
+localview-chromium = { path = "../../crates/chromium" }
 localview-control = { path = "../../crates/control" }
 localview-core = { path = "../../crates/core" }
 localview-discovery = { path = "../../crates/discovery" }
