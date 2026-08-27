@@ -282,3 +282,53 @@ async fn caller_cannot_supply_a_chromium_executable_or_pre_authorized_probe() {
     let _ = fs::remove_dir_all(fixture_root);
     let _ = fs::remove_dir_all(profile_root);
 }
+
+#[tokio::test]
+async fn browser_specific_budget_escalation_preserves_a_bounded_chromium_runtime_window() {
+    let source = r#"
+use std::{thread, time::Duration};
+fn main() {
+    thread::sleep(Duration::from_millis(120));
+    println!("<html><body>delayed-compatibility-ok</body></html>");
+}
+"#;
+    let (fixture_root, executable) = compile_fixture("escalated", source);
+    let profile_root = test_dir("escalated-profiles");
+    fs::create_dir_all(&profile_root).expect("profile root");
+    let (state, session_id) = test_state(executable, profile_root.clone()).await;
+    seed_semantic_and_layout(
+        &state,
+        session_id,
+        "http://127.0.0.1:5173/compatibility",
+    )
+    .await;
+
+    let mut body = cycle_body();
+    body["budget"]["latency_ms"] = Value::from(40);
+
+    let (status, response) = send(
+        state,
+        Method::POST,
+        format!("/v1/sessions/{session_id}/perception/cycle"),
+        Some(body),
+    )
+    .await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "planner-authorized browser escalation must not be converted into a tiny executor timeout: {response}"
+    );
+    assert_eq!(response["completion"], "no_op");
+    assert_eq!(response["usage"]["chromium_spawns"], 1);
+    assert!(response["usage"]["latency_ms"].as_u64().unwrap_or(0) > 40);
+    assert_eq!(response["budget_decision"]["status"], "escalated");
+    assert_eq!(
+        response["budget_decision"]["budget_escalation_reason"],
+        "browser_specific_suspicion"
+    );
+    assert_empty_dir(&profile_root);
+
+    let _ = fs::remove_dir_all(fixture_root);
+    let _ = fs::remove_dir_all(profile_root);
+}
