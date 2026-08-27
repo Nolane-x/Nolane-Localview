@@ -80,6 +80,8 @@ jobs:
         run: cargo test -p localview-chromium --test executable_discovery
       - name: Tier-3 Chromium process executor contract
         run: cargo test -p localview-chromium --test executor_contract
+      - name: Tier-3 Chromium rendered-pixel executor contract
+        run: cargo test -p localview-chromium --test rendered_pixel_contract
       - name: Tier-3 Chromium perception cycle contract
         run: |
           cargo test -p localview-control --test chromium_perception_cycle
