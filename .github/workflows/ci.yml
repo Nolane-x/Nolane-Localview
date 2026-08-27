@@ -76,6 +76,14 @@ jobs:
         run: cargo test -p localview-control --test runtime_resource_governor
       - name: Process resource telemetry contract
         run: cargo test -p localview-resource-governor --test process_metrics
+      - name: Tier-3 Chromium executable discovery contract
+        run: cargo test -p localview-chromium --test executable_discovery
+      - name: Tier-3 Chromium process executor contract
+        run: cargo test -p localview-chromium --test executor_contract
+      - name: Tier-3 Chromium perception cycle contract
+        run: |
+          cargo test -p localview-control --test chromium_perception_cycle
+          cargo test -p localview-control --test chromium_evidence_freshness
 
   native-gui-smoke-linux:
     name: Native GUI smoke (WebKitGTK)
