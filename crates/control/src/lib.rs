@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod capture_settle;
+mod chromium_runtime;
 mod fresh_snapshot;
 mod native_executor;
 mod perception;
@@ -16,6 +17,8 @@ use std::net::SocketAddr;
 use anyhow::Result;
 use axum::Router;
 
+#[doc(hidden)]
+pub use chromium_runtime::configure_chromium_executor_for_sessions;
 pub use localview_resource_governor::RuntimeResourceGovernor;
 pub use resource_runtime::runtime_resource_governor_for_sessions;
 pub use runtime::{ControlState, EventEnvelope};

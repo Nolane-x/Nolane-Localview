@@ -21,11 +21,13 @@ use localview_protocol::{PageSnapshot, SessionId, ViewportMeta};
 use localview_resource_governor::ResourceWorkKind;
 use localview_token_budget::{
     evaluate_perception_budget, BudgetEscalationReason, PerceptionBudgetContract,
-    PerceptionBudgetDecision, PerceptionBudgetUsage, PerceptionBudgetViolation,
+    PerceptionBudgetDecision, PerceptionBudgetDecisionStatus, PerceptionBudgetUsage,
+    PerceptionBudgetViolation,
 };
 use serde::Serialize;
 
 use crate::{
+    chromium_runtime::{execute_compatibility_probe, ChromiumRuntimeError},
     fresh_snapshot::{acquire_fresh_semantic_snapshot, FreshSnapshotError},
     perception::{
         authorized, build_live_perception_plan_with_usage_and_visual_satisfaction, denied,
@@ -73,6 +75,16 @@ enum PerceptionCycleExecutionReceipt {
         request_id: uuid::Uuid,
         usage: PerceptionBudgetUsage,
         payload: serde_json::Value,
+    },
+    ChromiumCompatibility {
+        target: String,
+        exit_code: i32,
+        usage: PerceptionBudgetUsage,
+        stdout_total_bytes: usize,
+        stdout_truncated: bool,
+        stderr_total_bytes: usize,
+        stderr_truncated: bool,
+        evidence_id: String,
     },
 }
 
@@ -151,9 +163,6 @@ async fn execute_live_perception_cycle(
                     Err(error) => return execution_error_response(error),
                 };
 
-                // Semantic execution does not yet return a measured token receipt,
-                // so retain the planner's cumulative non-latency reservation and
-                // replace only latency with whole-cycle wall clock.
                 spent = planned.plan.budget_decision.usage;
                 spent.latency_ms = elapsed_ms(started_at);
                 PerceptionCycleExecutionReceipt::SemanticSnapshot {
@@ -223,6 +232,43 @@ async fn execute_live_perception_cycle(
                     payload: result.payload,
                 }
             }
+            PerceptionActionKind::ChromiumEscalation => {
+                let timeout_cap = chromium_timeout_cap(
+                    &request.budget,
+                    started_at,
+                    &planned.plan.budget_decision,
+                );
+                let receipt = match execute_compatibility_probe(
+                    &state,
+                    id,
+                    request.revision.as_deref(),
+                    selected.action.target.clone(),
+                    timeout_cap,
+                )
+                .await
+                {
+                    Ok(receipt) => receipt,
+                    Err(error) => return chromium_execution_error_response(error),
+                };
+                let actual_usage = PerceptionBudgetUsage {
+                    latency_ms: 0,
+                    text_tokens: 0,
+                    image_regions: 0,
+                    chromium_spawns: 1,
+                };
+                spent = add_actual_non_latency_usage(&spent, &actual_usage);
+                spent.latency_ms = elapsed_ms(started_at);
+                PerceptionCycleExecutionReceipt::ChromiumCompatibility {
+                    target: receipt.target,
+                    exit_code: receipt.exit_code,
+                    usage: actual_usage,
+                    stdout_total_bytes: receipt.stdout_total_bytes,
+                    stdout_truncated: receipt.stdout_truncated,
+                    stderr_total_bytes: receipt.stderr_total_bytes,
+                    stderr_truncated: receipt.stderr_truncated,
+                    evidence_id: receipt.evidence_id,
+                }
+            }
             _ => return executor_unavailable_response(action_kind, spent),
         };
 
@@ -265,6 +311,27 @@ fn elapsed_ms(started_at: Instant) -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
+fn chromium_timeout_cap(
+    budget: &PerceptionBudgetContract,
+    started_at: Instant,
+    decision: &PerceptionBudgetDecision,
+) -> Option<Duration> {
+    let planner_authorized_browser_escalation =
+        decision.status == PerceptionBudgetDecisionStatus::Escalated
+            && decision.budget_escalation_reason
+                == Some(BudgetEscalationReason::BrowserSpecificSuspicion);
+    if planner_authorized_browser_escalation {
+        None
+    } else {
+        Some(Duration::from_millis(
+            budget
+                .latency_ms
+                .saturating_sub(elapsed_ms(started_at))
+                .max(1),
+        ))
+    }
+}
+
 fn native_visual_operation_budget(
     budget: &PerceptionBudgetContract,
     spent: &PerceptionBudgetUsage,
@@ -272,10 +339,6 @@ fn native_visual_operation_budget(
     PerceptionBudgetContract {
         latency_ms: budget.latency_ms.saturating_sub(spent.latency_ms),
         text_tokens: budget.text_tokens.saturating_sub(spent.text_tokens),
-        // A planner-authorized RegionCapture must be capable of producing one
-        // image even when the original cycle needs an explicit escalation for
-        // the cumulative overrun. The whole-cycle evaluator remains authority
-        // for that cumulative decision after actual usage returns.
         image_regions: 1,
         chromium_spawns: 0,
     }
@@ -419,6 +482,48 @@ fn executor_unavailable_response(
         })),
     )
         .into_response()
+}
+
+fn chromium_execution_error_response(error: ChromiumRuntimeError) -> axum::response::Response {
+    match error {
+        ChromiumRuntimeError::ExecutorUnavailable => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "chromium_executor_unavailable"})),
+        )
+            .into_response(),
+        ChromiumRuntimeError::SessionNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "session_not_found"})),
+        )
+            .into_response(),
+        ChromiumRuntimeError::InvalidTarget => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": "invalid_chromium_target"})),
+        )
+            .into_response(),
+        ChromiumRuntimeError::ResourceGovernor(denial) => resource_denial_response(denial),
+        ChromiumRuntimeError::Executor(localview_chromium::ChromiumExecutorError::Timeout) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({"error": "chromium_executor_timeout"})),
+        )
+            .into_response(),
+        ChromiumRuntimeError::Executor(reason) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": "chromium_executor_failed",
+                "reason": reason.to_string(),
+            })),
+        )
+            .into_response(),
+        ChromiumRuntimeError::NonZeroExit(exit_code) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": "chromium_executor_nonzero_exit",
+                "exit_code": exit_code,
+            })),
+        )
+            .into_response(),
+    }
 }
 
 fn visual_viewport_required_response() -> axum::response::Response {

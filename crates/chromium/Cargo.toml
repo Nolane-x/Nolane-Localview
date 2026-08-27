@@ -1,0 +1,12 @@
+[package]
+name = "localview-chromium"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+url.workspace = true
+uuid.workspace = true
