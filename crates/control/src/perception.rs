@@ -120,11 +120,20 @@ pub(crate) async fn build_live_perception_plan_with_usage_and_visual_satisfactio
     }
 
     let mut events = state.live.recent(id, 2048).await;
+    let current_route = events
+        .iter()
+        .rev()
+        .find_map(|event| event.route.as_deref())
+        .map(str::to_owned);
     let retained = state.evidence.recent_for_session(id, 64).await;
     append_retained_snapshot_observations(&mut events, &retained);
     let diagnosis = diagnose_live(&events);
     let chromium_satisfied = retained.iter().rev().any(|evidence| {
-        authoritative_chromium_compatibility(evidence, request.revision.as_deref())
+        authoritative_chromium_compatibility(
+            evidence,
+            request.revision.as_deref(),
+            current_route.as_deref(),
+        )
     });
     let signals = derive_signals(&diagnosis, request, visual_satisfied, chromium_satisfied);
     let candidates = derive_candidates(
@@ -206,6 +215,7 @@ fn authoritative_native_snapshot(evidence: &EvidenceObject, kind: EvidenceKind) 
 fn authoritative_chromium_compatibility(
     evidence: &EvidenceObject,
     revision: Option<&str>,
+    current_route: Option<&str>,
 ) -> bool {
     evidence.kind == EvidenceKind::Visual
         && evidence.provenance.source == "chromium-compatibility"
@@ -214,6 +224,13 @@ fn authoritative_chromium_compatibility(
         && evidence.confidence >= 0.999
         && !evidence.secret_taint
         && (revision.is_none() || evidence.provenance.revision.as_deref() == revision)
+        && current_route.is_some_and(|route| {
+            evidence
+                .payload
+                .get("target")
+                .and_then(serde_json::Value::as_str)
+                == Some(route)
+        })
 }
 
 pub(crate) fn plan_error_response(error: LivePerceptionPlanError) -> axum::response::Response {
