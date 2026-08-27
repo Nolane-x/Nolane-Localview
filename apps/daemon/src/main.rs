@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod process_metrics;
+
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
@@ -34,6 +36,7 @@ async fn main() -> Result<()> {
     let config = RuntimeConfig::default();
     let sessions = Arc::new(SessionManager::new(config.disconnect_grace));
     let resources = runtime_resource_governor_for_sessions(&sessions);
+    process_metrics::spawn(resources.clone());
     let observations = ObservationBus::new(1024);
     let live = LiveBridge::default();
     let evidence = EvidenceStore::default();
