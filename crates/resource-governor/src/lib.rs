@@ -239,6 +239,8 @@ type ReservationKey = (String, String);
 struct RuntimeGovernorState {
     budget: ResourceBudget,
     sample: RuntimeResourceSample,
+    process_memory_mb: u64,
+    process_cpu_percent: f32,
     reservations: BTreeMap<ReservationKey, ResourceWorkKind>,
 }
 
@@ -259,6 +261,8 @@ impl RuntimeResourceGovernor {
             inner: Arc::new(Mutex::new(RuntimeGovernorState {
                 budget,
                 sample: RuntimeResourceSample::default(),
+                process_memory_mb: 0,
+                process_cpu_percent: 0.0,
                 reservations: BTreeMap::new(),
             })),
         }
@@ -272,12 +276,25 @@ impl RuntimeResourceGovernor {
         true
     }
 
+    pub fn update_process_metrics(&self, memory_mb: u64, cpu_percent: f32) -> bool {
+        if !cpu_percent.is_finite() || cpu_percent < 0.0 {
+            return false;
+        }
+        let mut state = lock(&self.inner);
+        state.process_memory_mb = memory_mb;
+        state.process_cpu_percent = cpu_percent;
+        true
+    }
+
     pub fn decision(&self) -> GovernorDecision {
         let state = lock(&self.inner);
         decision_for_state(&state)
     }
 
-    pub fn check(&self, work_kind: ResourceWorkKind) -> Result<GovernorDecision, ResourceAdmissionDenial> {
+    pub fn check(
+        &self,
+        work_kind: ResourceWorkKind,
+    ) -> Result<GovernorDecision, ResourceAdmissionDenial> {
         let state = lock(&self.inner);
         let decision = decision_for_state(&state);
         if denied_by_decision(work_kind, &decision) {
@@ -375,10 +392,12 @@ fn decision_for_state(state: &RuntimeGovernorState) -> GovernorDecision {
             }
         }
     }
+    let cpu_percent = ((state.sample.cpu_percent as f64) + (state.process_cpu_percent as f64))
+        .min(f32::MAX as f64) as f32;
     evaluate(
         &ResourceSample {
-            memory_mb: state.sample.memory_mb,
-            cpu_percent: state.sample.cpu_percent,
+            memory_mb: state.sample.memory_mb.saturating_add(state.process_memory_mb),
+            cpu_percent,
             capture_storage_mb: state.sample.capture_storage_mb,
             network_kb_per_minute: state.sample.network_kb_per_minute,
             chromium_instances,
