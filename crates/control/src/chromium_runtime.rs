@@ -97,7 +97,7 @@ pub(crate) async fn execute_compatibility_probe(
     id: SessionId,
     revision: Option<&str>,
     region: Option<String>,
-    timeout_cap: Duration,
+    timeout_cap: Option<Duration>,
 ) -> Result<ChromiumCompatibilityReceipt, ChromiumRuntimeError> {
     let config = config(state).ok_or(ChromiumRuntimeError::ExecutorUnavailable)?;
     let target = resolve_target(state, id).await?;
@@ -111,7 +111,9 @@ pub(crate) async fn execute_compatibility_probe(
         .map_err(ChromiumRuntimeError::ResourceGovernor)?;
 
     let mut policy = config.policy;
-    policy.timeout = policy.timeout.min(timeout_cap.max(Duration::from_millis(1)));
+    if let Some(timeout_cap) = timeout_cap {
+        policy.timeout = policy.timeout.min(timeout_cap.max(Duration::from_millis(1)));
+    }
     let execution = execute_ephemeral(&config.executable, &target, &policy)
         .await
         .map_err(ChromiumRuntimeError::Executor)?;
