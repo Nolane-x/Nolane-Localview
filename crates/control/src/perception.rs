@@ -14,8 +14,8 @@ use localview_evidence::{EvidenceKind, EvidenceObject, UncertaintyClass};
 use localview_live_analysis::{diagnose_live, LiveDiagnosis, LiveUncertaintyClass};
 use localview_live_bridge::{ObserverEvent, ObserverEventKind};
 use localview_planner::{
-    plan_budgeted_perception_cycle_with_usage, BudgetedPerceptionCandidate,
-    BudgetedPerceptionPlan, PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
+    plan_budgeted_perception_cycle_with_usage, BudgetedPerceptionCandidate, BudgetedPerceptionPlan,
+    PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
 };
 use localview_protocol::{SessionId, ViewportMeta};
 use localview_resource_governor::{ResourceAdmissionDenial, ResourceWorkKind};
@@ -123,7 +123,10 @@ pub(crate) async fn build_live_perception_plan_with_usage_and_visual_satisfactio
     let retained = state.evidence.recent_for_session(id, 64).await;
     append_retained_snapshot_observations(&mut events, &retained);
     let diagnosis = diagnose_live(&events);
-    let signals = derive_signals(&diagnosis, request, visual_satisfied);
+    let chromium_satisfied = retained.iter().rev().any(|evidence| {
+        authoritative_chromium_compatibility(evidence, request.revision.as_deref())
+    });
+    let signals = derive_signals(&diagnosis, request, visual_satisfied, chromium_satisfied);
     let candidates = derive_candidates(
         &diagnosis,
         &signals,
@@ -200,6 +203,19 @@ fn authoritative_native_snapshot(evidence: &EvidenceObject, kind: EvidenceKind) 
         && !evidence.secret_taint
 }
 
+fn authoritative_chromium_compatibility(
+    evidence: &EvidenceObject,
+    revision: Option<&str>,
+) -> bool {
+    evidence.kind == EvidenceKind::Visual
+        && evidence.provenance.source == "chromium-compatibility"
+        && evidence.provenance.engine.as_deref() == Some("chromium")
+        && evidence.uncertainty == UncertaintyClass::Observed
+        && evidence.confidence >= 0.999
+        && !evidence.secret_taint
+        && (revision.is_none() || evidence.provenance.revision.as_deref() == revision)
+}
+
 pub(crate) fn plan_error_response(error: LivePerceptionPlanError) -> axum::response::Response {
     match error {
         LivePerceptionPlanError::SessionNotFound => (
@@ -223,6 +239,7 @@ fn derive_signals(
     diagnosis: &LiveDiagnosis,
     request: &LivePerceptionPlanRequest,
     visual_satisfied: bool,
+    chromium_satisfied: bool,
 ) -> PerceptionCycleSignals {
     let state_unknown = has_unknown(diagnosis, LiveUncertaintyClass::State);
     let visual_unknown = has_unknown(diagnosis, LiveUncertaintyClass::Visual) && !visual_satisfied;
@@ -241,7 +258,8 @@ fn derive_signals(
         insufficient_evidence,
         browser_specific_suspicion: request.compatibility_requested
             && !state_unknown
-            && !visual_unknown,
+            && !visual_unknown
+            && !chromium_satisfied,
     }
 }
 
