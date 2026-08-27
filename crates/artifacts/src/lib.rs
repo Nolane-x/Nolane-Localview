@@ -7,7 +7,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +63,22 @@ impl ArtifactStore {
         self.lru.push_back(id);
         self.gc().await?;
         Ok(meta)
+    }
+
+    pub async fn read(&mut self, id: &str) -> Result<Option<Vec<u8>>> {
+        let Some(meta) = self.index.get(id).cloned() else {
+            return Ok(None);
+        };
+        let bytes = tokio::fs::read(&meta.path).await?;
+        if bytes.len() as u64 != meta.bytes || content_id(&bytes) != id {
+            bail!("artifact content no longer matches its content id");
+        }
+
+        if let Some(index) = self.lru.iter().position(|candidate| candidate == id) {
+            self.lru.remove(index);
+        }
+        self.lru.push_back(id.to_owned());
+        Ok(Some(bytes))
     }
 
     async fn restore_existing(&mut self) -> Result<()> {
