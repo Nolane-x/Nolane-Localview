@@ -101,6 +101,7 @@ pub(crate) async fn execute_compatibility_probe(
 ) -> Result<ChromiumCompatibilityReceipt, ChromiumRuntimeError> {
     let config = config(state).ok_or(ChromiumRuntimeError::ExecutorUnavailable)?;
     let target = resolve_target(state, id).await?;
+    let public_target = private_safe_route_identity(&target);
     let reservation_id = Uuid::new_v4();
     let _reservation = resource_governor(state)
         .reserve(
@@ -125,12 +126,12 @@ pub(crate) async fn execute_compatibility_probe(
     let evidence = state
         .evidence
         .insert(EvidenceDraft {
-            kind: EvidenceKind::Visual,
+            kind: EvidenceKind::Contract,
             session_id: id,
             region,
             payload: serde_json::json!({
-                "probe": "headless_dump_dom",
-                "target": target.as_str(),
+                "probe": "page_load_dump_dom",
+                "target": public_target,
                 "exit_code": exit_code,
                 "stdout_total_bytes": execution.stdout.total_bytes,
                 "stdout_truncated": execution.stdout.truncated,
@@ -151,7 +152,7 @@ pub(crate) async fn execute_compatibility_probe(
         .await;
 
     Ok(ChromiumCompatibilityReceipt {
-        target: target.to_string(),
+        target: public_target,
         exit_code,
         stdout_total_bytes: execution.stdout.total_bytes,
         stdout_truncated: execution.stdout.truncated,
@@ -159,6 +160,17 @@ pub(crate) async fn execute_compatibility_probe(
         stderr_truncated: execution.stderr.truncated,
         evidence_id: evidence.id,
     })
+}
+
+pub(crate) fn canonical_chromium_route_identity(base: &Url, route: &str) -> Option<String> {
+    resolve_route_target(base, route).map(|target| private_safe_route_identity(&target))
+}
+
+fn private_safe_route_identity(target: &Url) -> String {
+    let mut identity = target.clone();
+    identity.set_query(None);
+    identity.set_fragment(None);
+    identity.to_string()
 }
 
 fn config(state: &ControlState) -> Option<ChromiumExecutorConfig> {
@@ -193,17 +205,21 @@ async fn resolve_target(
         .into_iter()
         .rev()
         .find_map(|event| event.route);
-    let target = match observed_route {
-        Some(route) => Url::parse(&route)
-            .or_else(|_| base.join(&route))
-            .map_err(|_| ChromiumRuntimeError::InvalidTarget)?,
-        None => base.clone(),
-    };
-
-    if !validate_loopback_url(&target) || target.origin() != base.origin() {
-        return Err(ChromiumRuntimeError::InvalidTarget);
+    match observed_route {
+        Some(route) => resolve_route_target(&base, &route).ok_or(ChromiumRuntimeError::InvalidTarget),
+        None => Ok(base),
     }
-    Ok(target)
+}
+
+fn resolve_route_target(base: &Url, route: &str) -> Option<Url> {
+    if !validate_loopback_url(base) {
+        return None;
+    }
+    let target = Url::parse(route).or_else(|_| base.join(route)).ok()?;
+    if !validate_loopback_url(&target) || target.origin() != base.origin() {
+        return None;
+    }
+    Some(target)
 }
 
 fn lock_registry(registry: &Mutex<ChromiumRegistry>) -> MutexGuard<'_, ChromiumRegistry> {
