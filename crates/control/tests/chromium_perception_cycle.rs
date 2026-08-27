@@ -181,7 +181,7 @@ fn assert_empty_dir(path: &Path) {
 }
 
 #[tokio::test]
-async fn planner_authorized_chromium_executes_once_retains_safe_evidence_and_replans_to_noop() {
+async fn planner_authorized_chromium_executes_once_retains_private_safe_contract_evidence_and_replans_to_noop() {
     let source = r#"
 fn main() {
     println!("<html><body>compatibility-ok</body></html>");
@@ -192,7 +192,8 @@ fn main() {
     let profile_root = test_dir("profiles");
     fs::create_dir_all(&profile_root).expect("profile root");
     let (state, session_id) = test_state(executable, profile_root.clone()).await;
-    let route = "http://127.0.0.1:5173/settings";
+    let route = "http://127.0.0.1:5173/settings?access_token=private-value#private-fragment";
+    let public_route = "http://127.0.0.1:5173/settings";
     seed_semantic_and_layout(&state, session_id, route).await;
 
     let (status, body) = send(
@@ -214,7 +215,7 @@ fn main() {
         body["steps"][0]["execution"]["kind"],
         "chromium_compatibility"
     );
-    assert_eq!(body["steps"][0]["execution"]["target"], route);
+    assert_eq!(body["steps"][0]["execution"]["target"], public_route);
     assert_eq!(body["steps"][0]["execution"]["exit_code"], 0);
     assert_eq!(body["steps"][0]["execution"]["usage"]["chromium_spawns"], 1);
     assert_eq!(body["usage"]["chromium_spawns"], 1);
@@ -222,6 +223,9 @@ fn main() {
         body["steps"][0]["execution"].get("stdout").is_none(),
         "raw DOM/stdout must not be copied into the control response"
     );
+    let serialized_body = body.to_string();
+    assert!(!serialized_body.contains("private-value"));
+    assert!(!serialized_body.contains("private-fragment"));
     assert_empty_dir(&profile_root);
 
     let retained = state.evidence.recent_for_session(session_id, 64).await;
@@ -230,16 +234,20 @@ fn main() {
         .rev()
         .find(|evidence| evidence.provenance.source == "chromium-compatibility")
         .expect("successful Tier-3 execution must retain bounded compatibility evidence");
-    assert_eq!(chromium.kind, EvidenceKind::Visual);
+    assert_eq!(chromium.kind, EvidenceKind::Contract);
     assert_eq!(chromium.provenance.engine.as_deref(), Some("chromium"));
     assert_eq!(chromium.provenance.revision.as_deref(), Some("rev-chromium"));
     assert_eq!(chromium.uncertainty, UncertaintyClass::Observed);
     assert!(chromium.confidence >= 0.999);
     assert!(!chromium.secret_taint);
-    assert_eq!(chromium.payload["target"], route);
+    assert_eq!(chromium.payload["probe"], "page_load_dump_dom");
+    assert_eq!(chromium.payload["target"], public_route);
     assert_eq!(chromium.payload["exit_code"], 0);
     assert!(chromium.payload.get("stdout").is_none());
     assert!(chromium.payload["stdout_total_bytes"].as_u64().unwrap_or(0) > 0);
+    let serialized_evidence = serde_json::to_string(chromium).expect("evidence JSON");
+    assert!(!serialized_evidence.contains("private-value"));
+    assert!(!serialized_evidence.contains("private-fragment"));
 
     let (plan_status, next_plan) = send(
         state,
