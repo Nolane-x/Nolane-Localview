@@ -66,6 +66,32 @@ impl RuntimeResourceSample {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProcessResourceMetrics {
+    pub memory_mb: u64,
+    pub cpu_percent: f32,
+}
+
+pub fn normalize_process_metrics(
+    memory_bytes: u64,
+    raw_cpu_percent: f32,
+    logical_cpus: usize,
+) -> Option<ProcessResourceMetrics> {
+    if !raw_cpu_percent.is_finite() || raw_cpu_percent < 0.0 {
+        return None;
+    }
+    let bytes_per_mb = 1024_u64 * 1024;
+    let memory_mb = memory_bytes.div_ceil(bytes_per_mb);
+    let cpu_percent = raw_cpu_percent / logical_cpus.max(1) as f32;
+    if !cpu_percent.is_finite() {
+        return None;
+    }
+    Some(ProcessResourceMetrics {
+        memory_mb,
+        cpu_percent,
+    })
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum PressureLevel {
