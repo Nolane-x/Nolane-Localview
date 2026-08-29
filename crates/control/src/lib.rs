@@ -10,6 +10,7 @@ mod perception_execution;
 mod resource_runtime;
 #[path = "runtime.rs"]
 mod runtime;
+mod visual_diff;
 mod visual_region;
 
 use std::net::SocketAddr;
@@ -21,9 +22,9 @@ use axum::Router;
 pub use chromium_runtime::configure_chromium_executor_for_sessions;
 pub use localview_resource_governor::RuntimeResourceGovernor;
 pub use resource_runtime::runtime_resource_governor_for_sessions;
-pub use runtime::{ControlState, EventEnvelope};
 #[doc(hidden)]
 pub use runtime::serve as legacy_serve;
+pub use runtime::{ControlState, EventEnvelope};
 
 pub fn router(state: ControlState) -> Router {
     runtime::router(state.clone())
@@ -34,6 +35,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(perception_execution::router(state.clone()))
         .merge(perception_cycle::router(state.clone()))
         .merge(resource_runtime::router(state.clone()))
+        .merge(visual_diff::router(state.clone()))
         .merge(visual_region::router(state))
 }
 
