@@ -12,6 +12,7 @@ mod resource_runtime;
 mod runtime;
 mod visual_diff;
 mod visual_region;
+mod visual_verify;
 
 use std::net::SocketAddr;
 
@@ -36,6 +37,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(perception_cycle::router(state.clone()))
         .merge(resource_runtime::router(state.clone()))
         .merge(visual_diff::router(state.clone()))
+        .merge(visual_verify::router(state.clone()))
         .merge(visual_region::router(state))
 }
 
