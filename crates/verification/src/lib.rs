@@ -254,6 +254,116 @@ pub fn determinism(samples: &[CheckSample]) -> DeterminismReport {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VisualChangeExpectation {
+    Unchanged { max_changed_ratio: f64 },
+    Changed { min_changed_ratio: f64 },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct VisualChangeObservation {
+    pub changed_ratio: f64,
+    pub baseline_comparable: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualChangeVerdict {
+    Pass,
+    Fail,
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VisualChangeResult {
+    pub verdict: VisualChangeVerdict,
+    pub changed_ratio: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualChangeVerificationError {
+    InvalidObservedRatio,
+    InvalidExpectationRatio,
+}
+
+pub fn verify_visual_change(
+    observation: &VisualChangeObservation,
+    expectation: VisualChangeExpectation,
+) -> Result<VisualChangeResult, VisualChangeVerificationError> {
+    if !valid_unit_ratio(observation.changed_ratio) {
+        return Err(VisualChangeVerificationError::InvalidObservedRatio);
+    }
+
+    let threshold = match expectation {
+        VisualChangeExpectation::Unchanged { max_changed_ratio } => max_changed_ratio,
+        VisualChangeExpectation::Changed { min_changed_ratio } => min_changed_ratio,
+    };
+    if !valid_unit_ratio(threshold) {
+        return Err(VisualChangeVerificationError::InvalidExpectationRatio);
+    }
+
+    if !observation.baseline_comparable {
+        return Ok(VisualChangeResult {
+            verdict: VisualChangeVerdict::Inconclusive,
+            changed_ratio: observation.changed_ratio,
+            reason: "visual assertion has no comparable baseline".into(),
+        });
+    }
+
+    let (verdict, reason) = match expectation {
+        VisualChangeExpectation::Unchanged { max_changed_ratio } => {
+            if observation.changed_ratio <= max_changed_ratio {
+                (
+                    VisualChangeVerdict::Pass,
+                    format!(
+                        "changed ratio {:.6} is within unchanged limit {:.6}",
+                        observation.changed_ratio, max_changed_ratio
+                    ),
+                )
+            } else {
+                (
+                    VisualChangeVerdict::Fail,
+                    format!(
+                        "changed ratio {:.6} exceeds unchanged limit {:.6}",
+                        observation.changed_ratio, max_changed_ratio
+                    ),
+                )
+            }
+        }
+        VisualChangeExpectation::Changed { min_changed_ratio } => {
+            if observation.changed_ratio >= min_changed_ratio {
+                (
+                    VisualChangeVerdict::Pass,
+                    format!(
+                        "changed ratio {:.6} meets changed minimum {:.6}",
+                        observation.changed_ratio, min_changed_ratio
+                    ),
+                )
+            } else {
+                (
+                    VisualChangeVerdict::Fail,
+                    format!(
+                        "changed ratio {:.6} is below changed minimum {:.6}",
+                        observation.changed_ratio, min_changed_ratio
+                    ),
+                )
+            }
+        }
+    };
+
+    Ok(VisualChangeResult {
+        verdict,
+        changed_ratio: observation.changed_ratio,
+        reason,
+    })
+}
+
+fn valid_unit_ratio(value: f64) -> bool {
+    value.is_finite() && (0.0..=1.0).contains(&value)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StalenessContext {
     pub current_revision: String,
@@ -709,7 +819,10 @@ mod tests {
         let required = BTreeSet::from(["semantic".into(), "layout".into()]);
         let packet = verify_current(
             Some("wt:abc"),
-            &[evidence(EvidenceKind::Semantic, None), evidence(EvidenceKind::Layout, None)],
+            &[
+                evidence(EvidenceKind::Semantic, None),
+                evidence(EvidenceKind::Layout, None),
+            ],
             0,
             0,
             &required,
