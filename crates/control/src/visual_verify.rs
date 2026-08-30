@@ -10,12 +10,16 @@ use axum::{
 use localview_evidence::{EvidenceKind, UncertaintyClass};
 use localview_live_bridge::{NativeExecutorAction, NativeExecutorResult};
 use localview_protocol::{SessionId, ViewportMeta};
+use localview_resource_governor::ResourceWorkKind;
 use localview_verification::{
     verify_visual_change, VisualChangeExpectation, VisualChangeObservation,
 };
 use serde::Deserialize;
 
-use crate::ControlState;
+use crate::{
+    resource_runtime::{denial_response as resource_denial_response, governor as resource_governor},
+    ControlState,
+};
 
 const NATIVE_VISUAL_DIFF_TIMEOUT: Duration = Duration::from_secs(12);
 const NATIVE_VISUAL_DIFF_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -208,6 +212,16 @@ async fn capture_and_verify_visual_diff(
         return invalid_verification();
     }
 
+    let reservation_id = uuid::Uuid::new_v4();
+    let resource_reservation = match resource_governor(&state).reserve(
+        id.to_string(),
+        reservation_id.to_string(),
+        ResourceWorkKind::NativeVisualCapture,
+    ) {
+        Ok(reservation) => reservation,
+        Err(denial) => return resource_denial_response(denial),
+    };
+
     let native_request = state
         .live
         .enqueue_native_executor(
@@ -231,6 +245,8 @@ async fn capture_and_verify_visual_diff(
                 .into_response();
         }
     };
+    drop(resource_reservation);
+
     if !native_result.ok {
         return (
             StatusCode::BAD_GATEWAY,
