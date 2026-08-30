@@ -399,7 +399,8 @@ pub(crate) async fn execute_native_visual_packet(
     request: NativeExecutorRequest,
 ) -> NativeExecutorResult {
     let request_id = request.id;
-    let completed = match request.action {
+    let session_id = request.session_id;
+    match request.action {
         NativeExecutorAction::VisualPacket {
             reference,
             viewport,
@@ -407,10 +408,10 @@ pub(crate) async fn execute_native_visual_packet(
             budget,
             budget_escalation_reason,
         } => {
-            capture_visual_packet_authorized(
+            match capture_visual_packet_authorized(
                 app,
                 state,
-                request.session_id,
+                session_id,
                 reference,
                 viewport,
                 revision,
@@ -418,41 +419,70 @@ pub(crate) async fn execute_native_visual_packet(
                 budget_escalation_reason,
             )
             .await
-        }
-    };
-
-    match completed {
-        Ok(receipt) => {
-            let usage = receipt.budget_decision.usage;
-            let payload = serde_json::json!({
-                "mode": receipt.mode,
-                "capture_performed": receipt.capture_performed,
-                "selected_regions": receipt.selection.selected.len(),
-                "evidence_ids": receipt
-                    .receipts
-                    .iter()
-                    .map(|receipt| receipt.evidence_id.clone())
-                    .collect::<Vec<_>>(),
-                "baseline_cached": receipt.baseline_cached,
-                "snapshot_version": receipt.snapshot_version,
-            });
-            NativeExecutorResult {
-                request_id,
-                ok: true,
-                error: None,
-                usage: Some(usage),
-                payload,
-                completed_at: Utc::now(),
+            {
+                Ok(receipt) => {
+                    let usage = receipt.budget_decision.usage;
+                    let payload = serde_json::json!({
+                        "mode": receipt.mode,
+                        "capture_performed": receipt.capture_performed,
+                        "selected_regions": receipt.selection.selected.len(),
+                        "evidence_ids": receipt
+                            .receipts
+                            .iter()
+                            .map(|receipt| receipt.evidence_id.clone())
+                            .collect::<Vec<_>>(),
+                        "baseline_cached": receipt.baseline_cached,
+                        "snapshot_version": receipt.snapshot_version,
+                    });
+                    NativeExecutorResult {
+                        request_id,
+                        ok: true,
+                        error: None,
+                        usage: Some(usage),
+                        payload,
+                        completed_at: Utc::now(),
+                    }
+                }
+                Err(error) => failed_native_executor_result(request_id, error),
             }
         }
-        Err(error) => NativeExecutorResult {
-            request_id,
-            ok: false,
-            error: Some(bounded_native_executor_error(error)),
-            usage: None,
-            payload: serde_json::Value::Null,
-            completed_at: Utc::now(),
-        },
+        NativeExecutorAction::VisualDiffCapture { viewport, revision } => {
+            match capture_changed_regions(app, state, session_id, viewport, revision).await {
+                Ok(receipt) => {
+                    let payload = serde_json::json!({
+                        "mode": receipt.mode,
+                        "changed_ratio": receipt.changed_ratio,
+                        "evidence_ids": receipt
+                            .receipts
+                            .iter()
+                            .map(|receipt| receipt.evidence_id.clone())
+                            .collect::<Vec<_>>(),
+                        "visual_diff_evidence_id": receipt.visual_diff_evidence_id,
+                        "baseline_cached": receipt.baseline_cached,
+                    });
+                    NativeExecutorResult {
+                        request_id,
+                        ok: true,
+                        error: None,
+                        usage: None,
+                        payload,
+                        completed_at: Utc::now(),
+                    }
+                }
+                Err(error) => failed_native_executor_result(request_id, error),
+            }
+        }
+    }
+}
+
+fn failed_native_executor_result(request_id: uuid::Uuid, error: String) -> NativeExecutorResult {
+    NativeExecutorResult {
+        request_id,
+        ok: false,
+        error: Some(bounded_native_executor_error(error)),
+        usage: None,
+        payload: serde_json::Value::Null,
+        completed_at: Utc::now(),
     }
 }
 
