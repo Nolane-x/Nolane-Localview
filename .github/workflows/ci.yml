@@ -78,6 +78,8 @@ jobs:
         run: cargo test -p localview-control --test live_visual_verification
       - name: Live visual capture verification contract
         run: cargo test -p localview-control --test live_visual_capture_verify
+      - name: Live visual capture resource governor contract
+        run: cargo test -p localview-control --test live_visual_capture_resource_governor
       - name: Runtime resource governor authority contract
         run: cargo test -p localview-control --test runtime_resource_governor
       - name: Process resource telemetry contract
