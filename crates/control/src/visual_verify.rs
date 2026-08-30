@@ -75,6 +75,12 @@ enum RetainedVisualDiffMode {
     BaselineReset,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetainedVerificationError {
+    EvidenceNotFound,
+    Invalid,
+}
+
 fn authorized(headers: &HeaderMap, state: &ControlState) -> bool {
     headers
         .get(header::AUTHORIZATION)
@@ -105,6 +111,19 @@ fn invalid_verification() -> axum::response::Response {
         Json(serde_json::json!({"error": "invalid_visual_verification"})),
     )
         .into_response()
+}
+
+fn retained_verification_error_response(
+    error: RetainedVerificationError,
+) -> axum::response::Response {
+    match error {
+        RetainedVerificationError::EvidenceNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "evidence_not_found"})),
+        )
+            .into_response(),
+        RetainedVerificationError::Invalid => invalid_verification(),
+    }
 }
 
 fn trusted_diff_shape(payload: &RetainedVisualDiffPayload) -> bool {
@@ -163,7 +182,7 @@ async fn verify_retained_visual_diff(
     .await
     {
         Ok(result) => result,
-        Err(response) => return response,
+        Err(error) => return retained_verification_error_response(error),
     };
 
     Json(serde_json::json!({
@@ -233,7 +252,7 @@ async fn capture_and_verify_visual_diff(
 
     let result = match verify_retained_evidence(&state, id, &evidence_id, request.expectation).await {
         Ok(result) => result,
-        Err(response) => return response,
+        Err(error) => return retained_verification_error_response(error),
     };
 
     Json(serde_json::json!({
@@ -272,13 +291,9 @@ async fn verify_retained_evidence(
     id: SessionId,
     evidence_id: &str,
     expectation: VisualChangeExpectation,
-) -> Result<serde_json::Value, axum::response::Response> {
+) -> Result<serde_json::Value, RetainedVerificationError> {
     let Some(evidence) = state.evidence.get(evidence_id).await else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "evidence_not_found"})),
-        )
-            .into_response());
+        return Err(RetainedVerificationError::EvidenceNotFound);
     };
 
     if evidence.session_id != id
@@ -289,14 +304,14 @@ async fn verify_retained_evidence(
         || evidence.secret_taint
         || evidence.confidence < 1.0
     {
-        return Err(invalid_verification());
+        return Err(RetainedVerificationError::Invalid);
     }
 
     let Ok(payload) = serde_json::from_value::<RetainedVisualDiffPayload>(evidence.payload) else {
-        return Err(invalid_verification());
+        return Err(RetainedVerificationError::Invalid);
     };
     if !trusted_diff_shape(&payload) {
-        return Err(invalid_verification());
+        return Err(RetainedVerificationError::Invalid);
     }
 
     let observation = VisualChangeObservation {
@@ -304,9 +319,9 @@ async fn verify_retained_evidence(
         baseline_comparable: payload.baseline_comparable,
     };
     let Ok(result) = verify_visual_change(&observation, expectation) else {
-        return Err(invalid_verification());
+        return Err(RetainedVerificationError::Invalid);
     };
-    serde_json::to_value(result).map_err(|_| invalid_verification())
+    serde_json::to_value(result).map_err(|_| RetainedVerificationError::Invalid)
 }
 
 fn invalid_native_visual_diff_result(request_id: uuid::Uuid) -> axum::response::Response {
