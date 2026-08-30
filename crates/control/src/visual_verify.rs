@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
@@ -6,7 +8,8 @@ use axum::{
     Json, Router,
 };
 use localview_evidence::{EvidenceKind, UncertaintyClass};
-use localview_protocol::SessionId;
+use localview_live_bridge::{NativeExecutorAction, NativeExecutorResult};
+use localview_protocol::{SessionId, ViewportMeta};
 use localview_verification::{
     verify_visual_change, VisualChangeExpectation, VisualChangeObservation,
 };
@@ -14,11 +17,18 @@ use serde::Deserialize;
 
 use crate::ControlState;
 
+const NATIVE_VISUAL_DIFF_TIMEOUT: Duration = Duration::from_secs(12);
+const NATIVE_VISUAL_DIFF_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
         .route(
             "/v1/sessions/{id}/verify/visual",
             post(verify_retained_visual_diff),
+        )
+        .route(
+            "/v1/sessions/{id}/verify/visual/capture",
+            post(capture_and_verify_visual_diff),
         )
         .with_state(state)
 }
@@ -27,6 +37,14 @@ pub(crate) fn router(state: ControlState) -> Router {
 #[serde(deny_unknown_fields)]
 struct LiveVisualVerifyRequest {
     evidence_id: String,
+    expectation: VisualChangeExpectation,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LiveVisualCaptureVerifyRequest {
+    viewport: ViewportMeta,
+    revision: Option<String>,
     expectation: VisualChangeExpectation,
 }
 
@@ -73,6 +91,14 @@ fn denied() -> axum::response::Response {
         .into_response()
 }
 
+fn session_not_found() -> axum::response::Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "session_not_found"})),
+    )
+        .into_response()
+}
+
 fn invalid_verification() -> axum::response::Response {
     (
         StatusCode::BAD_REQUEST,
@@ -107,6 +133,14 @@ fn trusted_diff_shape(payload: &RetainedVisualDiffPayload) -> bool {
     }
 }
 
+fn valid_capture_viewport(viewport: &ViewportMeta) -> bool {
+    viewport.css_width > 0
+        && viewport.css_height > 0
+        && viewport.device_scale_factor.is_finite()
+        && viewport.device_scale_factor > 0.0
+        && viewport.device_scale_factor <= 8.0
+}
+
 async fn verify_retained_visual_diff(
     State(state): State<ControlState>,
     headers: HeaderMap,
@@ -117,19 +151,134 @@ async fn verify_retained_visual_diff(
         return denied();
     }
     if state.sessions.get(id).await.is_none() {
+        return session_not_found();
+    }
+
+    let result = match verify_retained_evidence(
+        &state,
+        id,
+        &request.evidence_id,
+        request.expectation,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+
+    Json(serde_json::json!({
+        "evidence_id": request.evidence_id,
+        "result": result,
+    }))
+    .into_response()
+}
+
+async fn capture_and_verify_visual_diff(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+    Json(request): Json<LiveVisualCaptureVerifyRequest>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if state.sessions.get(id).await.is_none() {
+        return session_not_found();
+    }
+    if !valid_capture_viewport(&request.viewport) {
+        return invalid_verification();
+    }
+
+    let native_request = state
+        .live
+        .enqueue_native_executor(
+            id,
+            NativeExecutorAction::VisualDiffCapture {
+                viewport: request.viewport,
+                revision: request.revision,
+            },
+        )
+        .await;
+    let native_result = match wait_for_native_visual_diff(&state, id, native_request.id).await {
+        Ok(result) => result,
+        Err(()) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(serde_json::json!({
+                    "error": "native_visual_diff_timeout",
+                    "native_request_id": native_request.id,
+                })),
+            )
+                .into_response();
+        }
+    };
+    if !native_result.ok {
         return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "session_not_found"})),
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": "native_visual_diff_failed",
+                "native_request_id": native_request.id,
+            })),
         )
             .into_response();
     }
+    let Some(evidence_id) = native_result
+        .payload
+        .get("visual_diff_evidence_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+    else {
+        return invalid_native_visual_diff_result(native_request.id);
+    };
 
-    let Some(evidence) = state.evidence.get(&request.evidence_id).await else {
-        return (
+    let result = match verify_retained_evidence(&state, id, &evidence_id, request.expectation).await {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+
+    Json(serde_json::json!({
+        "evidence_id": evidence_id,
+        "result": result,
+        "native_request_id": native_request.id,
+    }))
+    .into_response()
+}
+
+async fn wait_for_native_visual_diff(
+    state: &ControlState,
+    id: SessionId,
+    request_id: uuid::Uuid,
+) -> Result<NativeExecutorResult, ()> {
+    tokio::time::timeout(NATIVE_VISUAL_DIFF_TIMEOUT, async {
+        loop {
+            if let Some(result) = state
+                .live
+                .recent_native_executor_results(id, 16)
+                .await
+                .into_iter()
+                .find(|result| result.request_id == request_id)
+            {
+                return result;
+            }
+            tokio::time::sleep(NATIVE_VISUAL_DIFF_POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .map_err(|_| ())
+}
+
+async fn verify_retained_evidence(
+    state: &ControlState,
+    id: SessionId,
+    evidence_id: &str,
+    expectation: VisualChangeExpectation,
+) -> Result<serde_json::Value, axum::response::Response> {
+    let Some(evidence) = state.evidence.get(evidence_id).await else {
+        return Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "evidence_not_found"})),
         )
-            .into_response();
+            .into_response());
     };
 
     if evidence.session_id != id
@@ -140,27 +289,33 @@ async fn verify_retained_visual_diff(
         || evidence.secret_taint
         || evidence.confidence < 1.0
     {
-        return invalid_verification();
+        return Err(invalid_verification());
     }
 
     let Ok(payload) = serde_json::from_value::<RetainedVisualDiffPayload>(evidence.payload) else {
-        return invalid_verification();
+        return Err(invalid_verification());
     };
     if !trusted_diff_shape(&payload) {
-        return invalid_verification();
+        return Err(invalid_verification());
     }
 
     let observation = VisualChangeObservation {
         changed_ratio: payload.changed_ratio,
         baseline_comparable: payload.baseline_comparable,
     };
-    let Ok(result) = verify_visual_change(&observation, request.expectation) else {
-        return invalid_verification();
+    let Ok(result) = verify_visual_change(&observation, expectation) else {
+        return Err(invalid_verification());
     };
+    serde_json::to_value(result).map_err(|_| invalid_verification())
+}
 
-    Json(serde_json::json!({
-        "evidence_id": request.evidence_id,
-        "result": result,
-    }))
-    .into_response()
+fn invalid_native_visual_diff_result(request_id: uuid::Uuid) -> axum::response::Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(serde_json::json!({
+            "error": "invalid_native_visual_diff_result",
+            "native_request_id": request_id,
+        })),
+    )
+        .into_response()
 }
