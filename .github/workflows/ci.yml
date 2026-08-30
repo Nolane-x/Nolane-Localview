@@ -27,7 +27,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnayem/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -76,6 +76,8 @@ jobs:
         run: cargo test -p localview-control --test visual_diff_evidence
       - name: Live visual verification contract
         run: cargo test -p localview-control --test live_visual_verification
+      - name: Live visual capture verification contract
+        run: cargo test -p localview-control --test live_visual_capture_verify
       - name: Runtime resource governor authority contract
         run: cargo test -p localview-control --test runtime_resource_governor
       - name: Process resource telemetry contract
@@ -184,3 +186,5 @@ jobs:
         run: cargo test -p localview-desktop --test perception_budget_authorization_contract
       - name: Native visual executor worker contract
         run: cargo test -p localview-desktop --test native_visual_executor_worker_contract
+      - name: Native visual diff executor contract
+        run: cargo test -p localview-desktop --test native_visual_diff_executor_contract
