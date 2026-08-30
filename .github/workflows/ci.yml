@@ -172,6 +172,8 @@ jobs:
         run: cargo test -p localview-desktop --test visual_freeze_capture_contract
       - name: Changed-region scheduling transaction contract
         run: cargo test -p localview-desktop --test changed_region_schedule_contract
+      - name: Changed visual diff publication contract
+        run: cargo test -p localview-desktop --test changed_visual_diff_publication_contract
       - name: Progressive target capture contract
         run: cargo test -p localview-desktop --test progressive_target_capture_contract
       - name: Visual packet capture contract
