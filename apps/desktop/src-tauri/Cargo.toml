@@ -39,3 +39,4 @@ serde_json.workspace = true
 tauri = { version = "2.11.5", features = ["tray-icon"] }
 tokio.workspace = true
 url.workspace = true
+uuid.workspace = true
