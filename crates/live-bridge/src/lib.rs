@@ -145,6 +145,10 @@ pub enum NativeExecutorAction {
         budget: PerceptionBudgetContract,
         budget_escalation_reason: Option<BudgetEscalationReason>,
     },
+    VisualDiffCapture {
+        viewport: ViewportMeta,
+        revision: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
