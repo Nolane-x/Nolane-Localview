@@ -24,6 +24,12 @@ use crate::{
 const NATIVE_VISUAL_DIFF_TIMEOUT: Duration = Duration::from_secs(12);
 const NATIVE_VISUAL_DIFF_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeVisualDiffWaitError {
+    Timeout,
+}
+
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
         .route(
@@ -234,7 +240,7 @@ async fn capture_and_verify_visual_diff(
         .await;
     let native_result = match wait_for_native_visual_diff(&state, id, native_request.id).await {
         Ok(result) => result,
-        Err(()) => {
+        Err(NativeVisualDiffWaitError::Timeout) => {
             return (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(serde_json::json!({
@@ -283,8 +289,18 @@ async fn wait_for_native_visual_diff(
     state: &ControlState,
     id: SessionId,
     request_id: uuid::Uuid,
-) -> Result<NativeExecutorResult, ()> {
-    tokio::time::timeout(NATIVE_VISUAL_DIFF_TIMEOUT, async {
+) -> Result<NativeExecutorResult, NativeVisualDiffWaitError> {
+    wait_for_native_visual_diff_with_timeout(state, id, request_id, NATIVE_VISUAL_DIFF_TIMEOUT).await
+}
+
+#[doc(hidden)]
+pub async fn wait_for_native_visual_diff_with_timeout(
+    state: &ControlState,
+    id: SessionId,
+    request_id: uuid::Uuid,
+    timeout: Duration,
+) -> Result<NativeExecutorResult, NativeVisualDiffWaitError> {
+    let result = tokio::time::timeout(timeout, async {
         loop {
             if let Some(result) = state
                 .live
@@ -298,8 +314,18 @@ async fn wait_for_native_visual_diff(
             tokio::time::sleep(NATIVE_VISUAL_DIFF_POLL_INTERVAL).await;
         }
     })
-    .await
-    .map_err(|_| ())
+    .await;
+
+    match result {
+        Ok(result) => Ok(result),
+        Err(_) => {
+            let _ = state
+                .live
+                .request_native_executor_cancellation(id, request_id)
+                .await;
+            Err(NativeVisualDiffWaitError::Timeout)
+        }
+    }
 }
 
 async fn verify_retained_evidence(
