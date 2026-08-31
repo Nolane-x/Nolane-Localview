@@ -292,11 +292,7 @@ impl LiveBridge {
         session_id: SessionId,
         request_id: Uuid,
     ) -> Option<NativeExecutorResult> {
-        self.base
-            .recent_native_executor_results(session_id, usize::MAX)
-            .await
-            .into_iter()
-            .find(|result| result.request_id == request_id)
+        self.base.native_executor_result(session_id, request_id).await
     }
 
     pub async fn request_native_executor_cancellation(
