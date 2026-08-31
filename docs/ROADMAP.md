@@ -36,6 +36,8 @@ Landed live path:
 - bounded native drain transport for observer events.
 - normalized semantic/layout observer events through the daemon/control evidence path.
 - queued deterministic click/type/key/scroll/focus/snapshot execution.
+- Exact-session, exact-action cooperative cancellation for public `BridgeAction` work. Pending cancellation filters delivery; inflight cancellation fences result authority before acknowledgement; cancelled actions cannot create Interaction/Semantic/Layout evidence; `FreezeVisuals` / `RestoreVisuals` remain outside public cancellation authority.
+- The desktop keeps ownership of actions already taken from the daemon until cancellation ACK or result publication is terminal. Cancellation/ACK/result transport retries retain `executed` and `cancellationSeen` state, so transient failure cannot orphan the action or execute an already-applied DOM side effect twice. Cancellation remains cooperative and does not force-abort a synchronous WebView call already in progress.
 - synchronous MCP `page.snapshot` and `page.inspect` backed by fresh completed snapshot actions.
 - bridge caller/session ownership validation.
 - top-level navigation guard that keeps managed preview/workspace surfaces on loopback.
@@ -120,13 +122,12 @@ Landed native visual path:
 
 Still required before the visual/runtime Active Perception path is considered complete:
 
-- an explicit bridge cancellation protocol before any future hard mid-action deadline cancellation is attempted; current actions remain bounded by their existing timeout and the cycle rechecks elapsed latency at boundaries;
 - framework-specific/sourcemap-backed ownership beyond current explicit source evidence;
 - extend the separate Runtime Resource Governor from its current live admission/sample path to full capture-storage/browser-process/hidden-surface/analysis-concurrency/cache enforcement;
 - guarded full-page stitching;
 - responsive sweep/contact-sheet execution over the same bounded capture authority.
 
-**Done when:** one button edit normally costs an evidence-backed crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling with true aggregate network in-flight accounting, live freeze/restore, pre-persistence private-region redaction, bounded CSS-region execution, evidence-backed progressive semantic targeting, baseline-driven changed-region scheduling, token-aware visual packet selection, planner-owned four-dimensional Perception Budget authority, native visual execution, planner-authorized Chromium execution, retained semantic feedback, single-request whole-cycle budget accounting and the capture → diff → retained evidence → deterministic verification loop are now present. Explicit mid-action cancellation authority, complete Runtime Resource Governor enforcement, deeper framework/source ownership, guarded stitching and responsive execution remain.
+**Done when:** one button edit normally costs an evidence-backed crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling with true aggregate network in-flight accounting, live freeze/restore, pre-persistence private-region redaction, bounded CSS-region execution, evidence-backed progressive semantic targeting, baseline-driven changed-region scheduling, token-aware visual packet selection, planner-owned four-dimensional Perception Budget authority, native visual execution, planner-authorized Chromium execution, retained semantic feedback, single-request whole-cycle budget accounting, cooperative public-action cancellation and the capture → diff → retained evidence → deterministic verification loop are now present. Complete Runtime Resource Governor enforcement, deeper framework/source ownership, guarded stitching and responsive execution remain. Hard force-abort inside an already-running synchronous WebView/platform action is intentionally not claimed by the cooperative cancellation protocol.
 
 ## Wave 3 — Runtime telemetry
 

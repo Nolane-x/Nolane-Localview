@@ -32,8 +32,10 @@ Internal capture actions never enter the public cancellation authority. Existing
 8. Completed non-cancelled actions are removed from cancellation authority.
 9. Terminal cancelled tombstones are bounded to 256 entries globally and cleaned on session release.
 10. Public cancellation endpoints cannot address internal capture actions.
-11. A cancellation acknowledgement may settle the base public action origin so capacity is released, but it must never synthesize Interaction evidence as if the action had executed.
+11. A cancellation acknowledgement may settle the base public action origin so capacity is released, but it must never synthesize Interaction evidence as if the action had executed or route the cancelled origin through normal claimed-result storage.
 12. Public action result submission after cancellation returns conflict and stores no Interaction/Semantic/Layout evidence.
+13. Once a public action is delivered to the desktop executor, that worker retains local ownership until cancellation acknowledgement or result publication reaches a terminal outcome.
+14. Transient cancellation lookup, acknowledgement, or result transport failure must not orphan an already-taken action and must not cause a DOM side effect that already executed to run a second time.
 
 ## Control API
 
@@ -50,6 +52,8 @@ Responses mirror the native cancellation shape but use page-action terminology. 
 
 The page executor can query exact cancellation state for the action it owns. Cancellation remains cooperative: LocalView does not force-kill JavaScript or platform WebView APIs mid-call. The executor checks the signal at safe boundaries and acknowledges when it stops the action. The authority fence prevents late/racing results from being accepted even before ACK.
 
+After `preview_take_actions` returns, the preview worker keeps a bounded local pending entry until terminal acknowledgement or result publication. Each entry remembers whether its DOM action has already executed and whether cancellation has already been observed. A transport failure before execution retries the cancellation check; a transport failure after execution retries only cancellation/ACK/result terminalization and never calls the DOM action again. Once cancellation has been observed, later retries stay on the acknowledgement path rather than falling back to normal result publication. An already-terminal result conflict is treated as terminal from the worker's perspective because authority has already resolved the action.
+
 ## Evidence Semantics
 
 Cancellation is control-flow state, not positive execution evidence. A cancelled action does not create Interaction evidence and cannot create Semantic/Layout evidence. If an action already completed and its result was accepted before cancellation acquired authority, cancellation returns not found because completion removed the lifecycle entry.
@@ -65,15 +69,19 @@ TDD must prove:
 - queue eviction removes stale cancellation ownership;
 - terminal tombstones are bounded;
 - exact lookup works beyond a truncated cancellation listing;
-- acknowledgement releases base lifecycle capacity;
+- acknowledgement releases base lifecycle capacity without polluting claimed storage;
 - cancelled public results create no evidence;
 - internal `FreezeVisuals` / `RestoreVisuals` are unreachable through public cancellation;
+- the desktop retains taken actions across cancellation/ACK/result transport retries;
+- an executed action is never re-executed merely because post-execution terminalization needs retry;
+- observed cancellation retries ACK and never falls back to normal result publication;
+- an already-terminal result conflict cannot create an endless retry loop;
 - existing capture restore transaction tests remain green;
 - Ubuntu/macOS/Windows core gates and Tauri/native GUI smoke remain green on the exact head.
 
 ## Non-goals
 
-- No force-abort of WebView platform APIs.
+- No force-abort of WebView platform APIs or synchronous JavaScript actions already in progress.
 - No cancellation authority for internal capture actions.
 - No unification of native-executor and public-action cancellation registries.
 - No new raw page payload or secret-bearing cancellation telemetry.
