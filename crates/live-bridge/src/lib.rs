@@ -465,6 +465,17 @@ impl LiveBridge {
         )
     }
 
+    pub async fn discard_public_action(&self, session_id: SessionId, action_id: Uuid) -> bool {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return false;
+        };
+        let Some(index) = state.inflight.iter().position(|action| action.id == action_id) else {
+            return false;
+        };
+        state.inflight.remove(index).is_some()
+    }
+
     pub async fn claim_native_executor(
         &self,
         session_id: SessionId,
