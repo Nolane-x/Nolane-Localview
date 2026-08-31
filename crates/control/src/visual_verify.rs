@@ -302,13 +302,7 @@ pub async fn wait_for_native_visual_diff_with_timeout(
 ) -> Result<NativeExecutorResult, NativeVisualDiffWaitError> {
     let result = tokio::time::timeout(timeout, async {
         loop {
-            if let Some(result) = state
-                .live
-                .recent_native_executor_results(id, 16)
-                .await
-                .into_iter()
-                .find(|result| result.request_id == request_id)
-            {
+            if let Some(result) = state.live.native_executor_result(id, request_id).await {
                 return result;
             }
             tokio::time::sleep(NATIVE_VISUAL_DIFF_POLL_INTERVAL).await;
