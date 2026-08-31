@@ -40,6 +40,7 @@ use crate::{
 
 const MAX_PERCEPTION_CYCLE_STEPS: usize = 4;
 const NATIVE_VISUAL_EXECUTOR_TIMEOUT: Duration = Duration::from_secs(12);
+const MAX_NATIVE_VISUAL_EVIDENCE_IDS: usize = 8;
 
 #[derive(Debug, Serialize)]
 struct LivePerceptionCycleResponse {
@@ -213,6 +214,9 @@ async fn execute_live_perception_cycle(
                 if !result.ok {
                     return native_visual_failed_response(&result);
                 }
+                let Some(evidence_ids) = native_visual_result_evidence_ids(&result) else {
+                    return native_visual_evidence_missing_response();
+                };
                 let Some(actual_usage) = result.usage else {
                     return native_visual_invalid_usage_response("native_visual_usage_missing");
                 };
@@ -221,10 +225,10 @@ async fn execute_live_perception_cycle(
                 }
                 if !has_matching_native_visual_evidence(
                     &state,
-                    id,
                     &native_request,
                     &viewport,
                     request.revision.as_deref(),
+                    &evidence_ids,
                 )
                 .await
                 {
@@ -366,22 +370,38 @@ fn add_actual_non_latency_usage(
     }
 }
 
+fn native_visual_result_evidence_ids(result: &NativeExecutorResult) -> Option<Vec<String>> {
+    let values = result.payload.get("evidence_ids")?.as_array()?;
+    if values.is_empty() || values.len() > MAX_NATIVE_VISUAL_EVIDENCE_IDS {
+        return None;
+    }
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|evidence_id| !evidence_id.is_empty())
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
 async fn has_matching_native_visual_evidence(
     state: &ControlState,
-    id: SessionId,
     native_request: &NativeExecutorRequest,
     viewport: &ViewportMeta,
     revision: Option<&str>,
+    evidence_ids: &[String],
 ) -> bool {
-    state
-        .evidence
-        .recent_for_session(id, 64)
-        .await
-        .iter()
-        .rev()
-        .any(|evidence| {
-            authoritative_native_visual_evidence(evidence, native_request, viewport, revision)
-        })
+    for evidence_id in evidence_ids {
+        let Some(evidence) = state.evidence.get(evidence_id).await else {
+            return false;
+        };
+        if !authoritative_native_visual_evidence(&evidence, native_request, viewport, revision) {
+            return false;
+        }
+    }
+    true
 }
 
 fn authoritative_native_visual_evidence(
@@ -391,6 +411,7 @@ fn authoritative_native_visual_evidence(
     revision: Option<&str>,
 ) -> bool {
     if evidence.kind != EvidenceKind::Visual
+        || evidence.session_id != native_request.session_id
         || evidence.provenance.source != "native-capture"
         || evidence.uncertainty != UncertaintyClass::Observed
         || evidence.confidence < 0.999
