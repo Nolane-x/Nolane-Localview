@@ -21,3 +21,12 @@ fn fetch_and_xhr_account_for_start_and_completion() {
     assert!(script.contains("const originalFetch"));
     assert!(script.contains("XMLHttpRequest.prototype.send"));
 }
+
+#[test]
+fn rejected_second_xhr_send_cannot_release_the_first_request() {
+    let script = bootstrap_script(&InstrumentationConfig::default());
+
+    assert!(script.contains("const startedHere = !meta.active;"));
+    assert!(script.contains("if (startedHere) {"));
+    assert!(script.contains("if (startedHere && meta.active) {"));
+}
