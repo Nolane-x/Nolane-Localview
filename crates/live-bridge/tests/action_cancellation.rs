@@ -61,6 +61,70 @@ async fn inflight_cancel_fences_result_claim_before_ack() {
 }
 
 #[tokio::test]
+async fn cancellation_ack_discards_origin_instead_of_polluting_claimed_storage() {
+    let bridge = LiveBridge::new(64, 8);
+    let session = Uuid::new_v4();
+    let secret = "must-remain-redacted";
+
+    let protected = bridge
+        .enqueue_action(
+            session,
+            Some("@secret".into()),
+            BridgeActionKind::TypeText {
+                text: secret.into(),
+                clear_first: true,
+            },
+        )
+        .await;
+    assert_eq!(bridge.take_actions(session, 8).await.len(), 1);
+    assert_eq!(
+        bridge
+            .claim_action(session, protected.id)
+            .await
+            .expect("protected result origin")
+            .id,
+        protected.id
+    );
+
+    for _ in 0..8 {
+        let cancelled = bridge
+            .enqueue_action(session, None, BridgeActionKind::Click)
+            .await;
+        assert_eq!(bridge.take_actions(session, 8).await.len(), 1);
+        let outcome = bridge
+            .request_action_cancellation(session, cancelled.id)
+            .await
+            .expect("inflight cancellation");
+        assert_eq!(outcome.state, ActionCancellationState::CancellationRequested);
+        assert!(bridge
+            .acknowledge_action_cancellation(session, cancelled.id)
+            .await);
+    }
+
+    bridge
+        .complete_action(
+            session,
+            BridgeActionResult {
+                action_id: protected.id,
+                ok: true,
+                error: Some(format!("echo:{secret}")),
+                payload: serde_json::json!({"value": secret}),
+                completed_at: Utc::now(),
+            },
+        )
+        .await;
+
+    let result = bridge
+        .recent_results(session, 8)
+        .await
+        .into_iter()
+        .find(|result| result.action_id == protected.id)
+        .expect("protected completion result");
+    assert_eq!(result.payload, Value::Null);
+    assert_eq!(result.error.as_deref(), Some("echo:[REDACTED]"));
+}
+
+#[tokio::test]
 async fn result_claim_wins_linearization_and_later_cancel_is_too_late() {
     let bridge = LiveBridge::new(64, 8);
     let session = Uuid::new_v4();
