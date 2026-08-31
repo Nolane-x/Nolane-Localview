@@ -40,6 +40,12 @@ jobs:
         run: cargo check --workspace --exclude localview-desktop --all-targets
       - name: Clippy
         run: cargo clippy --workspace --exclude localview-desktop --all-targets -- -D warnings
+      - name: Stable capture network idle contract
+        run: cargo test -p localview-capture --test settle_contract
+      - name: Instrumentation network in-flight contract
+        run: cargo test -p localview-instrumentation --test network_inflight_contract
+      - name: Control network idle projection contract
+        run: cargo test -p localview-control --test network_inflight_settle_contract
       - name: Native executor cancellation lifecycle hardening
         run: cargo test -p localview-live-bridge --test native_executor_cancellation_hardening
       - name: Native executor cancellation control hardening
