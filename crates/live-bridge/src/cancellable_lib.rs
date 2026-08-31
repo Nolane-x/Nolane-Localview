@@ -382,7 +382,7 @@ impl LiveBridge {
         }
 
         for action_id in consume {
-            let _ = self.base.claim_action(session_id, action_id).await;
+            let _ = self.base.discard_public_action(session_id, action_id).await;
         }
         authority.prune_cancelled_tombstones();
         deliver
@@ -507,7 +507,7 @@ impl LiveBridge {
             _ => return false,
         }
 
-        let _ = self.base.claim_action(session_id, action_id).await;
+        let _ = self.base.discard_public_action(session_id, action_id).await;
         let requested_at = authority
             .actions
             .get(&key)
