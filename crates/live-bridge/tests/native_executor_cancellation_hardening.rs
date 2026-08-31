@@ -16,11 +16,13 @@ fn action() -> NativeExecutorAction {
 
 #[tokio::test]
 async fn evicted_pending_origin_is_not_a_cancellation_target() {
-    let bridge = LiveBridge::new(16, 2);
+    let bridge = LiveBridge::new(16, 8);
     let session_id = SessionId::new_v4();
     let oldest = bridge.enqueue_native_executor(session_id, action()).await;
-    let middle = bridge.enqueue_native_executor(session_id, action()).await;
-    let newest = bridge.enqueue_native_executor(session_id, action()).await;
+    let mut retained = Vec::new();
+    for _ in 0..8 {
+        retained.push(bridge.enqueue_native_executor(session_id, action()).await);
+    }
 
     assert!(
         bridge
@@ -30,15 +32,17 @@ async fn evicted_pending_origin_is_not_a_cancellation_target() {
         "the bounded native queue already evicted this origin, so cancellation authority must not retain a stale owner"
     );
 
+    let middle = retained[3].id;
     let middle_cancel = bridge
-        .request_native_executor_cancellation(session_id, middle.id)
+        .request_native_executor_cancellation(session_id, middle)
         .await
         .expect("middle request remains queued");
     assert_eq!(middle_cancel.state, NativeExecutorCancellationState::Cancelled);
     assert!(middle_cancel.acknowledged);
 
+    let newest = retained.last().expect("newest retained request").id;
     let newest_cancel = bridge
-        .request_native_executor_cancellation(session_id, newest.id)
+        .request_native_executor_cancellation(session_id, newest)
         .await
         .expect("newest request remains queued");
     assert_eq!(newest_cancel.state, NativeExecutorCancellationState::Cancelled);
@@ -47,7 +51,7 @@ async fn evicted_pending_origin_is_not_a_cancellation_target() {
 
 #[tokio::test]
 async fn terminal_cancellation_tombstones_are_bounded() {
-    let bridge = LiveBridge::new(16, 1);
+    let bridge = LiveBridge::new(16, 8);
     let session_id = SessionId::new_v4();
     let mut first_id = None;
     let mut last_id = None;
