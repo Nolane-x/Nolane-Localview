@@ -40,6 +40,10 @@ jobs:
         run: cargo check --workspace --exclude localview-desktop --all-targets
       - name: Clippy
         run: cargo clippy --workspace --exclude localview-desktop --all-targets -- -D warnings
+      - name: Native executor cancellation lifecycle hardening
+        run: cargo test -p localview-live-bridge --test native_executor_cancellation_hardening
+      - name: Native executor cancellation control hardening
+        run: cargo test -p localview-control --test native_executor_cancellation_hardening
       - name: Tests
         run: cargo test --workspace --exclude localview-desktop
       - name: Native executor queue contract
@@ -194,3 +198,5 @@ jobs:
         run: cargo test -p localview-desktop --test native_visual_diff_executor_contract
       - name: Native executor cancellation worker contract
         run: cargo test -p localview-desktop --test native_executor_cancellation_worker_contract
+      - name: Native executor exact cancellation lookup contract
+        run: cargo test -p localview-desktop --test native_executor_cancellation_lookup_contract
