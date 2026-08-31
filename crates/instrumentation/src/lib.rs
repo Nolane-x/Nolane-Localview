@@ -776,8 +776,9 @@ const SCRIPT: &str = r#"
     };
     XMLHttpRequest.prototype.send = function(...args) {
       const meta = xhrMeta.get(this) || { method: 'GET', url: '', started: 0, active: false };
+      const startedHere = !meta.active;
       meta.started = performance.now();
-      if (!meta.active) {
+      if (startedHere) {
         meta.active = true;
         beginNetworkRequest();
       }
@@ -797,7 +798,7 @@ const SCRIPT: &str = r#"
       try {
         return originalSend.apply(this, args);
       } catch (error) {
-        if (meta.active) {
+        if (startedHere && meta.active) {
           meta.active = false;
           finishNetworkRequest();
         }
