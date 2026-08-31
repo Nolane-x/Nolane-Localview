@@ -22,15 +22,15 @@ use axum::Router;
 
 #[doc(hidden)]
 pub use chromium_runtime::configure_chromium_executor_for_sessions;
+#[doc(hidden)]
+pub use native_executor::{
+    wait_for_native_executor_result_with_timeout, NativeExecutorWaitError,
+};
 pub use localview_resource_governor::RuntimeResourceGovernor;
 pub use resource_runtime::runtime_resource_governor_for_sessions;
 #[doc(hidden)]
 pub use runtime::serve as legacy_serve;
 pub use runtime::{ControlState, EventEnvelope};
-#[doc(hidden)]
-pub use visual_verify::{
-    wait_for_native_visual_diff_with_timeout, NativeVisualDiffWaitError,
-};
 
 pub fn router(state: ControlState) -> Router {
     runtime::router(state.clone())
