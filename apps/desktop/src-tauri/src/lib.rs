@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
-    BridgeAction, BridgeActionResult, IngestReport, ObserverBatch, ObserverEvent,
-    PrivateBridgeAction,
+    ActionCancellationSignal, BridgeAction, BridgeActionResult, IngestReport, ObserverBatch,
+    ObserverEvent, PrivateBridgeAction,
 };
 use localview_protocol::{Health, Session, SessionId};
 use serde::Serialize;
@@ -255,6 +255,58 @@ async fn preview_take_actions(
         actions.push(serde_json::to_value(action).map_err(err)?);
     }
     Ok(actions)
+}
+
+#[tauri::command]
+async fn preview_action_cancellation(
+    webview_window: tauri::WebviewWindow,
+    session_id: SessionId,
+    action_id: uuid::Uuid,
+) -> Result<bool, String> {
+    ensure_preview_caller(&webview_window, session_id)?;
+    let token = read_token().await?;
+    let response = control_client()?
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/cancellations/{action_id}"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(err)?;
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+        return Ok(false);
+    }
+    let signal = response
+        .error_for_status()
+        .map_err(err)?
+        .json::<ActionCancellationSignal>()
+        .await
+        .map_err(err)?;
+    if signal.action_id != action_id {
+        return Err("action cancellation signal/action mismatch".into());
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+async fn preview_ack_action_cancellation(
+    webview_window: tauri::WebviewWindow,
+    session_id: SessionId,
+    action_id: uuid::Uuid,
+) -> Result<(), String> {
+    ensure_preview_caller(&webview_window, session_id)?;
+    let token = read_token().await?;
+    control_client()?
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/cancellations/{action_id}/ack"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -586,6 +638,26 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     }
   };
 
+  const isInternalCaptureAction = (queued) => {
+    const action = queued?.action || {};
+    return action.type === 'freeze_visuals' || action.type === 'restore_visuals';
+  };
+
+  const cancellationRequested = async (invoke, action) => {
+    if (isInternalCaptureAction(action)) return false;
+    return !!(await invoke('preview_action_cancellation', {
+      sessionId,
+      actionId: action.id,
+    }));
+  };
+
+  const acknowledgeCancellation = async (invoke, action) => {
+    await invoke('preview_ack_action_cancellation', {
+      sessionId,
+      actionId: action.id,
+    });
+  };
+
   const complete = async (invoke, action, ok, payload, error) => {
     await invoke('preview_complete_action', {
       sessionId,
@@ -618,12 +690,27 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
 
       const actions = await invoke('preview_take_actions', { sessionId });
       for (const action of Array.isArray(actions) ? actions : []) {
-        try {
-          const payload = await execute(action);
-          await complete(invoke, action, true, payload, null);
-        } catch (error) {
-          await complete(invoke, action, false, null, String(error?.message || error));
+        if (await cancellationRequested(invoke, action)) {
+          await acknowledgeCancellation(invoke, action);
+          continue;
         }
+
+        let ok = true;
+        let payload = null;
+        let actionError = null;
+        try {
+          payload = await execute(action);
+        } catch (error) {
+          ok = false;
+          actionError = String(error?.message || error);
+        }
+
+        if (await cancellationRequested(invoke, action)) {
+          await acknowledgeCancellation(invoke, action);
+          continue;
+        }
+
+        await complete(invoke, action, ok, payload, actionError);
       }
     } catch (_) {
       // Best effort by design: LocalView observation must never break the target application.
@@ -686,6 +773,8 @@ pub fn run() {
             open_preview,
             preview_ingest,
             preview_take_actions,
+            preview_action_cancellation,
+            preview_ack_action_cancellation,
             preview_complete_action,
             visual_capture::capture_viewport,
             visual_capture::capture_region,
