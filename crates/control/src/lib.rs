@@ -27,6 +27,10 @@ pub use resource_runtime::runtime_resource_governor_for_sessions;
 #[doc(hidden)]
 pub use runtime::serve as legacy_serve;
 pub use runtime::{ControlState, EventEnvelope};
+#[doc(hidden)]
+pub use visual_verify::{
+    wait_for_native_visual_diff_with_timeout, NativeVisualDiffWaitError,
+};
 
 pub fn router(state: ControlState) -> Router {
     runtime::router(state.clone())
