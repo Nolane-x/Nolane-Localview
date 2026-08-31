@@ -2,14 +2,18 @@
 
 use std::time::Duration;
 
-use localview_live_bridge::{NativeExecutorRequest, NativeExecutorResult};
+use localview_live_bridge::{
+    NativeExecutorCancellationSignal, NativeExecutorRequest, NativeExecutorResult,
+};
 use localview_protocol::{Session, SessionId};
 use tauri::Manager;
+use uuid::Uuid;
 
 use crate::{control_client, read_token, visual_capture};
 
 const NATIVE_EXECUTOR_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const MAX_SESSIONS_PER_POLL: usize = 16;
+const MAX_CANCELLATION_SIGNALS: usize = 32;
 const RESULT_POST_ATTEMPTS: usize = 3;
 const RESULT_POST_RETRY_DELAY: Duration = Duration::from_millis(80);
 
@@ -77,10 +81,74 @@ async fn poll_session(
         .map_err(|error| error.to_string())?;
 
     for request in requests {
+        if cancellation_requested(client, token, session_id, request.id).await? {
+            acknowledge_cancellation(client, token, session_id, request.id).await?;
+            continue;
+        }
+
+        let request_id = request.id;
         let state = app.state::<visual_capture::VisualCaptureState>();
         let result = visual_capture::execute_native_visual_packet(app.clone(), state, request).await;
-        post_result(client, token, session_id, &result).await;
+
+        match cancellation_requested(client, token, session_id, request_id).await {
+            Ok(true) => {
+                acknowledge_cancellation(client, token, session_id, request_id).await?;
+                continue;
+            }
+            Ok(false) => post_result(client, token, session_id, &result).await,
+            Err(_) => {
+                // Fail closed if cancellation authority cannot be consulted after native work.
+                // The daemon's bounded active-origin expiry remains the cleanup backstop.
+                continue;
+            }
+        }
     }
+    Ok(())
+}
+
+async fn cancellation_requested(
+    client: &reqwest::Client,
+    token: &str,
+    session_id: SessionId,
+    request_id: Uuid,
+) -> Result<bool, String> {
+    let signals = client
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/native-executor/cancellations"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?
+        .json::<Vec<NativeExecutorCancellationSignal>>()
+        .await
+        .map_err(|error| error.to_string())?;
+    if signals.len() > MAX_CANCELLATION_SIGNALS {
+        return Err("native executor cancellation response exceeded bounded signal count".into());
+    }
+    Ok(signals
+        .iter()
+        .any(|signal| signal.request_id == request_id))
+}
+
+async fn acknowledge_cancellation(
+    client: &reqwest::Client,
+    token: &str,
+    session_id: SessionId,
+    request_id: Uuid,
+) -> Result<(), String> {
+    client
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/native-executor/cancellations/{request_id}/ack"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -91,16 +159,19 @@ async fn post_result(
     result: &NativeExecutorResult,
 ) {
     for attempt in 0..RESULT_POST_ATTEMPTS {
-        let accepted = client
+        let response = client
             .post(format!(
                 "http://127.0.0.1:45454/v1/sessions/{session_id}/native-executor/results"
             ))
             .bearer_auth(token)
             .json(result)
             .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .is_ok();
+            .await;
+        let accepted = match response {
+            Ok(response) if response.status() == reqwest::StatusCode::CONFLICT => return,
+            Ok(response) => response.error_for_status().is_ok(),
+            Err(_) => false,
+        };
         if accepted {
             return;
         }
