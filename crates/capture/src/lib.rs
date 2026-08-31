@@ -126,6 +126,8 @@ pub enum SettleReason {
     HmrRecent,
     DomMutationRecent,
     LayoutRecent,
+    NetworkStateUnknown,
+    NetworkInflight,
     NetworkRecent,
 }
 
@@ -136,6 +138,8 @@ pub struct SettleObservation {
     pub ready_state: Option<String>,
     pub fonts_status: Option<String>,
     pub pending_images: Option<u32>,
+    #[serde(default)]
+    pub inflight_network_requests: Option<u32>,
     pub latest_hmr_at_unix_ms: Option<i64>,
     pub latest_dom_mutation_at_unix_ms: Option<i64>,
     pub latest_layout_at_unix_ms: Option<i64>,
@@ -209,6 +213,11 @@ pub fn evaluate_settle(
     }
 
     if let Some(quiet_ms) = policy.network_quiet_ms {
+        match observation.inflight_network_requests {
+            None => reasons.push(SettleReason::NetworkStateUnknown),
+            Some(count) if count > 0 => reasons.push(SettleReason::NetworkInflight),
+            Some(_) => {}
+        }
         if recent(
             observation.now_unix_ms,
             observation.latest_network_at_unix_ms,
