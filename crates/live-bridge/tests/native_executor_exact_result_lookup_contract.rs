@@ -5,6 +5,10 @@ fn source(path: &str) -> String {
     fs::read_to_string(root.join(path)).expect("source file")
 }
 
+fn without_whitespace(value: &str) -> String {
+    value.chars().filter(|character| !character.is_whitespace()).collect()
+}
+
 #[test]
 fn exact_native_executor_lookup_is_store_level_not_batch_materialized() {
     let base = source("src/lib.rs");
@@ -22,9 +26,10 @@ fn exact_native_executor_lookup_is_store_level_not_batch_materialized() {
         .find("\n    pub async fn request_native_executor_cancellation(")
         .expect("next wrapper method");
     let method = &tail[..end];
+    let compact_method = without_whitespace(method);
 
     assert!(
-        method.contains("self.base.native_executor_result(session_id, request_id).await"),
+        compact_method.contains("self.base.native_executor_result(session_id,request_id).await"),
         "wrapper must delegate exact lookup directly to the base retained store"
     );
     assert!(
