@@ -777,30 +777,35 @@ const SCRIPT: &str = r#"
     XMLHttpRequest.prototype.send = function(...args) {
       const meta = xhrMeta.get(this) || { method: 'GET', url: '', started: 0, active: false };
       const startedHere = !meta.active;
-      meta.started = performance.now();
+      let onLoadEnd = null;
       if (startedHere) {
+        meta.started = performance.now();
         meta.active = true;
         beginNetworkRequest();
+        xhrMeta.set(this, meta);
+        onLoadEnd = () => {
+          if (meta.active) {
+            meta.active = false;
+            finishNetworkRequest();
+          }
+          push('network', {
+            transport: 'xhr', method: meta.method, url: meta.url,
+            status: Number.isFinite(this.status) ? this.status : null,
+            ok: this.status >= 200 && this.status < 400,
+            duration: Math.round((performance.now() - meta.started) * 10) / 10,
+          });
+        };
+        this.addEventListener('loadend', onLoadEnd, { once: true });
       }
-      xhrMeta.set(this, meta);
-      this.addEventListener('loadend', () => {
-        if (meta.active) {
-          meta.active = false;
-          finishNetworkRequest();
-        }
-        push('network', {
-          transport: 'xhr', method: meta.method, url: meta.url,
-          status: Number.isFinite(this.status) ? this.status : null,
-          ok: this.status >= 200 && this.status < 400,
-          duration: Math.round((performance.now() - meta.started) * 10) / 10,
-        });
-      }, { once: true });
       try {
         return originalSend.apply(this, args);
       } catch (error) {
         if (startedHere && meta.active) {
           meta.active = false;
           finishNetworkRequest();
+        }
+        if (startedHere && onLoadEnd) {
+          this.removeEventListener('loadend', onLoadEnd);
         }
         throw error;
       }
