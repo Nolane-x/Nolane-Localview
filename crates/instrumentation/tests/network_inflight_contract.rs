@@ -30,3 +30,18 @@ fn rejected_second_xhr_send_cannot_release_the_first_request() {
     assert!(script.contains("if (startedHere) {"));
     assert!(script.contains("if (startedHere && meta.active) {"));
 }
+
+#[test]
+fn rejected_xhr_send_does_not_mutate_or_leak_completion_metadata() {
+    let script = bootstrap_script(&InstrumentationConfig::default());
+
+    assert!(script.contains("let onLoadEnd = null;"));
+    assert!(script.contains(
+        "if (startedHere) {\n        meta.started = performance.now();\n        meta.active = true;\n        beginNetworkRequest();\n        xhrMeta.set(this, meta);"
+    ));
+    assert!(script.contains("onLoadEnd = () => {"));
+    assert!(script.contains("this.addEventListener('loadend', onLoadEnd, { once: true });"));
+    assert!(script.contains(
+        "if (startedHere && onLoadEnd) {\n          this.removeEventListener('loadend', onLoadEnd);\n        }"
+    ));
+}
