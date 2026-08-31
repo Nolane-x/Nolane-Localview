@@ -3,6 +3,7 @@
 mod capture_settle;
 mod chromium_runtime;
 mod fresh_snapshot;
+mod native_cancellation;
 mod native_executor;
 mod perception;
 mod perception_cycle;
@@ -31,6 +32,7 @@ pub fn router(state: ControlState) -> Router {
     runtime::router(state.clone())
         .merge(capture_settle::router(state.clone()))
         .merge(fresh_snapshot::router(state.clone()))
+        .merge(native_cancellation::router(state.clone()))
         .merge(native_executor::router(state.clone()))
         .merge(perception::router(state.clone()))
         .merge(perception_execution::router(state.clone()))
