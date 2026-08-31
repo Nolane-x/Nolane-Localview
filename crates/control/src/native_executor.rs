@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::time::Duration;
+
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -21,8 +23,15 @@ use crate::{
 const MAX_NATIVE_EXECUTOR_POLL_BATCH: usize = 8;
 const NATIVE_EXECUTOR_ACTIVE_LEASE_SECS: i64 = 15;
 const MAX_NATIVE_EXECUTOR_EVIDENCE_IDS: usize = 8;
+const NATIVE_EXECUTOR_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const NATIVE_VISUAL_EVIDENCE_CORRELATION_ERROR: &str =
     "native visual evidence correlation failed";
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeExecutorWaitError {
+    Timeout,
+}
 
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
@@ -35,6 +44,35 @@ pub(crate) fn router(state: ControlState) -> Router {
             post(complete_native_executor_result),
         )
         .with_state(state)
+}
+
+#[doc(hidden)]
+pub async fn wait_for_native_executor_result_with_timeout(
+    state: &ControlState,
+    id: SessionId,
+    request_id: uuid::Uuid,
+    timeout: Duration,
+) -> Result<NativeExecutorResult, NativeExecutorWaitError> {
+    let result = tokio::time::timeout(timeout, async {
+        loop {
+            if let Some(result) = state.live.native_executor_result(id, request_id).await {
+                return result;
+            }
+            tokio::time::sleep(NATIVE_EXECUTOR_RESULT_POLL_INTERVAL).await;
+        }
+    })
+    .await;
+
+    match result {
+        Ok(result) => Ok(result),
+        Err(_) => {
+            let _ = state
+                .live
+                .request_native_executor_cancellation(id, request_id)
+                .await;
+            Err(NativeExecutorWaitError::Timeout)
+        }
+    }
 }
 
 async fn take_native_executor_requests(
