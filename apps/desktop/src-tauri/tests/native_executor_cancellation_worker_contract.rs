@@ -53,10 +53,11 @@ fn native_worker_rechecks_cancellation_before_publishing_result() {
 fn cancellation_transport_is_bounded_and_request_scoped() {
     let worker = include_str!("../src/native_executor_worker.rs");
 
-    assert!(worker.contains("MAX_CANCELLATION_SIGNALS"));
-    assert!(worker.contains("request.id"));
-    assert!(worker.contains("signal.request_id == request_id"));
+    assert!(worker.contains("/native-executor/cancellations/{request_id}"));
+    assert!(worker.contains("json::<NativeExecutorCancellationSignal>()"));
+    assert!(worker.contains("signal.request_id != request_id"));
     assert!(worker.contains("/ack"));
+    assert!(!worker.contains("json::<Vec<NativeExecutorCancellationSignal>>()"));
     assert!(!worker.contains("tokio::task::abort"));
     assert!(!worker.contains("abort_handle"));
 }
