@@ -29,6 +29,7 @@ use serde::Serialize;
 use crate::{
     chromium_runtime::{execute_compatibility_probe, ChromiumRuntimeError},
     fresh_snapshot::{acquire_fresh_semantic_snapshot, FreshSnapshotError},
+    native_executor::{wait_for_native_executor_result_with_timeout, NativeExecutorWaitError},
     perception::{
         authorized, build_live_perception_plan_with_usage_and_visual_satisfaction, denied,
         plan_error_response, LivePerceptionPlanRequest,
@@ -39,7 +40,6 @@ use crate::{
 
 const MAX_PERCEPTION_CYCLE_STEPS: usize = 4;
 const NATIVE_VISUAL_EXECUTOR_TIMEOUT: Duration = Duration::from_secs(12);
-const NATIVE_VISUAL_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Serialize)]
 struct LivePerceptionCycleResponse {
@@ -197,10 +197,18 @@ async fn execute_live_perception_cycle(
                     )
                     .await;
 
-                let result = match wait_for_native_executor_result(&state, id, native_request.id).await
+                let result = match wait_for_native_executor_result_with_timeout(
+                    &state,
+                    id,
+                    native_request.id,
+                    NATIVE_VISUAL_EXECUTOR_TIMEOUT,
+                )
+                .await
                 {
                     Ok(result) => result,
-                    Err(()) => return native_visual_timeout_response(native_request.id),
+                    Err(NativeExecutorWaitError::Timeout) => {
+                        return native_visual_timeout_response(native_request.id)
+                    }
                 };
                 if !result.ok {
                     return native_visual_failed_response(&result);
@@ -356,29 +364,6 @@ fn add_actual_non_latency_usage(
             .chromium_spawns
             .saturating_add(actual.chromium_spawns),
     }
-}
-
-async fn wait_for_native_executor_result(
-    state: &ControlState,
-    id: SessionId,
-    request_id: uuid::Uuid,
-) -> Result<NativeExecutorResult, ()> {
-    tokio::time::timeout(NATIVE_VISUAL_EXECUTOR_TIMEOUT, async {
-        loop {
-            if let Some(result) = state
-                .live
-                .recent_native_executor_results(id, 16)
-                .await
-                .into_iter()
-                .find(|result| result.request_id == request_id)
-            {
-                return result;
-            }
-            tokio::time::sleep(NATIVE_VISUAL_RESULT_POLL_INTERVAL).await;
-        }
-    })
-    .await
-    .map_err(|_| ())
 }
 
 async fn has_matching_native_visual_evidence(
