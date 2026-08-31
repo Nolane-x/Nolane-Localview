@@ -108,6 +108,7 @@ Landed native visual path:
 - Authenticated capture-settle endpoint that requests an exact fresh semantic snapshot action for every sample; stale observer snapshots cannot satisfy readiness.
 - Fresh snapshot presence is timestamped by the daemon at evaluation time rather than trusting the page-provided action completion clock.
 - DOM/layout quiet window of 200 ms and metadata-based fetch/XHR completion quiet window from capture policy (250 ms by default).
+- Stable capture now combines that completion quiet window with a privacy-safe fresh aggregate fetch/XHR in-flight count. Active requests block with `network_inflight`; missing or malformed state fails closed with `network_state_unknown` while the network gate is enabled. Readiness exports only the aggregate count, and repeated/rejected XHR `send()` attempts cannot steal another request's counter, timing metadata or completion-listener ownership.
 - The evaluator applies a 300 ms HMR quiet window when an HMR observer signal exists; framework-specific live HMR signal production remains Wave 3 work and is not claimed as complete here.
 - Desktop managed-surface preflight followed by a five-second fail-closed settle transaction before native pixel acquisition; unstable timeout never falls through to capture.
 - Settle retry is bounded to 25–100 ms, while the native three-second capture timeout remains a separate post-settle budget.
@@ -120,13 +121,12 @@ Landed native visual path:
 Still required before the visual/runtime Active Perception path is considered complete:
 
 - an explicit bridge cancellation protocol before any future hard mid-action deadline cancellation is attempted; current actions remain bounded by their existing timeout and the cycle rechecks elapsed latency at boundaries;
-- true network in-flight accounting beyond the current fetch/XHR completion quiet-period heuristic;
 - framework-specific/sourcemap-backed ownership beyond current explicit source evidence;
 - extend the separate Runtime Resource Governor from its current live admission/sample path to full capture-storage/browser-process/hidden-surface/analysis-concurrency/cache enforcement;
 - guarded full-page stitching;
 - responsive sweep/contact-sheet execution over the same bounded capture authority.
 
-**Done when:** one button edit normally costs an evidence-backed crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling, live freeze/restore, pre-persistence private-region redaction, bounded CSS-region execution, evidence-backed progressive semantic targeting, baseline-driven changed-region scheduling, token-aware visual packet selection, planner-owned four-dimensional Perception Budget authority, native visual execution, planner-authorized Chromium execution, retained semantic feedback, single-request whole-cycle budget accounting and the capture → diff → retained evidence → deterministic verification loop are now present. Explicit mid-action cancellation authority, complete Runtime Resource Governor enforcement, deeper framework/source ownership, guarded stitching and responsive execution remain.
+**Done when:** one button edit normally costs an evidence-backed crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling with true aggregate network in-flight accounting, live freeze/restore, pre-persistence private-region redaction, bounded CSS-region execution, evidence-backed progressive semantic targeting, baseline-driven changed-region scheduling, token-aware visual packet selection, planner-owned four-dimensional Perception Budget authority, native visual execution, planner-authorized Chromium execution, retained semantic feedback, single-request whole-cycle budget accounting and the capture → diff → retained evidence → deterministic verification loop are now present. Explicit mid-action cancellation authority, complete Runtime Resource Governor enforcement, deeper framework/source ownership, guarded stitching and responsive execution remain.
 
 ## Wave 3 — Runtime telemetry
 
