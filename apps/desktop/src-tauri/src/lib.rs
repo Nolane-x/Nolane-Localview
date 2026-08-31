@@ -690,6 +690,10 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
   };
 
   const processPendingAction = async (invoke, entry) => {
+    const cancellationDefaults = { cancellationSeen: false };
+    if (entry.cancellationSeen === undefined) {
+      Object.assign(entry, cancellationDefaults);
+    }
     const action = entry.action;
 
     if (entry.cancellationSeen) {
