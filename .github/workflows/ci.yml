@@ -46,6 +46,8 @@ jobs:
         run: cargo test -p localview-live-bridge --test native_executor_queue
       - name: Native executor transport contract
         run: cargo test -p localview-control --test native_executor_transport
+      - name: Native executor cancellation authority contract
+        run: cargo test -p localview-control --test native_executor_cancellation
       - name: Progressive semantic target resolver contract
         run: cargo test -p localview-capture --test progressive_target_resolution
       - name: Fresh semantic snapshot control contract
@@ -190,3 +192,5 @@ jobs:
         run: cargo test -p localview-desktop --test native_visual_executor_worker_contract
       - name: Native visual diff executor contract
         run: cargo test -p localview-desktop --test native_visual_diff_executor_contract
+      - name: Native executor cancellation worker contract
+        run: cargo test -p localview-desktop --test native_executor_cancellation_worker_contract
