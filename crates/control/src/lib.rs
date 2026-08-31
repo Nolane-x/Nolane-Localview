@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod action_cancellation;
 mod capture_settle;
 mod chromium_runtime;
 mod fresh_snapshot;
@@ -34,6 +35,7 @@ pub use runtime::{ControlState, EventEnvelope};
 
 pub fn router(state: ControlState) -> Router {
     runtime::router(state.clone())
+        .merge(action_cancellation::router(state.clone()))
         .merge(capture_settle::router(state.clone()))
         .merge(fresh_snapshot::router(state.clone()))
         .merge(native_cancellation::router(state.clone()))
