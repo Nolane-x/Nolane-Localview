@@ -17,18 +17,12 @@ use localview_verification::{
 use serde::Deserialize;
 
 use crate::{
+    native_executor::{wait_for_native_executor_result_with_timeout, NativeExecutorWaitError},
     resource_runtime::{denial_response as resource_denial_response, governor as resource_governor},
     ControlState,
 };
 
 const NATIVE_VISUAL_DIFF_TIMEOUT: Duration = Duration::from_secs(12);
-const NATIVE_VISUAL_DIFF_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeVisualDiffWaitError {
-    Timeout,
-}
 
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
@@ -238,9 +232,16 @@ async fn capture_and_verify_visual_diff(
             },
         )
         .await;
-    let native_result = match wait_for_native_visual_diff(&state, id, native_request.id).await {
+    let native_result = match wait_for_native_executor_result_with_timeout(
+        &state,
+        id,
+        native_request.id,
+        NATIVE_VISUAL_DIFF_TIMEOUT,
+    )
+    .await
+    {
         Ok(result) => result,
-        Err(NativeVisualDiffWaitError::Timeout) => {
+        Err(NativeExecutorWaitError::Timeout) => {
             return (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(serde_json::json!({
@@ -283,43 +284,6 @@ async fn capture_and_verify_visual_diff(
         "native_request_id": native_request.id,
     }))
     .into_response()
-}
-
-async fn wait_for_native_visual_diff(
-    state: &ControlState,
-    id: SessionId,
-    request_id: uuid::Uuid,
-) -> Result<NativeExecutorResult, NativeVisualDiffWaitError> {
-    wait_for_native_visual_diff_with_timeout(state, id, request_id, NATIVE_VISUAL_DIFF_TIMEOUT).await
-}
-
-#[doc(hidden)]
-pub async fn wait_for_native_visual_diff_with_timeout(
-    state: &ControlState,
-    id: SessionId,
-    request_id: uuid::Uuid,
-    timeout: Duration,
-) -> Result<NativeExecutorResult, NativeVisualDiffWaitError> {
-    let result = tokio::time::timeout(timeout, async {
-        loop {
-            if let Some(result) = state.live.native_executor_result(id, request_id).await {
-                return result;
-            }
-            tokio::time::sleep(NATIVE_VISUAL_DIFF_POLL_INTERVAL).await;
-        }
-    })
-    .await;
-
-    match result {
-        Ok(result) => Ok(result),
-        Err(_) => {
-            let _ = state
-                .live
-                .request_native_executor_cancellation(id, request_id)
-                .await;
-            Err(NativeVisualDiffWaitError::Timeout)
-        }
-    }
 }
 
 async fn verify_retained_evidence(
