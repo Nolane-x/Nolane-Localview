@@ -638,6 +638,19 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     }
   };
 
+  const complete = async (invoke, action, ok, payload, error) => {
+    await invoke('preview_complete_action', {
+      sessionId,
+      result: {
+        action_id: action.id,
+        ok,
+        error: error || null,
+        payload: payload ?? null,
+        completed_at: new Date().toISOString(),
+      },
+    });
+  };
+
   const isInternalCaptureAction = (queued) => {
     const action = queued?.action || {};
     return action.type === 'freeze_visuals' || action.type === 'restore_visuals';
@@ -655,19 +668,6 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     await invoke('preview_ack_action_cancellation', {
       sessionId,
       actionId: action.id,
-    });
-  };
-
-  const complete = async (invoke, action, ok, payload, error) => {
-    await invoke('preview_complete_action', {
-      sessionId,
-      result: {
-        action_id: action.id,
-        ok,
-        error: error || null,
-        payload: payload ?? null,
-        completed_at: new Date().toISOString(),
-      },
     });
   };
 
