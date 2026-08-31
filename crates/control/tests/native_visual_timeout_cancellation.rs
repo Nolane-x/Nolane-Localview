@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::Utc;
-use localview_control::{wait_for_native_visual_diff_with_timeout, ControlState};
+use localview_control::{wait_for_native_executor_result_with_timeout, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{
     LiveBridge, NativeExecutorAction, NativeExecutorCancellationState, NativeExecutorResult,
@@ -107,13 +107,24 @@ async fn complete_one(
     request.id
 }
 
+#[test]
+fn native_visual_consumers_share_exact_cancellable_waiter_authority() {
+    let visual_verify = include_str!("../src/visual_verify.rs");
+    let perception_cycle = include_str!("../src/perception_cycle.rs");
+
+    assert!(visual_verify.contains("wait_for_native_executor_result_with_timeout"));
+    assert!(perception_cycle.contains("wait_for_native_executor_result_with_timeout"));
+    assert!(!visual_verify.contains("recent_native_executor_results(id, 16)"));
+    assert!(!perception_cycle.contains("recent_native_executor_results(id, 16)"));
+}
+
 #[tokio::test]
 async fn queued_native_visual_timeout_cancels_before_dispatch() {
     let (state, session_id) = test_state().await;
     let request = state.live.enqueue_native_executor(session_id, action()).await;
 
     assert!(
-        wait_for_native_visual_diff_with_timeout(
+        wait_for_native_executor_result_with_timeout(
             &state,
             session_id,
             request.id,
@@ -153,7 +164,7 @@ async fn inflight_native_visual_timeout_fences_result_before_worker_ack() {
     assert_eq!(dispatched[0].id, request.id);
 
     assert!(
-        wait_for_native_visual_diff_with_timeout(
+        wait_for_native_executor_result_with_timeout(
             &state,
             session_id,
             request.id,
@@ -186,7 +197,7 @@ async fn waiter_finds_exact_native_result_outside_recent_window() {
     let target_id = complete_one(&state, session_id, "target").await;
 
     for index in 0..20 {
-        complete_one(&state, session_id, &format!("newer-{index}" )).await;
+        complete_one(&state, session_id, &format!("newer-{index}")).await;
     }
 
     let recent = state.live.recent_native_executor_results(session_id, 16).await;
@@ -196,7 +207,7 @@ async fn waiter_finds_exact_native_result_outside_recent_window() {
         "test precondition: target must be outside the legacy recent-16 window"
     );
 
-    let resolved = wait_for_native_visual_diff_with_timeout(
+    let resolved = wait_for_native_executor_result_with_timeout(
         &state,
         session_id,
         target_id,
@@ -206,5 +217,8 @@ async fn waiter_finds_exact_native_result_outside_recent_window() {
     .expect("exact retained result must resolve even when newer completions hide it from recent-16");
 
     assert_eq!(resolved.request_id, target_id);
-    assert_eq!(resolved.payload.get("marker"), Some(&Value::String("target".into())));
+    assert_eq!(
+        resolved.payload.get("marker"),
+        Some(&Value::String("target".into()))
+    );
 }
