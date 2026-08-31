@@ -7,13 +7,14 @@ use chrono::Utc;
 use localview_control::{wait_for_native_visual_diff_with_timeout, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{
-    LiveBridge, NativeExecutorAction, NativeExecutorCancellationState,
+    LiveBridge, NativeExecutorAction, NativeExecutorCancellationState, NativeExecutorResult,
 };
 use localview_observation::ObservationBus;
 use localview_protocol::{
     Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind, ViewportMeta,
 };
 use localview_sessions::SessionManager;
+use serde_json::Value;
 
 fn discovered(port: u16) -> DiscoveredServer {
     DiscoveredServer {
@@ -65,6 +66,45 @@ fn action() -> NativeExecutorAction {
         },
         revision: Some("timeout-cancel".into()),
     }
+}
+
+fn result(request_id: uuid::Uuid, marker: &str) -> NativeExecutorResult {
+    NativeExecutorResult {
+        request_id,
+        ok: true,
+        error: None,
+        usage: None,
+        payload: serde_json::json!({"marker": marker}),
+        completed_at: Utc::now(),
+    }
+}
+
+async fn complete_one(
+    state: &ControlState,
+    session_id: localview_protocol::SessionId,
+    marker: &str,
+) -> uuid::Uuid {
+    let request = state.live.enqueue_native_executor(session_id, action()).await;
+    let dispatched = state
+        .live
+        .take_native_executor_requests(session_id, 1)
+        .await;
+    assert_eq!(dispatched.len(), 1);
+    assert_eq!(dispatched[0].id, request.id);
+    assert!(
+        state
+            .live
+            .claim_native_executor(session_id, request.id)
+            .await
+            .is_some()
+    );
+    assert!(
+        state
+            .live
+            .complete_native_executor(session_id, result(request.id, marker))
+            .await
+    );
+    request.id
 }
 
 #[tokio::test]
@@ -138,4 +178,33 @@ async fn inflight_native_visual_timeout_fences_result_before_worker_ack() {
             .is_none(),
         "accepted timeout cancellation must fence result ownership before ACK"
     );
+}
+
+#[tokio::test]
+async fn waiter_finds_exact_native_result_outside_recent_window() {
+    let (state, session_id) = test_state().await;
+    let target_id = complete_one(&state, session_id, "target").await;
+
+    for index in 0..20 {
+        complete_one(&state, session_id, &format!("newer-{index}" )).await;
+    }
+
+    let recent = state.live.recent_native_executor_results(session_id, 16).await;
+    assert_eq!(recent.len(), 16);
+    assert!(
+        recent.iter().all(|item| item.request_id != target_id),
+        "test precondition: target must be outside the legacy recent-16 window"
+    );
+
+    let resolved = wait_for_native_visual_diff_with_timeout(
+        &state,
+        session_id,
+        target_id,
+        Duration::from_millis(30),
+    )
+    .await
+    .expect("exact retained result must resolve even when newer completions hide it from recent-16");
+
+    assert_eq!(resolved.request_id, target_id);
+    assert_eq!(resolved.payload.get("marker"), Some(&Value::String("target".into())));
 }
