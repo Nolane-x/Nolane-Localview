@@ -46,6 +46,10 @@ jobs:
         run: cargo test -p localview-instrumentation --test network_inflight_contract
       - name: Control network idle projection contract
         run: cargo test -p localview-control --test network_inflight_settle_contract
+      - name: Bridge action cancellation authority contract
+        run: cargo test -p localview-live-bridge --test action_cancellation
+      - name: Bridge action cancellation control contract
+        run: cargo test -p localview-control --test action_cancellation
       - name: Native executor cancellation lifecycle hardening
         run: cargo test -p localview-live-bridge --test native_executor_cancellation_hardening
       - name: Native executor cancellation control hardening
@@ -184,6 +188,8 @@ jobs:
         run: cargo test -p localview-desktop --test workspace_surface_policy
       - name: Live semantic bridge contract
         run: cargo test -p localview-desktop --test live_semantic_bridge_contract
+      - name: Bridge action cancellation worker contract
+        run: cargo test -p localview-desktop --test action_cancellation_worker_contract
       - name: Native visual capture desktop contract
         run: cargo test -p localview-desktop --test native_capture_contract
       - name: Stable capture settle desktop contract
