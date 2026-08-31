@@ -25,6 +25,10 @@ pub(crate) fn router(state: ControlState) -> Router {
             get(native_executor_cancellations),
         )
         .route(
+            "/v1/sessions/{id}/native-executor/cancellations/{request_id}",
+            get(native_executor_cancellation),
+        )
+        .route(
             "/v1/sessions/{id}/native-executor/cancellations/{request_id}/ack",
             post(acknowledge_native_executor_cancellation),
         )
@@ -112,6 +116,28 @@ async fn native_executor_cancellations(
             .await,
     )
     .into_response()
+}
+
+async fn native_executor_cancellation(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path((id, request_id)): Path<(SessionId, Uuid)>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if state.sessions.get(id).await.is_none() {
+        return session_not_found();
+    }
+
+    match state
+        .live
+        .native_executor_cancellation(id, request_id)
+        .await
+    {
+        Some(signal) => Json(signal).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
 }
 
 async fn acknowledge_native_executor_cancellation(
