@@ -44,6 +44,8 @@ jobs:
         run: cargo test -p localview-live-bridge --test native_executor_cancellation_hardening
       - name: Native executor cancellation control hardening
         run: cargo test -p localview-control --test native_executor_cancellation_hardening
+      - name: Native visual timeout cancellation contract
+        run: cargo test -p localview-control --test native_visual_timeout_cancellation
       - name: Tests
         run: cargo test --workspace --exclude localview-desktop
       - name: Native executor queue contract
