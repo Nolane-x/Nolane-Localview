@@ -591,6 +591,20 @@ impl LiveBridge {
             .unwrap_or_default()
     }
 
+    pub async fn native_executor_result(
+        &self,
+        session_id: SessionId,
+        request_id: Uuid,
+    ) -> Option<NativeExecutorResult> {
+        let states = self.inner.read().await;
+        states
+            .get(&session_id)?
+            .native_executor_results
+            .iter()
+            .find(|result| result.request_id == request_id)
+            .cloned()
+    }
+
     pub async fn recent_native_executor_results(
         &self,
         session_id: SessionId,
