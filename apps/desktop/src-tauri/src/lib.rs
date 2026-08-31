@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
-    BridgeAction, BridgeActionResult, IngestReport, ObserverBatch, ObserverEvent,
-    PrivateBridgeAction,
+    ActionCancellationSignal, BridgeAction, BridgeActionResult, IngestReport, ObserverBatch,
+    ObserverEvent, PrivateBridgeAction,
 };
 use localview_protocol::{Health, Session, SessionId};
 use serde::Serialize;
@@ -258,6 +258,58 @@ async fn preview_take_actions(
 }
 
 #[tauri::command]
+async fn preview_action_cancellation(
+    webview_window: tauri::WebviewWindow,
+    session_id: SessionId,
+    action_id: uuid::Uuid,
+) -> Result<bool, String> {
+    ensure_preview_caller(&webview_window, session_id)?;
+    let token = read_token().await?;
+    let response = control_client()?
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/cancellations/{action_id}"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(err)?;
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+        return Ok(false);
+    }
+    let signal = response
+        .error_for_status()
+        .map_err(err)?
+        .json::<ActionCancellationSignal>()
+        .await
+        .map_err(err)?;
+    if signal.action_id != action_id {
+        return Err("action cancellation signal/action mismatch".into());
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+async fn preview_ack_action_cancellation(
+    webview_window: tauri::WebviewWindow,
+    session_id: SessionId,
+    action_id: uuid::Uuid,
+) -> Result<(), String> {
+    ensure_preview_caller(&webview_window, session_id)?;
+    let token = read_token().await?;
+    control_client()?
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/cancellations/{action_id}/ack"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn preview_complete_action(
     webview_window: tauri::WebviewWindow,
     session_id: SessionId,
@@ -265,7 +317,7 @@ async fn preview_complete_action(
 ) -> Result<(), String> {
     ensure_preview_caller(&webview_window, session_id)?;
     let token = read_token().await?;
-    control_client()?
+    let response = control_client()?
         .post(format!(
             "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/results"
         ))
@@ -273,9 +325,11 @@ async fn preview_complete_action(
         .json(&result)
         .send()
         .await
-        .map_err(err)?
-        .error_for_status()
         .map_err(err)?;
+    if response.status() == reqwest::StatusCode::CONFLICT {
+        return Ok(());
+    }
+    response.error_for_status().map_err(err)?;
     Ok(())
 }
 
@@ -366,6 +420,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
   const generation = Date.now();
   let running = true;
   let busy = false;
+  const pendingActions = new Map();
 
   const MAX_PRIVATE_MASK_SELECTORS = 16;
   const MAX_PRIVATE_MASK_SELECTOR_BYTES = 256;
@@ -599,6 +654,86 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     });
   };
 
+  const isInternalCaptureAction = (queued) => {
+    const action = queued?.action || {};
+    return action.type === 'freeze_visuals' || action.type === 'restore_visuals';
+  };
+
+  const cancellationRequested = async (invoke, action) => {
+    if (isInternalCaptureAction(action)) return false;
+    return !!(await invoke('preview_action_cancellation', {
+      sessionId,
+      actionId: action.id,
+    }));
+  };
+
+  const acknowledgeCancellation = async (invoke, action) => {
+    await invoke('preview_ack_action_cancellation', {
+      sessionId,
+      actionId: action.id,
+    });
+  };
+
+  const rememberTakenActions = (actions) => {
+    const batch = Array.isArray(actions) ? actions : [];
+    for (const action of batch) {
+      if (!action?.id || pendingActions.has(action.id)) continue;
+      pendingActions.set(action.id, {
+        action,
+        executed: false,
+        cancellationSeen: false,
+        ok: true,
+        payload: null,
+        actionError: null,
+      });
+    }
+  };
+
+  const processPendingAction = async (invoke, entry) => {
+    const cancellationDefaults = { cancellationSeen: false };
+    if (entry.cancellationSeen === undefined) {
+      Object.assign(entry, cancellationDefaults);
+    }
+    const action = entry.action;
+
+    if (entry.cancellationSeen) {
+      await acknowledgeCancellation(invoke, action);
+      pendingActions.delete(action.id);
+      return;
+    }
+
+    if (!entry.executed) {
+      if (await cancellationRequested(invoke, action)) {
+        entry.cancellationSeen = true;
+        await acknowledgeCancellation(invoke, action);
+        pendingActions.delete(action.id);
+        return;
+      }
+
+      try {
+        entry.payload = await execute(action);
+        entry.ok = true;
+        entry.actionError = null;
+      } catch (error) {
+        entry.ok = false;
+        entry.payload = null;
+        entry.actionError = String(error?.message || error);
+      } finally {
+        entry.executed = true;
+      }
+    }
+
+    if (await cancellationRequested(invoke, action)) {
+      entry.cancellationSeen = true;
+      await acknowledgeCancellation(invoke, action);
+      pendingActions.delete(action.id);
+      return;
+    }
+
+    await complete(invoke, action, entry.ok, entry.payload, entry.actionError);
+    pendingActions.delete(action.id);
+  };
+
   const tick = async () => {
     if (!running || busy) return;
     const invoke = window.__TAURI__?.core?.invoke;
@@ -616,13 +751,16 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         });
       }
 
-      const actions = await invoke('preview_take_actions', { sessionId });
-      for (const action of Array.isArray(actions) ? actions : []) {
+      if (pendingActions.size === 0) {
+        const actions = await invoke('preview_take_actions', { sessionId });
+        rememberTakenActions(actions);
+      }
+
+      for (const entry of pendingActions.values()) {
         try {
-          const payload = await execute(action);
-          await complete(invoke, action, true, payload, null);
-        } catch (error) {
-          await complete(invoke, action, false, null, String(error?.message || error));
+          await processPendingAction(invoke, entry);
+        } catch (_) {
+          break;
         }
       }
     } catch (_) {
@@ -686,6 +824,8 @@ pub fn run() {
             open_preview,
             preview_ingest,
             preview_take_actions,
+            preview_action_cancellation,
+            preview_ack_action_cancellation,
             preview_complete_action,
             visual_capture::capture_viewport,
             visual_capture::capture_region,

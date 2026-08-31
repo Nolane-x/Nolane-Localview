@@ -61,6 +61,8 @@ pub struct ChangedRegionCaptureReceipt {
     pub mode: &'static str,
     pub changed_ratio: f64,
     pub receipts: Vec<VisualCaptureReceipt>,
+    pub visual_diff_evidence_id: String,
+    pub visual_diff_deduplicated: bool,
     pub baseline_cached: bool,
 }
 
@@ -117,6 +119,23 @@ struct VisualEvidenceRequest {
 
 #[derive(Debug, Deserialize)]
 struct VisualEvidenceResponse {
+    evidence_id: String,
+    deduplicated: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct VisualDiffEvidenceRequest {
+    route: String,
+    viewport: ViewportMeta,
+    revision: Option<String>,
+    captured_at_unix_ms: i64,
+    mode: &'static str,
+    changed_ratio: f64,
+    visual_evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisualDiffEvidenceResponse {
     evidence_id: String,
     deduplicated: bool,
 }
@@ -215,14 +234,31 @@ pub async fn capture_changed_regions(
     };
 
     if let ChangedRegionPlan::Unchanged = &plan {
+        let visual_diff = register_visual_diff_evidence(
+            session_id,
+            frame.route.clone(),
+            frame.viewport.clone(),
+            frame.revision.clone(),
+            frame.captured_at_unix_ms,
+            "unchanged",
+            0.0,
+            Vec::new(),
+        )
+        .await?;
         return Ok(ChangedRegionCaptureReceipt {
             mode: "unchanged",
             changed_ratio: 0.0,
             receipts: Vec::new(),
+            visual_diff_evidence_id: visual_diff.evidence_id,
+            visual_diff_deduplicated: visual_diff.deduplicated,
             baseline_cached: true,
         });
     }
 
+    let diff_route = frame.route.clone();
+    let diff_viewport = frame.viewport.clone();
+    let diff_revision = frame.revision.clone();
+    let diff_captured_at_unix_ms = frame.captured_at_unix_ms;
     let emission = emit_changed_capture_plan(
         &state,
         session_id,
@@ -233,12 +269,30 @@ pub async fn capture_changed_regions(
         baseline_reset,
     )
     .await?;
+    let visual_evidence_ids = emission
+        .receipts
+        .iter()
+        .map(|receipt| receipt.evidence_id.clone())
+        .collect();
+    let visual_diff = register_visual_diff_evidence(
+        session_id,
+        diff_route,
+        diff_viewport,
+        diff_revision,
+        diff_captured_at_unix_ms,
+        emission.mode,
+        emission.changed_ratio,
+        visual_evidence_ids,
+    )
+    .await?;
     let baseline_cached = commit_changed_baseline(&state, session_id, context, image).await?;
 
     Ok(ChangedRegionCaptureReceipt {
         mode: emission.mode,
         changed_ratio: emission.changed_ratio,
         receipts: emission.receipts,
+        visual_diff_evidence_id: visual_diff.evidence_id,
+        visual_diff_deduplicated: visual_diff.deduplicated,
         baseline_cached,
     })
 }
@@ -442,6 +496,57 @@ async fn emit_changed_capture_plan(
             }
         }
     }
+}
+
+async fn register_visual_diff_evidence(
+    session_id: SessionId,
+    route: String,
+    viewport: ViewportMeta,
+    revision: Option<String>,
+    captured_at_unix_ms: u64,
+    mode: &'static str,
+    changed_ratio: f64,
+    visual_evidence_ids: Vec<String>,
+) -> Result<VisualDiffEvidenceResponse, String> {
+    if !changed_ratio.is_finite() || !(0.0..=1.0).contains(&changed_ratio) {
+        return Err("visual diff ratio is outside the bounded unit interval".into());
+    }
+    let captured_at_unix_ms = i64::try_from(captured_at_unix_ms)
+        .map_err(|_| "visual diff timestamp exceeds daemon range".to_string())?;
+    let route = canonical_visual_diff_route(&route)?;
+    let metadata = VisualDiffEvidenceRequest {
+        route,
+        viewport,
+        revision,
+        captured_at_unix_ms,
+        mode,
+        changed_ratio,
+        visual_evidence_ids,
+    };
+
+    let token = read_token().await?;
+    control_client()?
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/evidence/visual-diff"
+        ))
+        .bearer_auth(token)
+        .json(&metadata)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json::<VisualDiffEvidenceResponse>()
+        .await
+        .map_err(err)
+}
+
+fn canonical_visual_diff_route(route: &str) -> Result<String, String> {
+    let mut route = url::Url::parse(route)
+        .map_err(|_| "visual diff route is not a valid URL".to_string())?;
+    route.set_query(None);
+    route.set_fragment(None);
+    Ok(route.to_string())
 }
 
 async fn session_capture_gate(

@@ -354,6 +354,11 @@ fn settle_observation(
         .and_then(|value| value.get("pendingImages"))
         .and_then(|value| value.as_u64())
         .and_then(|value| u32::try_from(value).ok());
+    let inflight_network_requests = snapshot
+        .and_then(|value| value.get("readiness"))
+        .and_then(|value| value.get("inflightRequests"))
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
 
     let mut latest_hmr_at_unix_ms = None;
     let mut latest_dom_mutation_at_unix_ms = None;
@@ -385,6 +390,7 @@ fn settle_observation(
         ready_state,
         fonts_status,
         pending_images,
+        inflight_network_requests,
         latest_hmr_at_unix_ms,
         latest_dom_mutation_at_unix_ms,
         latest_layout_at_unix_ms,
@@ -414,7 +420,7 @@ mod tests {
             payload: serde_json::json!({
                 "snapshot": {
                     "readyState": "complete",
-                    "readiness": {"fonts": "loaded", "pendingImages": 0},
+                    "readiness": {"fonts": "loaded", "pendingImages": 0, "inflightRequests": 99},
                     "secret": "stale-and-ignored"
                 }
             }),
@@ -425,7 +431,7 @@ mod tests {
             error: None,
             payload: serde_json::json!({
                 "readyState": "interactive",
-                "readiness": {"fonts": "loading", "pendingImages": 2},
+                "readiness": {"fonts": "loading", "pendingImages": 2, "inflightRequests": 3},
                 "secret": "never-copied"
             }),
             completed_at: Utc.timestamp_millis_opt(99_000).single().unwrap(),
@@ -436,5 +442,6 @@ mod tests {
         assert_eq!(observation.ready_state.as_deref(), Some("interactive"));
         assert_eq!(observation.fonts_status.as_deref(), Some("loading"));
         assert_eq!(observation.pending_images, Some(2));
+        assert_eq!(observation.inflight_network_requests, Some(3));
     }
 }

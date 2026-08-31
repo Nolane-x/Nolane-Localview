@@ -227,6 +227,15 @@ async fn execute_one_native_visual(
     panic!("cycle did not enqueue a native visual executor request");
 }
 
+#[test]
+fn perception_cycle_resolves_correlated_visual_evidence_by_result_ids() {
+    let source = include_str!("../src/perception_cycle.rs");
+
+    assert!(source.contains("native_visual_result_evidence_ids"));
+    assert!(source.contains("state.evidence.get(evidence_id)"));
+    assert!(!source.contains("recent_for_session(id, 64)"));
+}
+
 #[tokio::test]
 async fn region_capture_executes_through_native_bridge_uses_actual_usage_and_replans_to_noop() {
     let (state, session_id) = test_state().await;

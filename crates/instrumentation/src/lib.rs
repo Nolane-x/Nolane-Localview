@@ -47,6 +47,7 @@ pub fn bootstrap_script(config: &InstrumentationConfig) -> String {
       fonts: document.fonts?.status || 'unsupported',
       pendingImages: images.reduce((count, image) => count + (image.complete ? 0 : 1), 0),
       totalImages: images.length,
+      inflightRequests: config.include_network ? inflightNetworkRequests : null,
     };
   };
 
@@ -172,7 +173,15 @@ const SCRIPT: &str = r#"
   let geometryFlushQueued = false;
   let routeSnapshotTimer = 0;
   let lastSnapshot = null;
+  let inflightNetworkRequests = 0;
   const changedRefs = new Set();
+
+  const beginNetworkRequest = () => {
+    if (inflightNetworkRequests < Number.MAX_SAFE_INTEGER) inflightNetworkRequests += 1;
+  };
+  const finishNetworkRequest = () => {
+    inflightNetworkRequests = Math.max(0, inflightNetworkRequests - 1);
+  };
 
   const redact = (value) => String(value ?? '')
     .replace(/(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s,;]+/ig, '$1[REDACTED]')
@@ -738,14 +747,17 @@ const SCRIPT: &str = r#"
       const method = String(init.method || request?.method || 'GET').toUpperCase();
       const url = safeUrl(request?.url || request);
       const started = performance.now();
+      beginNetworkRequest();
       try {
         const response = await originalFetch(...args);
+        finishNetworkRequest();
         push('network', {
           transport: 'fetch', method, url, status: response.status, ok: response.ok,
           duration: Math.round((performance.now() - started) * 10) / 10,
         });
         return response;
       } catch (error) {
+        finishNetworkRequest();
         push('network', {
           transport: 'fetch', method, url, status: null, ok: false,
           duration: Math.round((performance.now() - started) * 10) / 10,
@@ -759,22 +771,44 @@ const SCRIPT: &str = r#"
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-      xhrMeta.set(this, { method: String(method || 'GET').toUpperCase(), url: safeUrl(url), started: 0 });
+      xhrMeta.set(this, { method: String(method || 'GET').toUpperCase(), url: safeUrl(url), started: 0, active: false });
       return originalOpen.call(this, method, url, ...rest);
     };
     XMLHttpRequest.prototype.send = function(...args) {
-      const meta = xhrMeta.get(this) || { method: 'GET', url: '', started: 0 };
-      meta.started = performance.now();
-      xhrMeta.set(this, meta);
-      this.addEventListener('loadend', () => {
-        push('network', {
-          transport: 'xhr', method: meta.method, url: meta.url,
-          status: Number.isFinite(this.status) ? this.status : null,
-          ok: this.status >= 200 && this.status < 400,
-          duration: Math.round((performance.now() - meta.started) * 10) / 10,
-        });
-      }, { once: true });
-      return originalSend.apply(this, args);
+      const meta = xhrMeta.get(this) || { method: 'GET', url: '', started: 0, active: false };
+      const startedHere = !meta.active;
+      let onLoadEnd = null;
+      if (startedHere) {
+        meta.started = performance.now();
+        meta.active = true;
+        beginNetworkRequest();
+        xhrMeta.set(this, meta);
+        onLoadEnd = () => {
+          if (meta.active) {
+            meta.active = false;
+            finishNetworkRequest();
+          }
+          push('network', {
+            transport: 'xhr', method: meta.method, url: meta.url,
+            status: Number.isFinite(this.status) ? this.status : null,
+            ok: this.status >= 200 && this.status < 400,
+            duration: Math.round((performance.now() - meta.started) * 10) / 10,
+          });
+        };
+        this.addEventListener('loadend', onLoadEnd, { once: true });
+      }
+      try {
+        return originalSend.apply(this, args);
+      } catch (error) {
+        if (startedHere && meta.active) {
+          meta.active = false;
+          finishNetworkRequest();
+        }
+        if (startedHere && onLoadEnd) {
+          this.removeEventListener('loadend', onLoadEnd);
+        }
+        throw error;
+      }
     };
   }
 

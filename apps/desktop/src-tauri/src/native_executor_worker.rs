@@ -2,9 +2,12 @@
 
 use std::time::Duration;
 
-use localview_live_bridge::{NativeExecutorRequest, NativeExecutorResult};
+use localview_live_bridge::{
+    NativeExecutorCancellationSignal, NativeExecutorRequest, NativeExecutorResult,
+};
 use localview_protocol::{Session, SessionId};
 use tauri::Manager;
+use uuid::Uuid;
 
 use crate::{control_client, read_token, visual_capture};
 
@@ -77,10 +80,81 @@ async fn poll_session(
         .map_err(|error| error.to_string())?;
 
     for request in requests {
+        if cancellation_requested(client, token, session_id, request.id).await? {
+            acknowledge_cancellation(client, token, session_id, request.id).await?;
+            continue;
+        }
+
+        let request_id = request.id;
         let state = app.state::<visual_capture::VisualCaptureState>();
         let result = visual_capture::execute_native_visual_packet(app.clone(), state, request).await;
-        post_result(client, token, session_id, &result).await;
+
+        match cancellation_requested(client, token, session_id, request_id).await {
+            Ok(true) => {
+                acknowledge_cancellation(client, token, session_id, request_id).await?;
+                continue;
+            }
+            Ok(false) => post_result(client, token, session_id, &result).await,
+            Err(_) => {
+                // Fail closed if cancellation authority cannot be consulted after native work.
+                // The daemon's bounded active-origin expiry remains the cleanup backstop.
+                continue;
+            }
+        }
     }
+    Ok(())
+}
+
+async fn cancellation_requested(
+    client: &reqwest::Client,
+    token: &str,
+    session_id: SessionId,
+    request_id: Uuid,
+) -> Result<bool, String> {
+    let response = client
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/native-executor/cancellations/{request_id}"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    match response.status() {
+        reqwest::StatusCode::NO_CONTENT => Ok(false),
+        reqwest::StatusCode::OK => {
+            let signal = response
+                .json::<NativeExecutorCancellationSignal>()
+                .await
+                .map_err(|error| error.to_string())?;
+            if signal.request_id != request_id {
+                return Err("native executor cancellation origin mismatch".into());
+            }
+            Ok(true)
+        }
+        _ => Err(response
+            .error_for_status()
+            .expect_err("non-success cancellation lookup status")
+            .to_string()),
+    }
+}
+
+async fn acknowledge_cancellation(
+    client: &reqwest::Client,
+    token: &str,
+    session_id: SessionId,
+    request_id: Uuid,
+) -> Result<(), String> {
+    client
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/native-executor/cancellations/{request_id}/ack"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -91,16 +165,19 @@ async fn post_result(
     result: &NativeExecutorResult,
 ) {
     for attempt in 0..RESULT_POST_ATTEMPTS {
-        let accepted = client
+        let response = client
             .post(format!(
                 "http://127.0.0.1:45454/v1/sessions/{session_id}/native-executor/results"
             ))
             .bearer_auth(token)
             .json(result)
             .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .is_ok();
+            .await;
+        let accepted = match response {
+            Ok(response) if response.status() == reqwest::StatusCode::CONFLICT => return,
+            Ok(response) => response.error_for_status().is_ok(),
+            Err(_) => false,
+        };
         if accepted {
             return;
         }

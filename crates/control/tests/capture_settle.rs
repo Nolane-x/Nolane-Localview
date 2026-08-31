@@ -103,7 +103,8 @@ fn snapshot_payload(ready_state: &str, fonts: &str, pending_images: u64) -> Valu
         "readiness": {
             "fonts": fonts,
             "pendingImages": pending_images,
-            "totalImages": pending_images + 1
+            "totalImages": pending_images + 1,
+            "inflightRequests": 0
         },
         "privatePayloadThatMustNotReturn": "fresh-secret"
     })

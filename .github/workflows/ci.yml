@@ -40,12 +40,32 @@ jobs:
         run: cargo check --workspace --exclude localview-desktop --all-targets
       - name: Clippy
         run: cargo clippy --workspace --exclude localview-desktop --all-targets -- -D warnings
+      - name: Stable capture network idle contract
+        run: cargo test -p localview-capture --test settle_contract
+      - name: Instrumentation network in-flight contract
+        run: cargo test -p localview-instrumentation --test network_inflight_contract
+      - name: Control network idle projection contract
+        run: cargo test -p localview-control --test network_inflight_settle_contract
+      - name: Bridge action cancellation authority contract
+        run: cargo test -p localview-live-bridge --test action_cancellation
+      - name: Bridge action cancellation control contract
+        run: cargo test -p localview-control --test action_cancellation
+      - name: Native executor cancellation lifecycle hardening
+        run: cargo test -p localview-live-bridge --test native_executor_cancellation_hardening
+      - name: Native executor cancellation control hardening
+        run: cargo test -p localview-control --test native_executor_cancellation_hardening
+      - name: Native visual timeout cancellation contract
+        run: cargo test -p localview-control --test native_visual_timeout_cancellation
+      - name: Native executor exact result lookup contract
+        run: cargo test -p localview-live-bridge --test native_executor_exact_result_lookup_contract
       - name: Tests
         run: cargo test --workspace --exclude localview-desktop
       - name: Native executor queue contract
         run: cargo test -p localview-live-bridge --test native_executor_queue
       - name: Native executor transport contract
         run: cargo test -p localview-control --test native_executor_transport
+      - name: Native executor cancellation authority contract
+        run: cargo test -p localview-control --test native_executor_cancellation
       - name: Progressive semantic target resolver contract
         run: cargo test -p localview-capture --test progressive_target_resolution
       - name: Fresh semantic snapshot control contract
@@ -72,6 +92,14 @@ jobs:
         run: cargo test -p localview-control --test native_visual_perception_cycle
       - name: Native visual evidence correlation contract
         run: cargo test -p localview-control --test native_visual_evidence_correlation
+      - name: Native visual diff evidence contract
+        run: cargo test -p localview-control --test visual_diff_evidence
+      - name: Live visual verification contract
+        run: cargo test -p localview-control --test live_visual_verification
+      - name: Live visual capture verification contract
+        run: cargo test -p localview-control --test live_visual_capture_verify
+      - name: Live visual capture resource governor contract
+        run: cargo test -p localview-control --test live_visual_capture_resource_governor
       - name: Runtime resource governor authority contract
         run: cargo test -p localview-control --test runtime_resource_governor
       - name: Process resource telemetry contract
@@ -80,8 +108,6 @@ jobs:
         run: cargo test -p localview-chromium --test executable_discovery
       - name: Tier-3 Chromium process executor contract
         run: cargo test -p localview-chromium --test executor_contract
-      - name: Tier-3 Chromium rendered-pixel executor contract
-        run: cargo test -p localview-chromium --test rendered_pixel_contract
       - name: Tier-3 Chromium perception cycle contract
         run: |
           cargo test -p localview-control --test chromium_perception_cycle
@@ -162,6 +188,8 @@ jobs:
         run: cargo test -p localview-desktop --test workspace_surface_policy
       - name: Live semantic bridge contract
         run: cargo test -p localview-desktop --test live_semantic_bridge_contract
+      - name: Bridge action cancellation worker contract
+        run: cargo test -p localview-desktop --test action_cancellation_worker_contract
       - name: Native visual capture desktop contract
         run: cargo test -p localview-desktop --test native_capture_contract
       - name: Stable capture settle desktop contract
@@ -170,6 +198,8 @@ jobs:
         run: cargo test -p localview-desktop --test visual_freeze_capture_contract
       - name: Changed-region scheduling transaction contract
         run: cargo test -p localview-desktop --test changed_region_schedule_contract
+      - name: Changed visual diff publication contract
+        run: cargo test -p localview-desktop --test changed_visual_diff_publication_contract
       - name: Progressive target capture contract
         run: cargo test -p localview-desktop --test progressive_target_capture_contract
       - name: Visual packet capture contract
@@ -180,3 +210,9 @@ jobs:
         run: cargo test -p localview-desktop --test perception_budget_authorization_contract
       - name: Native visual executor worker contract
         run: cargo test -p localview-desktop --test native_visual_executor_worker_contract
+      - name: Native visual diff executor contract
+        run: cargo test -p localview-desktop --test native_visual_diff_executor_contract
+      - name: Native executor cancellation worker contract
+        run: cargo test -p localview-desktop --test native_executor_cancellation_worker_contract
+      - name: Native executor exact cancellation lookup contract
+        run: cargo test -p localview-desktop --test native_executor_cancellation_lookup_contract

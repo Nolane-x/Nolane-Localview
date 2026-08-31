@@ -145,6 +145,10 @@ pub enum NativeExecutorAction {
         budget: PerceptionBudgetContract,
         budget_escalation_reason: Option<BudgetEscalationReason>,
     },
+    VisualDiffCapture {
+        viewport: ViewportMeta,
+        revision: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -461,6 +465,17 @@ impl LiveBridge {
         )
     }
 
+    pub async fn discard_public_action(&self, session_id: SessionId, action_id: Uuid) -> bool {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return false;
+        };
+        let Some(index) = state.inflight.iter().position(|action| action.id == action_id) else {
+            return false;
+        };
+        state.inflight.remove(index).is_some()
+    }
+
     pub async fn claim_native_executor(
         &self,
         session_id: SessionId,
@@ -585,6 +600,20 @@ impl LiveBridge {
             .get(&session_id)
             .map(|state| recent_from(&state.capture_results, limit))
             .unwrap_or_default()
+    }
+
+    pub async fn native_executor_result(
+        &self,
+        session_id: SessionId,
+        request_id: Uuid,
+    ) -> Option<NativeExecutorResult> {
+        let states = self.inner.read().await;
+        states
+            .get(&session_id)?
+            .native_executor_results
+            .iter()
+            .find(|result| result.request_id == request_id)
+            .cloned()
     }
 
     pub async fn recent_native_executor_results(

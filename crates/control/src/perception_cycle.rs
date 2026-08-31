@@ -29,6 +29,7 @@ use serde::Serialize;
 use crate::{
     chromium_runtime::{execute_compatibility_probe, ChromiumRuntimeError},
     fresh_snapshot::{acquire_fresh_semantic_snapshot, FreshSnapshotError},
+    native_executor::{wait_for_native_executor_result_with_timeout, NativeExecutorWaitError},
     perception::{
         authorized, build_live_perception_plan_with_usage_and_visual_satisfaction, denied,
         plan_error_response, LivePerceptionPlanRequest,
@@ -39,7 +40,7 @@ use crate::{
 
 const MAX_PERCEPTION_CYCLE_STEPS: usize = 4;
 const NATIVE_VISUAL_EXECUTOR_TIMEOUT: Duration = Duration::from_secs(12);
-const NATIVE_VISUAL_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MAX_NATIVE_VISUAL_EVIDENCE_IDS: usize = 8;
 
 #[derive(Debug, Serialize)]
 struct LivePerceptionCycleResponse {
@@ -197,14 +198,25 @@ async fn execute_live_perception_cycle(
                     )
                     .await;
 
-                let result = match wait_for_native_executor_result(&state, id, native_request.id).await
+                let result = match wait_for_native_executor_result_with_timeout(
+                    &state,
+                    id,
+                    native_request.id,
+                    NATIVE_VISUAL_EXECUTOR_TIMEOUT,
+                )
+                .await
                 {
                     Ok(result) => result,
-                    Err(()) => return native_visual_timeout_response(native_request.id),
+                    Err(NativeExecutorWaitError::Timeout) => {
+                        return native_visual_timeout_response(native_request.id)
+                    }
                 };
                 if !result.ok {
                     return native_visual_failed_response(&result);
                 }
+                let Some(evidence_ids) = native_visual_result_evidence_ids(&result) else {
+                    return native_visual_evidence_missing_response();
+                };
                 let Some(actual_usage) = result.usage else {
                     return native_visual_invalid_usage_response("native_visual_usage_missing");
                 };
@@ -213,10 +225,10 @@ async fn execute_live_perception_cycle(
                 }
                 if !has_matching_native_visual_evidence(
                     &state,
-                    id,
                     &native_request,
                     &viewport,
                     request.revision.as_deref(),
+                    &evidence_ids,
                 )
                 .await
                 {
@@ -358,45 +370,38 @@ fn add_actual_non_latency_usage(
     }
 }
 
-async fn wait_for_native_executor_result(
-    state: &ControlState,
-    id: SessionId,
-    request_id: uuid::Uuid,
-) -> Result<NativeExecutorResult, ()> {
-    tokio::time::timeout(NATIVE_VISUAL_EXECUTOR_TIMEOUT, async {
-        loop {
-            if let Some(result) = state
-                .live
-                .recent_native_executor_results(id, 16)
-                .await
-                .into_iter()
-                .find(|result| result.request_id == request_id)
-            {
-                return result;
-            }
-            tokio::time::sleep(NATIVE_VISUAL_RESULT_POLL_INTERVAL).await;
-        }
-    })
-    .await
-    .map_err(|_| ())
+fn native_visual_result_evidence_ids(result: &NativeExecutorResult) -> Option<Vec<String>> {
+    let values = result.payload.get("evidence_ids")?.as_array()?;
+    if values.is_empty() || values.len() > MAX_NATIVE_VISUAL_EVIDENCE_IDS {
+        return None;
+    }
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|evidence_id| !evidence_id.is_empty())
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 async fn has_matching_native_visual_evidence(
     state: &ControlState,
-    id: SessionId,
     native_request: &NativeExecutorRequest,
     viewport: &ViewportMeta,
     revision: Option<&str>,
+    evidence_ids: &[String],
 ) -> bool {
-    state
-        .evidence
-        .recent_for_session(id, 64)
-        .await
-        .iter()
-        .rev()
-        .any(|evidence| {
-            authoritative_native_visual_evidence(evidence, native_request, viewport, revision)
-        })
+    for evidence_id in evidence_ids {
+        let Some(evidence) = state.evidence.get(evidence_id).await else {
+            return false;
+        };
+        if !authoritative_native_visual_evidence(&evidence, native_request, viewport, revision) {
+            return false;
+        }
+    }
+    true
 }
 
 fn authoritative_native_visual_evidence(
@@ -406,6 +411,7 @@ fn authoritative_native_visual_evidence(
     revision: Option<&str>,
 ) -> bool {
     if evidence.kind != EvidenceKind::Visual
+        || evidence.session_id != native_request.session_id
         || evidence.provenance.source != "native-capture"
         || evidence.uncertainty != UncertaintyClass::Observed
         || evidence.confidence < 0.999
