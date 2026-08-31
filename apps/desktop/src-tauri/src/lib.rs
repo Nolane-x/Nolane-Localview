@@ -317,7 +317,7 @@ async fn preview_complete_action(
 ) -> Result<(), String> {
     ensure_preview_caller(&webview_window, session_id)?;
     let token = read_token().await?;
-    control_client()?
+    let response = control_client()?
         .post(format!(
             "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/results"
         ))
@@ -325,9 +325,11 @@ async fn preview_complete_action(
         .json(&result)
         .send()
         .await
-        .map_err(err)?
-        .error_for_status()
         .map_err(err)?;
+    if response.status() == reqwest::StatusCode::CONFLICT {
+        return Ok(());
+    }
+    response.error_for_status().map_err(err)?;
     Ok(())
 }
 
@@ -418,6 +420,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
   const generation = Date.now();
   let running = true;
   let busy = false;
+  const pendingActions = new Map();
 
   const MAX_PRIVATE_MASK_SELECTORS = 16;
   const MAX_PRIVATE_MASK_SELECTOR_BYTES = 256;
@@ -671,6 +674,62 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     });
   };
 
+  const rememberTakenActions = (actions) => {
+    const batch = Array.isArray(actions) ? actions : [];
+    for (const action of batch) {
+      if (!action?.id || pendingActions.has(action.id)) continue;
+      pendingActions.set(action.id, {
+        action,
+        executed: false,
+        cancellationSeen: false,
+        ok: true,
+        payload: null,
+        actionError: null,
+      });
+    }
+  };
+
+  const processPendingAction = async (invoke, entry) => {
+    const action = entry.action;
+
+    if (entry.cancellationSeen) {
+      await acknowledgeCancellation(invoke, action);
+      pendingActions.delete(action.id);
+      return;
+    }
+
+    if (!entry.executed) {
+      if (await cancellationRequested(invoke, action)) {
+        entry.cancellationSeen = true;
+        await acknowledgeCancellation(invoke, action);
+        pendingActions.delete(action.id);
+        return;
+      }
+
+      try {
+        entry.payload = await execute(action);
+        entry.ok = true;
+        entry.actionError = null;
+      } catch (error) {
+        entry.ok = false;
+        entry.payload = null;
+        entry.actionError = String(error?.message || error);
+      } finally {
+        entry.executed = true;
+      }
+    }
+
+    if (await cancellationRequested(invoke, action)) {
+      entry.cancellationSeen = true;
+      await acknowledgeCancellation(invoke, action);
+      pendingActions.delete(action.id);
+      return;
+    }
+
+    await complete(invoke, action, entry.ok, entry.payload, entry.actionError);
+    pendingActions.delete(action.id);
+  };
+
   const tick = async () => {
     if (!running || busy) return;
     const invoke = window.__TAURI__?.core?.invoke;
@@ -688,29 +747,17 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         });
       }
 
-      const actions = await invoke('preview_take_actions', { sessionId });
-      for (const action of Array.isArray(actions) ? actions : []) {
-        if (await cancellationRequested(invoke, action)) {
-          await acknowledgeCancellation(invoke, action);
-          continue;
-        }
+      if (pendingActions.size === 0) {
+        const actions = await invoke('preview_take_actions', { sessionId });
+        rememberTakenActions(actions);
+      }
 
-        let ok = true;
-        let payload = null;
-        let actionError = null;
+      for (const entry of pendingActions.values()) {
         try {
-          payload = await execute(action);
-        } catch (error) {
-          ok = false;
-          actionError = String(error?.message || error);
+          await processPendingAction(invoke, entry);
+        } catch (_) {
+          break;
         }
-
-        if (await cancellationRequested(invoke, action)) {
-          await acknowledgeCancellation(invoke, action);
-          continue;
-        }
-
-        await complete(invoke, action, ok, payload, actionError);
       }
     } catch (_) {
       // Best effort by design: LocalView observation must never break the target application.
