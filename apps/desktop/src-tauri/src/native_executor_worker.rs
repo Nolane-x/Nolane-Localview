@@ -13,7 +13,6 @@ use crate::{control_client, read_token, visual_capture};
 
 const NATIVE_EXECUTOR_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const MAX_SESSIONS_PER_POLL: usize = 16;
-const MAX_CANCELLATION_SIGNALS: usize = 32;
 const RESULT_POST_ATTEMPTS: usize = 3;
 const RESULT_POST_RETRY_DELAY: Duration = Duration::from_millis(80);
 
@@ -112,25 +111,32 @@ async fn cancellation_requested(
     session_id: SessionId,
     request_id: Uuid,
 ) -> Result<bool, String> {
-    let signals = client
+    let response = client
         .get(format!(
-            "http://127.0.0.1:45454/v1/sessions/{session_id}/native-executor/cancellations"
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/native-executor/cancellations/{request_id}"
         ))
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?
-        .json::<Vec<NativeExecutorCancellationSignal>>()
-        .await
         .map_err(|error| error.to_string())?;
-    if signals.len() > MAX_CANCELLATION_SIGNALS {
-        return Err("native executor cancellation response exceeded bounded signal count".into());
+
+    match response.status() {
+        reqwest::StatusCode::NO_CONTENT => Ok(false),
+        reqwest::StatusCode::OK => {
+            let signal = response
+                .json::<NativeExecutorCancellationSignal>()
+                .await
+                .map_err(|error| error.to_string())?;
+            if signal.request_id != request_id {
+                return Err("native executor cancellation origin mismatch".into());
+            }
+            Ok(true)
+        }
+        _ => Err(response
+            .error_for_status()
+            .expect_err("non-success cancellation lookup status")
+            .to_string()),
     }
-    Ok(signals
-        .iter()
-        .any(|signal| signal.request_id == request_id))
 }
 
 async fn acknowledge_cancellation(
