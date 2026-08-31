@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
 };
 use localview_evidence::{EvidenceKind, UncertaintyClass};
-use localview_live_bridge::{NativeExecutorAction, NativeExecutorResult};
+use localview_live_bridge::NativeExecutorAction;
 use localview_protocol::{SessionId, ViewportMeta};
 use localview_resource_governor::ResourceWorkKind;
 use localview_verification::{
