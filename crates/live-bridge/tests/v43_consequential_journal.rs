@@ -28,7 +28,7 @@ fn envelope() -> CanonicalActionEnvelope {
             provider_incarnation_ref: ProviderIncarnationRef::from("provider:webview:1"),
             target_incarnation_ref: TargetIncarnationRef::from("target:webview:1"),
             risk_class: ActionRiskClass::ExternalSideEffect,
-            idempotency_class: ActionIdempotencyClass::NonIdempotent,
+            idempotency_class: ActionIdempotencyClass::Irreversible,
             expected_postcondition_contract_refs: vec!["postcondition:message-visible".into()],
         },
     }
@@ -209,9 +209,9 @@ async fn compensation_is_additive_history_not_rewrite_of_prior_effect() {
 
     let entries = journal.entries_for(action.transport_action_id).await;
     assert_eq!(entries.len(), 4);
-    assert!(entries.windows(2).all(|pair| {
-        pair[0].journal_sequence < pair[1].journal_sequence
-    }));
+    assert!(entries
+        .windows(2)
+        .all(|pair| pair[0].journal_sequence < pair[1].journal_sequence));
     assert_eq!(
         journal.recovery_state(action.transport_action_id).await.unwrap(),
         ConsequentialRecoveryState::Compensated
@@ -235,7 +235,10 @@ async fn incomplete_trailing_record_is_discarded_before_new_durable_append() {
     drop(file);
 
     let reopened = ConsequentialJournal::open(&path).await.unwrap();
-    assert_eq!(reopened.entries_for(action.transport_action_id).await.len(), 1);
+    assert_eq!(
+        reopened.entries_for(action.transport_action_id).await.len(),
+        1
+    );
     let second = reopened
         .record_authorization(
             action.transport_action_id,
