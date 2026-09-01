@@ -1,0 +1,20 @@
+[package]
+name = "localview-native-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+localview-protocol = { path = "../protocol" }
+localview-resource-governor = { path = "../resource-governor" }
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+serde_json.workspace = true
