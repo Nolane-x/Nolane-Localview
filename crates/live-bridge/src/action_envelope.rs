@@ -74,4 +74,10 @@ pub enum ActionEnvelopeBindingError {
     MissingProviderObservation,
     ProviderIncarnationMismatch,
     TargetIncarnationMismatch,
+    MissingDecisionPrincipal,
+    MissingActingPrincipal,
+    MissingAuthorizationRevision,
+    MissingPreconditionSnapshotCut,
+    MissingExpectedPostcondition,
+    InternalCaptureActionUnsupported,
 }
