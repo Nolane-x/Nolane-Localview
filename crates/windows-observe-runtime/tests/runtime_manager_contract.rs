@@ -198,17 +198,6 @@ fn selection() -> UserSelectedWindowTarget {
     }
 }
 
-fn event(provider: &FakeProvider, sequence: u64) -> WindowsUiaEvent {
-    WindowsUiaEvent {
-        sequence,
-        captured_at: Utc::now(),
-        provider_incarnation_ref: provider.provider.clone(),
-        target_incarnation_ref: provider.target.clone(),
-        kind: WindowsUiaEventKind::PropertyChanged { property_id: 30005 },
-        element_ref: None,
-    }
-}
-
 #[tokio::test]
 async fn attach_owns_subscription_binds_opaque_lineage_and_establishes_initial_snapshot() {
     let bridge = LiveBridge::new(64, 8);
@@ -262,20 +251,35 @@ async fn contiguous_callback_drain_does_not_poll_snapshot_but_gap_reconciles_onc
     )
     .unwrap();
     manager.attach(session(), selection()).await.unwrap();
-    assert_eq!(provider.counts().0, 1, "attach establishes exactly one snapshot baseline");
+    assert_eq!(
+        provider.counts().0,
+        1,
+        "attach establishes exactly one snapshot baseline"
+    );
 
     let first = manager.drain_once(session()).await.unwrap();
     assert!(!first.reconciliation_performed);
-    assert_eq!(provider.counts().0, 1, "contiguous callbacks must not trigger UI tree polling");
+    assert_eq!(
+        provider.counts().0,
+        1,
+        "contiguous callbacks must not trigger UI tree polling"
+    );
 
     let second = manager.drain_once(session()).await.unwrap();
     assert!(second.reconciliation_performed);
-    assert_eq!(second.status.event_continuity, EventContinuityState::GapDetected);
+    assert_eq!(
+        second.status.event_continuity,
+        EventContinuityState::GapDetected
+    );
     assert_eq!(
         second.status.current_snapshot_completeness,
         Some(ReconciliationCompleteness::Established)
     );
-    assert_eq!(provider.counts().0, 2, "one observed gap causes one bounded reconciliation snapshot");
+    assert_eq!(
+        provider.counts().0,
+        2,
+        "one observed gap causes one bounded reconciliation snapshot"
+    );
 }
 
 #[tokio::test]
@@ -318,7 +322,10 @@ async fn invalid_runtime_bounds_fail_closed_before_provider_work() {
     )
     .unwrap_err();
 
-    assert!(matches!(error, WindowsObserveRuntimeError::InvalidConfiguration));
+    assert!(matches!(
+        error,
+        WindowsObserveRuntimeError::InvalidConfiguration
+    ));
     assert_eq!(provider.counts(), (0, 0, 0));
 }
 
