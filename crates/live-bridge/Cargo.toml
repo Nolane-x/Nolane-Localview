@@ -14,5 +14,6 @@ localview-protocol = { path = "../protocol" }
 localview-token-budget = { path = "../token-budget" }
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
