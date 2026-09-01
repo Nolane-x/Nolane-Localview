@@ -25,6 +25,14 @@ pub struct WindowsObserveBridgeBinding {
 pub enum WindowsObserveBridgeError {
     #[error("provider observation binding rejected: {0:?}")]
     Binding(ProviderObservationBindingError),
+    #[error("Windows UIA observation binding is missing")]
+    ObservationBindingMissing,
+    #[error("LiveBridge provider incarnation does not match the Windows UIA runtime binding")]
+    BoundProviderIncarnationMismatch,
+    #[error("LiveBridge target incarnation does not match the Windows UIA runtime binding")]
+    BoundTargetIncarnationMismatch,
+    #[error("LiveBridge generation does not match the Windows UIA runtime binding")]
+    BoundGenerationMismatch,
     #[error("Windows UIA event provider incarnation does not match the runtime binding")]
     ProviderIncarnationMismatch,
     #[error("Windows UIA event target incarnation does not match the runtime binding")]
@@ -114,6 +122,7 @@ impl WindowsObserveBridgeBinding {
         bridge: &LiveBridge,
         drain: WindowsUiaEventDrain,
     ) -> Result<ProviderIngestReport, WindowsObserveBridgeError> {
+        self.require_live_binding(bridge).await?;
         self.validate_drain(&drain)?;
 
         let dropped_before_drain = drain.dropped_before_drain;
@@ -144,6 +153,7 @@ impl WindowsObserveBridgeBinding {
         snapshot: &NativeSemanticSnapshotRevision,
         receipt_id: impl Into<String>,
     ) -> Result<ObservationStatus, WindowsObserveBridgeError> {
+        self.require_live_binding(bridge).await?;
         if snapshot.provider_incarnation_ref() != &self.provider_incarnation_ref {
             return Err(WindowsObserveBridgeError::ReconciliationProviderIncarnationMismatch);
         }
@@ -159,6 +169,26 @@ impl WindowsObserveBridgeBinding {
             .observation_status(self.session_id)
             .await
             .ok_or(WindowsObserveBridgeError::ObservationStateMissing)
+    }
+
+    async fn require_live_binding(
+        &self,
+        bridge: &LiveBridge,
+    ) -> Result<ObservationStatus, WindowsObserveBridgeError> {
+        let status = bridge
+            .observation_status(self.session_id)
+            .await
+            .ok_or(WindowsObserveBridgeError::ObservationBindingMissing)?;
+        if status.provider_incarnation_ref != self.provider_incarnation_ref {
+            return Err(WindowsObserveBridgeError::BoundProviderIncarnationMismatch);
+        }
+        if status.target_incarnation_ref != self.target_incarnation_ref {
+            return Err(WindowsObserveBridgeError::BoundTargetIncarnationMismatch);
+        }
+        if status.generation != self.generation {
+            return Err(WindowsObserveBridgeError::BoundGenerationMismatch);
+        }
+        Ok(status)
     }
 
     fn validate_drain(&self, drain: &WindowsUiaEventDrain) -> Result<(), WindowsObserveBridgeError> {
