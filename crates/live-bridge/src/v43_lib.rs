@@ -2,7 +2,9 @@
 
 #[path = "cancellable_lib.rs"]
 mod legacy;
+mod action_envelope;
 
+pub use action_envelope::*;
 pub use legacy::{
     ActionCancellationOutcome, ActionCancellationSignal, ActionCancellationState, BridgeAction,
     BridgeActionKind, BridgeActionResult, CompletionOrigin, IngestReport, NativeExecutorAction,
@@ -14,11 +16,12 @@ pub use legacy::{
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use localview_protocol::{
-    EventContinuityState, ProviderIncarnationRef, ReconciliationCompleteness,
+    ElementRef, EventContinuityState, ProviderIncarnationRef, ReconciliationCompleteness,
     ReconciliationSnapshotReceipt, SessionId, TargetIncarnationRef,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+use uuid::Uuid;
 
 const PROVIDER_BOUND_GENERATION_BASE: u64 = 1 << 63;
 
@@ -131,6 +134,8 @@ impl ProviderContinuityState {
 pub struct LiveBridge {
     legacy: legacy::LiveBridge,
     continuity: Arc<RwLock<HashMap<SessionId, ProviderContinuityState>>>,
+    action_envelopes: Arc<RwLock<HashMap<Uuid, CanonicalActionEnvelope>>>,
+    action_gate: Arc<Mutex<()>>,
 }
 
 impl LiveBridge {
@@ -138,6 +143,8 @@ impl LiveBridge {
         Self {
             legacy: legacy::LiveBridge::new(event_capacity, action_capacity),
             continuity: Arc::new(RwLock::new(HashMap::new())),
+            action_envelopes: Arc::new(RwLock::new(HashMap::new())),
+            action_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -224,6 +231,119 @@ impl LiveBridge {
         }
     }
 
+    /// Compatibility enqueue for the existing web bridge. This path deliberately
+    /// does not synthesize canonical authority metadata.
+    pub async fn enqueue_action(
+        &self,
+        session_id: SessionId,
+        reference: Option<ElementRef>,
+        action: BridgeActionKind,
+    ) -> BridgeAction {
+        let _gate = self.action_gate.lock().await;
+        self.legacy.enqueue_action(session_id, reference, action).await
+    }
+
+    /// Queue an action only after binding the canonical V4.3 authority envelope.
+    ///
+    /// This is an admission-time incarnation check, not dispatch authorization.
+    /// Dispatch-time freshness/foreground/postcondition revalidation remains a
+    /// later verified-action concern.
+    pub async fn enqueue_canonical_action(
+        &self,
+        session_id: SessionId,
+        reference: Option<ElementRef>,
+        action: BridgeActionKind,
+        metadata: ActionEnvelopeMetadata,
+    ) -> Result<CanonicalQueuedAction, ActionEnvelopeBindingError> {
+        if action.is_internal_capture_action() {
+            return Err(ActionEnvelopeBindingError::InternalCaptureActionUnsupported);
+        }
+        if metadata.decision_principal_ref.as_str().trim().is_empty() {
+            return Err(ActionEnvelopeBindingError::MissingDecisionPrincipal);
+        }
+        if metadata.acting_principal_ref.as_str().trim().is_empty() {
+            return Err(ActionEnvelopeBindingError::MissingActingPrincipal);
+        }
+        if metadata.authorization_revision.trim().is_empty() {
+            return Err(ActionEnvelopeBindingError::MissingAuthorizationRevision);
+        }
+        if metadata.precondition_snapshot_cut_ref.trim().is_empty() {
+            return Err(ActionEnvelopeBindingError::MissingPreconditionSnapshotCut);
+        }
+        if metadata.risk_class != ActionRiskClass::ObserveOnly
+            && metadata.expected_postcondition_contract_refs.is_empty()
+        {
+            return Err(ActionEnvelopeBindingError::MissingExpectedPostcondition);
+        }
+
+        let _gate = self.action_gate.lock().await;
+        let current_incarnations = {
+            let continuity = self.continuity.read().await;
+            let Some(state) = continuity.get(&session_id) else {
+                return Err(ActionEnvelopeBindingError::MissingProviderObservation);
+            };
+            (
+                state.provider_incarnation_ref.clone(),
+                state.target_incarnation_ref.clone(),
+            )
+        };
+
+        if metadata.provider_incarnation_ref != current_incarnations.0 {
+            return Err(ActionEnvelopeBindingError::ProviderIncarnationMismatch);
+        }
+        if metadata.target_incarnation_ref != current_incarnations.1 {
+            return Err(ActionEnvelopeBindingError::TargetIncarnationMismatch);
+        }
+
+        let action = self
+            .legacy
+            .enqueue_action(session_id, reference, action)
+            .await;
+        let envelope = CanonicalActionEnvelope {
+            envelope_id: Uuid::new_v4(),
+            transport_action_id: action.id,
+            session_id,
+            metadata,
+        };
+        self.action_envelopes
+            .write()
+            .await
+            .insert(action.id, envelope.clone());
+
+        Ok(CanonicalQueuedAction { action, envelope })
+    }
+
+    pub async fn take_actions(&self, session_id: SessionId, limit: usize) -> Vec<BridgeAction> {
+        self.take_public_actions(session_id, limit).await
+    }
+
+    pub async fn take_public_actions(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<BridgeAction> {
+        let _gate = self.action_gate.lock().await;
+        self.legacy.take_public_actions(session_id, limit).await
+    }
+
+    pub async fn action_envelope(&self, action_id: Uuid) -> Option<CanonicalActionEnvelope> {
+        self.action_envelopes.read().await.get(&action_id).cloned()
+    }
+
+    /// Narrow freshness check for the provider/target incarnation binding only.
+    /// A `true` result is never sufficient to authorize dispatch by itself.
+    pub async fn action_envelope_is_current(&self, action_id: Uuid) -> bool {
+        let Some(envelope) = self.action_envelope(action_id).await else {
+            return false;
+        };
+        let continuity = self.continuity.read().await;
+        let Some(state) = continuity.get(&envelope.session_id) else {
+            return false;
+        };
+        envelope.metadata.provider_incarnation_ref == state.provider_incarnation_ref
+            && envelope.metadata.target_incarnation_ref == state.target_incarnation_ref
+    }
+
     pub async fn observation_status(&self, session_id: SessionId) -> Option<ObservationStatus> {
         let continuity = self.continuity.read().await;
         let state = continuity.get(&session_id)?;
@@ -264,7 +384,12 @@ impl LiveBridge {
     }
 
     pub async fn release_session(&self, session_id: SessionId) {
+        let _gate = self.action_gate.lock().await;
         self.continuity.write().await.remove(&session_id);
+        self.action_envelopes
+            .write()
+            .await
+            .retain(|_, envelope| envelope.session_id != session_id);
         self.legacy.release_session(session_id).await;
     }
 }
