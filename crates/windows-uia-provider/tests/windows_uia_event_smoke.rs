@@ -18,10 +18,11 @@ mod windows_event_smoke {
     use windows::{
         core::w,
         Win32::{
+            Foundation::HWND,
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, SetWindowTextW,
-                ShowWindow, TranslateMessage, CW_USEDEFAULT, HWND, MSG, PM_REMOVE, SW_SHOW,
+                ShowWindow, TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE, SW_SHOW,
                 WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
