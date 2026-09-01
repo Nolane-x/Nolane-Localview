@@ -12,5 +12,6 @@ localview-native-provider = { path = "../native-provider" }
 localview-protocol = { path = "../protocol" }
 localview-windows-uia-provider = { path = "../windows-uia-provider" }
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
