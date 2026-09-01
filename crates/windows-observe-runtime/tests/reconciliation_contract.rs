@@ -7,7 +7,9 @@ use localview_protocol::{
     EventContinuityState, ProviderIncarnationRef, ReconciliationCompleteness, SessionId,
     TargetIncarnationRef,
 };
-use localview_windows_observe_runtime::WindowsObserveBridgeBinding;
+use localview_windows_observe_runtime::{
+    WindowsObserveBridgeBinding, WindowsObserveBridgeError,
+};
 use localview_windows_uia_provider::{
     WindowsUiaEvent, WindowsUiaEventDrain, WindowsUiaEventKind,
 };
@@ -62,6 +64,35 @@ async fn binding_starts_windows_uia_at_opaque_ordering_and_exact_sequence_baseli
     assert_eq!(status.event_continuity, EventContinuityState::OrderingOpaque);
     assert_eq!(status.provider_incarnation_ref, provider());
     assert_eq!(status.target_incarnation_ref, target());
+}
+
+#[tokio::test]
+async fn drain_before_binding_fails_closed_instead_of_creating_implicit_continuity() {
+    let bridge = LiveBridge::new(64, 8);
+    let binding = WindowsObserveBridgeBinding::new(session(), 7, provider(), target(), 0);
+
+    let error = binding
+        .ingest_drain(
+            &bridge,
+            WindowsUiaEventDrain {
+                events: vec![WindowsUiaEvent {
+                    sequence: 1,
+                    captured_at: Utc::now(),
+                    provider_incarnation_ref: provider(),
+                    target_incarnation_ref: target(),
+                    kind: WindowsUiaEventKind::FocusChanged,
+                    element_ref: None,
+                }],
+                dropped_before_drain: 0,
+                latest_sequence: 1,
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error, WindowsObserveBridgeError::ObservationBindingMissing);
+    assert!(bridge.observation_status(session()).await.is_none());
+    assert!(bridge.recent(session(), 8).await.is_empty());
 }
 
 #[tokio::test]
