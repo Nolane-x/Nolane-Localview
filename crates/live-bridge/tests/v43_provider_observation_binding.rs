@@ -1,7 +1,7 @@
 use chrono::Utc;
 use localview_live_bridge::{
-    EventSequenceGap, LiveBridge, ObserverEvent, ObserverEventKind, ProviderObservationBinding,
-    ProviderObservationBindingError, ProviderObserverBatch,
+    EventSequenceGap, LiveBridge, ObserverBatch, ObserverEvent, ObserverEventKind,
+    ProviderObservationBinding, ProviderObservationBindingError, ProviderObserverBatch,
 };
 use localview_protocol::{
     EventContinuityState, ProviderIncarnationRef, ReconciliationCompleteness,
@@ -130,6 +130,67 @@ async fn reconciliation_establishes_current_snapshot_without_upgrading_opaque_ev
     assert_eq!(
         status.current_snapshot_completeness,
         Some(ReconciliationCompleteness::Established)
+    );
+}
+
+#[tokio::test]
+async fn legacy_ingest_cannot_launder_provider_gap_or_reconciliation_receipt() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+    let provider = ProviderIncarnationRef::from("provider:windows-uia:mta:legacy-isolation");
+    let target = TargetIncarnationRef::from("target:windows:selection=legacy-isolation");
+
+    bridge
+        .bind_provider_observation(binding(
+            session_id,
+            provider.clone(),
+            target.clone(),
+            EventContinuityState::OrderingOpaque,
+            Some(0),
+        ))
+        .await
+        .unwrap();
+    bridge
+        .ingest_provider(ProviderObserverBatch {
+            session_id,
+            generation: 1,
+            provider_incarnation_ref: provider.clone(),
+            target_incarnation_ref: target.clone(),
+            events: vec![event(3)],
+        })
+        .await;
+    assert!(
+        bridge
+            .record_reconciliation(session_id, receipt(provider, target))
+            .await
+    );
+
+    let before = bridge.observation_status(session_id).await.unwrap();
+    assert_eq!(before.event_continuity, EventContinuityState::GapDetected);
+    assert!(before.gap.is_some());
+    assert_eq!(
+        before.current_snapshot_completeness,
+        Some(ReconciliationCompleteness::Established)
+    );
+
+    let _ = bridge
+        .ingest(ObserverBatch {
+            session_id,
+            generation: 0,
+            events: vec![event(1)],
+        })
+        .await;
+
+    let after = bridge.observation_status(session_id).await.unwrap();
+    assert_eq!(after.event_continuity, EventContinuityState::GapDetected);
+    assert_eq!(after.gap, before.gap);
+    assert_eq!(
+        after.current_snapshot_completeness,
+        Some(ReconciliationCompleteness::Established)
+    );
+    assert_eq!(
+        after.reconciliation_receipt_id.as_deref(),
+        Some("reconcile:uia:1")
     );
 }
 
