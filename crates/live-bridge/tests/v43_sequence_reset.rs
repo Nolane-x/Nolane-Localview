@@ -49,9 +49,42 @@ async fn sequence_reset_rebases_the_bounded_lineage_without_claiming_continuity(
     assert_eq!(reset.ingest.last_seq, Some(2));
 
     let recent = bridge.recent(session_id, 8).await;
-    assert_eq!(recent.iter().map(|item| item.seq).collect::<Vec<_>>(), vec![1, 2]);
+    assert_eq!(
+        recent.iter().map(|item| item.seq).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
 
     let status = bridge.observation_status(session_id).await.unwrap();
     assert_eq!(status.event_continuity, EventContinuityState::SequenceReset);
     assert_eq!(status.last_seq, Some(2));
+}
+
+#[tokio::test]
+async fn sequence_reset_inside_one_batch_opens_a_new_internal_lineage_at_the_reset_boundary() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+
+    let report = bridge
+        .ingest_provider(ProviderObserverBatch {
+            session_id,
+            generation: 3,
+            provider_incarnation_ref: ProviderIncarnationRef::from("provider:webview:stable"),
+            target_incarnation_ref: TargetIncarnationRef::from("target:webview:stable"),
+            events: vec![event(10), event(11), event(1), event(2)],
+        })
+        .await;
+
+    assert_eq!(report.continuity, EventContinuityState::SequenceReset);
+    assert_eq!(report.ingest.accepted, 4);
+    assert_eq!(report.ingest.rejected_stale, 0);
+    assert_eq!(report.ingest.last_seq, Some(2));
+
+    // The reset creates a new bounded-buffer generation, so pre-reset events are
+    // deliberately not mixed into the current lineage even though all four were
+    // accepted at their respective sequence boundaries.
+    let recent = bridge.recent(session_id, 8).await;
+    assert_eq!(
+        recent.iter().map(|item| item.seq).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
 }
