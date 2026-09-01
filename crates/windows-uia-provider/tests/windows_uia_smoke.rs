@@ -1,6 +1,13 @@
 #[cfg(windows)]
 mod windows_smoke {
-    use std::time::Duration;
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc, Arc,
+        },
+        thread,
+        time::Duration,
+    };
 
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
     use localview_protocol::ReconciliationCompleteness;
@@ -13,8 +20,9 @@ mod windows_smoke {
         Win32::{
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, ShowWindow, CW_USEDEFAULT, SW_SHOW,
-                WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, ShowWindow,
+                TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE, SW_SHOW, WS_OVERLAPPEDWINDOW,
+                WS_VISIBLE,
             },
         },
     };
@@ -27,26 +35,56 @@ mod windows_smoke {
             "real UIA smoke must be explicitly enabled"
         );
 
-        let window = unsafe {
-            CreateWindowExW(
-                Default::default(),
-                w!("BUTTON"),
-                w!("LocalView UIA Smoke Save"),
-                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                420,
-                180,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("create deterministic Win32 UIA fixture")
-        };
-        unsafe {
-            let _ = ShowWindow(window, SW_SHOW);
-        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let ui_stop = Arc::clone(&stop);
+        let (window_tx, window_rx) = mpsc::sync_channel(1);
+        let ui_thread = thread::Builder::new()
+            .name("localview-uia-smoke-ui".into())
+            .spawn(move || {
+                let window = unsafe {
+                    CreateWindowExW(
+                        Default::default(),
+                        w!("BUTTON"),
+                        w!("LocalView UIA Smoke Save"),
+                        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                        CW_USEDEFAULT,
+                        CW_USEDEFAULT,
+                        420,
+                        180,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .expect("create deterministic Win32 UIA fixture")
+                };
+                unsafe {
+                    let _ = ShowWindow(window, SW_SHOW);
+                }
+                window_tx
+                    .send(window.0 as usize as u64)
+                    .expect("publish smoke HWND");
+
+                let mut message = MSG::default();
+                while !ui_stop.load(Ordering::Acquire) {
+                    while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                        unsafe {
+                            let _ = TranslateMessage(&message);
+                            DispatchMessageW(&message);
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+
+                unsafe {
+                    DestroyWindow(window).expect("destroy Win32 UIA fixture");
+                }
+            })
+            .expect("spawn responsive Win32 smoke UI thread");
+
+        let window_handle = window_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("receive live smoke HWND");
 
         let worker = WindowsUiaWorker::spawn(WindowsUiaWorkerConfig {
             snapshot_budget: SnapshotBudget {
@@ -60,7 +98,7 @@ mod windows_smoke {
 
         let process_id = unsafe { GetCurrentProcessId() };
         let selection = UserSelectedWindowTarget {
-            native_window_handle: window.0 as usize as u64,
+            native_window_handle: window_handle,
             expected_process_id: process_id,
             selection_nonce: Uuid::new_v4(),
         };
@@ -68,10 +106,7 @@ mod windows_smoke {
             .attach(selection)
             .expect("attach exact user-selected Win32 target");
         assert_eq!(attachment.fingerprint().process_id, process_id);
-        assert_eq!(
-            attachment.fingerprint().native_window_handle,
-            window.0 as usize as u64
-        );
+        assert_eq!(attachment.fingerprint().native_window_handle, window_handle);
 
         let snapshot = worker
             .snapshot(
@@ -102,8 +137,7 @@ mod windows_smoke {
             attachment.target_incarnation_ref()
         );
 
-        unsafe {
-            DestroyWindow(window).expect("destroy Win32 UIA fixture");
-        }
+        stop.store(true, Ordering::Release);
+        ui_thread.join().expect("join smoke UI thread");
     }
 }
