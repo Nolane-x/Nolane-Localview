@@ -3,8 +3,10 @@
 #[path = "cancellable_lib.rs"]
 mod legacy;
 mod action_envelope;
+mod consequential_journal;
 
 pub use action_envelope::*;
+pub use consequential_journal::*;
 pub use legacy::{
     ActionCancellationOutcome, ActionCancellationSignal, ActionCancellationState, BridgeAction,
     BridgeActionKind, BridgeActionResult, CompletionOrigin, IngestReport, NativeExecutorAction,
