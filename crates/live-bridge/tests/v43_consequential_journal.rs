@@ -34,6 +34,14 @@ fn envelope() -> CanonicalActionEnvelope {
     }
 }
 
+fn dispatch_receipt() -> DispatchLinearizationReceipt {
+    DispatchLinearizationReceipt {
+        receipt_ref: "dispatch:1".into(),
+        transport_result: TransportResult::DeliveredToExecutor,
+        dispatch_result: DispatchResult::DispatchedFull,
+    }
+}
+
 #[tokio::test]
 async fn journal_sequence_survives_reopen_and_is_the_causal_order() {
     let path = journal_path("sequence");
@@ -89,14 +97,7 @@ async fn crash_after_dispatch_replays_as_possibly_dispatched_and_requires_reconc
         .await
         .unwrap();
     journal
-        .record_dispatch_linearized(
-            action.transport_action_id,
-            DispatchLinearizationReceipt {
-                receipt_ref: "dispatch:1".into(),
-                transport_result: TransportResult::DeliveredToExecutor,
-                dispatch_result: DispatchResult::DispatchedFull,
-            },
-        )
+        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
         .await
         .unwrap();
     drop(journal);
@@ -132,14 +133,7 @@ async fn verified_outcome_remains_uncommitted_until_commit_is_durable() {
         .await
         .unwrap();
     journal
-        .record_dispatch_linearized(
-            action.transport_action_id,
-            DispatchLinearizationReceipt {
-                receipt_ref: "dispatch:1".into(),
-                transport_result: TransportResult::DeliveredToExecutor,
-                dispatch_result: DispatchResult::DispatchedFull,
-            },
-        )
+        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
         .await
         .unwrap();
     journal
@@ -178,14 +172,15 @@ async fn compensation_is_additive_history_not_rewrite_of_prior_effect() {
 
     journal.record_intent_admitted(action.clone()).await.unwrap();
     journal
-        .record_dispatch_linearized(
+        .record_authorization(
             action.transport_action_id,
-            DispatchLinearizationReceipt {
-                receipt_ref: "dispatch:1".into(),
-                transport_result: TransportResult::DeliveredToExecutor,
-                dispatch_result: DispatchResult::DispatchedFull,
-            },
+            action.metadata.authorization_revision.clone(),
+            false,
         )
+        .await
+        .unwrap();
+    journal
+        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
         .await
         .unwrap();
     journal
@@ -208,7 +203,7 @@ async fn compensation_is_additive_history_not_rewrite_of_prior_effect() {
         .unwrap();
 
     let entries = journal.entries_for(action.transport_action_id).await;
-    assert_eq!(entries.len(), 4);
+    assert_eq!(entries.len(), 5);
     assert!(entries
         .windows(2)
         .all(|pair| pair[0].journal_sequence < pair[1].journal_sequence));
@@ -216,6 +211,37 @@ async fn compensation_is_additive_history_not_rewrite_of_prior_effect() {
         journal.recovery_state(action.transport_action_id).await.unwrap(),
         ConsequentialRecoveryState::Compensated
     );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn invalid_lifecycle_transitions_are_typed_and_never_appended() {
+    let path = journal_path("invalid-transition");
+    let action = envelope();
+    let journal = ConsequentialJournal::open(&path).await.unwrap();
+
+    let unknown = journal
+        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        unknown,
+        ConsequentialJournalError::UnknownAction { action_id }
+            if action_id == action.transport_action_id
+    ));
+
+    journal.record_intent_admitted(action.clone()).await.unwrap();
+    let invalid_commit = journal
+        .record_committed(action.transport_action_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        invalid_commit,
+        ConsequentialJournalError::InvalidTransition { action_id, .. }
+            if action_id == action.transport_action_id
+    ));
+    assert_eq!(journal.entries_for(action.transport_action_id).await.len(), 1);
 
     let _ = std::fs::remove_file(path);
 }
