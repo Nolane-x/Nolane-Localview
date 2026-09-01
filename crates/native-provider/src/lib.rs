@@ -1,9 +1,14 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
+use localview_content_addressed::object_hash;
 use localview_protocol::{
-    ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef,
+    ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef,
+    ReconciliationCompleteness, ReconciliationSnapshotReceipt, TargetIncarnationRef,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -260,5 +265,266 @@ impl SnapshotBudgetGuard {
             incomplete: !exhausted.is_empty(),
             exhausted,
         }
+    }
+}
+
+/// A provider-normalized semantic observation. It deliberately contains no live
+/// UIA/COM object: provider-owned handles stay inside the OS worker apartment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeSemanticNodeObservation {
+    pub element_ref: ProviderElementRef,
+    pub parent_index: Option<usize>,
+    pub depth: usize,
+    pub role: Option<String>,
+    pub name: Option<String>,
+    pub control_type: Option<String>,
+    pub automation_id: Option<String>,
+    pub class_name: Option<String>,
+    pub is_enabled: Option<bool>,
+    pub is_offscreen: Option<bool>,
+    #[serde(default)]
+    pub attributes: BTreeMap<String, String>,
+}
+
+/// Mutable construction payload owned only by the observation transaction. Once
+/// published it is converted into an immutable snapshot revision.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeSemanticSnapshotDraft {
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub snapshot_cut_ref: String,
+    pub surface_scope: String,
+    pub cache_profile_revision: String,
+    pub permission_visibility_revision: String,
+    pub capture_sequence: u64,
+    pub nodes: Vec<NativeSemanticNodeObservation>,
+    pub resource_usage: SnapshotResourceUsage,
+    pub completeness: ReconciliationCompleteness,
+    #[serde(default)]
+    pub incompleteness_debt: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Error, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotPublishError {
+    #[error("snapshot provider incarnation does not match cache lineage")]
+    ProviderIncarnationMismatch,
+    #[error("snapshot target incarnation does not match cache lineage")]
+    TargetIncarnationMismatch,
+    #[error("established snapshot contains incompleteness")]
+    EstablishedSnapshotHasIncompleteness,
+    #[error("snapshot resource usage is internally inconsistent")]
+    ResourceUsageInconsistent,
+    #[error("snapshot cut is missing")]
+    MissingSnapshotCut,
+    #[error("snapshot surface scope is missing")]
+    MissingSurfaceScope,
+    #[error("snapshot cache profile revision is missing")]
+    MissingCacheProfileRevision,
+    #[error("snapshot permission visibility revision is missing")]
+    MissingPermissionVisibilityRevision,
+    #[error("snapshot capture sequence did not advance")]
+    NonMonotonicCaptureSequence,
+    #[error("node provider incarnation does not match snapshot")]
+    NodeProviderIncarnationMismatch,
+    #[error("node target incarnation does not match snapshot")]
+    NodeTargetIncarnationMismatch,
+    #[error("node acquisition cut does not match snapshot")]
+    MixedObservationCut,
+    #[error("node parent reference is not a prior node in this revision")]
+    InvalidNodeParent,
+}
+
+/// An immutable provider observation revision. All fields are private and only
+/// read-only accessors are exposed, so refreshing a cache can never mutate the
+/// evidence held by an older revision.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeSemanticSnapshotRevision {
+    cache_revision_ref: String,
+    provider_incarnation_ref: ProviderIncarnationRef,
+    target_incarnation_ref: TargetIncarnationRef,
+    snapshot_cut_ref: String,
+    surface_scope: String,
+    cache_profile_revision: String,
+    permission_visibility_revision: String,
+    capture_sequence: u64,
+    nodes: Vec<NativeSemanticNodeObservation>,
+    resource_usage: SnapshotResourceUsage,
+    completeness: ReconciliationCompleteness,
+    observed_digest: String,
+    incompleteness_debt: Vec<String>,
+}
+
+impl NativeSemanticSnapshotRevision {
+    pub fn cache_revision_ref(&self) -> &str {
+        &self.cache_revision_ref
+    }
+
+    pub fn provider_incarnation_ref(&self) -> &ProviderIncarnationRef {
+        &self.provider_incarnation_ref
+    }
+
+    pub fn target_incarnation_ref(&self) -> &TargetIncarnationRef {
+        &self.target_incarnation_ref
+    }
+
+    pub fn snapshot_cut_ref(&self) -> &str {
+        &self.snapshot_cut_ref
+    }
+
+    pub fn capture_sequence(&self) -> u64 {
+        self.capture_sequence
+    }
+
+    pub fn nodes(&self) -> &[NativeSemanticNodeObservation] {
+        &self.nodes
+    }
+
+    pub fn resource_usage(&self) -> &SnapshotResourceUsage {
+        &self.resource_usage
+    }
+
+    pub fn completeness(&self) -> ReconciliationCompleteness {
+        self.completeness
+    }
+
+    pub fn observed_digest(&self) -> &str {
+        &self.observed_digest
+    }
+
+    pub fn incompleteness_debt(&self) -> &[String] {
+        &self.incompleteness_debt
+    }
+
+    /// Project this exact immutable revision into the protocol receipt. No
+    /// completeness inference is performed here: the published revision is the
+    /// authority for the receipt fields.
+    pub fn reconciliation_receipt(
+        &self,
+        receipt_id: impl Into<String>,
+    ) -> ReconciliationSnapshotReceipt {
+        ReconciliationSnapshotReceipt {
+            receipt_id: receipt_id.into(),
+            provider_incarnation_ref: self.provider_incarnation_ref.clone(),
+            target_incarnation_ref: self.target_incarnation_ref.clone(),
+            snapshot_cut_ref: self.snapshot_cut_ref.clone(),
+            surface_scope: self.surface_scope.clone(),
+            completeness: self.completeness,
+            cache_profile_revision: self.cache_profile_revision.clone(),
+            permission_visibility_revision: self.permission_visibility_revision.clone(),
+            capture_sequence: self.capture_sequence,
+            observed_digest: self.observed_digest.clone(),
+            incompleteness_debt: self.incompleteness_debt.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SemanticSnapshotCache {
+    provider_incarnation_ref: ProviderIncarnationRef,
+    target_incarnation_ref: TargetIncarnationRef,
+    current: Option<Arc<NativeSemanticSnapshotRevision>>,
+}
+
+impl SemanticSnapshotCache {
+    pub fn for_lineage(
+        provider_incarnation_ref: ProviderIncarnationRef,
+        target_incarnation_ref: TargetIncarnationRef,
+    ) -> Self {
+        Self {
+            provider_incarnation_ref,
+            target_incarnation_ref,
+            current: None,
+        }
+    }
+
+    pub fn current(&self) -> Option<Arc<NativeSemanticSnapshotRevision>> {
+        self.current.clone()
+    }
+
+    pub fn publish(
+        &mut self,
+        draft: NativeSemanticSnapshotDraft,
+    ) -> Result<Arc<NativeSemanticSnapshotRevision>, SnapshotPublishError> {
+        self.validate(&draft)?;
+
+        let observed_digest = object_hash(&draft);
+        let cache_revision_ref = format!(
+            "native-semantic-cache:{}:{}",
+            draft.capture_sequence, observed_digest
+        );
+        let revision = Arc::new(NativeSemanticSnapshotRevision {
+            cache_revision_ref,
+            provider_incarnation_ref: draft.provider_incarnation_ref,
+            target_incarnation_ref: draft.target_incarnation_ref,
+            snapshot_cut_ref: draft.snapshot_cut_ref,
+            surface_scope: draft.surface_scope,
+            cache_profile_revision: draft.cache_profile_revision,
+            permission_visibility_revision: draft.permission_visibility_revision,
+            capture_sequence: draft.capture_sequence,
+            nodes: draft.nodes,
+            resource_usage: draft.resource_usage,
+            completeness: draft.completeness,
+            observed_digest,
+            incompleteness_debt: draft.incompleteness_debt,
+        });
+        self.current = Some(revision.clone());
+        Ok(revision)
+    }
+
+    fn validate(&self, draft: &NativeSemanticSnapshotDraft) -> Result<(), SnapshotPublishError> {
+        if draft.provider_incarnation_ref != self.provider_incarnation_ref {
+            return Err(SnapshotPublishError::ProviderIncarnationMismatch);
+        }
+        if draft.target_incarnation_ref != self.target_incarnation_ref {
+            return Err(SnapshotPublishError::TargetIncarnationMismatch);
+        }
+        if draft.snapshot_cut_ref.trim().is_empty() {
+            return Err(SnapshotPublishError::MissingSnapshotCut);
+        }
+        if draft.surface_scope.trim().is_empty() {
+            return Err(SnapshotPublishError::MissingSurfaceScope);
+        }
+        if draft.cache_profile_revision.trim().is_empty() {
+            return Err(SnapshotPublishError::MissingCacheProfileRevision);
+        }
+        if draft.permission_visibility_revision.trim().is_empty() {
+            return Err(SnapshotPublishError::MissingPermissionVisibilityRevision);
+        }
+        if let Some(current) = &self.current {
+            if draft.capture_sequence <= current.capture_sequence {
+                return Err(SnapshotPublishError::NonMonotonicCaptureSequence);
+            }
+        }
+
+        let usage_incomplete = draft.resource_usage.incomplete
+            || !draft.resource_usage.exhausted.is_empty()
+            || !draft.incompleteness_debt.is_empty();
+        if draft.completeness == ReconciliationCompleteness::Established && usage_incomplete {
+            return Err(SnapshotPublishError::EstablishedSnapshotHasIncompleteness);
+        }
+        if draft.resource_usage.incomplete != !draft.resource_usage.exhausted.is_empty() {
+            return Err(SnapshotPublishError::ResourceUsageInconsistent);
+        }
+        if draft.resource_usage.nodes_observed != draft.nodes.len() {
+            return Err(SnapshotPublishError::ResourceUsageInconsistent);
+        }
+
+        for (index, node) in draft.nodes.iter().enumerate() {
+            if node.element_ref.provider_incarnation_ref != draft.provider_incarnation_ref {
+                return Err(SnapshotPublishError::NodeProviderIncarnationMismatch);
+            }
+            if node.element_ref.target_incarnation_ref != draft.target_incarnation_ref {
+                return Err(SnapshotPublishError::NodeTargetIncarnationMismatch);
+            }
+            if node.element_ref.acquisition_cut_ref != draft.snapshot_cut_ref {
+                return Err(SnapshotPublishError::MixedObservationCut);
+            }
+            if node.parent_index.is_some_and(|parent| parent >= index) {
+                return Err(SnapshotPublishError::InvalidNodeParent);
+            }
+        }
+
+        Ok(())
     }
 }
