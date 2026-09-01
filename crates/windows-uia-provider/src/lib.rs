@@ -234,6 +234,9 @@ mod platform {
 
     impl Drop for WindowsUiaWorker {
         fn drop(&mut self) {
+            // Never join here: a hostile or hung UIA provider must not freeze the
+            // LocalView caller during cleanup. A responsive worker consumes this
+            // shutdown command and uninitializes COM on its owning MTA thread.
             let _ = self.sender.send(WorkerCommand::Shutdown);
         }
     }
@@ -254,7 +257,11 @@ mod platform {
         startup: mpsc::SyncSender<Result<ProviderIncarnationRef, WindowsUiaWorkerError>>,
         snapshot_budget: SnapshotBudget,
     ) {
-        let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok() };
+        let initialized = unsafe {
+            // SAFETY: This dedicated worker owns its COM apartment for its entire
+            // lifetime and never exposes UIA COM interfaces to another thread.
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok()
+        };
         if let Err(error) = initialized {
             let _ = startup.send(Err(WindowsUiaWorkerError::WorkerStartupFailed(
                 error.to_string(),
@@ -263,6 +270,8 @@ mod platform {
         }
 
         let automation = unsafe {
+            // SAFETY: COM was initialized as MTA immediately above and the
+            // returned IUIAutomation interface remains on this worker thread.
             CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
         };
         let automation = match automation {
@@ -271,19 +280,28 @@ mod platform {
                 let _ = startup.send(Err(WindowsUiaWorkerError::WorkerStartupFailed(
                     error.to_string(),
                 )));
-                unsafe { CoUninitialize() }
+                unsafe {
+                    // SAFETY: paired with successful CoInitializeEx on this thread.
+                    CoUninitialize();
+                }
                 return;
             }
         };
 
-        let walker = unsafe { automation.ControlViewWalker() };
+        let walker = unsafe {
+            // SAFETY: the UIA interface is live and remains owned by this MTA.
+            automation.ControlViewWalker()
+        };
         let walker = match walker {
             Ok(walker) => walker,
             Err(error) => {
                 let _ = startup.send(Err(WindowsUiaWorkerError::WorkerStartupFailed(
                     error.to_string(),
                 )));
-                unsafe { CoUninitialize() }
+                unsafe {
+                    // SAFETY: paired with successful CoInitializeEx on this thread.
+                    CoUninitialize();
+                }
                 return;
             }
         };
@@ -300,7 +318,10 @@ mod platform {
             caches: HashMap::new(),
         };
         if startup.send(Ok(provider_incarnation_ref)).is_err() {
-            unsafe { CoUninitialize() }
+            unsafe {
+                // SAFETY: paired with successful CoInitializeEx on this thread.
+                CoUninitialize();
+            }
             return;
         }
 
@@ -321,7 +342,11 @@ mod platform {
         }
 
         drop(state);
-        unsafe { CoUninitialize() }
+        unsafe {
+            // SAFETY: all apartment-owned COM interfaces were dropped above and
+            // this call is on the exact thread that initialized COM.
+            CoUninitialize();
+        }
     }
 
     impl WorkerState {
@@ -357,8 +382,12 @@ mod platform {
             }
 
             let hwnd = hwnd_from_u64(attachment.selection.native_window_handle);
-            let root = unsafe { self.automation.ElementFromHandle(hwnd) }
-                .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+            let root = unsafe {
+                // SAFETY: HWND identity was revalidated immediately above and the
+                // UIA interface is used only inside its owning MTA apartment.
+                self.automation.ElementFromHandle(hwnd)
+            }
+            .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
 
             let cache = self
                 .caches
@@ -424,7 +453,11 @@ mod platform {
 
             let hwnd = hwnd_from_u64(selection.native_window_handle);
             let mut process_id = 0_u32;
-            let thread_id = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
+            let thread_id = unsafe {
+                // SAFETY: `process_id` is valid writable storage and HWND is a
+                // value supplied by the explicit selection, validated by Win32.
+                GetWindowThreadProcessId(hwnd, Some(&mut process_id))
+            };
             if thread_id == 0 || process_id == 0 {
                 return Err(WindowsUiaWorkerError::ProviderFailure(
                     "selected HWND is no longer a live Win32 window".into(),
@@ -433,6 +466,8 @@ mod platform {
 
             let process_start_time_ticks = process_start_time_ticks(process_id)?;
             let root_runtime_id_hint = unsafe {
+                // SAFETY: the UIA object and element remain inside the owning MTA;
+                // RuntimeId is copied into a Rust Vec and never used as durable identity.
                 self.automation
                     .ElementFromHandle(hwnd)
                     .ok()
@@ -455,6 +490,7 @@ mod platform {
 
     fn process_start_time_ticks(process_id: u32) -> Result<u64, WindowsUiaWorkerError> {
         let process = unsafe {
+            // SAFETY: the requested access is read-only process lifetime metadata.
             OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id)
         }
         .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
@@ -464,6 +500,8 @@ mod platform {
         let mut kernel = FILETIME::default();
         let mut user = FILETIME::default();
         let result = unsafe {
+            // SAFETY: all FILETIME pointers are valid for the duration of the call
+            // and `process` was opened successfully above.
             GetProcessTimes(
                 process,
                 &mut creation,
@@ -472,7 +510,10 @@ mod platform {
                 &mut user,
             )
         };
-        let _ = unsafe { CloseHandle(process) };
+        let _ = unsafe {
+            // SAFETY: `process` is an owned handle returned by OpenProcess.
+            CloseHandle(process)
+        };
         result.map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
 
         let ticks = ((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64;
@@ -603,12 +644,21 @@ mod platform {
                 continue;
             }
 
-            let mut child = unsafe { walker.GetFirstChildElement(&element) }.ok();
+            let mut child = unsafe {
+                // SAFETY: walker and element are apartment-owned COM interfaces.
+                walker.GetFirstChildElement(&element)
+            }
+            .ok();
             while let Some(current_child) = child {
                 if nodes.len().saturating_add(queue.len()) >= budget.max_nodes {
                     break;
                 }
-                let next = unsafe { walker.GetNextSiblingElement(&current_child) }.ok();
+                let next = unsafe {
+                    // SAFETY: current_child remains live in this MTA while asking
+                    // the same walker for its next sibling.
+                    walker.GetNextSiblingElement(&current_child)
+                }
+                .ok();
                 queue.push_back((current_child, Some(index), depth.saturating_add(1)));
                 child = next;
             }
@@ -638,6 +688,8 @@ mod platform {
     }
 
     unsafe fn runtime_id_hint(element: &IUIAutomationElement) -> Option<Vec<i32>> {
+        // SAFETY: caller guarantees `element` is apartment-owned and live. The
+        // SAFEARRAY returned by UIA is copied element-by-element then destroyed.
         let array = unsafe { element.GetRuntimeId().ok()? };
         if array.is_null() {
             return None;
@@ -675,7 +727,11 @@ mod platform {
 
     impl Drop for SafeArrayGuard {
         fn drop(&mut self) {
-            let _ = unsafe { SafeArrayDestroy(self.0) };
+            let _ = unsafe {
+                // SAFETY: this guard owns the SAFEARRAY returned by GetRuntimeId
+                // and destroys it exactly once on the same worker thread.
+                SafeArrayDestroy(self.0)
+            };
         }
     }
 
