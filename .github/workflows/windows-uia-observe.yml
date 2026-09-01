@@ -1,0 +1,31 @@
+name: Windows UIA Observe
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: localview-uia-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-uia-observe:
+    name: Real Windows UIA observe
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile isolated UIA provider
+        run: cargo check -p localview-windows-uia-provider --all-targets
+      - name: Real user-selected Win32 UIA snapshot
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-uia-provider --test windows_uia_smoke -- --ignored --nocapture
