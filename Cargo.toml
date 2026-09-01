@@ -21,6 +21,7 @@ members = [
   "crates/native-capture",
   "crates/native-provider",
   "crates/windows-uia-provider",
+  "crates/windows-observe-runtime",
   "crates/chromium",
   "crates/engine",
   "crates/network",
