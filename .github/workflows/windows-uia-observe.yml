@@ -29,3 +29,7 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test windows_uia_smoke -- --ignored --nocapture
+      - name: Real bounded Win32 UIA event subscription
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-uia-provider --test windows_uia_event_smoke -- --ignored --nocapture
