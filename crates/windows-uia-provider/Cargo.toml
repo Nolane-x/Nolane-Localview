@@ -9,6 +9,7 @@ license.workspace = true
 path = "src/event_buffer_lib.rs"
 
 [dependencies]
+chrono.workspace = true
 localview-native-provider = { path = "../native-provider" }
 localview-protocol = { path = "../protocol" }
 thiserror.workspace = true
