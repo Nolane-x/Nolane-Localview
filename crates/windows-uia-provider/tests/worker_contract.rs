@@ -1,10 +1,9 @@
 use std::time::Duration;
 
-use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
+use localview_native_provider::SnapshotBudget;
 use localview_windows_uia_provider::{
-    WindowsUiaObserveRequest, WindowsUiaWorker, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
+    WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
 };
-use uuid::Uuid;
 
 #[test]
 fn worker_config_is_bounded_and_observe_only() {
@@ -29,18 +28,12 @@ fn worker_config_is_bounded_and_observe_only() {
 }
 
 #[test]
-fn observe_request_requires_explicit_user_selection_and_cut() {
-    let request = WindowsUiaObserveRequest {
-        selection: UserSelectedWindowTarget {
-            native_window_handle: 0x1234,
-            expected_process_id: 77,
-            selection_nonce: Uuid::new_v4(),
-        },
+fn snapshot_request_requires_an_explicit_cut_and_surface_scope() {
+    let request = WindowsUiaSnapshotRequest {
         snapshot_cut_ref: "cut:uia:1".into(),
         surface_scope: "window:1234".into(),
     };
 
-    assert_eq!(request.selection.expected_process_id, 77);
     assert_eq!(request.snapshot_cut_ref, "cut:uia:1");
     assert_eq!(request.surface_scope, "window:1234");
 }
