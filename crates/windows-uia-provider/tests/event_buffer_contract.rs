@@ -1,3 +1,4 @@
+use chrono::Utc;
 use localview_native_provider::ProviderEventOrdering;
 use localview_protocol::{
     ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef,
@@ -94,6 +95,18 @@ fn retained_events_are_stamped_with_the_buffer_lineage() {
     assert_eq!(event.provider_incarnation_ref, provider());
     assert_eq!(event.target_incarnation_ref, target());
     assert_eq!(event.sequence, 1);
+}
+
+#[test]
+fn event_capture_time_is_allocated_at_buffer_admission() {
+    let mut buffer = WindowsUiaEventBuffer::new(provider(), target(), 4).unwrap();
+    let before = Utc::now();
+    buffer.push(property_event(30005)).unwrap();
+    let after = Utc::now();
+
+    let event = buffer.drain(1).events.pop().unwrap();
+    assert!(event.captured_at >= before);
+    assert!(event.captured_at <= after);
 }
 
 #[test]
