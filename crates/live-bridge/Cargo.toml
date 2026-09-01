@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [lib]
-path = "src/cancellable_lib.rs"
+path = "src/v43_lib.rs"
 
 [dependencies]
 chrono.workspace = true
