@@ -19,6 +19,7 @@ members = [
   "crates/framework-adapters",
   "crates/capture",
   "crates/native-capture",
+  "crates/native-provider",
   "crates/chromium",
   "crates/engine",
   "crates/network",
