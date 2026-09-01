@@ -1,10 +1,10 @@
 use localview_native_provider::{
     derive_windows_target_incarnation, provider_element_ref_from_runtime_id,
-    NativeProviderCapabilities, ProviderEventOrdering, ProviderEventReliabilityProfile,
-    SnapshotBudget, SnapshotBudgetGuard, SnapshotBudgetLimit, UserSelectedWindowTarget,
-    WindowsTargetFingerprint,
+    NativeProviderCapabilities, NativeProviderIdentityError, ProviderEventOrdering,
+    ProviderEventReliabilityProfile, SnapshotBudget, SnapshotBudgetGuard, SnapshotBudgetLimit,
+    UserSelectedWindowTarget, WindowsTargetFingerprint,
 };
-use localview_protocol::{ProviderIncarnationRef, ProviderElementRealization};
+use localview_protocol::{ProviderElementRealization, ProviderIncarnationRef};
 use uuid::Uuid;
 
 #[test]
@@ -28,6 +28,36 @@ fn explicit_user_selection_and_process_lifetime_bind_target_incarnation() {
     let first_ref = derive_windows_target_incarnation(&selection, &first).unwrap();
     let reincarnated_ref = derive_windows_target_incarnation(&selection, &reincarnated).unwrap();
     assert_ne!(first_ref, reincarnated_ref);
+}
+
+#[test]
+fn explicit_selection_mismatch_fails_closed_before_identity_is_derived() {
+    let selection = UserSelectedWindowTarget {
+        native_window_handle: 0x1234,
+        expected_process_id: 77,
+        selection_nonce: Uuid::new_v4(),
+    };
+    let wrong_window = WindowsTargetFingerprint {
+        native_window_handle: 0x9999,
+        process_id: 77,
+        process_start_time_ticks: 100,
+        root_runtime_id_hint: vec![42, 7],
+    };
+    let wrong_process = WindowsTargetFingerprint {
+        native_window_handle: 0x1234,
+        process_id: 88,
+        process_start_time_ticks: 100,
+        root_runtime_id_hint: vec![42, 7],
+    };
+
+    assert_eq!(
+        derive_windows_target_incarnation(&selection, &wrong_window).unwrap_err(),
+        NativeProviderIdentityError::WindowSelectionMismatch
+    );
+    assert_eq!(
+        derive_windows_target_incarnation(&selection, &wrong_process).unwrap_err(),
+        NativeProviderIdentityError::ProcessSelectionMismatch
+    );
 }
 
 #[test]
@@ -84,6 +114,22 @@ fn snapshot_accounting_fails_bounded_and_reports_the_exhausted_dimension() {
     assert_eq!(usage.properties_read, 9);
     assert!(usage.exhausted.contains(&SnapshotBudgetLimit::Nodes));
     assert!(usage.exhausted.contains(&SnapshotBudgetLimit::Depth));
+    assert!(usage.incomplete);
+}
+
+#[test]
+fn property_budget_overflow_does_not_partially_account_a_rejected_node() {
+    let mut guard = SnapshotBudgetGuard::new(SnapshotBudget {
+        max_nodes: 4,
+        max_depth: 3,
+        max_properties: 2,
+    });
+
+    assert!(!guard.admit_node(0, 3));
+    let usage = guard.finish();
+    assert_eq!(usage.nodes_observed, 0);
+    assert_eq!(usage.properties_read, 0);
+    assert!(usage.exhausted.contains(&SnapshotBudgetLimit::Properties));
     assert!(usage.incomplete);
 }
 
