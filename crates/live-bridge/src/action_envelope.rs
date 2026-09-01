@@ -8,27 +8,41 @@ use crate::BridgeAction;
 
 /// Minimum side-effect/risk floor for a canonical action.
 ///
-/// The class is intentionally ordinal only by policy convention; callers must not
-/// cast it to a numeric score and use that as authority.
+/// The V4 taxonomy is carried on the wire explicitly so policy does not infer
+/// risk from a numeric score or from the transport action kind alone.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
 pub enum ActionRiskClass {
+    #[serde(rename = "s0_observe_only")]
     ObserveOnly,
+    #[serde(rename = "s1_reversible_ui_state")]
     ReversibleUiState,
+    #[serde(rename = "s2_local_data_mutation")]
     LocalDataMutation,
+    #[serde(rename = "s3_external_side_effect")]
     ExternalSideEffect,
+    #[serde(rename = "s4_destructive_or_irreversible")]
     DestructiveOrIrreversible,
+    #[serde(rename = "s5_credential_or_authority_change")]
     CredentialOrAuthorityChange,
+    #[serde(rename = "side_effect_unknown")]
     Unknown,
 }
 
-/// Retry/idempotency semantics are explicit because UNKNOWN_OUTCOME must not
-/// silently become an automatic retry for consequential work.
+/// Canonical V4 idempotency classes. Retry authority depends on the declared
+/// class plus reconciliation evidence; the class alone never authorizes retry.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
 pub enum ActionIdempotencyClass {
-    Idempotent,
-    NonIdempotent,
+    #[serde(rename = "pure_read")]
+    PureRead,
+    #[serde(rename = "idempotent_write_with_key")]
+    IdempotentWriteWithKey,
+    #[serde(rename = "idempotent_by_observed_state")]
+    IdempotentByObservedState,
+    #[serde(rename = "compensatable_non_idempotent")]
+    CompensatableNonIdempotent,
+    #[serde(rename = "irreversible")]
+    Irreversible,
+    #[serde(rename = "idempotency_unknown")]
     Unknown,
 }
 
