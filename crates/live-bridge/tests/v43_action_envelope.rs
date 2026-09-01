@@ -17,7 +17,7 @@ fn metadata(
         provider_incarnation_ref: provider,
         target_incarnation_ref: target,
         risk_class: ActionRiskClass::ExternalSideEffect,
-        idempotency_class: ActionIdempotencyClass::NonIdempotent,
+        idempotency_class: ActionIdempotencyClass::Irreversible,
         expected_postcondition_contract_refs: vec!["postcondition:message-visible".into()],
     }
 }
@@ -327,17 +327,41 @@ async fn legacy_bridge_action_remains_compact_and_has_no_canonical_authority_by_
 }
 
 #[test]
-fn risk_and_idempotency_are_typed_not_boolean_shortcuts() {
+fn risk_and_idempotency_preserve_the_v4_taxonomy_on_the_wire() {
     assert_eq!(
         serde_json::to_string(&ActionRiskClass::ObserveOnly).unwrap(),
-        "\"observe_only\""
+        "\"s0_observe_only\""
     );
     assert_eq!(
         serde_json::to_string(&ActionRiskClass::CredentialOrAuthorityChange).unwrap(),
-        "\"credential_or_authority_change\""
+        "\"s5_credential_or_authority_change\""
     );
     assert_eq!(
-        serde_json::to_string(&ActionIdempotencyClass::Unknown).unwrap(),
-        "\"unknown\""
+        serde_json::to_string(&ActionRiskClass::Unknown).unwrap(),
+        "\"side_effect_unknown\""
     );
+
+    let idempotency = [
+        (ActionIdempotencyClass::PureRead, "pure_read"),
+        (
+            ActionIdempotencyClass::IdempotentWriteWithKey,
+            "idempotent_write_with_key",
+        ),
+        (
+            ActionIdempotencyClass::IdempotentByObservedState,
+            "idempotent_by_observed_state",
+        ),
+        (
+            ActionIdempotencyClass::CompensatableNonIdempotent,
+            "compensatable_non_idempotent",
+        ),
+        (ActionIdempotencyClass::Irreversible, "irreversible"),
+        (ActionIdempotencyClass::Unknown, "idempotency_unknown"),
+    ];
+    for (class, expected) in idempotency {
+        assert_eq!(
+            serde_json::to_string(&class).unwrap(),
+            format!("\"{expected}\"")
+        );
+    }
 }
