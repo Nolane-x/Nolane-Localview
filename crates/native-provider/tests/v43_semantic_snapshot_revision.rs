@@ -117,6 +117,33 @@ fn incomplete_observation_cannot_claim_established_completeness() {
 }
 
 #[test]
+fn cache_rejects_non_monotonic_capture_sequence() {
+    let mut cache = SemanticSnapshotCache::for_lineage(provider(), target());
+    cache.publish(draft("Save", 2, "cut:2")).unwrap();
+
+    assert_eq!(
+        cache.publish(draft("Old", 1, "cut:1")).unwrap_err(),
+        SnapshotPublishError::NonMonotonicCaptureSequence
+    );
+    assert_eq!(
+        cache.publish(draft("Duplicate", 2, "cut:2b")).unwrap_err(),
+        SnapshotPublishError::NonMonotonicCaptureSequence
+    );
+}
+
+#[test]
+fn mixed_cut_nodes_cannot_be_published_as_one_snapshot() {
+    let mut cache = SemanticSnapshotCache::for_lineage(provider(), target());
+    let mut mixed = draft("Save", 1, "cut:1");
+    mixed.nodes[0].element_ref.acquisition_cut_ref = "cut:older".into();
+
+    assert_eq!(
+        cache.publish(mixed).unwrap_err(),
+        SnapshotPublishError::MixedObservationCut
+    );
+}
+
+#[test]
 fn reconciliation_receipt_is_an_exact_projection_of_the_snapshot_revision() {
     let mut cache = SemanticSnapshotCache::for_lineage(provider(), target());
     let snapshot = cache.publish(draft("Save", 7, "cut:7")).unwrap();
