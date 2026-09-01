@@ -20,6 +20,7 @@ members = [
   "crates/capture",
   "crates/native-capture",
   "crates/native-provider",
+  "crates/windows-uia-provider",
   "crates/chromium",
   "crates/engine",
   "crates/network",
