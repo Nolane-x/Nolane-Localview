@@ -247,14 +247,9 @@ impl LiveBridge {
         &self,
         batch: ObserverBatch,
     ) -> (IngestReport, Vec<ObserverEvent>) {
-        {
-            let mut continuity = self.continuity.write().await;
-            if let Some(state) = continuity.get_mut(&batch.session_id) {
-                state.event_continuity = EventContinuityState::OrderingOpaque;
-                state.gap = None;
-                state.reconciliation = None;
-            }
-        }
+        // The legacy web stream has no authority over provider-bound event
+        // continuity or reconciliation. Mixing the two state domains here would
+        // allow an unrelated web batch to erase an observed provider gap.
         self.legacy.ingest_collect(batch).await
     }
 
