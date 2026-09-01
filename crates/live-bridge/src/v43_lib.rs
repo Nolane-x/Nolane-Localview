@@ -63,6 +63,22 @@ pub struct ObservationStatus {
     pub gap: Option<EventSequenceGap>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderObservationBinding {
+    pub session_id: SessionId,
+    pub generation: u64,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub initial_continuity: EventContinuityState,
+    pub sequence_baseline: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ProviderObservationBindingError {
+    AlreadyBound,
+    UnsupportedInitialContinuity,
+}
+
 #[derive(Debug, Clone)]
 struct ProviderContinuityState {
     provider_incarnation_ref: ProviderIncarnationRef,
@@ -86,6 +102,38 @@ impl ProviderContinuityState {
             event_continuity: EventContinuityState::Continuous,
             gap: None,
             reconciliation: None,
+        }
+    }
+
+    fn from_binding(binding: &ProviderObservationBinding) -> Self {
+        Self {
+            provider_incarnation_ref: binding.provider_incarnation_ref.clone(),
+            target_incarnation_ref: binding.target_incarnation_ref.clone(),
+            generation: binding.generation,
+            legacy_generation: PROVIDER_BOUND_GENERATION_BASE,
+            last_seq: binding.sequence_baseline,
+            event_continuity: binding.initial_continuity,
+            gap: None,
+            reconciliation: None,
+        }
+    }
+
+    fn status(&self) -> ObservationStatus {
+        ObservationStatus {
+            provider_incarnation_ref: self.provider_incarnation_ref.clone(),
+            target_incarnation_ref: self.target_incarnation_ref.clone(),
+            generation: self.generation,
+            last_seq: self.last_seq,
+            event_continuity: self.event_continuity,
+            current_snapshot_completeness: self
+                .reconciliation
+                .as_ref()
+                .map(|receipt| receipt.completeness),
+            reconciliation_receipt_id: self
+                .reconciliation
+                .as_ref()
+                .map(|receipt| receipt.receipt_id.clone()),
+            gap: self.gap,
         }
     }
 
@@ -158,6 +206,37 @@ impl LiveBridge {
             action_envelopes: Arc::new(RwLock::new(HashMap::new())),
             action_gate: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// Bind provider reliability before the first provider event is ingested.
+    ///
+    /// Only declarative starting states are accepted. Evidence-backed adverse
+    /// states such as a gap, sequence reset, provider reincarnation, reconnect,
+    /// or broken stream must be produced by observation rather than asserted by
+    /// a provider. Existing session state is never overwritten, preventing a
+    /// second binding from laundering continuity debt.
+    pub async fn bind_provider_observation(
+        &self,
+        binding: ProviderObservationBinding,
+    ) -> Result<ObservationStatus, ProviderObservationBindingError> {
+        if !matches!(
+            binding.initial_continuity,
+            EventContinuityState::Continuous
+                | EventContinuityState::OrderingOpaque
+                | EventContinuityState::ReconciliationRequired
+        ) {
+            return Err(ProviderObservationBindingError::UnsupportedInitialContinuity);
+        }
+
+        let mut continuity = self.continuity.write().await;
+        if continuity.contains_key(&binding.session_id) {
+            return Err(ProviderObservationBindingError::AlreadyBound);
+        }
+
+        let state = ProviderContinuityState::from_binding(&binding);
+        let status = state.status();
+        continuity.insert(binding.session_id, state);
+        Ok(status)
     }
 
     pub async fn ingest(&self, batch: ObserverBatch) -> IngestReport {
@@ -367,22 +446,7 @@ impl LiveBridge {
     pub async fn observation_status(&self, session_id: SessionId) -> Option<ObservationStatus> {
         let continuity = self.continuity.read().await;
         let state = continuity.get(&session_id)?;
-        Some(ObservationStatus {
-            provider_incarnation_ref: state.provider_incarnation_ref.clone(),
-            target_incarnation_ref: state.target_incarnation_ref.clone(),
-            generation: state.generation,
-            last_seq: state.last_seq,
-            event_continuity: state.event_continuity,
-            current_snapshot_completeness: state
-                .reconciliation
-                .as_ref()
-                .map(|receipt| receipt.completeness),
-            reconciliation_receipt_id: state
-                .reconciliation
-                .as_ref()
-                .map(|receipt| receipt.receipt_id.clone()),
-            gap: state.gap,
-        })
+        Some(state.status())
     }
 
     pub async fn record_reconciliation(
