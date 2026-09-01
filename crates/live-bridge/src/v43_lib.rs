@@ -99,21 +99,17 @@ impl ProviderContinuityState {
         self.reconciliation = None;
     }
 
-    /// Observe one provider sequence number and return true when the provider has
-    /// reset its sequence baseline within the same declared incarnation.
-    ///
-    /// A reset opens a fresh internal bounded-buffer lineage but deliberately
-    /// preserves `SEQUENCE_RESET` as the public continuity state. It must never be
-    /// laundered into `CONTINUOUS` merely because subsequent reset-lineage events
-    /// are locally contiguous.
-    fn observe_sequence(&mut self, sequence: u64) -> bool {
+    /// Observe one provider sequence number. A lower sequence within the same
+    /// declared provider/target incarnation opens a fresh internal bounded-buffer
+    /// lineage while preserving `SEQUENCE_RESET` as the public continuity state.
+    fn observe_sequence(&mut self, sequence: u64) {
         let Some(previous) = self.last_seq else {
             self.last_seq = Some(sequence);
-            return false;
+            return;
         };
 
         if sequence == previous {
-            return false;
+            return;
         }
         if sequence < previous {
             self.legacy_generation = self.legacy_generation.saturating_add(1);
@@ -121,7 +117,7 @@ impl ProviderContinuityState {
             self.event_continuity = EventContinuityState::SequenceReset;
             self.gap = None;
             self.reconciliation = None;
-            return true;
+            return;
         }
 
         if sequence > previous.saturating_add(1) {
@@ -133,7 +129,6 @@ impl ProviderContinuityState {
             self.reconciliation = None;
         }
         self.last_seq = Some(sequence);
-        false
     }
 }
 
@@ -215,8 +210,11 @@ impl LiveBridge {
         let event_continuity = state.event_continuity;
         let gap = state.gap;
         let expected_last_seq = state.last_seq;
-        drop(continuity);
 
+        // Keep the provider continuity writer held until the corresponding legacy
+        // bounded-buffer updates finish. Otherwise two concurrent provider batches
+        // could compute valid lineages and then reach the legacy buffer out of
+        // order, reintroducing stale rejection through a race.
         let mut accepted = 0usize;
         let mut rejected_stale = 0usize;
         for (legacy_generation, event) in lineage_events {
@@ -231,6 +229,7 @@ impl LiveBridge {
             accepted += legacy_report.accepted;
             rejected_stale += legacy_report.rejected_stale;
         }
+        drop(continuity);
 
         let ingest = IngestReport {
             accepted,
