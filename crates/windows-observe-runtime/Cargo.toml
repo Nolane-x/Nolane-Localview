@@ -1,0 +1,14 @@
+[package]
+name = "localview-windows-observe-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+localview-live-bridge = { path = "../live-bridge" }
+localview-native-provider = { path = "../native-provider" }
+localview-protocol = { path = "../protocol" }
+localview-windows-uia-provider = { path = "../windows-uia-provider" }
+serde_json.workspace = true
