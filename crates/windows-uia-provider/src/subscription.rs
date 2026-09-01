@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, time::Duration};
 
 use localview_native_provider::{
     NativeProviderCapabilities, NativeSemanticSnapshotRevision, ProviderEventReliabilityProfile,
@@ -588,7 +588,7 @@ impl WindowsUiaWorker {
         &self,
         _attachment: &WindowsUiaAttachment,
         _request: WindowsUiaSnapshotRequest,
-    ) -> Result<Arc<NativeSemanticSnapshotRevision>, WindowsUiaWorkerError> {
+    ) -> Result<std::sync::Arc<NativeSemanticSnapshotRevision>, WindowsUiaWorkerError> {
         Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
 
