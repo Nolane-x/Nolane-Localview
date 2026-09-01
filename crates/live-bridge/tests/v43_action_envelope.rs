@@ -22,6 +22,23 @@ fn metadata(
     }
 }
 
+async fn bind_provider(
+    bridge: &LiveBridge,
+    session_id: Uuid,
+    provider: ProviderIncarnationRef,
+    target: TargetIncarnationRef,
+) {
+    bridge
+        .ingest_provider(ProviderObserverBatch {
+            session_id,
+            generation: 1,
+            provider_incarnation_ref: provider,
+            target_incarnation_ref: target,
+            events: Vec::new(),
+        })
+        .await;
+}
+
 #[tokio::test]
 async fn canonical_action_envelope_binds_principals_authority_cut_and_incarnations() {
     let bridge = LiveBridge::new(32, 8);
@@ -29,15 +46,7 @@ async fn canonical_action_envelope_binds_principals_authority_cut_and_incarnatio
     let provider = ProviderIncarnationRef::from("provider:webview:1");
     let target = TargetIncarnationRef::from("target:webview:1");
 
-    bridge
-        .ingest_provider(ProviderObserverBatch {
-            session_id,
-            generation: 1,
-            provider_incarnation_ref: provider.clone(),
-            target_incarnation_ref: target.clone(),
-            events: Vec::new(),
-        })
-        .await;
+    bind_provider(&bridge, session_id, provider.clone(), target.clone()).await;
 
     let queued = bridge
         .enqueue_canonical_action(
@@ -77,30 +86,187 @@ async fn canonical_action_rejects_provider_or_target_incarnation_mismatch_before
     let provider = ProviderIncarnationRef::from("provider:webview:1");
     let target = TargetIncarnationRef::from("target:webview:1");
 
-    bridge
-        .ingest_provider(ProviderObserverBatch {
-            session_id,
-            generation: 1,
-            provider_incarnation_ref: provider.clone(),
-            target_incarnation_ref: target.clone(),
-            events: Vec::new(),
-        })
-        .await;
+    bind_provider(&bridge, session_id, provider.clone(), target.clone()).await;
 
-    let error = bridge
+    let provider_error = bridge
         .enqueue_canonical_action(
             session_id,
             Some("@send".into()),
             BridgeActionKind::Click,
             metadata(
                 ProviderIncarnationRef::from("provider:webview:stale"),
-                target,
+                target.clone(),
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        provider_error,
+        ActionEnvelopeBindingError::ProviderIncarnationMismatch
+    );
+
+    let target_error = bridge
+        .enqueue_canonical_action(
+            session_id,
+            Some("@send".into()),
+            BridgeActionKind::Click,
+            metadata(
+                provider,
+                TargetIncarnationRef::from("target:webview:stale"),
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        target_error,
+        ActionEnvelopeBindingError::TargetIncarnationMismatch
+    );
+    assert!(bridge.take_actions(session_id, 8).await.is_empty());
+}
+
+#[tokio::test]
+async fn canonical_action_requires_provider_observation_before_admission() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+    let error = bridge
+        .enqueue_canonical_action(
+            session_id,
+            Some("@send".into()),
+            BridgeActionKind::Click,
+            metadata(
+                ProviderIncarnationRef::from("provider:webview:1"),
+                TargetIncarnationRef::from("target:webview:1"),
             ),
         )
         .await
         .unwrap_err();
 
-    assert_eq!(error, ActionEnvelopeBindingError::ProviderIncarnationMismatch);
+    assert_eq!(
+        error,
+        ActionEnvelopeBindingError::MissingProviderObservation
+    );
+    assert!(bridge.take_actions(session_id, 8).await.is_empty());
+}
+
+#[tokio::test]
+async fn consequential_action_requires_expected_postcondition_contract() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+    let provider = ProviderIncarnationRef::from("provider:webview:1");
+    let target = TargetIncarnationRef::from("target:webview:1");
+    bind_provider(&bridge, session_id, provider.clone(), target.clone()).await;
+
+    let mut envelope = metadata(provider, target);
+    envelope.expected_postcondition_contract_refs.clear();
+    let error = bridge
+        .enqueue_canonical_action(
+            session_id,
+            Some("@send".into()),
+            BridgeActionKind::Click,
+            envelope,
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        ActionEnvelopeBindingError::MissingExpectedPostcondition
+    );
+    assert!(bridge.take_actions(session_id, 8).await.is_empty());
+}
+
+#[tokio::test]
+async fn internal_capture_action_cannot_borrow_public_canonical_authority() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+    let provider = ProviderIncarnationRef::from("provider:webview:1");
+    let target = TargetIncarnationRef::from("target:webview:1");
+    bind_provider(&bridge, session_id, provider.clone(), target.clone()).await;
+
+    let error = bridge
+        .enqueue_canonical_action(
+            session_id,
+            None,
+            BridgeActionKind::FreezeVisuals,
+            metadata(provider, target),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        ActionEnvelopeBindingError::InternalCaptureActionUnsupported
+    );
+}
+
+#[tokio::test]
+async fn empty_principal_authorization_or_cut_is_rejected_before_queueing() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+    let provider = ProviderIncarnationRef::from("provider:webview:1");
+    let target = TargetIncarnationRef::from("target:webview:1");
+    bind_provider(&bridge, session_id, provider.clone(), target.clone()).await;
+
+    let mut missing_decision = metadata(provider.clone(), target.clone());
+    missing_decision.decision_principal_ref = PrincipalRef::from(" ");
+    assert_eq!(
+        bridge
+            .enqueue_canonical_action(
+                session_id,
+                Some("@send".into()),
+                BridgeActionKind::Click,
+                missing_decision,
+            )
+            .await
+            .unwrap_err(),
+        ActionEnvelopeBindingError::MissingDecisionPrincipal
+    );
+
+    let mut missing_acting = metadata(provider.clone(), target.clone());
+    missing_acting.acting_principal_ref = PrincipalRef::from("");
+    assert_eq!(
+        bridge
+            .enqueue_canonical_action(
+                session_id,
+                Some("@send".into()),
+                BridgeActionKind::Click,
+                missing_acting,
+            )
+            .await
+            .unwrap_err(),
+        ActionEnvelopeBindingError::MissingActingPrincipal
+    );
+
+    let mut missing_auth = metadata(provider.clone(), target.clone());
+    missing_auth.authorization_revision = "  ".into();
+    assert_eq!(
+        bridge
+            .enqueue_canonical_action(
+                session_id,
+                Some("@send".into()),
+                BridgeActionKind::Click,
+                missing_auth,
+            )
+            .await
+            .unwrap_err(),
+        ActionEnvelopeBindingError::MissingAuthorizationRevision
+    );
+
+    let mut missing_cut = metadata(provider, target);
+    missing_cut.precondition_snapshot_cut_ref.clear();
+    assert_eq!(
+        bridge
+            .enqueue_canonical_action(
+                session_id,
+                Some("@send".into()),
+                BridgeActionKind::Click,
+                missing_cut,
+            )
+            .await
+            .unwrap_err(),
+        ActionEnvelopeBindingError::MissingPreconditionSnapshotCut
+    );
+
     assert!(bridge.take_actions(session_id, 8).await.is_empty());
 }
 
@@ -111,15 +277,13 @@ async fn canonical_envelope_is_immutable_evidence_after_provider_reincarnation()
     let old_provider = ProviderIncarnationRef::from("provider:webview:old");
     let target = TargetIncarnationRef::from("target:webview:1");
 
-    bridge
-        .ingest_provider(ProviderObserverBatch {
-            session_id,
-            generation: 1,
-            provider_incarnation_ref: old_provider.clone(),
-            target_incarnation_ref: target.clone(),
-            events: Vec::new(),
-        })
-        .await;
+    bind_provider(
+        &bridge,
+        session_id,
+        old_provider.clone(),
+        target.clone(),
+    )
+    .await;
 
     let queued = bridge
         .enqueue_canonical_action(
