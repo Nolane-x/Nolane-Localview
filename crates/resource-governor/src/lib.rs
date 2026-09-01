@@ -251,6 +251,8 @@ pub fn schedule(
 pub enum ResourceWorkKind {
     NativeVisualCapture,
     Chromium,
+    NativeSemanticObservation,
+    NativeSemanticReconciliation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -416,6 +418,8 @@ fn decision_for_state(state: &RuntimeGovernorState) -> GovernorDecision {
             ResourceWorkKind::Chromium => {
                 chromium_instances = chromium_instances.saturating_add(1)
             }
+            ResourceWorkKind::NativeSemanticObservation
+            | ResourceWorkKind::NativeSemanticReconciliation => {}
         }
     }
     let cpu_percent = ((state.sample.cpu_percent as f64) + (state.process_cpu_percent as f64))
@@ -449,6 +453,10 @@ fn denied_by_decision(work_kind: ResourceWorkKind, decision: &GovernorDecision) 
                 || decision
                     .actions
                     .contains(&DegradationAction::BlockChromiumEscalation)
+        }
+        ResourceWorkKind::NativeSemanticObservation
+        | ResourceWorkKind::NativeSemanticReconciliation => {
+            decision.pressure == PressureLevel::Critical
         }
     }
 }
