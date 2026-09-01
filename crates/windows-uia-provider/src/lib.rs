@@ -523,6 +523,11 @@ mod platform {
         Ok(ticks)
     }
 
+    // These eight inputs are deliberately explicit correctness/authority facts:
+    // traversal object/root, provider+target lineage, observation cut/scope,
+    // capture sequence, and resource budget. Hiding them in mutable context would
+    // make accidental cross-lineage reuse easier at this OS boundary.
+    #[allow(clippy::too_many_arguments)]
     fn observe_bounded_tree(
         walker: &IUIAutomationTreeWalker,
         root: IUIAutomationElement,
