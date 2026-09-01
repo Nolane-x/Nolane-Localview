@@ -11,11 +11,7 @@ pub use legacy::{
     ObserverEvent, ObserverEventKind, PrivateBridgeAction, PrivateCaptureActionData,
 };
 
-use std::{
-    collections::HashMap,
-    ops::Deref,
-    sync::Arc,
-};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use localview_protocol::{
     EventContinuityState, ProviderIncarnationRef, ReconciliationCompleteness,
@@ -278,5 +274,11 @@ impl Deref for LiveBridge {
 
     fn deref(&self) -> &Self::Target {
         &self.legacy
+    }
+}
+
+impl Default for LiveBridge {
+    fn default() -> Self {
+        Self::new(2048, 128)
     }
 }
