@@ -102,20 +102,29 @@ impl ProviderContinuityState {
         self.reconciliation = None;
     }
 
-    fn observe_sequence(&mut self, sequence: u64) {
+    /// Observe one provider sequence number and return true when the provider has
+    /// reset its sequence baseline within the same declared incarnation.
+    ///
+    /// A reset opens a fresh internal bounded-buffer lineage but deliberately
+    /// preserves `SEQUENCE_RESET` as the public continuity state. It must never be
+    /// laundered into `CONTINUOUS` merely because subsequent reset-lineage events
+    /// are locally contiguous.
+    fn observe_sequence(&mut self, sequence: u64) -> bool {
         let Some(previous) = self.last_seq else {
             self.last_seq = Some(sequence);
-            return;
+            return false;
         };
 
         if sequence == previous {
-            return;
+            return false;
         }
         if sequence < previous {
+            self.legacy_generation = self.legacy_generation.saturating_add(1);
+            self.last_seq = Some(sequence);
             self.event_continuity = EventContinuityState::SequenceReset;
             self.gap = None;
             self.reconciliation = None;
-            return;
+            return true;
         }
 
         if sequence > previous.saturating_add(1) {
@@ -127,6 +136,7 @@ impl ProviderContinuityState {
             self.reconciliation = None;
         }
         self.last_seq = Some(sequence);
+        false
     }
 }
 
@@ -168,9 +178,10 @@ impl LiveBridge {
     }
 
     pub async fn ingest_provider(&self, batch: ProviderObserverBatch) -> ProviderIngestReport {
+        let session_id = batch.session_id;
         let mut continuity = self.continuity.write().await;
         let state = continuity
-            .entry(batch.session_id)
+            .entry(session_id)
             .or_insert_with(|| ProviderContinuityState::new(&batch));
 
         if batch.provider_incarnation_ref != state.provider_incarnation_ref {
@@ -194,11 +205,27 @@ impl LiveBridge {
             };
         }
 
-        for event in &batch.events {
+        // Bind each event to the exact internal bounded-buffer lineage that was
+        // current when its sequence was observed. This matters when a provider
+        // resets sequence numbers in the middle of a batch: feeding the whole
+        // batch under one legacy generation would either retain stale pre-reset
+        // events or reject the new low sequence as stale.
+        let mut accepted = 0usize;
+        let mut rejected_stale = 0usize;
+        for event in batch.events {
             state.observe_sequence(event.seq);
+            let (legacy_report, _) = self
+                .legacy
+                .ingest_collect(ObserverBatch {
+                    session_id,
+                    generation: state.legacy_generation,
+                    events: vec![event],
+                })
+                .await;
+            accepted += legacy_report.accepted;
+            rejected_stale += legacy_report.rejected_stale;
         }
 
-        let legacy_generation = state.legacy_generation;
         let expected_generation = state.generation;
         let provider_incarnation_ref = state.provider_incarnation_ref.clone();
         let target_incarnation_ref = state.target_incarnation_ref.clone();
@@ -206,18 +233,9 @@ impl LiveBridge {
         let gap = state.gap;
         let expected_last_seq = state.last_seq;
 
-        let (legacy_report, _) = self
-            .legacy
-            .ingest_collect(ObserverBatch {
-                session_id: batch.session_id,
-                generation: legacy_generation,
-                events: batch.events,
-            })
-            .await;
-
         let ingest = IngestReport {
-            accepted: legacy_report.accepted,
-            rejected_stale: legacy_report.rejected_stale,
+            accepted,
+            rejected_stale,
             last_seq: expected_last_seq,
             generation: expected_generation,
         };
