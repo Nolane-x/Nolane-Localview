@@ -292,6 +292,7 @@ fn load_and_repair(path: &Path) -> Result<Vec<ConsequentialJournalEntry>, Conseq
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(path)
         .map_err(|error| ConsequentialJournalError::Io {
             operation: "open",
@@ -337,12 +338,13 @@ fn load_and_repair(path: &Path) -> Result<Vec<ConsequentialJournalEntry>, Conseq
 
     let mut entries = Vec::new();
     let mut line_start = 0usize;
-    let mut line_number = 1usize;
-    for newline in bytes
+    for (line_offset, newline) in bytes
         .iter()
         .enumerate()
         .filter_map(|(index, byte)| (*byte == b'\n').then_some(index))
+        .enumerate()
     {
+        let line_number = line_offset + 1;
         let line = &bytes[line_start..newline];
         if line.is_empty() {
             return Err(ConsequentialJournalError::CorruptRecord {
@@ -383,7 +385,6 @@ fn load_and_repair(path: &Path) -> Result<Vec<ConsequentialJournalEntry>, Conseq
         })?;
         entries.push(entry);
         line_start = newline + 1;
-        line_number += 1;
     }
 
     Ok(entries)
