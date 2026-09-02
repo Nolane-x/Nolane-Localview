@@ -293,19 +293,19 @@ struct FakeExecutorError;
 #[derive(Debug)]
 struct FakeExecutor {
     mode: ExecutorMode,
-    calls: Mutex<Vec<WindowsUiaProviderExecutionRequest>>,
+    calls: Mutex<usize>,
 }
 
 impl FakeExecutor {
     fn new(mode: ExecutorMode) -> Self {
         Self {
             mode,
-            calls: Mutex::new(Vec::new()),
+            calls: Mutex::new(0),
         }
     }
 
     fn call_count(&self) -> usize {
-        self.calls.lock().unwrap().len()
+        *self.calls.lock().unwrap()
     }
 }
 
@@ -314,14 +314,14 @@ impl WindowsUiaDispatchExecutor for FakeExecutor {
 
     async fn execute(
         &self,
-        request: WindowsUiaProviderExecutionRequest,
+        request: &WindowsUiaProviderExecutionRequest,
     ) -> Result<WindowsUiaProviderExecutionReceipt, Self::Error> {
-        self.calls.lock().unwrap().push(request.clone());
+        *self.calls.lock().unwrap() += 1;
         if matches!(self.mode, ExecutorMode::Fail) {
             return Err(FakeExecutorError);
         }
 
-        let mut element_ref = request.element_ref.clone();
+        let mut element_ref = request.element_ref().clone();
         if matches!(self.mode, ExecutorMode::ForgeElement) {
             element_ref.opaque_provider_element_id = "uia-runtime:[102,forged]".into();
         }
@@ -332,16 +332,16 @@ impl WindowsUiaDispatchExecutor for FakeExecutor {
         };
 
         Ok(WindowsUiaProviderExecutionReceipt {
-            dispatch_attempt_ref: request.dispatch_attempt_ref,
-            action_id: request.action_id,
-            preparation_journal_sequence: request.preparation_journal_sequence,
-            preparation_receipt_ref: request.preparation_receipt_ref,
-            snapshot_cut_ref: request.snapshot_cut_ref,
-            provider_incarnation_ref: request.provider_incarnation_ref,
-            target_incarnation_ref: request.target_incarnation_ref,
+            dispatch_attempt_ref: request.dispatch_attempt_ref(),
+            action_id: request.action_id(),
+            preparation_journal_sequence: request.preparation_journal_sequence(),
+            preparation_receipt_ref: request.preparation_receipt_ref().to_owned(),
+            snapshot_cut_ref: request.snapshot_cut_ref().to_owned(),
+            provider_incarnation_ref: request.provider_incarnation_ref().clone(),
+            target_incarnation_ref: request.target_incarnation_ref().clone(),
             element_ref,
-            required_pattern: request.required_pattern,
-            context_requirements: request.context_requirements,
+            required_pattern: request.required_pattern(),
+            context_requirements: request.context_requirements(),
             transport_result: TransportResult::DeliveredToExecutor,
             dispatch_result,
         })
