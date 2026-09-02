@@ -6,9 +6,15 @@ use std::{
 };
 
 use localview_live_bridge::{LiveBridge, ObservationStatus, ProviderIngestReport};
-use localview_native_provider::{NativeSemanticSnapshotRevision, UserSelectedWindowTarget};
+use localview_native_provider::{
+    NativeSemanticSnapshotRevision, SnapshotResourceUsage, UserSelectedWindowTarget,
+};
 use localview_protocol::{
     EventContinuityState, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
+};
+use localview_resource_governor::{
+    PressureLevel, ResourceAdmissionDenial, ResourceReservation, ResourceWorkKind,
+    RuntimeResourceGovernor,
 };
 use localview_windows_uia_provider::{
     WindowsUiaAttachment, WindowsUiaEventDrain, WindowsUiaEventSubscription,
@@ -102,6 +108,12 @@ pub enum WindowsObserveRuntimeError {
         operation: &'static str,
         message: String,
     },
+    #[error("Windows observe resource governor denied {work_kind:?} at {pressure:?} pressure")]
+    ResourceDenied {
+        work_kind: ResourceWorkKind,
+        pressure: PressureLevel,
+        reasons: Vec<String>,
+    },
     #[error("Windows observe subscription provider lineage does not match the worker")]
     SubscriptionProviderIncarnationMismatch,
     #[error("Windows observe subscription target lineage does not match the attachment")]
@@ -118,6 +130,48 @@ impl From<WindowsObserveBridgeError> for WindowsObserveRuntimeError {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WindowsObserveResourceAccounting {
+    pub initial_snapshots: u64,
+    pub reconciliation_snapshots: u64,
+    pub event_drains: u64,
+    pub events_accepted: u64,
+    pub events_rejected_stale: u64,
+    pub provider_events_dropped: u64,
+    pub snapshot_nodes_observed: u64,
+    pub snapshot_properties_read: u64,
+    pub snapshot_max_depth_observed: usize,
+    pub incomplete_snapshots: u64,
+    pub resource_denials: u64,
+}
+
+impl WindowsObserveResourceAccounting {
+    fn record_initial_snapshot(&mut self, usage: &SnapshotResourceUsage) {
+        self.initial_snapshots = self.initial_snapshots.saturating_add(1);
+        self.record_snapshot_usage(usage);
+    }
+
+    fn record_reconciliation_snapshot(&mut self, usage: &SnapshotResourceUsage) {
+        self.reconciliation_snapshots = self.reconciliation_snapshots.saturating_add(1);
+        self.record_snapshot_usage(usage);
+    }
+
+    fn record_snapshot_usage(&mut self, usage: &SnapshotResourceUsage) {
+        self.snapshot_nodes_observed = self
+            .snapshot_nodes_observed
+            .saturating_add(usize_to_u64(usage.nodes_observed));
+        self.snapshot_properties_read = self
+            .snapshot_properties_read
+            .saturating_add(usize_to_u64(usage.properties_read));
+        self.snapshot_max_depth_observed = self
+            .snapshot_max_depth_observed
+            .max(usage.max_depth_observed);
+        if usage.incomplete {
+            self.incomplete_snapshots = self.incomplete_snapshots.saturating_add(1);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsObserveDrainOutcome {
     pub report: ProviderIngestReport,
@@ -130,12 +184,14 @@ struct ActiveObservation<P: WindowsObserveProvider> {
     subscription: P::Subscription,
     binding: WindowsObserveBridgeBinding,
     surface_scope: String,
+    accounting: WindowsObserveResourceAccounting,
 }
 
 pub struct WindowsObserveRuntimeManager<P: WindowsObserveProvider> {
     provider: Arc<P>,
     bridge: LiveBridge,
     config: WindowsObserveRuntimeConfig,
+    resource_governor: RuntimeResourceGovernor,
     active: Mutex<HashMap<SessionId, ActiveObservation<P>>>,
     generations: Mutex<HashMap<SessionId, u64>>,
     operation_gate: Mutex<()>,
@@ -156,6 +212,20 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         bridge: LiveBridge,
         config: WindowsObserveRuntimeConfig,
     ) -> Result<Self, WindowsObserveRuntimeError> {
+        Self::with_resource_governor(
+            provider,
+            bridge,
+            config,
+            RuntimeResourceGovernor::default(),
+        )
+    }
+
+    pub fn with_resource_governor(
+        provider: Arc<P>,
+        bridge: LiveBridge,
+        config: WindowsObserveRuntimeConfig,
+        resource_governor: RuntimeResourceGovernor,
+    ) -> Result<Self, WindowsObserveRuntimeError> {
         if config.event_capacity == 0 || config.drain_limit == 0 {
             return Err(WindowsObserveRuntimeError::InvalidConfiguration);
         }
@@ -164,6 +234,7 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             provider,
             bridge,
             config,
+            resource_governor,
             active: Mutex::new(HashMap::new()),
             generations: Mutex::new(HashMap::new()),
             operation_gate: Mutex::new(()),
@@ -179,6 +250,12 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         if self.active.lock().await.contains_key(&session_id) {
             return Err(WindowsObserveRuntimeError::AlreadyAttached { session_id });
         }
+
+        // Admission precedes every provider call. Critical runtime pressure must
+        // therefore fail before attach/subscribe/snapshot work begins.
+        let _observation_reservation = self
+            .reserve_resource(session_id, ResourceWorkKind::NativeSemanticObservation)
+            .await?;
 
         let provider = self.provider.clone();
         let attach_selection = selection.clone();
@@ -253,6 +330,8 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             }
         };
 
+        let mut accounting = WindowsObserveResourceAccounting::default();
+        accounting.record_initial_snapshot(snapshot.resource_usage());
         self.generations.lock().await.insert(session_id, generation);
         self.active.lock().await.insert(
             session_id,
@@ -261,6 +340,7 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
                 subscription,
                 binding,
                 surface_scope,
+                accounting,
             },
         );
         Ok(status)
@@ -284,6 +364,9 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             )
         };
 
+        let observation_reservation = self
+            .reserve_resource(session_id, ResourceWorkKind::NativeSemanticObservation)
+            .await?;
         let provider = self.provider.clone();
         let drain_subscription = subscription.clone();
         let drain_limit = self.config.drain_limit;
@@ -291,16 +374,47 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             provider.drain_events(&drain_subscription, drain_limit)
         })
         .await?;
+        let dropped_before_drain = drain.dropped_before_drain;
+
+        // The bounded provider drain itself happened even if a later bridge
+        // validation fails, so count that work before projecting it downstream.
+        self.update_accounting(session_id, |accounting| {
+            accounting.event_drains = accounting.event_drains.saturating_add(1);
+            accounting.provider_events_dropped = accounting
+                .provider_events_dropped
+                .saturating_add(dropped_before_drain);
+        })
+        .await;
 
         let report = binding.ingest_drain(&self.bridge, drain).await?;
+        self.update_accounting(session_id, |accounting| {
+            accounting.events_accepted = accounting
+                .events_accepted
+                .saturating_add(usize_to_u64(report.ingest.accepted));
+            accounting.events_rejected_stale = accounting
+                .events_rejected_stale
+                .saturating_add(usize_to_u64(report.ingest.rejected_stale));
+        })
+        .await;
+
         let observed_status = self
             .bridge
             .observation_status(session_id)
             .await
             .ok_or(WindowsObserveRuntimeError::ObservationStateMissing { session_id })?;
-        let reconciliation_performed = requires_reconciliation(report.continuity)
+        let reconciliation_needed = requires_reconciliation(report.continuity)
             && observed_status.current_snapshot_completeness.is_none();
-        let status = if reconciliation_performed {
+
+        // Reconciliation is a distinct authority decision. The observation may
+        // have been admitted before pressure rose while processing the callback
+        // drain; releasing it here forces a fresh governor decision for the
+        // correctness-restoring snapshot.
+        drop(observation_reservation);
+
+        let status = if reconciliation_needed {
+            let _reconciliation_reservation = self
+                .reserve_resource(session_id, ResourceWorkKind::NativeSemanticReconciliation)
+                .await?;
             let snapshot_cut_ref = format!(
                 "windows-uia:reconcile:{session_id}:{}:{}",
                 binding.generation(),
@@ -322,9 +436,14 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
                 binding.generation(),
                 Uuid::new_v4()
             );
-            binding
+            let status = binding
                 .record_snapshot_reconciliation(&self.bridge, snapshot.as_ref(), receipt_id)
-                .await?
+                .await?;
+            self.update_accounting(session_id, |accounting| {
+                accounting.record_reconciliation_snapshot(snapshot.resource_usage());
+            })
+            .await;
+            status
         } else {
             observed_status
         };
@@ -332,7 +451,7 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         Ok(WindowsObserveDrainOutcome {
             report,
             status,
-            reconciliation_performed,
+            reconciliation_performed: reconciliation_needed,
         })
     }
 
@@ -341,6 +460,17 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             return None;
         }
         self.bridge.observation_status(session_id).await
+    }
+
+    pub async fn resource_accounting(
+        &self,
+        session_id: SessionId,
+    ) -> Option<WindowsObserveResourceAccounting> {
+        self.active
+            .lock()
+            .await
+            .get(&session_id)
+            .map(|observation| observation.accounting.clone())
     }
 
     /// Detach observation authority first, then attempt provider-side cleanup.
@@ -375,6 +505,37 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         sessions
     }
 
+    async fn reserve_resource(
+        &self,
+        session_id: SessionId,
+        work_kind: ResourceWorkKind,
+    ) -> Result<ResourceReservation, WindowsObserveRuntimeError> {
+        match self.resource_governor.reserve(
+            session_id.to_string(),
+            format!("windows-observe:{work_kind:?}:{}", Uuid::new_v4()),
+            work_kind,
+        ) {
+            Ok(reservation) => Ok(reservation),
+            Err(denial) => {
+                self.update_accounting(session_id, |accounting| {
+                    accounting.resource_denials = accounting.resource_denials.saturating_add(1);
+                })
+                .await;
+                Err(resource_denial_error(denial))
+            }
+        }
+    }
+
+    async fn update_accounting(
+        &self,
+        session_id: SessionId,
+        update: impl FnOnce(&mut WindowsObserveResourceAccounting),
+    ) {
+        if let Some(observation) = self.active.lock().await.get_mut(&session_id) {
+            update(&mut observation.accounting);
+        }
+    }
+
     async fn next_generation(&self, session_id: SessionId) -> u64 {
         self.generations
             .lock()
@@ -394,6 +555,14 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
     }
 }
 
+fn resource_denial_error(denial: ResourceAdmissionDenial) -> WindowsObserveRuntimeError {
+    WindowsObserveRuntimeError::ResourceDenied {
+        work_kind: denial.work_kind,
+        pressure: denial.decision.pressure,
+        reasons: denial.decision.reasons,
+    }
+}
+
 fn requires_reconciliation(continuity: EventContinuityState) -> bool {
     matches!(
         continuity,
@@ -404,6 +573,10 @@ fn requires_reconciliation(continuity: EventContinuityState) -> bool {
             | EventContinuityState::ReconnectedUnreconciled
             | EventContinuityState::Broken
     )
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 async fn run_provider<T, E, F>(
@@ -523,11 +696,30 @@ pub fn spawn_windows_uia_runtime_manager(
     worker_config: WindowsUiaWorkerConfig,
     runtime_config: WindowsObserveRuntimeConfig,
 ) -> Result<WindowsUiaObserveRuntimeManager, WindowsObserveRuntimeError> {
+    spawn_windows_uia_runtime_manager_with_governor(
+        bridge,
+        RuntimeResourceGovernor::default(),
+        worker_config,
+        runtime_config,
+    )
+}
+
+pub fn spawn_windows_uia_runtime_manager_with_governor(
+    bridge: LiveBridge,
+    resource_governor: RuntimeResourceGovernor,
+    worker_config: WindowsUiaWorkerConfig,
+    runtime_config: WindowsObserveRuntimeConfig,
+) -> Result<WindowsUiaObserveRuntimeManager, WindowsObserveRuntimeError> {
     let provider = WindowsUiaObserveProvider::spawn(worker_config).map_err(|error| {
         WindowsObserveRuntimeError::Provider {
             operation: "spawn",
             message: error.to_string(),
         }
     })?;
-    WindowsObserveRuntimeManager::new(Arc::new(provider), bridge, runtime_config)
+    WindowsObserveRuntimeManager::with_resource_governor(
+        Arc::new(provider),
+        bridge,
+        runtime_config,
+        resource_governor,
+    )
 }

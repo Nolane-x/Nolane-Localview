@@ -27,10 +27,12 @@ use localview_observation::ObservationBus;
 use localview_protocol::ObservationEvent;
 use localview_security::generate_control_token;
 use localview_sessions::SessionManager;
-use localview_windows_observe_runtime::WindowsUiaObserveRuntimeManager;
+use localview_windows_observe_runtime::{
+    WindowsObserveRuntimeError, WindowsUiaObserveRuntimeManager,
+};
 #[cfg(windows)]
 use localview_windows_observe_runtime::{
-    spawn_windows_uia_runtime_manager, WindowsObserveRuntimeConfig,
+    spawn_windows_uia_runtime_manager_with_governor, WindowsObserveRuntimeConfig,
 };
 #[cfg(windows)]
 use localview_windows_uia_provider::WindowsUiaWorkerConfig;
@@ -66,8 +68,9 @@ async fn main() -> Result<()> {
 
     #[cfg(windows)]
     let windows_observe: Option<Arc<WindowsUiaObserveRuntimeManager>> =
-        match spawn_windows_uia_runtime_manager(
+        match spawn_windows_uia_runtime_manager_with_governor(
             live.clone(),
+            resources.clone(),
             WindowsUiaWorkerConfig::default(),
             WindowsObserveRuntimeConfig::default(),
         ) {
@@ -182,10 +185,19 @@ fn spawn_windows_observe_drain_loop(runtime: Arc<WindowsUiaObserveRuntimeManager
         loop {
             interval.tick().await;
             for session_id in runtime.attached_sessions().await {
-                if let Err(error) = runtime.drain_once(session_id).await {
-                    warn!(%session_id, %error, "Windows observe callback drain failed; detaching fail-closed");
-                    if let Err(cleanup_error) = runtime.release(session_id).await {
-                        warn!(%session_id, %cleanup_error, "Windows observe provider cleanup failed after drain-error detach");
+                match runtime.drain_once(session_id).await {
+                    Ok(_) => {}
+                    Err(WindowsObserveRuntimeError::ResourceDenied { .. }) => {
+                        // Runtime pressure is transient admission state, not a
+                        // provider/target failure. Keep the explicit attachment
+                        // and any continuity debt so a later admitted drain can
+                        // reconcile it without reattaching or polling globally.
+                    }
+                    Err(error) => {
+                        warn!(%session_id, %error, "Windows observe callback drain failed; detaching fail-closed");
+                        if let Err(cleanup_error) = runtime.release(session_id).await {
+                            warn!(%session_id, %cleanup_error, "Windows observe provider cleanup failed after drain-error detach");
+                        }
                     }
                 }
             }

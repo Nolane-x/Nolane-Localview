@@ -168,6 +168,7 @@ fn runtime_error_response(error: WindowsObserveRuntimeError) -> axum::response::
         WindowsObserveRuntimeError::InvalidConfiguration => StatusCode::INTERNAL_SERVER_ERROR,
         WindowsObserveRuntimeError::Provider { .. }
         | WindowsObserveRuntimeError::ProviderTask { .. } => StatusCode::SERVICE_UNAVAILABLE,
+        WindowsObserveRuntimeError::ResourceDenied { .. } => StatusCode::TOO_MANY_REQUESTS,
         WindowsObserveRuntimeError::SubscriptionProviderIncarnationMismatch
         | WindowsObserveRuntimeError::SubscriptionTargetIncarnationMismatch
         | WindowsObserveRuntimeError::Bridge(_)
