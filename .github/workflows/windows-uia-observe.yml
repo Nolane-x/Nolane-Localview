@@ -27,6 +27,8 @@ jobs:
         run: cargo check -p localview-windows-uia-provider --all-targets
       - name: Compile observe runtime manager
         run: cargo check -p localview-windows-observe-runtime --all-targets
+      - name: Phase 5 resource accounting and governor contract
+        run: cargo test -p localview-windows-observe-runtime --test resource_accounting_contract -- --nocapture
       - name: Real user-selected Win32 UIA snapshot
         env:
           LOCALVIEW_UIA_SMOKE: "1"
