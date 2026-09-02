@@ -27,10 +27,12 @@ use localview_observation::ObservationBus;
 use localview_protocol::ObservationEvent;
 use localview_security::generate_control_token;
 use localview_sessions::SessionManager;
+use localview_windows_observe_runtime::WindowsUiaObserveRuntimeManager;
+#[cfg(windows)]
 use localview_windows_observe_runtime::{
     spawn_windows_uia_runtime_manager, WindowsObserveRuntimeConfig,
-    WindowsUiaObserveRuntimeManager,
 };
+#[cfg(windows)]
 use localview_windows_uia_provider::WindowsUiaWorkerConfig;
 use tokio::time::MissedTickBehavior;
 use tracing::{info, warn};
