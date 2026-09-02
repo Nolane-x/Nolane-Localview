@@ -43,6 +43,7 @@ struct FakeState {
     snapshot_count: usize,
     subscribe_count: usize,
     unsubscribe_count: usize,
+    fail_unsubscribe: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -62,8 +63,14 @@ impl FakeProvider {
                 snapshot_count: 0,
                 subscribe_count: 0,
                 unsubscribe_count: 0,
+                fail_unsubscribe: false,
             })),
         }
+    }
+
+    fn with_unsubscribe_failure(self) -> Self {
+        self.state.lock().unwrap().fail_unsubscribe = true;
+        self
     }
 
     fn counts(&self) -> (usize, usize, usize) {
@@ -181,8 +188,13 @@ impl WindowsObserveProvider for FakeProvider {
     }
 
     fn unsubscribe_events(&self, _subscription: Self::Subscription) -> Result<(), Self::Error> {
-        self.state.lock().unwrap().unsubscribe_count += 1;
-        Ok(())
+        let mut state = self.state.lock().unwrap();
+        state.unsubscribe_count += 1;
+        if state.fail_unsubscribe {
+            Err(FakeError)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -319,6 +331,33 @@ async fn duplicate_attach_is_rejected_and_release_unsubscribes_and_clears_provid
     ));
 
     manager.release(session()).await.unwrap();
+    assert!(manager.status(session()).await.is_none());
+    assert!(bridge.observation_status(session()).await.is_none());
+    assert_eq!(provider.counts(), (1, 1, 1));
+}
+
+#[tokio::test]
+async fn failed_provider_unsubscribe_cannot_preserve_stale_observation_authority() {
+    let bridge = LiveBridge::new(64, 8);
+    let provider = FakeProvider::new(vec![]).with_unsubscribe_failure();
+    let manager = WindowsObserveRuntimeManager::new(
+        Arc::new(provider.clone()),
+        bridge.clone(),
+        WindowsObserveRuntimeConfig {
+            event_capacity: 8,
+            drain_limit: 4,
+        },
+    )
+    .unwrap();
+
+    manager.attach(session(), selection()).await.unwrap();
+    assert!(matches!(
+        manager.release(session()).await.unwrap_err(),
+        WindowsObserveRuntimeError::Provider {
+            operation: "unsubscribe_events",
+            ..
+        }
+    ));
     assert!(manager.status(session()).await.is_none());
     assert!(bridge.observation_status(session()).await.is_none());
     assert_eq!(provider.counts(), (1, 1, 1));
