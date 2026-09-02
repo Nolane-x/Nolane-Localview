@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use chrono::{DateTime, Utc};
 use localview_native_provider::ProviderEventReliabilityProfile;
 use localview_protocol::{ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef};
 use thiserror::Error;
@@ -20,6 +21,7 @@ pub struct WindowsUiaEventDraft {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsUiaEvent {
     pub sequence: u64,
+    pub captured_at: DateTime<Utc>,
     pub provider_incarnation_ref: ProviderIncarnationRef,
     pub target_incarnation_ref: TargetIncarnationRef,
     pub kind: WindowsUiaEventKind,
@@ -93,6 +95,9 @@ impl WindowsUiaEventBuffer {
             }
         }
 
+        // This timestamp is allocated at provider callback/buffer admission time,
+        // before downstream runtime scheduling can add ingestion latency.
+        let captured_at = Utc::now();
         let sequence = self.latest_sequence.saturating_add(1);
         self.latest_sequence = sequence;
 
@@ -103,6 +108,7 @@ impl WindowsUiaEventBuffer {
 
         self.events.push_back(WindowsUiaEvent {
             sequence,
+            captured_at,
             provider_incarnation_ref: self.provider_incarnation_ref.clone(),
             target_incarnation_ref: self.target_incarnation_ref.clone(),
             kind: draft.kind,
