@@ -6,7 +6,9 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use localview_protocol::{DispatchResult, TransportResult, WorldOutcome};
+use localview_protocol::{
+    DispatchResult, ProviderIncarnationRef, TargetIncarnationRef, TransportResult, WorldOutcome,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -15,6 +17,22 @@ use uuid::Uuid;
 use crate::CanonicalActionEnvelope;
 
 const JOURNAL_SCHEMA_VERSION: u32 = 1;
+
+/// Durable evidence that the final authority/freshness fence has been sealed and
+/// the action is immediately eligible to cross an external side-effect boundary.
+///
+/// This record MUST be synced before the provider/executor is allowed to perform
+/// the side effect. If the process dies after this record but before a dispatch
+/// receipt is committed, recovery treats the action as dispatch-uncertain and
+/// requires reconciliation rather than retrying blindly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DispatchPreparationReceipt {
+    pub receipt_ref: String,
+    pub authorization_journal_sequence: u64,
+    pub precondition_snapshot_cut_ref: String,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DispatchLinearizationReceipt {
@@ -32,6 +50,9 @@ pub enum ConsequentialJournalTransition {
     AuthorizationRecorded {
         authorization_revision: String,
         revalidated: bool,
+    },
+    DispatchPrepared {
+        receipt: DispatchPreparationReceipt,
     },
     DispatchLinearized {
         receipt: DispatchLinearizationReceipt,
@@ -63,6 +84,10 @@ pub struct ConsequentialJournalEntry {
 pub enum ConsequentialRecoveryState {
     Admitted,
     AuthorizedNotDispatched,
+    /// A durable write-ahead record exists immediately before the external
+    /// side-effect boundary, but no durable executor/dispatch receipt exists.
+    /// Recovery must conservatively reconcile and must not blind-retry.
+    DispatchPrepared,
     KnownNotDispatched,
     PossiblyDispatched,
     OutcomeObservedUnverified,
@@ -152,7 +177,8 @@ impl ConsequentialJournal {
         self.recovery_state(action_id).await.map(|state| {
             matches!(
                 state,
-                ConsequentialRecoveryState::PossiblyDispatched
+                ConsequentialRecoveryState::DispatchPrepared
+                    | ConsequentialRecoveryState::PossiblyDispatched
                     | ConsequentialRecoveryState::OutcomeObservedUnverified
                     | ConsequentialRecoveryState::CompensationFailed
             )
@@ -183,6 +209,18 @@ impl ConsequentialJournal {
                 authorization_revision,
                 revalidated,
             },
+        )
+        .await
+    }
+
+    pub async fn record_dispatch_prepared(
+        &self,
+        action_id: Uuid,
+        receipt: DispatchPreparationReceipt,
+    ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
+        self.append_validated(
+            action_id,
+            ConsequentialJournalTransition::DispatchPrepared { receipt },
         )
         .await
     }
@@ -249,7 +287,12 @@ impl ConsequentialJournal {
         transition: ConsequentialJournalTransition,
     ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
         let mut state = self.state.lock().await;
-        validate_transition(&state.entries, action_id, &transition)?;
+        validate_transition(
+            &state.entries,
+            action_id,
+            &transition,
+            TransitionValidationMode::Append,
+        )?;
 
         let entry = ConsequentialJournalEntry {
             schema_version: JOURNAL_SCHEMA_VERSION,
@@ -377,11 +420,15 @@ fn load_and_repair(path: &Path) -> Result<Vec<ConsequentialJournalEntry>, Conseq
                 ),
             });
         }
-        validate_transition(&entries, entry.action_id, &entry.transition).map_err(|error| {
-            ConsequentialJournalError::CorruptRecord {
-                line: line_number,
-                message: error.to_string(),
-            }
+        validate_transition(
+            &entries,
+            entry.action_id,
+            &entry.transition,
+            TransitionValidationMode::Replay,
+        )
+        .map_err(|error| ConsequentialJournalError::CorruptRecord {
+            line: line_number,
+            message: error.to_string(),
         })?;
         entries.push(entry);
         line_start = newline + 1;
@@ -417,10 +464,17 @@ fn append_durable(path: &Path, encoded: &[u8]) -> Result<(), ConsequentialJourna
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransitionValidationMode {
+    Append,
+    Replay,
+}
+
 fn validate_transition(
     entries: &[ConsequentialJournalEntry],
     action_id: Uuid,
     transition: &ConsequentialJournalTransition,
+    mode: TransitionValidationMode,
 ) -> Result<(), ConsequentialJournalError> {
     let current = recovery_state_for(entries, action_id);
     match transition {
@@ -447,18 +501,40 @@ fn validate_transition(
                 current,
             }),
         },
+        ConsequentialJournalTransition::DispatchPrepared { receipt } => {
+            if current.is_none() {
+                return Err(ConsequentialJournalError::UnknownAction { action_id });
+            }
+            if current != Some(ConsequentialRecoveryState::AuthorizedNotDispatched) {
+                return Err(ConsequentialJournalError::InvalidTransition {
+                    action_id,
+                    attempted: "dispatch_prepared",
+                    current,
+                });
+            }
+            validate_dispatch_preparation(entries, action_id, receipt, current)
+        }
         ConsequentialJournalTransition::DispatchLinearized { .. } => match current {
             None => Err(ConsequentialJournalError::UnknownAction { action_id }),
-            Some(ConsequentialRecoveryState::AuthorizedNotDispatched) => Ok(()),
+            Some(ConsequentialRecoveryState::DispatchPrepared) => Ok(()),
+            // Journals produced before the explicit V4.3 PREPARED boundary are
+            // still valid historical evidence. They may be replayed, but new
+            // appends cannot use this shortcut.
+            Some(ConsequentialRecoveryState::AuthorizedNotDispatched)
+                if mode == TransitionValidationMode::Replay =>
+            {
+                Ok(())
+            }
             _ => Err(ConsequentialJournalError::InvalidTransition {
                 action_id,
-                attempted: "dispatch_linearized",
+                attempted: "dispatch_linearized_without_durable_prepare",
                 current,
             }),
         },
         ConsequentialJournalTransition::ReconciliationOutcome { .. } => match current {
             None => Err(ConsequentialJournalError::UnknownAction { action_id }),
-            Some(ConsequentialRecoveryState::PossiblyDispatched)
+            Some(ConsequentialRecoveryState::DispatchPrepared)
+            | Some(ConsequentialRecoveryState::PossiblyDispatched)
             | Some(ConsequentialRecoveryState::KnownNotDispatched) => Ok(()),
             _ => Err(ConsequentialJournalError::InvalidTransition {
                 action_id,
@@ -487,6 +563,99 @@ fn validate_transition(
     }
 }
 
+fn validate_dispatch_preparation(
+    entries: &[ConsequentialJournalEntry],
+    action_id: Uuid,
+    receipt: &DispatchPreparationReceipt,
+    current: Option<ConsequentialRecoveryState>,
+) -> Result<(), ConsequentialJournalError> {
+    let envelope = entries
+        .iter()
+        .find_map(|entry| {
+            if entry.action_id != action_id {
+                return None;
+            }
+            match &entry.transition {
+                ConsequentialJournalTransition::IntentAdmitted { envelope } => Some(envelope),
+                _ => None,
+            }
+        })
+        .ok_or(ConsequentialJournalError::UnknownAction { action_id })?;
+
+    let latest_authorization = entries.iter().rev().find_map(|entry| {
+        if entry.action_id != action_id {
+            return None;
+        }
+        match &entry.transition {
+            ConsequentialJournalTransition::AuthorizationRecorded {
+                authorization_revision,
+                revalidated,
+            } => Some((entry.journal_sequence, authorization_revision, *revalidated)),
+            _ => None,
+        }
+    });
+    let Some((authorization_sequence, authorization_revision, revalidated)) = latest_authorization
+    else {
+        return Err(ConsequentialJournalError::InvalidTransition {
+            action_id,
+            attempted: "dispatch_prepared_without_authorization",
+            current,
+        });
+    };
+
+    if !revalidated {
+        return Err(ConsequentialJournalError::InvalidTransition {
+            action_id,
+            attempted: "dispatch_prepared_without_revalidated_authority",
+            current,
+        });
+    }
+    if authorization_revision != &envelope.metadata.authorization_revision {
+        return Err(ConsequentialJournalError::InvalidTransition {
+            action_id,
+            attempted: "dispatch_prepared_with_stale_authorization_revision",
+            current,
+        });
+    }
+    if receipt.receipt_ref.trim().is_empty() {
+        return Err(ConsequentialJournalError::InvalidTransition {
+            action_id,
+            attempted: "dispatch_prepared_without_receipt_ref",
+            current,
+        });
+    }
+    if receipt.authorization_journal_sequence != authorization_sequence {
+        return Err(ConsequentialJournalError::InvalidTransition {
+            action_id,
+            attempted: "dispatch_prepared_with_stale_authorization_sequence",
+            current,
+        });
+    }
+    if receipt.precondition_snapshot_cut_ref != envelope.metadata.precondition_snapshot_cut_ref {
+        return Err(ConsequentialJournalError::InvalidTransition {
+            action_id,
+            attempted: "dispatch_prepared_with_mismatched_precondition_cut",
+            current,
+        });
+    }
+    if receipt.provider_incarnation_ref != envelope.metadata.provider_incarnation_ref {
+        return Err(ConsequentialJournalError::InvalidTransition {
+            action_id,
+            attempted: "dispatch_prepared_with_mismatched_provider_incarnation",
+            current,
+        });
+    }
+    if receipt.target_incarnation_ref != envelope.metadata.target_incarnation_ref {
+        return Err(ConsequentialJournalError::InvalidTransition {
+            action_id,
+            attempted: "dispatch_prepared_with_mismatched_target_incarnation",
+            current,
+        });
+    }
+
+    Ok(())
+}
+
 fn recovery_state_for(
     entries: &[ConsequentialJournalEntry],
     action_id: Uuid,
@@ -499,6 +668,9 @@ fn recovery_state_for(
             }
             ConsequentialJournalTransition::AuthorizationRecorded { .. } => {
                 ConsequentialRecoveryState::AuthorizedNotDispatched
+            }
+            ConsequentialJournalTransition::DispatchPrepared { .. } => {
+                ConsequentialRecoveryState::DispatchPrepared
             }
             ConsequentialJournalTransition::DispatchLinearized { receipt } => {
                 match receipt.dispatch_result {
