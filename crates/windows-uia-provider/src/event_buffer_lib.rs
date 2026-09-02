@@ -14,5 +14,6 @@ pub use action_capability::*;
 pub use event_buffer::*;
 pub use subscription::*;
 pub use worker::{
-    WindowsUiaAttachment, WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
+    WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
+    WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
 };
