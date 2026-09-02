@@ -3,11 +3,13 @@
 mod action_preflight;
 mod dispatch_authority;
 mod dispatch_seal;
+mod execution_arm;
 mod prepared_dispatch;
 mod runtime_manager;
 pub use action_preflight::*;
 pub use dispatch_authority::*;
 pub use dispatch_seal::*;
+pub use execution_arm::*;
 pub use prepared_dispatch::*;
 pub use runtime_manager::*;
 
@@ -135,7 +137,6 @@ impl WindowsObserveBridgeBinding {
     ) -> Result<ProviderIngestReport, WindowsObserveBridgeError> {
         self.require_live_binding(bridge).await?;
         self.validate_drain(&drain)?;
-
         let dropped_before_drain = drain.dropped_before_drain;
         let events = drain
             .events
@@ -143,7 +144,6 @@ impl WindowsObserveBridgeBinding {
             .enumerate()
             .map(|(index, event)| self.project_event(event, index == 0, dropped_before_drain))
             .collect();
-
         Ok(bridge
             .ingest_provider(ProviderObserverBatch {
                 session_id: self.session_id,
@@ -171,7 +171,6 @@ impl WindowsObserveBridgeBinding {
         if snapshot.target_incarnation_ref() != &self.target_incarnation_ref {
             return Err(WindowsObserveBridgeError::ReconciliationTargetIncarnationMismatch);
         }
-
         let receipt = snapshot.reconciliation_receipt(receipt_id);
         if !bridge.record_reconciliation(self.session_id, receipt).await {
             return Err(WindowsObserveBridgeError::ReconciliationRejected);
@@ -224,7 +223,6 @@ impl WindowsObserveBridgeBinding {
             }
             previous_sequence = Some(event.sequence);
         }
-
         if previous_sequence.is_some_and(|sequence| drain.latest_sequence < sequence) {
             return Err(WindowsObserveBridgeError::InvalidLatestSequence);
         }
@@ -277,7 +275,6 @@ impl WindowsObserveBridgeBinding {
                 }),
             ),
         };
-
         ObserverEvent {
             seq: event.sequence,
             captured_at: event.captured_at,
