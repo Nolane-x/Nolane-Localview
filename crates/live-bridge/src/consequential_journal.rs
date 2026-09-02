@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -98,6 +98,68 @@ pub enum ConsequentialRecoveryState {
     Committed,
 }
 
+/// Opaque, process-local authority produced only after the exact PREPARED entry
+/// is durable. It is deliberately not Clone/Serialize/Deserialize and its fields
+/// are private, so knowing an action id cannot manufacture dispatch authority.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DispatchPreparedCapability {
+    journal_instance_ref: Uuid,
+    action_id: Uuid,
+    preparation_journal_sequence: u64,
+    preparation_receipt_ref: String,
+    capability_ref: Uuid,
+}
+
+impl DispatchPreparedCapability {
+    pub fn action_id(&self) -> Uuid {
+        self.action_id
+    }
+
+    pub fn preparation_journal_sequence(&self) -> u64 {
+        self.preparation_journal_sequence
+    }
+}
+
+/// Durable PREPARED evidence plus the one-shot live capability associated with
+/// that exact fsync. Dropping this admission drops the only externally available
+/// authority to begin dispatch; durable recovery remains PREPARED/uncertain.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DispatchPreparedAdmission {
+    entry: ConsequentialJournalEntry,
+    capability: DispatchPreparedCapability,
+}
+
+impl DispatchPreparedAdmission {
+    pub fn entry(&self) -> &ConsequentialJournalEntry {
+        &self.entry
+    }
+
+    pub fn into_parts(self) -> (ConsequentialJournalEntry, DispatchPreparedCapability) {
+        (self.entry, self.capability)
+    }
+}
+
+/// Opaque one-shot execution permit. Creating it consumes the PREPARED
+/// capability. Recording the durable dispatch receipt consumes this permit.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DispatchExecutionPermit {
+    journal_instance_ref: Uuid,
+    action_id: Uuid,
+    preparation_journal_sequence: u64,
+    preparation_receipt_ref: String,
+    permit_ref: Uuid,
+}
+
+impl DispatchExecutionPermit {
+    pub fn action_id(&self) -> Uuid {
+        self.action_id
+    }
+
+    pub fn preparation_journal_sequence(&self) -> u64 {
+        self.preparation_journal_sequence
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConsequentialJournalError {
     #[error("journal I/O failed during {operation}: {message}")]
@@ -121,21 +183,48 @@ pub enum ConsequentialJournalError {
         attempted: &'static str,
         current: Option<ConsequentialRecoveryState>,
     },
+    #[error("invalid prepared dispatch capability for action {action_id}: {reason}")]
+    InvalidDispatchCapability {
+        action_id: Uuid,
+        reason: &'static str,
+    },
+    #[error("invalid dispatch execution permit for action {action_id}: {reason}")]
+    InvalidDispatchPermit {
+        action_id: Uuid,
+        reason: &'static str,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LivePreparedGrant {
+    capability_ref: Uuid,
+    preparation_journal_sequence: u64,
+    preparation_receipt_ref: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LiveExecutionGrant {
+    permit_ref: Uuid,
+    preparation_journal_sequence: u64,
+    preparation_receipt_ref: String,
 }
 
 #[derive(Debug, Default)]
 struct JournalState {
     next_sequence: u64,
     entries: Vec<ConsequentialJournalEntry>,
-    /// Non-durable process-local capability proving that this process itself
-    /// completed the durable PREPARED append. Reopening a journal intentionally
-    /// starts with an empty set, so recovered PREPARED actions can only reconcile.
-    live_dispatch_prepared: HashSet<Uuid>,
+    /// Process-local exact capabilities created only after PREPARED fsync.
+    /// Reopen intentionally reconstructs none of these grants.
+    live_dispatch_prepared: HashMap<Uuid, LivePreparedGrant>,
+    /// Process-local permits created only by consuming a matching prepared
+    /// capability. They are also never reconstructed from durable state.
+    live_dispatch_execution: HashMap<Uuid, LiveExecutionGrant>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ConsequentialJournal {
     path: Arc<PathBuf>,
+    journal_instance_ref: Uuid,
     state: Arc<Mutex<JournalState>>,
 }
 
@@ -155,10 +244,12 @@ impl ConsequentialJournal {
 
         Ok(Self {
             path: Arc::new(path),
+            journal_instance_ref: Uuid::new_v4(),
             state: Arc::new(Mutex::new(JournalState {
                 next_sequence,
                 entries,
-                live_dispatch_prepared: HashSet::new(),
+                live_dispatch_prepared: HashMap::new(),
+                live_dispatch_execution: HashMap::new(),
             })),
         })
     }
@@ -223,54 +314,174 @@ impl ConsequentialJournal {
         &self,
         action_id: Uuid,
         receipt: DispatchPreparationReceipt,
-    ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
+    ) -> Result<DispatchPreparedAdmission, ConsequentialJournalError> {
+        let preparation_receipt_ref = receipt.receipt_ref.clone();
+        let mut state = self.state.lock().await;
         let entry = self
-            .append_validated(
+            .append_validated_locked(
+                &mut state,
                 action_id,
                 ConsequentialJournalTransition::DispatchPrepared { receipt },
             )
             .await?;
-        // This process-local grant is created only after the PREPARED record has
-        // been fsync'd. It is deliberately not reconstructed by `open`.
-        self.state
-            .lock()
-            .await
-            .live_dispatch_prepared
-            .insert(action_id);
-        Ok(entry)
+
+        let capability_ref = Uuid::new_v4();
+        let grant = LivePreparedGrant {
+            capability_ref,
+            preparation_journal_sequence: entry.journal_sequence,
+            preparation_receipt_ref: preparation_receipt_ref.clone(),
+        };
+        state.live_dispatch_prepared.insert(action_id, grant);
+
+        Ok(DispatchPreparedAdmission {
+            entry: entry.clone(),
+            capability: DispatchPreparedCapability {
+                journal_instance_ref: self.journal_instance_ref,
+                action_id,
+                preparation_journal_sequence: entry.journal_sequence,
+                preparation_receipt_ref,
+                capability_ref,
+            },
+        })
     }
 
-    pub async fn record_dispatch_linearized(
+    /// Consume the exact live capability associated with one durable PREPARED
+    /// record and mint a one-shot execution permit. Durable state intentionally
+    /// remains PREPARED until an executor receipt is fsync'd.
+    pub async fn begin_dispatch(
         &self,
-        action_id: Uuid,
-        receipt: DispatchLinearizationReceipt,
-    ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
-        {
-            let state = self.state.lock().await;
-            if !state.live_dispatch_prepared.contains(&action_id) {
-                let current = recovery_state_for(&state.entries, action_id);
-                if current == Some(ConsequentialRecoveryState::DispatchPrepared) {
-                    return Err(ConsequentialJournalError::InvalidTransition {
-                        action_id,
-                        attempted: "dispatch_linearized_after_recovered_prepare",
-                        current,
-                    });
-                }
-            }
+        capability: DispatchPreparedCapability,
+    ) -> Result<DispatchExecutionPermit, ConsequentialJournalError> {
+        let action_id = capability.action_id;
+        if capability.journal_instance_ref != self.journal_instance_ref {
+            return Err(ConsequentialJournalError::InvalidDispatchCapability {
+                action_id,
+                reason: "journal_instance_mismatch",
+            });
         }
 
-        let entry = self
-            .append_validated(
+        let mut state = self.state.lock().await;
+        let Some(grant) = state.live_dispatch_prepared.get(&action_id) else {
+            return Err(ConsequentialJournalError::InvalidDispatchCapability {
                 action_id,
-                ConsequentialJournalTransition::DispatchLinearized { receipt },
-            )
-            .await?;
-        self.state
-            .lock()
-            .await
-            .live_dispatch_prepared
-            .remove(&action_id);
-        Ok(entry)
+                reason: "live_prepared_grant_missing",
+            });
+        };
+        if grant.capability_ref != capability.capability_ref
+            || grant.preparation_journal_sequence != capability.preparation_journal_sequence
+            || grant.preparation_receipt_ref != capability.preparation_receipt_ref
+        {
+            return Err(ConsequentialJournalError::InvalidDispatchCapability {
+                action_id,
+                reason: "prepared_grant_binding_mismatch",
+            });
+        }
+
+        // Consume first. Any failure after this point is deliberately fail-closed:
+        // there is no retry capability to restore.
+        state.live_dispatch_prepared.remove(&action_id);
+
+        let current = recovery_state_for(&state.entries, action_id);
+        if current != Some(ConsequentialRecoveryState::DispatchPrepared) {
+            return Err(ConsequentialJournalError::InvalidDispatchCapability {
+                action_id,
+                reason: "durable_state_is_not_prepared",
+            });
+        }
+        if !durable_preparation_matches(
+            &state.entries,
+            action_id,
+            capability.preparation_journal_sequence,
+            &capability.preparation_receipt_ref,
+        ) {
+            return Err(ConsequentialJournalError::InvalidDispatchCapability {
+                action_id,
+                reason: "durable_prepared_entry_mismatch",
+            });
+        }
+
+        let permit_ref = Uuid::new_v4();
+        state.live_dispatch_execution.insert(
+            action_id,
+            LiveExecutionGrant {
+                permit_ref,
+                preparation_journal_sequence: capability.preparation_journal_sequence,
+                preparation_receipt_ref: capability.preparation_receipt_ref.clone(),
+            },
+        );
+
+        Ok(DispatchExecutionPermit {
+            journal_instance_ref: self.journal_instance_ref,
+            action_id,
+            preparation_journal_sequence: capability.preparation_journal_sequence,
+            preparation_receipt_ref: capability.preparation_receipt_ref,
+            permit_ref,
+        })
+    }
+
+    /// Commit the executor/dispatch receipt using the exact one-shot permit.
+    /// The permit is consumed before serialization/I/O; an error therefore leaves
+    /// durable PREPARED state requiring reconciliation and never restores retry
+    /// authority.
+    pub async fn record_dispatch_linearized(
+        &self,
+        permit: DispatchExecutionPermit,
+        receipt: DispatchLinearizationReceipt,
+    ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
+        let action_id = permit.action_id;
+        if permit.journal_instance_ref != self.journal_instance_ref {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "journal_instance_mismatch",
+            });
+        }
+
+        let mut state = self.state.lock().await;
+        let Some(grant) = state.live_dispatch_execution.get(&action_id) else {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "live_execution_grant_missing",
+            });
+        };
+        if grant.permit_ref != permit.permit_ref
+            || grant.preparation_journal_sequence != permit.preparation_journal_sequence
+            || grant.preparation_receipt_ref != permit.preparation_receipt_ref
+        {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "execution_grant_binding_mismatch",
+            });
+        }
+
+        // Consume first. If durable state changed or append fails, this action is
+        // left conservatively PREPARED/uncertain and cannot be blindly retried.
+        state.live_dispatch_execution.remove(&action_id);
+
+        let current = recovery_state_for(&state.entries, action_id);
+        if current != Some(ConsequentialRecoveryState::DispatchPrepared) {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "durable_state_is_not_prepared",
+            });
+        }
+        if !durable_preparation_matches(
+            &state.entries,
+            action_id,
+            permit.preparation_journal_sequence,
+            &permit.preparation_receipt_ref,
+        ) {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "durable_prepared_entry_mismatch",
+            });
+        }
+
+        self.append_validated_locked(
+            &mut state,
+            action_id,
+            ConsequentialJournalTransition::DispatchLinearized { receipt },
+        )
+        .await
     }
 
     pub async fn record_reconciliation_outcome(
@@ -323,6 +534,16 @@ impl ConsequentialJournal {
         transition: ConsequentialJournalTransition,
     ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
         let mut state = self.state.lock().await;
+        self.append_validated_locked(&mut state, action_id, transition)
+            .await
+    }
+
+    async fn append_validated_locked(
+        &self,
+        state: &mut JournalState,
+        action_id: Uuid,
+        transition: ConsequentialJournalTransition,
+    ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
         validate_transition(
             &state.entries,
             action_id,
@@ -355,6 +576,23 @@ impl ConsequentialJournal {
         state.entries.push(entry.clone());
         Ok(entry)
     }
+}
+
+fn durable_preparation_matches(
+    entries: &[ConsequentialJournalEntry],
+    action_id: Uuid,
+    preparation_journal_sequence: u64,
+    preparation_receipt_ref: &str,
+) -> bool {
+    entries.iter().any(|entry| {
+        entry.action_id == action_id
+            && entry.journal_sequence == preparation_journal_sequence
+            && matches!(
+                &entry.transition,
+                ConsequentialJournalTransition::DispatchPrepared { receipt }
+                    if receipt.receipt_ref == preparation_receipt_ref
+            )
+    })
 }
 
 fn load_and_repair(path: &Path) -> Result<Vec<ConsequentialJournalEntry>, ConsequentialJournalError> {
