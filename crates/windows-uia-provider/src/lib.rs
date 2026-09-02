@@ -6,9 +6,7 @@ use localview_native_provider::{
     NativeProviderCapabilities, NativeProviderIdentityError, NativeSemanticSnapshotRevision,
     SnapshotBudget, SnapshotPublishError, UserSelectedWindowTarget, WindowsTargetFingerprint,
 };
-use localview_protocol::{
-    ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef,
-};
+use localview_protocol::{ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +84,8 @@ pub enum WindowsUiaWorkerError {
     InvalidSnapshotRequest,
     #[error("Windows UI Automation element lease request is invalid")]
     InvalidElementLeaseRequest,
+    #[error("Windows UI Automation dispatch context request is invalid")]
+    InvalidDispatchContextRequest,
     #[error(
         "Windows UI Automation element lease snapshot expired: requested {requested_cut}, current {current_cut}"
     )]
@@ -95,6 +95,8 @@ pub enum WindowsUiaWorkerError {
     },
     #[error("Windows UI Automation exact element lease was not found in the latest snapshot")]
     ElementLeaseNotFound,
+    #[error("Windows UI Automation dispatch context is blocked: {0}")]
+    DispatchContextBlocked(#[from] crate::WindowsUiaDispatchContextBlocker),
     #[error("Windows target identity error: {0}")]
     Identity(#[from] NativeProviderIdentityError),
     #[error("Windows UI Automation provider failure: {0}")]
@@ -142,12 +144,18 @@ mod platform {
                 UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
                 UIA_IsVirtualizedItemPatternAvailablePropertyId, UIA_PROPERTY_ID,
             },
-            WindowsAndMessaging::GetWindowThreadProcessId,
+            WindowsAndMessaging::{
+                GetForegroundWindow, GetLastActivePopup, GetWindowThreadProcessId, IsWindowVisible,
+            },
         },
     };
 
     use super::*;
-    use crate::{WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport};
+    use crate::{
+        evaluate_windows_uia_dispatch_context, WindowsUiaActionCapabilities,
+        WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
+        WindowsUiaDispatchContextRequest, WindowsUiaPattern, WindowsUiaPatternSupport,
+    };
 
     const PROPERTIES_PER_NODE: usize = 14;
     const CACHE_PROFILE_REVISION: &str = "windows-uia-control-view-v1";
@@ -168,12 +176,17 @@ mod platform {
             request: WindowsUiaElementLeaseRequest,
             reply: Sender<Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError>>,
         },
+        RevalidateDispatchContext {
+            attachment: WindowsUiaAttachment,
+            request: WindowsUiaDispatchContextRequest,
+            reply: Sender<Result<WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError>>,
+        },
         Shutdown,
     }
 
     struct RetainedElementLease {
         element_ref: ProviderElementRef,
-        _element: IUIAutomationElement,
+        element: IUIAutomationElement,
     }
 
     struct RetainedElementLeaseSet {
@@ -303,6 +316,29 @@ mod platform {
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
             recv_command(reply_rx, self.command_timeout)
         }
+
+        pub fn revalidate_dispatch_context(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaDispatchContextRequest,
+        ) -> Result<WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError> {
+            if request.snapshot_cut_ref.trim().is_empty() {
+                return Err(WindowsUiaWorkerError::InvalidDispatchContextRequest);
+            }
+            if attachment.provider_incarnation_ref != self.provider_incarnation_ref {
+                return Err(WindowsUiaWorkerError::TargetReincarnated);
+            }
+
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.sender
+                .send(WorkerCommand::RevalidateDispatchContext {
+                    attachment: attachment.clone(),
+                    request,
+                    reply: reply_tx,
+                })
+                .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
+            recv_command(reply_rx, self.command_timeout)
+        }
     }
 
     impl Drop for WindowsUiaWorker {
@@ -418,6 +454,13 @@ mod platform {
                 } => {
                     let _ = reply.send(state.bind_element_lease(&attachment, request));
                 }
+                WorkerCommand::RevalidateDispatchContext {
+                    attachment,
+                    request,
+                    reply,
+                } => {
+                    let _ = reply.send(state.revalidate_dispatch_context(&attachment, request));
+                }
                 WorkerCommand::Shutdown => break,
             }
         }
@@ -530,6 +573,109 @@ mod platform {
             attachment: &WindowsUiaAttachment,
             request: WindowsUiaElementLeaseRequest,
         ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
+            let retained = self.exact_retained_element(
+                attachment,
+                &request.snapshot_cut_ref,
+                &request.element_ref,
+            )?;
+
+            Ok(WindowsUiaElementLeaseReceipt {
+                snapshot_cut_ref: request.snapshot_cut_ref,
+                provider_incarnation_ref: self.provider_incarnation_ref.clone(),
+                target_incarnation_ref: attachment.target_incarnation_ref.clone(),
+                element_ref: retained.element_ref.clone(),
+            })
+        }
+
+        fn revalidate_dispatch_context(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaDispatchContextRequest,
+        ) -> Result<WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError> {
+            let retained = self.exact_retained_element(
+                attachment,
+                &request.snapshot_cut_ref,
+                &request.element_ref,
+            )?;
+
+            let foreground_window = unsafe {
+                // SAFETY: read-only Win32 query with no borrowed pointers.
+                GetForegroundWindow()
+            };
+            let foreground_window_handle = hwnd_to_u64(foreground_window);
+            let foreground_process_id = foreground_window_handle.and_then(|_| {
+                let mut process_id = 0_u32;
+                let thread_id = unsafe {
+                    // SAFETY: process_id is valid writable storage and foreground
+                    // HWND was returned by GetForegroundWindow immediately above.
+                    GetWindowThreadProcessId(foreground_window, Some(&mut process_id))
+                };
+                (thread_id != 0 && process_id != 0).then_some(process_id)
+            });
+
+            let exact_element_focused = if request.requirements.require_exact_element_focus {
+                unsafe {
+                    // SAFETY: both the current focused element and retained action
+                    // element remain inside this worker's owning MTA apartment.
+                    self.automation
+                        .GetFocusedElement()
+                        .ok()
+                        .and_then(|focused| {
+                            self.automation
+                                .CompareElements(&focused, &retained.element)
+                                .ok()
+                        })
+                        .map(|same| same.as_bool())
+                }
+            } else {
+                None
+            };
+
+            let target_hwnd = hwnd_from_u64(attachment.selection.native_window_handle);
+            let modal_blocker_window_handle = if request.requirements.require_no_modal_blocker {
+                let popup = unsafe {
+                    // SAFETY: target HWND was revalidated by exact_retained_element.
+                    GetLastActivePopup(target_hwnd)
+                };
+                let popup_handle = hwnd_to_u64(popup);
+                match popup_handle {
+                    Some(handle)
+                        if handle != attachment.selection.native_window_handle
+                            && unsafe { IsWindowVisible(popup) }.as_bool() =>
+                    {
+                        Some(handle)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            let observation = WindowsUiaDispatchContextObservation {
+                target_window_handle: attachment.selection.native_window_handle,
+                target_process_id: attachment.fingerprint.process_id,
+                foreground_window_handle,
+                foreground_process_id,
+                exact_element_focused,
+                modal_blocker_window_handle,
+            };
+            evaluate_windows_uia_dispatch_context(request.requirements, &observation)?;
+
+            Ok(WindowsUiaDispatchContextReceipt {
+                snapshot_cut_ref: request.snapshot_cut_ref,
+                provider_incarnation_ref: self.provider_incarnation_ref.clone(),
+                target_incarnation_ref: attachment.target_incarnation_ref.clone(),
+                element_ref: retained.element_ref.clone(),
+                observation,
+            })
+        }
+
+        fn exact_retained_element<'a>(
+            &'a self,
+            attachment: &WindowsUiaAttachment,
+            snapshot_cut_ref: &str,
+            element_ref: &ProviderElementRef,
+        ) -> Result<&'a RetainedElementLease, WindowsUiaWorkerError> {
             if attachment.provider_incarnation_ref != self.provider_incarnation_ref {
                 return Err(WindowsUiaWorkerError::TargetReincarnated);
             }
@@ -539,25 +685,18 @@ mod platform {
                 .element_leases
                 .get(&attachment.target_incarnation_ref)
                 .ok_or(WindowsUiaWorkerError::ElementLeaseNotFound)?;
-            if lease_set.snapshot_cut_ref != request.snapshot_cut_ref {
+            if lease_set.snapshot_cut_ref != snapshot_cut_ref {
                 return Err(WindowsUiaWorkerError::ElementLeaseSnapshotExpired {
-                    requested_cut: request.snapshot_cut_ref,
+                    requested_cut: snapshot_cut_ref.to_owned(),
                     current_cut: lease_set.snapshot_cut_ref.clone(),
                 });
             }
 
-            let retained = lease_set
+            lease_set
                 .elements
                 .iter()
-                .find(|retained| retained.element_ref == request.element_ref)
-                .ok_or(WindowsUiaWorkerError::ElementLeaseNotFound)?;
-
-            Ok(WindowsUiaElementLeaseReceipt {
-                snapshot_cut_ref: lease_set.snapshot_cut_ref.clone(),
-                provider_incarnation_ref: self.provider_incarnation_ref.clone(),
-                target_incarnation_ref: attachment.target_incarnation_ref.clone(),
-                element_ref: retained.element_ref.clone(),
-            })
+                .find(|retained| &retained.element_ref == element_ref)
+                .ok_or(WindowsUiaWorkerError::ElementLeaseNotFound)
         }
 
         fn require_current_target(
@@ -619,6 +758,10 @@ mod platform {
 
     fn hwnd_from_u64(value: u64) -> HWND {
         HWND(value as usize as *mut c_void)
+    }
+
+    fn hwnd_to_u64(value: HWND) -> Option<u64> {
+        (!value.0.is_null()).then_some(value.0 as usize as u64)
     }
 
     fn process_start_time_ticks(process_id: u32) -> Result<u64, WindowsUiaWorkerError> {
@@ -769,7 +912,7 @@ mod platform {
             action_capabilities.write_attributes(&mut attributes);
             retained_elements.push(RetainedElementLease {
                 element_ref: element_ref.clone(),
-                _element: element.clone(),
+                element: element.clone(),
             });
             nodes.push(NativeSemanticNodeObservation {
                 element_ref,
@@ -983,6 +1126,14 @@ impl WindowsUiaWorker {
         _attachment: &WindowsUiaAttachment,
         _request: WindowsUiaElementLeaseRequest,
     ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
+        Err(WindowsUiaWorkerError::UnsupportedPlatform)
+    }
+
+    pub fn revalidate_dispatch_context(
+        &self,
+        _attachment: &WindowsUiaAttachment,
+        _request: crate::WindowsUiaDispatchContextRequest,
+    ) -> Result<crate::WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError> {
         Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
 }
