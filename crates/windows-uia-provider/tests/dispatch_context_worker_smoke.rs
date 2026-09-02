@@ -19,10 +19,13 @@ mod windows_smoke {
         core::w,
         Win32::{
             System::Threading::GetCurrentProcessId,
-            UI::WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, SetFocus,
-                SetForegroundWindow, ShowWindow, TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE,
-                SW_SHOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+            UI::{
+                Input::KeyboardAndMouse::SetFocus,
+                WindowsAndMessaging::{
+                    CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW,
+                    SetForegroundWindow, ShowWindow, TranslateMessage, CW_USEDEFAULT, MSG,
+                    PM_REMOVE, SW_SHOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                },
             },
         },
     };
