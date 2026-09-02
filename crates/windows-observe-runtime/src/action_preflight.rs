@@ -3,13 +3,14 @@ use localview_live_bridge::{
 };
 use localview_protocol::{ProviderElementRealization, ProviderElementRef, SessionId};
 use localview_windows_uia_provider::{
-    WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport,
+    WindowsUiaActionCapabilities, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
+    WindowsUiaPattern, WindowsUiaPatternSupport,
 };
 use thiserror::Error;
 
 use crate::runtime_manager::{
-    WindowsObserveProvider, WindowsObserveRuntimeManager, WindowsSemanticReadError,
-    WindowsSemanticReadRequest,
+    WindowsObserveActionLeaseProvider, WindowsObserveProvider, WindowsObserveRuntimeError,
+    WindowsObserveRuntimeManager, WindowsSemanticReadError, WindowsSemanticReadRequest,
 };
 
 /// Point-in-time capability/freshness request for a future Windows UIA action.
@@ -27,8 +28,13 @@ pub struct WindowsUiaActionPreflightRequest {
 /// Evidence that an exact immutable semantic node was current, realized and
 /// advertised the required UIA pattern at one snapshot cut. This receipt does
 /// not reserve the UI, lock provider state or authorize later dispatch.
+///
+/// The exact canonical action authority is retained so a later dispatch fence
+/// can reject principal/policy/lineage substitution instead of accepting a
+/// semantically equivalent but differently authorized request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsUiaActionPreflightReceipt {
+    pub authority: ActionEnvelopeMetadata,
     pub snapshot_cut_ref: String,
     pub cache_revision_ref: String,
     pub observed_digest: String,
@@ -60,6 +66,39 @@ pub enum WindowsUiaActionPreflightError {
     PatternSupportUnknown { pattern: WindowsUiaPattern },
     #[error("Windows UIA action preflight internal read gate invariant failed")]
     ReadGateInvariant,
+}
+
+/// Request presented immediately before a future Windows UIA side-effect
+/// boundary. It carries both the current canonical authority and the exact
+/// earlier preflight evidence that authority produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUiaDispatchRevalidationRequest {
+    pub authority: ActionEnvelopeMetadata,
+    pub preflight: WindowsUiaActionPreflightReceipt,
+}
+
+/// Data-only proof that dispatch-time semantic evidence remained current and
+/// the worker could still bind the exact retained live UIA element. This is an
+/// eligibility receipt only: no UIA pattern method or OS input is executed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUiaDispatchRevalidationReceipt {
+    pub authority: ActionEnvelopeMetadata,
+    pub preflight: WindowsUiaActionPreflightReceipt,
+    pub element_lease: WindowsUiaElementLeaseReceipt,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum WindowsUiaDispatchRevalidationError {
+    #[error("Windows UIA dispatch authority does not exactly match preflight authority")]
+    PreflightAuthorityMismatch,
+    #[error("Windows UIA dispatch preflight evidence changed during immediate revalidation")]
+    PreflightEvidenceMismatch,
+    #[error("Windows UIA dispatch semantic revalidation failed: {0}")]
+    Preflight(#[from] WindowsUiaActionPreflightError),
+    #[error("Windows UIA dispatch exact element lease binding failed: {0}")]
+    LeaseProvider(WindowsObserveRuntimeError),
+    #[error("Windows UIA dispatch exact element lease receipt did not match revalidated authority")]
+    LeaseReceiptMismatch,
 }
 
 impl<P> WindowsObserveRuntimeManager<P>
@@ -101,6 +140,7 @@ where
             .support_for(request.required_pattern)
         {
             WindowsUiaPatternSupport::Supported => Ok(WindowsUiaActionPreflightReceipt {
+                authority: request.authority,
                 snapshot_cut_ref: read.snapshot_cut_ref,
                 cache_revision_ref: read.cache_revision_ref,
                 observed_digest: read.observed_digest,
@@ -118,6 +158,69 @@ where
                 })
             }
         }
+    }
+}
+
+impl<P> WindowsObserveRuntimeManager<P>
+where
+    P: WindowsObserveActionLeaseProvider,
+{
+    /// Revalidate the exact preflight authority/evidence immediately before a
+    /// future dispatch boundary and bind the exact worker-owned live element.
+    ///
+    /// The semantic pass and worker lease bind intentionally use separate
+    /// serialized operations. If observation changes between them, the worker's
+    /// exact snapshot-cut lease check rejects the bind. No fuzzy re-resolution
+    /// or side effect is permitted here.
+    pub async fn revalidate_uia_dispatch(
+        &self,
+        session_id: SessionId,
+        request: WindowsUiaDispatchRevalidationRequest,
+    ) -> Result<WindowsUiaDispatchRevalidationReceipt, WindowsUiaDispatchRevalidationError> {
+        if request.authority != request.preflight.authority {
+            return Err(WindowsUiaDispatchRevalidationError::PreflightAuthorityMismatch);
+        }
+
+        let refreshed = self
+            .preflight_uia_action(
+                session_id,
+                WindowsUiaActionPreflightRequest {
+                    authority: request.authority.clone(),
+                    element_ref: request.preflight.element_ref.clone(),
+                    required_pattern: request.preflight.required_pattern,
+                },
+            )
+            .await?;
+
+        if refreshed != request.preflight {
+            return Err(WindowsUiaDispatchRevalidationError::PreflightEvidenceMismatch);
+        }
+
+        let element_lease = self
+            .bind_action_element_lease(
+                session_id,
+                WindowsUiaElementLeaseRequest {
+                    snapshot_cut_ref: refreshed.snapshot_cut_ref.clone(),
+                    element_ref: refreshed.element_ref.clone(),
+                },
+            )
+            .await
+            .map_err(WindowsUiaDispatchRevalidationError::LeaseProvider)?;
+
+        if element_lease.snapshot_cut_ref != refreshed.snapshot_cut_ref
+            || element_lease.provider_incarnation_ref
+                != request.authority.provider_incarnation_ref
+            || element_lease.target_incarnation_ref != request.authority.target_incarnation_ref
+            || element_lease.element_ref != refreshed.element_ref
+        {
+            return Err(WindowsUiaDispatchRevalidationError::LeaseReceiptMismatch);
+        }
+
+        Ok(WindowsUiaDispatchRevalidationReceipt {
+            authority: request.authority,
+            preflight: refreshed,
+            element_lease,
+        })
     }
 }
 
