@@ -12,7 +12,7 @@ use crate::{
         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
         WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     },
-    WindowsUiaEventDrain,
+    WindowsUiaDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +91,14 @@ impl WindowsUiaWorker {
         request: WindowsUiaElementLeaseRequest,
     ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
         self.inner.bind_element_lease(attachment, request)
+    }
+
+    pub fn revalidate_dispatch_context(
+        &self,
+        attachment: &WindowsUiaAttachment,
+        request: WindowsUiaDispatchContextRequest,
+    ) -> Result<WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError> {
+        self.inner.revalidate_dispatch_context(attachment, request)
     }
 
     pub fn subscribe_events(

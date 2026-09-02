@@ -27,6 +27,8 @@ jobs:
         run: cargo check -p localview-windows-uia-provider --all-targets
       - name: Phase 6 UIA action capability contract
         run: cargo test -p localview-windows-uia-provider --test action_capability_contract -- --nocapture
+      - name: Phase 6 provider dispatch context fence contract
+        run: cargo test -p localview-windows-uia-provider --test dispatch_context_contract -- --nocapture
       - name: Compile observe runtime manager
         run: cargo check -p localview-windows-observe-runtime --all-targets
       - name: Phase 6 UIA action capability preflight contract
@@ -43,6 +45,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test windows_uia_smoke -- --ignored --nocapture
+      - name: Real Win32 dispatch context + exact focused element fence
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-uia-provider --test dispatch_context_worker_smoke -- --ignored --nocapture
       - name: Real bounded Win32 UIA event subscription
         env:
           LOCALVIEW_UIA_SMOKE: "1"

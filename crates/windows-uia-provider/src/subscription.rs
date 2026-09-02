@@ -13,7 +13,7 @@ use crate::{
         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
         WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     },
-    WindowsUiaEventDrain,
+    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +216,20 @@ mod platform {
             request: WindowsUiaElementLeaseRequest,
         ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
             self.inner.bind_element_lease(attachment, request)
+        }
+
+        pub fn revalidate_dispatch_context(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaDispatchContextRequest,
+        ) -> Result<WindowsUiaBoundDispatchContextReceipt, WindowsUiaWorkerError> {
+            let requirements = request.requirements;
+            self.inner
+                .revalidate_dispatch_context(attachment, request)
+                .map(|context| WindowsUiaBoundDispatchContextReceipt {
+                    requirements,
+                    context,
+                })
         }
 
         pub fn subscribe_events(
@@ -597,6 +611,14 @@ impl WindowsUiaWorker {
         _attachment: &WindowsUiaAttachment,
         _request: WindowsUiaSnapshotRequest,
     ) -> Result<std::sync::Arc<NativeSemanticSnapshotRevision>, WindowsUiaWorkerError> {
+        Err(WindowsUiaWorkerError::UnsupportedPlatform)
+    }
+
+    pub fn revalidate_dispatch_context(
+        &self,
+        _attachment: &WindowsUiaAttachment,
+        _request: WindowsUiaDispatchContextRequest,
+    ) -> Result<WindowsUiaBoundDispatchContextReceipt, WindowsUiaWorkerError> {
         Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
 

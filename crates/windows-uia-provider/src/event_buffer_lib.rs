@@ -1,6 +1,7 @@
 #![cfg_attr(not(windows), forbid(unsafe_code))]
 
 mod action_capability;
+mod dispatch_context;
 mod event_buffer;
 #[cfg(windows)]
 mod subscription;
@@ -11,6 +12,7 @@ mod subscription;
 mod worker;
 
 pub use action_capability::*;
+pub use dispatch_context::*;
 pub use event_buffer::*;
 pub use subscription::*;
 pub use worker::{
