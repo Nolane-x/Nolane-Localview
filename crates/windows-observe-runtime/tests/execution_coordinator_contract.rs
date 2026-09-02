@@ -22,7 +22,7 @@ impl WindowsUiaDispatchExecutor for NeverExecutor {
 
     async fn execute(
         &self,
-        _request: WindowsUiaProviderExecutionRequest,
+        _request: &WindowsUiaProviderExecutionRequest,
     ) -> Result<WindowsUiaProviderExecutionReceipt, Self::Error> {
         Err(std::io::Error::other("never execute in API contract"))
     }
