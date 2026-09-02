@@ -64,7 +64,7 @@ mod windows_smoke {
                 unsafe {
                     let _ = ShowWindow(window, SW_SHOW);
                     let _ = SetForegroundWindow(window);
-                    let _ = SetFocus(window);
+                    let _ = SetFocus(Some(window));
                 }
                 window_tx
                     .send(window.0 as usize as u64)
