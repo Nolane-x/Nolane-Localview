@@ -128,23 +128,25 @@ mod windows_smoke {
             })
             .expect("context fixture must be retained in the exact snapshot");
 
+        let requirements = WindowsUiaDispatchContextRequirements {
+            require_foreground_target: true,
+            require_exact_element_focus: true,
+            require_no_modal_blocker: true,
+        };
         let receipt = worker
             .revalidate_dispatch_context(
                 &attachment,
                 WindowsUiaDispatchContextRequest {
                     snapshot_cut_ref: snapshot.snapshot_cut_ref().into(),
                     element_ref: fixture_node.element_ref.clone(),
-                    requirements: WindowsUiaDispatchContextRequirements {
-                        require_foreground_target: true,
-                        require_exact_element_focus: true,
-                        require_no_modal_blocker: true,
-                    },
+                    requirements,
                 },
             )
             .expect("exact live element + current Windows context must pass");
 
         assert_eq!(receipt.snapshot_cut_ref, snapshot.snapshot_cut_ref());
         assert_eq!(receipt.element_ref, fixture_node.element_ref);
+        assert_eq!(receipt.requirements, requirements);
         assert_eq!(
             &receipt.provider_incarnation_ref,
             attachment.provider_incarnation_ref()
