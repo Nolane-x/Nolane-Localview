@@ -33,6 +33,8 @@ jobs:
         run: cargo test -p localview-windows-observe-runtime --test action_capability_preflight_contract -- --nocapture
       - name: Phase 6 dispatch-time exact lease revalidation contract
         run: cargo test -p localview-windows-observe-runtime --test dispatch_revalidation_contract -- --nocapture
+      - name: Phase 6 canonical dispatch authority + durable journal contract
+        run: cargo test -p localview-windows-observe-runtime --test dispatch_authority_contract -- --nocapture
       - name: Phase 5 resource accounting and governor contract
         run: cargo test -p localview-windows-observe-runtime --test resource_accounting_contract -- --nocapture
       - name: Phase 6 read-only semantic action contract
