@@ -25,6 +25,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Compile isolated UIA provider
         run: cargo check -p localview-windows-uia-provider --all-targets
+      - name: Compile observe runtime manager
+        run: cargo check -p localview-windows-observe-runtime --all-targets
       - name: Real user-selected Win32 UIA snapshot
         env:
           LOCALVIEW_UIA_SMOKE: "1"
@@ -33,3 +35,7 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test windows_uia_event_smoke -- --ignored --nocapture
+      - name: Real Win32 UIA runtime manager
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-observe-runtime --test windows_runtime_smoke -- --ignored --nocapture
