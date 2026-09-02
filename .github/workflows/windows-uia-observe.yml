@@ -31,6 +31,8 @@ jobs:
         run: cargo test -p localview-windows-uia-provider --test dispatch_context_contract -- --nocapture
       - name: Compile observe runtime manager
         run: cargo check -p localview-windows-observe-runtime --all-targets
+      - name: V4.3 durable pre-dispatch WAL crash boundary
+        run: cargo test -p localview-live-bridge --test v43_consequential_journal -- --nocapture
       - name: Phase 6 UIA action capability preflight contract
         run: cargo test -p localview-windows-observe-runtime --test action_capability_preflight_contract -- --nocapture
       - name: Phase 6 dispatch-time exact lease revalidation contract

@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
-    ConsequentialJournal, ConsequentialJournalTransition, DispatchLinearizationReceipt, LiveBridge,
-    ProviderObservationBinding,
+    ConsequentialJournal, ConsequentialJournalTransition, DispatchLinearizationReceipt,
+    DispatchPreparationReceipt, LiveBridge, ProviderObservationBinding,
 };
 use localview_protocol::{
     DispatchResult, EventContinuityState, PrincipalRef, ProviderElementRealization,
@@ -242,11 +242,24 @@ async fn previously_linearized_action_cannot_be_reauthorized_for_blind_redispatc
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
-    journal
+    let authorized = journal
         .record_authorization(
             queued.action.id,
             metadata.authorization_revision.clone(),
             true,
+        )
+        .await
+        .unwrap();
+    journal
+        .record_dispatch_prepared(
+            queued.action.id,
+            DispatchPreparationReceipt {
+                receipt_ref: "dispatch-prepared:authority-fence:3".into(),
+                authorization_journal_sequence: authorized.journal_sequence,
+                precondition_snapshot_cut_ref: metadata.precondition_snapshot_cut_ref.clone(),
+                provider_incarnation_ref: metadata.provider_incarnation_ref.clone(),
+                target_incarnation_ref: metadata.target_incarnation_ref.clone(),
+            },
         )
         .await
         .unwrap();
@@ -277,7 +290,7 @@ async fn previously_linearized_action_cannot_be_reauthorized_for_blind_redispatc
         error,
         WindowsUiaDispatchAuthorityError::JournalStateNotDispatchable { .. }
     ));
-    assert_eq!(journal.entries_for(queued.action.id).await.len(), 3);
+    assert_eq!(journal.entries_for(queued.action.id).await.len(), 4);
 
     let _ = std::fs::remove_file(path);
 }
