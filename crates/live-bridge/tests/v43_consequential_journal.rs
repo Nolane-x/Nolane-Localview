@@ -3,7 +3,7 @@ use std::{fs::OpenOptions, io::Write, path::PathBuf};
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
     ConsequentialJournal, ConsequentialJournalError, ConsequentialRecoveryState,
-    DispatchLinearizationReceipt,
+    DispatchLinearizationReceipt, DispatchPreparationReceipt,
 };
 use localview_protocol::{
     DispatchResult, PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
@@ -31,6 +31,16 @@ fn envelope() -> CanonicalActionEnvelope {
             idempotency_class: ActionIdempotencyClass::Irreversible,
             expected_postcondition_contract_refs: vec!["postcondition:message-visible".into()],
         },
+    }
+}
+
+fn preparation_receipt() -> DispatchPreparationReceipt {
+    DispatchPreparationReceipt {
+        receipt_ref: "dispatch-prepared:1".into(),
+        authorization_journal_sequence: 2,
+        precondition_snapshot_cut_ref: "cut:42".into(),
+        provider_incarnation_ref: ProviderIncarnationRef::from("provider:webview:1"),
+        target_incarnation_ref: TargetIncarnationRef::from("target:webview:1"),
     }
 }
 
@@ -77,6 +87,52 @@ async fn journal_sequence_survives_reopen_and_is_the_causal_order() {
         .await
         .unwrap();
     assert_eq!(revalidated.journal_sequence, 3);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn crash_after_prepare_before_dispatch_receipt_replays_as_dispatch_uncertain() {
+    let path = journal_path("prepared-dispatch-uncertain");
+    let action = envelope();
+    let journal = ConsequentialJournal::open(&path).await.unwrap();
+
+    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_authorization(
+            action.transport_action_id,
+            action.metadata.authorization_revision.clone(),
+            true,
+        )
+        .await
+        .unwrap();
+    journal
+        .record_dispatch_prepared(action.transport_action_id, preparation_receipt())
+        .await
+        .unwrap();
+    drop(journal);
+
+    let reopened = ConsequentialJournal::open(&path).await.unwrap();
+    assert_eq!(
+        reopened.recovery_state(action.transport_action_id).await.unwrap(),
+        ConsequentialRecoveryState::DispatchPrepared
+    );
+    assert!(
+        reopened
+            .requires_reconciliation(action.transport_action_id)
+            .await
+            .unwrap()
+    );
+
+    let duplicate_prepare = reopened
+        .record_dispatch_prepared(action.transport_action_id, preparation_receipt())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        duplicate_prepare,
+        ConsequentialJournalError::InvalidTransition { action_id, .. }
+            if action_id == action.transport_action_id
+    ));
 
     let _ = std::fs::remove_file(path);
 }
