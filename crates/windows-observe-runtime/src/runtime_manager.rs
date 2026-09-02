@@ -84,7 +84,7 @@ pub trait WindowsObserveProvider: Send + Sync + 'static {
     fn unsubscribe_events(&self, subscription: Self::Subscription) -> Result<(), Self::Error>;
 }
 
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum WindowsObserveRuntimeError {
     #[error("Windows observe runtime configuration is invalid")]
     InvalidConfiguration,
@@ -293,7 +293,13 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         .await?;
 
         let report = binding.ingest_drain(&self.bridge, drain).await?;
-        let reconciliation_performed = requires_reconciliation(report.continuity);
+        let observed_status = self
+            .bridge
+            .observation_status(session_id)
+            .await
+            .ok_or(WindowsObserveRuntimeError::ObservationStateMissing { session_id })?;
+        let reconciliation_performed = requires_reconciliation(report.continuity)
+            && observed_status.current_snapshot_completeness.is_none();
         let status = if reconciliation_performed {
             let snapshot_cut_ref = format!(
                 "windows-uia:reconcile:{session_id}:{}:{}",
@@ -320,10 +326,7 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
                 .record_snapshot_reconciliation(&self.bridge, snapshot.as_ref(), receipt_id)
                 .await?
         } else {
-            self.bridge
-                .observation_status(session_id)
-                .await
-                .ok_or(WindowsObserveRuntimeError::ObservationStateMissing { session_id })?
+            observed_status
         };
 
         Ok(WindowsObserveDrainOutcome {
@@ -363,6 +366,12 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         self.active.lock().await.remove(&session_id);
         self.bridge.release_provider_observation(session_id).await;
         Ok(())
+    }
+
+    pub async fn attached_sessions(&self) -> Vec<SessionId> {
+        let mut sessions = self.active.lock().await.keys().copied().collect::<Vec<_>>();
+        sessions.sort_unstable();
+        sessions
     }
 
     async fn next_generation(&self, session_id: SessionId) -> u64 {
