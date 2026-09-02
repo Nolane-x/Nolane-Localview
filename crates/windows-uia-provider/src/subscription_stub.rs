@@ -12,7 +12,7 @@ use crate::{
         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
         WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     },
-    WindowsUiaDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
+    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,8 +97,14 @@ impl WindowsUiaWorker {
         &self,
         attachment: &WindowsUiaAttachment,
         request: WindowsUiaDispatchContextRequest,
-    ) -> Result<WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError> {
-        self.inner.revalidate_dispatch_context(attachment, request)
+    ) -> Result<WindowsUiaBoundDispatchContextReceipt, WindowsUiaWorkerError> {
+        let requirements = request.requirements;
+        self.inner
+            .revalidate_dispatch_context(attachment, request)
+            .map(|context| WindowsUiaBoundDispatchContextReceipt {
+                requirements,
+                context,
+            })
     }
 
     pub fn subscribe_events(

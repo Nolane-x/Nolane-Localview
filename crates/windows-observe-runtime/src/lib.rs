@@ -2,9 +2,11 @@
 
 mod action_preflight;
 mod dispatch_authority;
+mod dispatch_seal;
 mod runtime_manager;
 pub use action_preflight::*;
 pub use dispatch_authority::*;
+pub use dispatch_seal::*;
 pub use runtime_manager::*;
 
 use localview_live_bridge::{
