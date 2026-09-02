@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::{
     worker::{
-        WindowsUiaAttachment, WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig,
-        WindowsUiaWorkerError,
+        WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
+        WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     },
     WindowsUiaEventDrain,
 };
@@ -83,6 +83,14 @@ impl WindowsUiaWorker {
         request: WindowsUiaSnapshotRequest,
     ) -> Result<Arc<NativeSemanticSnapshotRevision>, WindowsUiaWorkerError> {
         self.inner.snapshot(attachment, request)
+    }
+
+    pub fn bind_element_lease(
+        &self,
+        attachment: &WindowsUiaAttachment,
+        request: WindowsUiaElementLeaseRequest,
+    ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
+        self.inner.bind_element_lease(attachment, request)
     }
 
     pub fn subscribe_events(
