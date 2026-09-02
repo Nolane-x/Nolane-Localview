@@ -5,12 +5,17 @@ use std::{
     sync::Arc,
 };
 
-use localview_live_bridge::{LiveBridge, ObservationStatus, ProviderIngestReport};
+use localview_live_bridge::{
+    ActionEnvelopeBindingError, ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass,
+    LiveBridge, ObservationStatus, ProviderIngestReport,
+};
 use localview_native_provider::{
-    NativeSemanticSnapshotRevision, SnapshotResourceUsage, UserSelectedWindowTarget,
+    NativeSemanticNodeObservation, NativeSemanticSnapshotRevision, SnapshotResourceUsage,
+    UserSelectedWindowTarget,
 };
 use localview_protocol::{
-    EventContinuityState, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
+    EventContinuityState, ProviderElementRef, ProviderIncarnationRef, ReconciliationCompleteness,
+    SessionId, TargetIncarnationRef,
 };
 use localview_resource_governor::{
     PressureLevel, ResourceAdmissionDenial, ResourceReservation, ResourceWorkKind,
@@ -130,6 +135,40 @@ impl From<WindowsObserveBridgeError> for WindowsObserveRuntimeError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsSemanticReadRequest {
+    pub authority: ActionEnvelopeMetadata,
+    pub element_ref: ProviderElementRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsSemanticReadReceipt {
+    pub snapshot_cut_ref: String,
+    pub cache_revision_ref: String,
+    pub observed_digest: String,
+    pub node: NativeSemanticNodeObservation,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum WindowsSemanticReadError {
+    #[error("Windows semantic read session {session_id} is not attached")]
+    NotAttached { session_id: SessionId },
+    #[error("Windows semantic read canonical authority rejected: {0:?}")]
+    Authority(ActionEnvelopeBindingError),
+    #[error("Windows semantic read requires S0 observe-only risk")]
+    ObserveOnlyRiskRequired,
+    #[error("Windows semantic read requires pure-read idempotency")]
+    PureReadIdempotencyRequired,
+    #[error("Windows semantic read precondition cut does not match the current snapshot")]
+    PreconditionSnapshotCutMismatch { expected: String, actual: String },
+    #[error("Windows semantic read current snapshot is incomplete")]
+    SnapshotIncomplete,
+    #[error("Windows semantic read element acquisition cut does not match the current snapshot")]
+    ElementAcquisitionCutMismatch { expected: String, actual: String },
+    #[error("Windows semantic read element does not exist in the exact current snapshot")]
+    ElementNotFound,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WindowsObserveResourceAccounting {
     pub initial_snapshots: u64,
@@ -184,6 +223,7 @@ struct ActiveObservation<P: WindowsObserveProvider> {
     subscription: P::Subscription,
     binding: WindowsObserveBridgeBinding,
     surface_scope: String,
+    current_snapshot: Arc<NativeSemanticSnapshotRevision>,
     accounting: WindowsObserveResourceAccounting,
 }
 
@@ -340,6 +380,7 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
                 subscription,
                 binding,
                 surface_scope,
+                current_snapshot: snapshot,
                 accounting,
             },
         );
@@ -439,10 +480,7 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             let status = binding
                 .record_snapshot_reconciliation(&self.bridge, snapshot.as_ref(), receipt_id)
                 .await?;
-            self.update_accounting(session_id, |accounting| {
-                accounting.record_reconciliation_snapshot(snapshot.resource_usage());
-            })
-            .await;
+            self.update_reconciliation_snapshot(session_id, snapshot).await;
             status
         } else {
             observed_status
@@ -452,6 +490,51 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             report,
             status,
             reconciliation_performed: reconciliation_needed,
+        })
+    }
+
+    pub async fn read_semantic(
+        &self,
+        session_id: SessionId,
+        request: WindowsSemanticReadRequest,
+    ) -> Result<WindowsSemanticReadReceipt, WindowsSemanticReadError> {
+        // Serialize pure reads with attach/drain/reconciliation/release so the
+        // snapshot pointer and the bridge-visible reconciliation boundary cannot
+        // momentarily describe different current cuts.
+        let _gate = self.operation_gate.lock().await;
+        let snapshot = self
+            .active
+            .lock()
+            .await
+            .get(&session_id)
+            .map(|observation| observation.current_snapshot.clone())
+            .ok_or(WindowsSemanticReadError::NotAttached { session_id })?;
+
+        validate_semantic_read_authority(&request.authority, snapshot.as_ref())?;
+        if snapshot.completeness() != ReconciliationCompleteness::Established {
+            return Err(WindowsSemanticReadError::SnapshotIncomplete);
+        }
+
+        let current_cut = snapshot.snapshot_cut_ref();
+        if request.element_ref.acquisition_cut_ref != current_cut {
+            return Err(WindowsSemanticReadError::ElementAcquisitionCutMismatch {
+                expected: current_cut.to_owned(),
+                actual: request.element_ref.acquisition_cut_ref.clone(),
+            });
+        }
+
+        let node = snapshot
+            .nodes()
+            .iter()
+            .find(|node| node.element_ref == request.element_ref)
+            .cloned()
+            .ok_or(WindowsSemanticReadError::ElementNotFound)?;
+
+        Ok(WindowsSemanticReadReceipt {
+            snapshot_cut_ref: current_cut.to_owned(),
+            cache_revision_ref: snapshot.cache_revision_ref().to_owned(),
+            observed_digest: snapshot.observed_digest().to_owned(),
+            node,
         })
     }
 
@@ -536,6 +619,19 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         }
     }
 
+    async fn update_reconciliation_snapshot(
+        &self,
+        session_id: SessionId,
+        snapshot: Arc<NativeSemanticSnapshotRevision>,
+    ) {
+        if let Some(observation) = self.active.lock().await.get_mut(&session_id) {
+            observation
+                .accounting
+                .record_reconciliation_snapshot(snapshot.resource_usage());
+            observation.current_snapshot = snapshot;
+        }
+    }
+
     async fn next_generation(&self, session_id: SessionId) -> u64 {
         self.generations
             .lock()
@@ -553,6 +649,37 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         })
         .await;
     }
+}
+
+fn validate_semantic_read_authority(
+    authority: &ActionEnvelopeMetadata,
+    snapshot: &NativeSemanticSnapshotRevision,
+) -> Result<(), WindowsSemanticReadError> {
+    if authority.risk_class != ActionRiskClass::ObserveOnly {
+        return Err(WindowsSemanticReadError::ObserveOnlyRiskRequired);
+    }
+    if authority.idempotency_class != ActionIdempotencyClass::PureRead {
+        return Err(WindowsSemanticReadError::PureReadIdempotencyRequired);
+    }
+    if authority.provider_incarnation_ref != *snapshot.provider_incarnation_ref() {
+        return Err(WindowsSemanticReadError::Authority(
+            ActionEnvelopeBindingError::ProviderIncarnationMismatch,
+        ));
+    }
+    if authority.target_incarnation_ref != *snapshot.target_incarnation_ref() {
+        return Err(WindowsSemanticReadError::Authority(
+            ActionEnvelopeBindingError::TargetIncarnationMismatch,
+        ));
+    }
+
+    let expected_cut = snapshot.snapshot_cut_ref();
+    if authority.precondition_snapshot_cut_ref != expected_cut {
+        return Err(WindowsSemanticReadError::PreconditionSnapshotCutMismatch {
+            expected: expected_cut.to_owned(),
+            actual: authority.precondition_snapshot_cut_ref.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn resource_denial_error(denial: ResourceAdmissionDenial) -> WindowsObserveRuntimeError {
