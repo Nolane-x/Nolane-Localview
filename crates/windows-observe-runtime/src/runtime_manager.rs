@@ -22,9 +22,9 @@ use localview_resource_governor::{
     RuntimeResourceGovernor,
 };
 use localview_windows_uia_provider::{
-    WindowsUiaAttachment, WindowsUiaEventDrain, WindowsUiaEventSubscription,
-    WindowsUiaEventSubscriptionOptions, WindowsUiaSnapshotRequest, WindowsUiaWorker,
-    WindowsUiaWorkerConfig, WindowsUiaWorkerError,
+    WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
+    WindowsUiaEventDrain, WindowsUiaEventSubscription, WindowsUiaEventSubscriptionOptions,
+    WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -93,6 +93,19 @@ pub trait WindowsObserveProvider: Send + Sync + 'static {
     ) -> Result<Arc<NativeSemanticSnapshotRevision>, Self::Error>;
 
     fn unsubscribe_events(&self, subscription: Self::Subscription) -> Result<(), Self::Error>;
+}
+
+/// Narrow capability used only by the Phase 6 dispatch eligibility fence.
+///
+/// Observe-only providers do not need to implement this trait. Implementations
+/// may bind a worker-owned live element but must return only a data receipt and
+/// must not execute a UIA pattern method or OS input as part of the bind.
+pub trait WindowsObserveActionLeaseProvider: WindowsObserveProvider {
+    fn bind_element_lease(
+        &self,
+        attachment: &Self::Attachment,
+        request: WindowsUiaElementLeaseRequest,
+    ) -> Result<WindowsUiaElementLeaseReceipt, Self::Error>;
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -651,6 +664,38 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
     }
 }
 
+impl<P> WindowsObserveRuntimeManager<P>
+where
+    P: WindowsObserveActionLeaseProvider,
+{
+    /// Bind the exact retained worker element for one current snapshot cut.
+    ///
+    /// This is intentionally separate from semantic preflight. Re-acquiring the
+    /// operation gate makes attach/drain/reconciliation/release mutually
+    /// exclusive with the live bind; if the snapshot changed in the gap before
+    /// this call, the provider's exact-cut lease contract rejects the request.
+    pub(crate) async fn bind_action_element_lease(
+        &self,
+        session_id: SessionId,
+        request: WindowsUiaElementLeaseRequest,
+    ) -> Result<WindowsUiaElementLeaseReceipt, WindowsObserveRuntimeError> {
+        let _gate = self.operation_gate.lock().await;
+        let attachment = self
+            .active
+            .lock()
+            .await
+            .get(&session_id)
+            .map(|observation| observation.attachment.clone())
+            .ok_or(WindowsObserveRuntimeError::NotAttached { session_id })?;
+
+        let provider = self.provider.clone();
+        run_provider("bind_element_lease", move || {
+            provider.bind_element_lease(&attachment, request)
+        })
+        .await
+    }
+}
+
 fn validate_semantic_read_authority(
     authority: &ActionEnvelopeMetadata,
     snapshot: &NativeSemanticSnapshotRevision,
@@ -813,6 +858,16 @@ impl WindowsObserveProvider for WindowsUiaObserveProvider {
 
     fn unsubscribe_events(&self, subscription: Self::Subscription) -> Result<(), Self::Error> {
         self.worker.unsubscribe_events(subscription)
+    }
+}
+
+impl WindowsObserveActionLeaseProvider for WindowsUiaObserveProvider {
+    fn bind_element_lease(
+        &self,
+        attachment: &Self::Attachment,
+        request: WindowsUiaElementLeaseRequest,
+    ) -> Result<WindowsUiaElementLeaseReceipt, Self::Error> {
+        self.worker.bind_element_lease(attachment, request)
     }
 }
 
