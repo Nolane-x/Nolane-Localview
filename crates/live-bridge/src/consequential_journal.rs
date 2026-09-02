@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -126,6 +127,10 @@ pub enum ConsequentialJournalError {
 struct JournalState {
     next_sequence: u64,
     entries: Vec<ConsequentialJournalEntry>,
+    /// Non-durable process-local capability proving that this process itself
+    /// completed the durable PREPARED append. Reopening a journal intentionally
+    /// starts with an empty set, so recovered PREPARED actions can only reconcile.
+    live_dispatch_prepared: HashSet<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -153,6 +158,7 @@ impl ConsequentialJournal {
             state: Arc::new(Mutex::new(JournalState {
                 next_sequence,
                 entries,
+                live_dispatch_prepared: HashSet::new(),
             })),
         })
     }
@@ -218,11 +224,20 @@ impl ConsequentialJournal {
         action_id: Uuid,
         receipt: DispatchPreparationReceipt,
     ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
-        self.append_validated(
-            action_id,
-            ConsequentialJournalTransition::DispatchPrepared { receipt },
-        )
-        .await
+        let entry = self
+            .append_validated(
+                action_id,
+                ConsequentialJournalTransition::DispatchPrepared { receipt },
+            )
+            .await?;
+        // This process-local grant is created only after the PREPARED record has
+        // been fsync'd. It is deliberately not reconstructed by `open`.
+        self.state
+            .lock()
+            .await
+            .live_dispatch_prepared
+            .insert(action_id);
+        Ok(entry)
     }
 
     pub async fn record_dispatch_linearized(
@@ -230,11 +245,32 @@ impl ConsequentialJournal {
         action_id: Uuid,
         receipt: DispatchLinearizationReceipt,
     ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
-        self.append_validated(
-            action_id,
-            ConsequentialJournalTransition::DispatchLinearized { receipt },
-        )
-        .await
+        {
+            let state = self.state.lock().await;
+            if !state.live_dispatch_prepared.contains(&action_id) {
+                let current = recovery_state_for(&state.entries, action_id);
+                if current == Some(ConsequentialRecoveryState::DispatchPrepared) {
+                    return Err(ConsequentialJournalError::InvalidTransition {
+                        action_id,
+                        attempted: "dispatch_linearized_after_recovered_prepare",
+                        current,
+                    });
+                }
+            }
+        }
+
+        let entry = self
+            .append_validated(
+                action_id,
+                ConsequentialJournalTransition::DispatchLinearized { receipt },
+            )
+            .await?;
+        self.state
+            .lock()
+            .await
+            .live_dispatch_prepared
+            .remove(&action_id);
+        Ok(entry)
     }
 
     pub async fn record_reconciliation_outcome(
