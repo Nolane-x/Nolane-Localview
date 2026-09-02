@@ -250,7 +250,7 @@ async fn previously_linearized_action_cannot_be_reauthorized_for_blind_redispatc
         )
         .await
         .unwrap();
-    journal
+    let admission = journal
         .record_dispatch_prepared(
             queued.action.id,
             DispatchPreparationReceipt {
@@ -263,9 +263,11 @@ async fn previously_linearized_action_cannot_be_reauthorized_for_blind_redispatc
         )
         .await
         .unwrap();
+    let (_, capability) = admission.into_parts();
+    let permit = journal.begin_dispatch(capability).await.unwrap();
     journal
         .record_dispatch_linearized(
-            queued.action.id,
+            permit,
             DispatchLinearizationReceipt {
                 receipt_ref: "dispatch:authority-fence:3".into(),
                 transport_result: TransportResult::DeliveredToExecutor,
