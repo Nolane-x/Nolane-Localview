@@ -3,7 +3,7 @@ use std::{fs::OpenOptions, io::Write, path::PathBuf};
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
     ConsequentialJournal, ConsequentialJournalError, ConsequentialRecoveryState,
-    DispatchLinearizationReceipt, DispatchPreparationReceipt,
+    DispatchExecutionPermit, DispatchLinearizationReceipt, DispatchPreparationReceipt,
 };
 use localview_protocol::{
     DispatchResult, PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
@@ -55,10 +55,10 @@ fn dispatch_receipt() -> DispatchLinearizationReceipt {
     }
 }
 
-async fn authorize_and_prepare(
+async fn authorize_prepare_and_begin(
     journal: &ConsequentialJournal,
     action: &CanonicalActionEnvelope,
-) {
+) -> DispatchExecutionPermit {
     let authorized = journal
         .record_authorization(
             action.transport_action_id,
@@ -67,13 +67,15 @@ async fn authorize_and_prepare(
         )
         .await
         .unwrap();
-    journal
+    let admission = journal
         .record_dispatch_prepared(
             action.transport_action_id,
             preparation_receipt(action, authorized.journal_sequence),
         )
         .await
         .unwrap();
+    let (_, capability) = admission.into_parts();
+    journal.begin_dispatch(capability).await.unwrap()
 }
 
 #[tokio::test]
@@ -137,7 +139,8 @@ async fn crash_after_prepare_before_dispatch_receipt_replays_as_dispatch_uncerta
         )
         .await
         .unwrap();
-    assert!(prepared.journal_sequence > authorized.journal_sequence);
+    assert!(prepared.entry().journal_sequence > authorized.journal_sequence);
+    drop(prepared);
     drop(journal);
 
     let reopened = ConsequentialJournal::open(&path).await.unwrap();
@@ -161,16 +164,6 @@ async fn crash_after_prepare_before_dispatch_receipt_replays_as_dispatch_uncerta
         .unwrap_err();
     assert!(matches!(
         duplicate_prepare,
-        ConsequentialJournalError::InvalidTransition { action_id, .. }
-            if action_id == action.transport_action_id
-    ));
-
-    let blind_retry = reopened
-        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        blind_retry,
         ConsequentialJournalError::InvalidTransition { action_id, .. }
             if action_id == action.transport_action_id
     ));
@@ -237,7 +230,7 @@ async fn preparation_requires_latest_revalidated_authority_and_exact_binding() {
 }
 
 #[tokio::test]
-async fn new_dispatch_linearization_cannot_bypass_durable_prepare() {
+async fn authorization_alone_remains_not_dispatched_without_prepared_capability() {
     let path = journal_path("no-prepare-bypass");
     let action = envelope();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
@@ -251,15 +244,6 @@ async fn new_dispatch_linearization_cannot_bypass_durable_prepare() {
         .await
         .unwrap();
 
-    let error = journal
-        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        ConsequentialJournalError::InvalidTransition { action_id, .. }
-            if action_id == action.transport_action_id
-    ));
     assert_eq!(
         journal.recovery_state(action.transport_action_id).await,
         Some(ConsequentialRecoveryState::AuthorizedNotDispatched)
@@ -275,9 +259,9 @@ async fn crash_after_dispatch_replays_as_possibly_dispatched_and_requires_reconc
     let journal = ConsequentialJournal::open(&path).await.unwrap();
 
     journal.record_intent_admitted(action.clone()).await.unwrap();
-    authorize_and_prepare(&journal, &action).await;
+    let permit = authorize_prepare_and_begin(&journal, &action).await;
     journal
-        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
+        .record_dispatch_linearized(permit, dispatch_receipt())
         .await
         .unwrap();
     drop(journal);
@@ -304,9 +288,9 @@ async fn verified_outcome_remains_uncommitted_until_commit_is_durable() {
     let journal = ConsequentialJournal::open(&path).await.unwrap();
 
     journal.record_intent_admitted(action.clone()).await.unwrap();
-    authorize_and_prepare(&journal, &action).await;
+    let permit = authorize_prepare_and_begin(&journal, &action).await;
     journal
-        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
+        .record_dispatch_linearized(permit, dispatch_receipt())
         .await
         .unwrap();
     journal
@@ -344,9 +328,9 @@ async fn compensation_is_additive_history_not_rewrite_of_prior_effect() {
     let journal = ConsequentialJournal::open(&path).await.unwrap();
 
     journal.record_intent_admitted(action.clone()).await.unwrap();
-    authorize_and_prepare(&journal, &action).await;
+    let permit = authorize_prepare_and_begin(&journal, &action).await;
     journal
-        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
+        .record_dispatch_linearized(permit, dispatch_receipt())
         .await
         .unwrap();
     journal
@@ -388,7 +372,11 @@ async fn invalid_lifecycle_transitions_are_typed_and_never_appended() {
     let journal = ConsequentialJournal::open(&path).await.unwrap();
 
     let unknown = journal
-        .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
+        .record_authorization(
+            action.transport_action_id,
+            action.metadata.authorization_revision.clone(),
+            true,
+        )
         .await
         .unwrap_err();
     assert!(matches!(
