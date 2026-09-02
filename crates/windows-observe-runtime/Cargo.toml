@@ -10,14 +10,12 @@ chrono.workspace = true
 localview-live-bridge = { path = "../live-bridge" }
 localview-native-provider = { path = "../native-provider" }
 localview-protocol = { path = "../protocol" }
+localview-resource-governor = { path = "../resource-governor" }
 localview-windows-uia-provider = { path = "../windows-uia-provider" }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-localview-resource-governor = { path = "../resource-governor" }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows = { version = "0.61", features = [
