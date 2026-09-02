@@ -6,7 +6,9 @@ use localview_native_provider::{
     NativeProviderCapabilities, NativeProviderIdentityError, NativeSemanticSnapshotRevision,
     SnapshotBudget, SnapshotPublishError, UserSelectedWindowTarget, WindowsTargetFingerprint,
 };
-use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
+use localview_protocol::{
+    ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef,
+};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +30,20 @@ impl Default for WindowsUiaWorkerConfig {
 pub struct WindowsUiaSnapshotRequest {
     pub snapshot_cut_ref: String,
     pub surface_scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUiaElementLeaseRequest {
+    pub snapshot_cut_ref: String,
+    pub element_ref: ProviderElementRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUiaElementLeaseReceipt {
+    pub snapshot_cut_ref: String,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub element_ref: ProviderElementRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +84,17 @@ pub enum WindowsUiaWorkerError {
     TargetReincarnated,
     #[error("Windows UI Automation snapshot request is invalid")]
     InvalidSnapshotRequest,
+    #[error("Windows UI Automation element lease request is invalid")]
+    InvalidElementLeaseRequest,
+    #[error(
+        "Windows UI Automation element lease snapshot expired: requested {requested_cut}, current {current_cut}"
+    )]
+    ElementLeaseSnapshotExpired {
+        requested_cut: String,
+        current_cut: String,
+    },
+    #[error("Windows UI Automation exact element lease was not found in the latest snapshot")]
+    ElementLeaseNotFound,
     #[error("Windows target identity error: {0}")]
     Identity(#[from] NativeProviderIdentityError),
     #[error("Windows UI Automation provider failure: {0}")]
@@ -136,7 +163,22 @@ mod platform {
             request: WindowsUiaSnapshotRequest,
             reply: Sender<Result<Arc<NativeSemanticSnapshotRevision>, WindowsUiaWorkerError>>,
         },
+        BindElementLease {
+            attachment: WindowsUiaAttachment,
+            request: WindowsUiaElementLeaseRequest,
+            reply: Sender<Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError>>,
+        },
         Shutdown,
+    }
+
+    struct RetainedElementLease {
+        element_ref: ProviderElementRef,
+        _element: IUIAutomationElement,
+    }
+
+    struct RetainedElementLeaseSet {
+        snapshot_cut_ref: String,
+        elements: Vec<RetainedElementLease>,
     }
 
     struct WorkerState {
@@ -145,6 +187,7 @@ mod platform {
         provider_incarnation_ref: ProviderIncarnationRef,
         snapshot_budget: SnapshotBudget,
         caches: HashMap<TargetIncarnationRef, SemanticSnapshotCache>,
+        element_leases: HashMap<TargetIncarnationRef, RetainedElementLeaseSet>,
     }
 
     pub struct WindowsUiaWorker {
@@ -230,6 +273,29 @@ mod platform {
             let (reply_tx, reply_rx) = mpsc::channel();
             self.sender
                 .send(WorkerCommand::Snapshot {
+                    attachment: attachment.clone(),
+                    request,
+                    reply: reply_tx,
+                })
+                .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
+            recv_command(reply_rx, self.command_timeout)
+        }
+
+        pub fn bind_element_lease(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaElementLeaseRequest,
+        ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
+            if request.snapshot_cut_ref.trim().is_empty() {
+                return Err(WindowsUiaWorkerError::InvalidElementLeaseRequest);
+            }
+            if attachment.provider_incarnation_ref != self.provider_incarnation_ref {
+                return Err(WindowsUiaWorkerError::TargetReincarnated);
+            }
+
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.sender
+                .send(WorkerCommand::BindElementLease {
                     attachment: attachment.clone(),
                     request,
                     reply: reply_tx,
@@ -323,6 +389,7 @@ mod platform {
             provider_incarnation_ref: provider_incarnation_ref.clone(),
             snapshot_budget,
             caches: HashMap::new(),
+            element_leases: HashMap::new(),
         };
         if startup.send(Ok(provider_incarnation_ref)).is_err() {
             unsafe {
@@ -343,6 +410,13 @@ mod platform {
                     reply,
                 } => {
                     let _ = reply.send(state.snapshot(&attachment, request));
+                }
+                WorkerCommand::BindElementLease {
+                    attachment,
+                    request,
+                    reply,
+                } => {
+                    let _ = reply.send(state.bind_element_lease(&attachment, request));
                 }
                 WorkerCommand::Shutdown => break,
             }
@@ -381,12 +455,7 @@ mod platform {
                 return Err(WindowsUiaWorkerError::TargetReincarnated);
             }
 
-            let current_fingerprint = self.fingerprint(&attachment.selection)?;
-            let current_target =
-                derive_windows_target_incarnation(&attachment.selection, &current_fingerprint)?;
-            if current_target != attachment.target_incarnation_ref {
-                return Err(WindowsUiaWorkerError::TargetReincarnated);
-            }
+            self.require_current_target(attachment)?;
 
             let hwnd = hwnd_from_u64(attachment.selection.native_window_handle);
             let root = unsafe {
@@ -409,7 +478,7 @@ mod platform {
                 .current()
                 .map_or(1, |revision| revision.capture_sequence().saturating_add(1));
 
-            let (nodes, resource_usage, mut debt) = observe_bounded_tree(
+            let (nodes, retained_elements, resource_usage, mut debt) = observe_bounded_tree(
                 &self.walker,
                 root,
                 &self.provider_incarnation_ref,
@@ -430,7 +499,7 @@ mod platform {
                 ReconciliationCompleteness::Established
             };
 
-            cache
+            let revision = cache
                 .publish(NativeSemanticSnapshotDraft {
                     provider_incarnation_ref: self.provider_incarnation_ref.clone(),
                     target_incarnation_ref: attachment.target_incarnation_ref.clone(),
@@ -444,7 +513,64 @@ mod platform {
                     completeness,
                     incompleteness_debt: debt,
                 })
-                .map_err(WindowsUiaWorkerError::from)
+                .map_err(WindowsUiaWorkerError::from)?;
+
+            self.element_leases.insert(
+                attachment.target_incarnation_ref.clone(),
+                RetainedElementLeaseSet {
+                    snapshot_cut_ref: revision.snapshot_cut_ref().to_owned(),
+                    elements: retained_elements,
+                },
+            );
+            Ok(revision)
+        }
+
+        fn bind_element_lease(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaElementLeaseRequest,
+        ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
+            if attachment.provider_incarnation_ref != self.provider_incarnation_ref {
+                return Err(WindowsUiaWorkerError::TargetReincarnated);
+            }
+            self.require_current_target(attachment)?;
+
+            let lease_set = self
+                .element_leases
+                .get(&attachment.target_incarnation_ref)
+                .ok_or(WindowsUiaWorkerError::ElementLeaseNotFound)?;
+            if lease_set.snapshot_cut_ref != request.snapshot_cut_ref {
+                return Err(WindowsUiaWorkerError::ElementLeaseSnapshotExpired {
+                    requested_cut: request.snapshot_cut_ref,
+                    current_cut: lease_set.snapshot_cut_ref.clone(),
+                });
+            }
+
+            let retained = lease_set
+                .elements
+                .iter()
+                .find(|retained| retained.element_ref == request.element_ref)
+                .ok_or(WindowsUiaWorkerError::ElementLeaseNotFound)?;
+
+            Ok(WindowsUiaElementLeaseReceipt {
+                snapshot_cut_ref: lease_set.snapshot_cut_ref.clone(),
+                provider_incarnation_ref: self.provider_incarnation_ref.clone(),
+                target_incarnation_ref: attachment.target_incarnation_ref.clone(),
+                element_ref: retained.element_ref.clone(),
+            })
+        }
+
+        fn require_current_target(
+            &self,
+            attachment: &WindowsUiaAttachment,
+        ) -> Result<(), WindowsUiaWorkerError> {
+            let current_fingerprint = self.fingerprint(&attachment.selection)?;
+            let current_target =
+                derive_windows_target_incarnation(&attachment.selection, &current_fingerprint)?;
+            if current_target != attachment.target_incarnation_ref {
+                return Err(WindowsUiaWorkerError::TargetReincarnated);
+            }
+            Ok(())
         }
 
         fn fingerprint(
@@ -546,11 +672,13 @@ mod platform {
         budget: SnapshotBudget,
     ) -> (
         Vec<NativeSemanticNodeObservation>,
+        Vec<RetainedElementLease>,
         localview_native_provider::SnapshotResourceUsage,
         Vec<String>,
     ) {
         let mut guard = SnapshotBudgetGuard::new(budget);
         let mut nodes = Vec::new();
+        let mut retained_elements = Vec::new();
         let mut debt = Vec::new();
         let mut queue = VecDeque::from([(root, None, 0_usize)]);
 
@@ -639,6 +767,10 @@ mod platform {
                 attributes.insert("runtime_id_observed".into(), "true".into());
             }
             action_capabilities.write_attributes(&mut attributes);
+            retained_elements.push(RetainedElementLease {
+                element_ref: element_ref.clone(),
+                _element: element.clone(),
+            });
             nodes.push(NativeSemanticNodeObservation {
                 element_ref,
                 parent_index,
@@ -684,7 +816,7 @@ mod platform {
                 debt.push(format!("snapshot_budget_exhausted:{limit:?}"));
             }
         }
-        (nodes, usage, debt)
+        (nodes, retained_elements, usage, debt)
     }
 
     fn observe_action_capabilities(
@@ -843,6 +975,14 @@ impl WindowsUiaWorker {
         _attachment: &WindowsUiaAttachment,
         _request: WindowsUiaSnapshotRequest,
     ) -> Result<Arc<NativeSemanticSnapshotRevision>, WindowsUiaWorkerError> {
+        Err(WindowsUiaWorkerError::UnsupportedPlatform)
+    }
+
+    pub fn bind_element_lease(
+        &self,
+        _attachment: &WindowsUiaAttachment,
+        _request: WindowsUiaElementLeaseRequest,
+    ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
         Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
 }

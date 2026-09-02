@@ -12,8 +12,9 @@ mod windows_smoke {
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
     use localview_protocol::ReconciliationCompleteness;
     use localview_windows_uia_provider::{
-        WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport,
-        WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig,
+        WindowsUiaActionCapabilities, WindowsUiaElementLeaseRequest, WindowsUiaPattern,
+        WindowsUiaPatternSupport, WindowsUiaSnapshotRequest, WindowsUiaWorker,
+        WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     };
     use uuid::Uuid;
     use windows::{
@@ -146,6 +147,90 @@ mod windows_smoke {
         assert_eq!(
             snapshot.target_incarnation_ref(),
             attachment.target_incarnation_ref()
+        );
+
+        let lease = worker
+            .bind_element_lease(
+                &attachment,
+                WindowsUiaElementLeaseRequest {
+                    snapshot_cut_ref: snapshot.snapshot_cut_ref().into(),
+                    element_ref: fixture_node.element_ref.clone(),
+                },
+            )
+            .expect("bind exact current COM element retained by the MTA worker");
+        assert_eq!(lease.snapshot_cut_ref, snapshot.snapshot_cut_ref());
+        assert_eq!(lease.element_ref, fixture_node.element_ref);
+        assert_eq!(
+            &lease.provider_incarnation_ref,
+            attachment.provider_incarnation_ref()
+        );
+        assert_eq!(
+            &lease.target_incarnation_ref,
+            attachment.target_incarnation_ref()
+        );
+
+        let stale_request = WindowsUiaElementLeaseRequest {
+            snapshot_cut_ref: snapshot.snapshot_cut_ref().into(),
+            element_ref: fixture_node.element_ref.clone(),
+        };
+        let second_snapshot = worker
+            .snapshot(
+                &attachment,
+                WindowsUiaSnapshotRequest {
+                    snapshot_cut_ref: "cut:windows-uia-smoke:2".into(),
+                    surface_scope: "fixture:win32-button".into(),
+                },
+            )
+            .expect("publish a newer semantic snapshot and replace retained leases");
+        assert_eq!(
+            worker
+                .bind_element_lease(&attachment, stale_request)
+                .unwrap_err(),
+            WindowsUiaWorkerError::ElementLeaseSnapshotExpired {
+                requested_cut: snapshot.snapshot_cut_ref().into(),
+                current_cut: second_snapshot.snapshot_cut_ref().into(),
+            }
+        );
+
+        let second_fixture_node = second_snapshot
+            .nodes()
+            .iter()
+            .find(|node| {
+                node.name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("LocalView UIA Smoke"))
+            })
+            .expect("real Win32 button must remain present in the second snapshot");
+        let second_lease = worker
+            .bind_element_lease(
+                &attachment,
+                WindowsUiaElementLeaseRequest {
+                    snapshot_cut_ref: second_snapshot.snapshot_cut_ref().into(),
+                    element_ref: second_fixture_node.element_ref.clone(),
+                },
+            )
+            .expect("bind exact element from the current snapshot");
+        assert_eq!(second_lease.element_ref, second_fixture_node.element_ref);
+
+        let mut forged_element = second_fixture_node.element_ref.clone();
+        forged_element.opaque_provider_element_id.push_str(":forged");
+        assert_eq!(
+            worker
+                .bind_element_lease(
+                    &attachment,
+                    WindowsUiaElementLeaseRequest {
+                        snapshot_cut_ref: second_snapshot.snapshot_cut_ref().into(),
+                        element_ref: forged_element,
+                    },
+                )
+                .unwrap_err(),
+            WindowsUiaWorkerError::ElementLeaseNotFound
+        );
+
+        assert!(
+            !WindowsUiaWorker::capabilities().write_actions
+                && !WindowsUiaWorker::capabilities().input_dispatch,
+            "element leasing must not silently enable UIA writes or input dispatch"
         );
 
         stop.store(true, Ordering::Release);

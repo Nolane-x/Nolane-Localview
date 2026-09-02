@@ -10,8 +10,8 @@ use uuid::Uuid;
 use crate::{
     event_buffer::{WindowsUiaEventBuffer, WindowsUiaEventDraft, WindowsUiaEventKind},
     worker::{
-        WindowsUiaAttachment, WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig,
-        WindowsUiaWorkerError,
+        WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
+        WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     },
     WindowsUiaEventDrain,
 };
@@ -208,6 +208,14 @@ mod platform {
             request: WindowsUiaSnapshotRequest,
         ) -> Result<Arc<NativeSemanticSnapshotRevision>, WindowsUiaWorkerError> {
             self.inner.snapshot(attachment, request)
+        }
+
+        pub fn bind_element_lease(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaElementLeaseRequest,
+        ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
+            self.inner.bind_element_lease(attachment, request)
         }
 
         pub fn subscribe_events(

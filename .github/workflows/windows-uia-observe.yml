@@ -35,7 +35,7 @@ jobs:
         run: cargo test -p localview-windows-observe-runtime --test resource_accounting_contract -- --nocapture
       - name: Phase 6 read-only semantic action contract
         run: cargo test -p localview-windows-observe-runtime --test read_only_semantic_action_contract -- --nocapture
-      - name: Real user-selected Win32 UIA snapshot
+      - name: Real Win32 UIA snapshot + exact element lease lifetime
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test windows_uia_smoke -- --ignored --nocapture
