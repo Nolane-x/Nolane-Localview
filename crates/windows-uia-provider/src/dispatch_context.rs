@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use localview_protocol::{ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef};
 use thiserror::Error;
 
@@ -113,8 +115,10 @@ pub struct WindowsUiaDispatchContextRequest {
     pub requirements: WindowsUiaDispatchContextRequirements,
 }
 
-/// Data-only receipt. Returning this receipt never invokes a UIA pattern method
-/// and never dispatches keyboard/pointer input.
+/// Raw data-only receipt emitted by the semantic MTA after observing and checking
+/// the volatile context. The canonical public worker wraps this in
+/// `WindowsUiaBoundDispatchContextReceipt` so the exact checked requirements
+/// cannot be separated from the evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsUiaDispatchContextReceipt {
     pub snapshot_cut_ref: String,
@@ -122,4 +126,27 @@ pub struct WindowsUiaDispatchContextReceipt {
     pub target_incarnation_ref: TargetIncarnationRef,
     pub element_ref: ProviderElementRef,
     pub observation: WindowsUiaDispatchContextObservation,
+}
+
+/// Authority-bearing public receipt. It binds the exact requirement set to the
+/// exact raw MTA receipt while preserving ergonomic read-only access to the raw
+/// receipt fields through `Deref`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUiaBoundDispatchContextReceipt {
+    pub requirements: WindowsUiaDispatchContextRequirements,
+    pub context: WindowsUiaDispatchContextReceipt,
+}
+
+impl Deref for WindowsUiaBoundDispatchContextReceipt {
+    type Target = WindowsUiaDispatchContextReceipt;
+
+    fn deref(&self) -> &Self::Target {
+        &self.context
+    }
+}
+
+impl WindowsUiaBoundDispatchContextReceipt {
+    pub fn into_context(self) -> WindowsUiaDispatchContextReceipt {
+        self.context
+    }
 }
