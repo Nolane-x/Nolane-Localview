@@ -15,6 +15,7 @@ localview-engine = { path = "../engine" }
 localview-evidence = { path = "../evidence" }
 localview-live-analysis = { path = "../live-analysis" }
 localview-live-bridge = { path = "../live-bridge" }
+localview-native-provider = { path = "../native-provider" }
 localview-observation = { path = "../observation" }
 localview-planner = { path = "../planner" }
 localview-project-state = { path = "../project-state" }
@@ -24,6 +25,7 @@ localview-security = { path = "../security" }
 localview-sessions = { path = "../sessions" }
 localview-token-budget = { path = "../token-budget" }
 localview-verification = { path = "../verification" }
+localview-windows-observe-runtime = { path = "../windows-observe-runtime" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
