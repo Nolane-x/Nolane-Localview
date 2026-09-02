@@ -29,6 +29,8 @@ jobs:
         run: cargo check -p localview-windows-observe-runtime --all-targets
       - name: Phase 5 resource accounting and governor contract
         run: cargo test -p localview-windows-observe-runtime --test resource_accounting_contract -- --nocapture
+      - name: Phase 6 read-only semantic action contract
+        run: cargo test -p localview-windows-observe-runtime --test read_only_semantic_action_contract -- --nocapture
       - name: Real user-selected Win32 UIA snapshot
         env:
           LOCALVIEW_UIA_SMOKE: "1"
