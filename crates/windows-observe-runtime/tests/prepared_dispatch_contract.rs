@@ -17,19 +17,21 @@ use localview_protocol::{
     ReconciliationCompleteness, SessionId, TargetIncarnationRef,
 };
 use localview_windows_observe_runtime::{
-    prepare_uia_dispatch, WindowsObserveActionLeaseProvider, WindowsObserveDispatchContextProvider,
-    WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
-    WindowsObserveSubscriptionLineage, WindowsUiaActionPreflightRequest,
-    WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
+    arm_uia_dispatch_execution, prepare_uia_dispatch, WindowsObserveActionLeaseProvider,
+    WindowsObserveDispatchContextProvider, WindowsObserveProvider, WindowsObserveRuntimeConfig,
+    WindowsObserveRuntimeManager, WindowsObserveSubscriptionLineage,
+    WindowsUiaActionPreflightRequest, WindowsUiaAuthorizationRevalidationReceipt,
+    WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchExecutionArmError,
     WindowsUiaDispatchSealRequest, WindowsUiaPreparedDispatchError,
     WindowsUiaPreparedDispatchRequest,
 };
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaBoundDispatchContextReceipt,
-    WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
-    WindowsUiaDispatchContextRequest, WindowsUiaDispatchContextRequirements,
-    WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest, WindowsUiaEventDrain,
-    WindowsUiaPattern, WindowsUiaPatternSupport,
+    WindowsUiaDispatchContextBlocker, WindowsUiaDispatchContextObservation,
+    WindowsUiaDispatchContextReceipt, WindowsUiaDispatchContextRequest,
+    WindowsUiaDispatchContextRequirements, WindowsUiaElementLeaseReceipt,
+    WindowsUiaElementLeaseRequest, WindowsUiaEventDrain, WindowsUiaPattern,
+    WindowsUiaPatternSupport,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -49,6 +51,8 @@ struct FakeState {
     snapshot: Option<Arc<NativeSemanticSnapshotRevision>>,
     lease_calls: usize,
     context_calls: usize,
+    forge_context_on_call: Option<usize>,
+    block_focus_on_call: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +82,14 @@ impl FakeProvider {
 
     fn context_calls(&self) -> usize {
         self.state.lock().unwrap().context_calls
+    }
+
+    fn forge_context_on_call(&self, call: usize) {
+        self.state.lock().unwrap().forge_context_on_call = Some(call);
+    }
+
+    fn block_focus_on_call(&self, call: usize) {
+        self.state.lock().unwrap().block_focus_on_call = Some(call);
     }
 
     fn build_snapshot(&self, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
@@ -231,14 +243,29 @@ impl WindowsObserveDispatchContextProvider for FakeProvider {
         _attachment: &Self::Attachment,
         request: WindowsUiaDispatchContextRequest,
     ) -> Result<WindowsUiaBoundDispatchContextReceipt, Self::Error> {
-        self.state.lock().unwrap().context_calls += 1;
+        let (call, forge_context, block_focus) = {
+            let mut state = self.state.lock().unwrap();
+            state.context_calls += 1;
+            let call = state.context_calls;
+            (
+                call,
+                state.forge_context_on_call == Some(call),
+                state.block_focus_on_call == Some(call),
+            )
+        };
+
+        let mut element_ref = request.element_ref;
+        if forge_context {
+            element_ref.opaque_provider_element_id = format!("uia-runtime:[91,forged-{call}]");
+        }
+
         Ok(WindowsUiaBoundDispatchContextReceipt {
             requirements: request.requirements,
             context: WindowsUiaDispatchContextReceipt {
                 snapshot_cut_ref: request.snapshot_cut_ref,
                 provider_incarnation_ref: self.provider.clone(),
                 target_incarnation_ref: self.target.clone(),
-                element_ref: request.element_ref,
+                element_ref,
                 observation: WindowsUiaDispatchContextObservation {
                     target_window_handle: 0x9102,
                     target_process_id: 91,
@@ -247,7 +274,7 @@ impl WindowsObserveDispatchContextProvider for FakeProvider {
                     exact_element_focused: request
                         .requirements
                         .require_exact_element_focus
-                        .then_some(true),
+                        .then_some(!block_focus),
                     modal_blocker_window_handle: None,
                 },
             },
@@ -454,6 +481,136 @@ async fn a_second_prepare_attempt_fails_closed_without_a_second_context_grant() 
 
     assert!(matches!(error, WindowsUiaPreparedDispatchError::Seal(_)));
     assert_eq!(provider.context_calls(), 1);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn execution_arm_reobserves_exact_context_before_consuming_prepared_capability() {
+    let (bridge, journal, path, provider, runtime, seal_request) =
+        fixture("execution-arm-success").await;
+    let action_id = seal_request.action_id;
+
+    let prepared = prepare_uia_dispatch(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        WindowsUiaPreparedDispatchRequest { seal: seal_request },
+        &FakeAuthorizationRevalidator,
+    )
+    .await
+    .unwrap();
+    assert_eq!(provider.context_calls(), 1);
+
+    let armed = arm_uia_dispatch_execution(&bridge, &journal, &runtime, session(), prepared)
+        .await
+        .unwrap();
+
+    assert_eq!(armed.action_id(), action_id);
+    assert_eq!(provider.context_calls(), 2);
+    assert_eq!(
+        armed.armed_context().requirements,
+        armed.seal().context.requirements
+    );
+    assert_eq!(
+        armed.armed_context().element_ref,
+        armed.seal().authority.dispatch_revalidation.element_lease.element_ref
+    );
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::DispatchPrepared)
+    );
+    assert_eq!(
+        journal.requires_reconciliation(action_id).await,
+        Some(true)
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn execution_arm_rejects_second_context_element_drift_and_never_reprepares() {
+    let (bridge, journal, path, provider, runtime, seal_request) =
+        fixture("execution-arm-forged-context").await;
+    let action_id = seal_request.action_id;
+    let duplicate_request = seal_request.clone();
+    provider.forge_context_on_call(2);
+
+    let prepared = prepare_uia_dispatch(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        WindowsUiaPreparedDispatchRequest { seal: seal_request },
+        &FakeAuthorizationRevalidator,
+    )
+    .await
+    .unwrap();
+    assert_eq!(provider.context_calls(), 1);
+
+    let error = arm_uia_dispatch_execution(&bridge, &journal, &runtime, session(), prepared)
+        .await
+        .unwrap_err();
+    assert_eq!(error, WindowsUiaDispatchExecutionArmError::ContextReceiptMismatch);
+    assert_eq!(provider.context_calls(), 2);
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::DispatchPrepared)
+    );
+    assert_eq!(journal.requires_reconciliation(action_id).await, Some(true));
+
+    let retry = prepare_uia_dispatch(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        WindowsUiaPreparedDispatchRequest {
+            seal: duplicate_request,
+        },
+        &FakeAuthorizationRevalidator,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(retry, WindowsUiaPreparedDispatchError::Seal(_)));
+    assert_eq!(provider.context_calls(), 2);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn execution_arm_independently_rejects_blocked_focus_even_when_receipt_binding_matches() {
+    let (bridge, journal, path, provider, runtime, seal_request) =
+        fixture("execution-arm-blocked-focus").await;
+    let action_id = seal_request.action_id;
+    provider.block_focus_on_call(2);
+
+    let prepared = prepare_uia_dispatch(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        WindowsUiaPreparedDispatchRequest { seal: seal_request },
+        &FakeAuthorizationRevalidator,
+    )
+    .await
+    .unwrap();
+
+    let error = arm_uia_dispatch_execution(&bridge, &journal, &runtime, session(), prepared)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        WindowsUiaDispatchExecutionArmError::ContextBlocked(
+            WindowsUiaDispatchContextBlocker::ExactElementFocusMismatch
+        )
+    );
+    assert_eq!(provider.context_calls(), 2);
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::DispatchPrepared)
+    );
+    assert_eq!(journal.requires_reconciliation(action_id).await, Some(true));
 
     let _ = std::fs::remove_file(path);
 }
