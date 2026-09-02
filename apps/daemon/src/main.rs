@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
                             if let Some(runtime) = &windows_observe {
                                 if runtime.status(id).await.is_some() {
                                     if let Err(error) = runtime.release(id).await {
-                                        warn!(session_id = %id, %error, "failed to release Windows observe attachment during session cleanup");
+                                        warn!(session_id = %id, %error, "Windows observe provider cleanup failed after local authority was detached");
                                     }
                                 }
                             }
@@ -165,7 +165,7 @@ async fn main() -> Result<()> {
     if let Some(runtime) = &windows_observe {
         for id in runtime.attached_sessions().await {
             if let Err(error) = runtime.release(id).await {
-                warn!(session_id = %id, %error, "failed to release Windows observe attachment during shutdown");
+                warn!(session_id = %id, %error, "Windows observe provider cleanup failed after shutdown detach");
             }
         }
     }
@@ -181,7 +181,10 @@ fn spawn_windows_observe_drain_loop(runtime: Arc<WindowsUiaObserveRuntimeManager
             interval.tick().await;
             for session_id in runtime.attached_sessions().await {
                 if let Err(error) = runtime.drain_once(session_id).await {
-                    warn!(%session_id, %error, "Windows observe callback drain failed");
+                    warn!(%session_id, %error, "Windows observe callback drain failed; detaching fail-closed");
+                    if let Err(cleanup_error) = runtime.release(session_id).await {
+                        warn!(%session_id, %cleanup_error, "Windows observe provider cleanup failed after drain-error detach");
+                    }
                 }
             }
         }
