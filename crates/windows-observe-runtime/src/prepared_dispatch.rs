@@ -1,6 +1,6 @@
 use localview_live_bridge::{
     ConsequentialJournal, ConsequentialJournalTransition, ConsequentialRecoveryState,
-    DispatchPreparationReceipt, LiveBridge,
+    DispatchPreparationReceipt, DispatchPreparedCapability, LiveBridge,
 };
 use localview_protocol::SessionId;
 use thiserror::Error;
@@ -25,13 +25,14 @@ pub struct WindowsUiaPreparedDispatchRequest {
 ///
 /// Deliberately not `Clone`: a future side-effect executor must consume one live
 /// preparation capability by value. Reopening the journal cannot reconstruct
-/// this type, matching the journal's non-durable continuation grant.
+/// the generic capability retained here.
 #[derive(Debug, PartialEq, Eq)]
 pub struct WindowsUiaPreparedDispatchReceipt {
     action_id: Uuid,
     seal: WindowsUiaDispatchSealReceipt,
     preparation: DispatchPreparationReceipt,
     preparation_journal_sequence: u64,
+    pub(crate) dispatch_capability: DispatchPreparedCapability,
 }
 
 impl WindowsUiaPreparedDispatchReceipt {
@@ -78,13 +79,16 @@ pub enum WindowsUiaPreparedDispatchError {
 /// Ordering is deliberately conservative:
 /// 1. rerun semantic/live-element/canonical/principal/journal/provider-context seal;
 /// 2. derive the PREPARED receipt only from the sealed authority;
-/// 3. fsync PREPARED through `ConsequentialJournal`;
+/// 3. fsync PREPARED through `ConsequentialJournal` and receive the exact
+///    process-local one-shot capability associated with that fsync;
 /// 4. verify the durable entry exactly matches the derived receipt;
-/// 5. reread canonical freshness and journal state after the fsync.
+/// 5. reread canonical freshness and journal state after the fsync;
+/// 6. only then retain the opaque generic capability inside the Windows receipt.
 ///
 /// If canonical authority changes while PREPARED is being written, this function
-/// returns an error while the durable journal remains in `DispatchPrepared`, so
-/// recovery is reconciliation-only. No UIA write pattern or OS input is emitted.
+/// returns an error without exposing the capability while the durable journal
+/// remains in `DispatchPrepared`, so recovery is reconciliation-only. No UIA
+/// write pattern or OS input is emitted.
 pub async fn prepare_uia_dispatch<P, R>(
     bridge: &LiveBridge,
     journal: &ConsequentialJournal,
@@ -117,17 +121,18 @@ where
         target_incarnation_ref: metadata.target_incarnation_ref.clone(),
     };
 
-    let entry = journal
+    let admission = journal
         .record_dispatch_prepared(action_id, preparation.clone())
         .await
         .map_err(|error| WindowsUiaPreparedDispatchError::JournalWriteFailed {
             message: error.to_string(),
         })?;
 
-    match &entry.transition {
+    match &admission.entry().transition {
         ConsequentialJournalTransition::DispatchPrepared { receipt } if receipt == &preparation => {}
         _ => return Err(WindowsUiaPreparedDispatchError::PreparationEntryMismatch),
     }
+    let preparation_journal_sequence = admission.entry().journal_sequence;
 
     let envelope = bridge
         .action_envelope(action_id)
@@ -148,10 +153,12 @@ where
         return Err(WindowsUiaPreparedDispatchError::JournalStateChangedAfterPrepare { state });
     }
 
+    let (_, dispatch_capability) = admission.into_parts();
     Ok(WindowsUiaPreparedDispatchReceipt {
         action_id,
         seal: sealed,
         preparation,
-        preparation_journal_sequence: entry.journal_sequence,
+        preparation_journal_sequence,
+        dispatch_capability,
     })
 }
