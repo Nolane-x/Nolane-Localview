@@ -280,6 +280,22 @@ async fn contiguous_callback_drain_does_not_poll_snapshot_but_gap_reconciles_onc
         2,
         "one observed gap causes one bounded reconciliation snapshot"
     );
+
+    let third = manager.drain_once(session()).await.unwrap();
+    assert!(!third.reconciliation_performed);
+    assert_eq!(
+        third.status.event_continuity,
+        EventContinuityState::GapDetected
+    );
+    assert_eq!(
+        third.status.current_snapshot_completeness,
+        Some(ReconciliationCompleteness::Established)
+    );
+    assert_eq!(
+        provider.counts().0,
+        2,
+        "reconciled historical gap must not trigger repeat snapshots"
+    );
 }
 
 #[tokio::test]
