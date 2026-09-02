@@ -12,6 +12,7 @@ mod windows_smoke {
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
     use localview_protocol::ReconciliationCompleteness;
     use localview_windows_uia_provider::{
+        WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport,
         WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig,
     };
     use uuid::Uuid;
@@ -123,11 +124,21 @@ mod windows_smoke {
             ReconciliationCompleteness::Established
         );
         assert!(!snapshot.nodes().is_empty());
-        assert!(snapshot.nodes().iter().any(|node| {
-            node.name
-                .as_deref()
-                .is_some_and(|name| name.contains("LocalView UIA Smoke"))
-        }));
+        let fixture_node = snapshot
+            .nodes()
+            .iter()
+            .find(|node| {
+                node.name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("LocalView UIA Smoke"))
+            })
+            .expect("real Win32 button must be present in the semantic snapshot");
+        let action_capabilities = WindowsUiaActionCapabilities::from_node(fixture_node);
+        assert_eq!(
+            action_capabilities.support_for(WindowsUiaPattern::Invoke),
+            WindowsUiaPatternSupport::Supported,
+            "real Win32 BUTTON must publish explicit Invoke-pattern support evidence"
+        );
         assert_eq!(
             snapshot.provider_incarnation_ref(),
             attachment.provider_incarnation_ref()

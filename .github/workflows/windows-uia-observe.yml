@@ -25,6 +25,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Compile isolated UIA provider
         run: cargo check -p localview-windows-uia-provider --all-targets
+      - name: Phase 6 UIA action capability contract
+        run: cargo test -p localview-windows-uia-provider --test action_capability_contract -- --nocapture
       - name: Compile observe runtime manager
         run: cargo check -p localview-windows-observe-runtime --all-targets
       - name: Phase 5 resource accounting and governor contract

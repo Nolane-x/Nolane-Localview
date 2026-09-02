@@ -108,14 +108,21 @@ mod platform {
         UI::{
             Accessibility::{
                 CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
+                UIA_IsExpandCollapsePatternAvailablePropertyId,
+                UIA_IsInvokePatternAvailablePropertyId,
+                UIA_IsScrollItemPatternAvailablePropertyId,
+                UIA_IsSelectionItemPatternAvailablePropertyId,
+                UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
+                UIA_IsVirtualizedItemPatternAvailablePropertyId, UIA_PROPERTY_ID,
             },
             WindowsAndMessaging::GetWindowThreadProcessId,
         },
     };
 
     use super::*;
+    use crate::{WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport};
 
-    const PROPERTIES_PER_NODE: usize = 7;
+    const PROPERTIES_PER_NODE: usize = 14;
     const CACHE_PROFILE_REVISION: &str = "windows-uia-control-view-v1";
     const PERMISSION_VISIBILITY_REVISION: &str = "windows-uia-interactive-user-v1";
 
@@ -595,6 +602,7 @@ mod platform {
                     None
                 }
             };
+            let action_capabilities = observe_action_capabilities(&element);
 
             let runtime_id = unsafe { runtime_id_hint(&element) }.unwrap_or_default();
             let mut element_ref = provider_element_ref_from_runtime_id(
@@ -630,6 +638,7 @@ mod platform {
             if !runtime_id.is_empty() {
                 attributes.insert("runtime_id_observed".into(), "true".into());
             }
+            action_capabilities.write_attributes(&mut attributes);
             nodes.push(NativeSemanticNodeObservation {
                 element_ref,
                 parent_index,
@@ -676,6 +685,58 @@ mod platform {
             }
         }
         (nodes, usage, debt)
+    }
+
+    fn observe_action_capabilities(
+        element: &IUIAutomationElement,
+    ) -> WindowsUiaActionCapabilities {
+        let mut capabilities = WindowsUiaActionCapabilities::default();
+        for (pattern, property_id) in [
+            (WindowsUiaPattern::Invoke, UIA_IsInvokePatternAvailablePropertyId),
+            (
+                WindowsUiaPattern::SelectionItem,
+                UIA_IsSelectionItemPatternAvailablePropertyId,
+            ),
+            (WindowsUiaPattern::Value, UIA_IsValuePatternAvailablePropertyId),
+            (WindowsUiaPattern::Toggle, UIA_IsTogglePatternAvailablePropertyId),
+            (
+                WindowsUiaPattern::ExpandCollapse,
+                UIA_IsExpandCollapsePatternAvailablePropertyId,
+            ),
+            (
+                WindowsUiaPattern::ScrollItem,
+                UIA_IsScrollItemPatternAvailablePropertyId,
+            ),
+            (
+                WindowsUiaPattern::VirtualizedItem,
+                UIA_IsVirtualizedItemPatternAvailablePropertyId,
+            ),
+        ] {
+            capabilities.record(pattern, read_pattern_support(element, property_id));
+        }
+        capabilities
+    }
+
+    fn read_pattern_support(
+        element: &IUIAutomationElement,
+        property_id: UIA_PROPERTY_ID,
+    ) -> WindowsUiaPatternSupport {
+        unsafe {
+            // SAFETY: the UIA element remains owned by this dedicated MTA. The
+            // returned VARIANT is converted immediately into a Rust bool and no
+            // pattern COM object escapes or is invoked.
+            element.GetCurrentPropertyValue(property_id)
+        }
+        .ok()
+        .and_then(|value| bool::try_from(&value).ok())
+        .map(|available| {
+            if available {
+                WindowsUiaPatternSupport::Supported
+            } else {
+                WindowsUiaPatternSupport::Unsupported
+            }
+        })
+        .unwrap_or(WindowsUiaPatternSupport::Unknown)
     }
 
     fn read_bstr(
