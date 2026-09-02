@@ -167,8 +167,13 @@ async fn crash_after_prepare_before_dispatch_receipt_replays_as_dispatch_uncerta
 
     let blind_retry = reopened
         .record_dispatch_linearized(action.transport_action_id, dispatch_receipt())
-        .await;
-    assert!(blind_retry.is_ok(), "the prepared generation may be completed exactly once");
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        blind_retry,
+        ConsequentialJournalError::InvalidTransition { action_id, .. }
+            if action_id == action.transport_action_id
+    ));
 
     let _ = std::fs::remove_file(path);
 }
