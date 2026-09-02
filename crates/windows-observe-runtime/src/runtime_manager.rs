@@ -343,29 +343,30 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         self.bridge.observation_status(session_id).await
     }
 
+    /// Detach observation authority first, then attempt provider-side cleanup.
+    ///
+    /// A hung or failed provider must never preserve stale LocalView authority.
+    /// Provider cleanup errors are returned to the caller, but the manager and
+    /// LiveBridge remain detached even when unregistering the OS event handler
+    /// fails.
     pub async fn release(
         &self,
         session_id: SessionId,
     ) -> Result<(), WindowsObserveRuntimeError> {
         let _gate = self.operation_gate.lock().await;
-        let subscription = {
-            let active = self.active.lock().await;
-            active
-                .get(&session_id)
-                .ok_or(WindowsObserveRuntimeError::NotAttached { session_id })?
-                .subscription
-                .clone()
-        };
+        let observation = self
+            .active
+            .lock()
+            .await
+            .remove(&session_id)
+            .ok_or(WindowsObserveRuntimeError::NotAttached { session_id })?;
+        self.bridge.release_provider_observation(session_id).await;
 
         let provider = self.provider.clone();
         run_provider("unsubscribe_events", move || {
-            provider.unsubscribe_events(subscription)
+            provider.unsubscribe_events(observation.subscription)
         })
-        .await?;
-
-        self.active.lock().await.remove(&session_id);
-        self.bridge.release_provider_observation(session_id).await;
-        Ok(())
+        .await
     }
 
     pub async fn attached_sessions(&self) -> Vec<SessionId> {
