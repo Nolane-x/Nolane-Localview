@@ -172,34 +172,77 @@ where
     })
 }
 
-/// Exact request presented to the one provider operation that is allowed to
+/// Opaque request presented to the one provider operation that is allowed to
 /// become the final side-effect boundary in a later slice.
 ///
-/// Callers never construct this request when using the coordinator. Every field
-/// is derived from the already-sealed, durably PREPARED, one-shot execution
-/// permit. A real Windows implementation must use this request only to locate
-/// the already-retained exact element and must final-revalidate target identity,
-/// volatile context and live pattern availability in the same MTA command as the
-/// provider call.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Its fields are private and it is deliberately not `Clone`: outside code
+/// cannot manufacture or replay a provider request from action/cut identifiers.
+/// The coordinator mints exactly one request from an already-sealed, durably
+/// PREPARED, one-shot execution permit. A real Windows implementation must use
+/// it only to locate the already-retained exact element and final-revalidate
+/// target identity, volatile context and live pattern availability in the same
+/// MTA command as the provider call.
+#[derive(Debug, PartialEq, Eq)]
 pub struct WindowsUiaProviderExecutionRequest {
-    pub dispatch_attempt_ref: Uuid,
-    pub action_id: Uuid,
-    pub preparation_journal_sequence: u64,
-    pub preparation_receipt_ref: String,
-    pub snapshot_cut_ref: String,
-    pub provider_incarnation_ref: ProviderIncarnationRef,
-    pub target_incarnation_ref: TargetIncarnationRef,
-    pub element_ref: ProviderElementRef,
-    pub required_pattern: WindowsUiaPattern,
-    pub context_requirements: WindowsUiaDispatchContextRequirements,
+    dispatch_attempt_ref: Uuid,
+    action_id: Uuid,
+    preparation_journal_sequence: u64,
+    preparation_receipt_ref: String,
+    snapshot_cut_ref: String,
+    provider_incarnation_ref: ProviderIncarnationRef,
+    target_incarnation_ref: TargetIncarnationRef,
+    element_ref: ProviderElementRef,
+    required_pattern: WindowsUiaPattern,
+    context_requirements: WindowsUiaDispatchContextRequirements,
+}
+
+impl WindowsUiaProviderExecutionRequest {
+    pub fn dispatch_attempt_ref(&self) -> Uuid {
+        self.dispatch_attempt_ref
+    }
+
+    pub fn action_id(&self) -> Uuid {
+        self.action_id
+    }
+
+    pub fn preparation_journal_sequence(&self) -> u64 {
+        self.preparation_journal_sequence
+    }
+
+    pub fn preparation_receipt_ref(&self) -> &str {
+        &self.preparation_receipt_ref
+    }
+
+    pub fn snapshot_cut_ref(&self) -> &str {
+        &self.snapshot_cut_ref
+    }
+
+    pub fn provider_incarnation_ref(&self) -> &ProviderIncarnationRef {
+        &self.provider_incarnation_ref
+    }
+
+    pub fn target_incarnation_ref(&self) -> &TargetIncarnationRef {
+        &self.target_incarnation_ref
+    }
+
+    pub fn element_ref(&self) -> &ProviderElementRef {
+        &self.element_ref
+    }
+
+    pub fn required_pattern(&self) -> WindowsUiaPattern {
+        self.required_pattern
+    }
+
+    pub fn context_requirements(&self) -> WindowsUiaDispatchContextRequirements {
+        self.context_requirements
+    }
 }
 
 /// Provider-owned evidence returned after one execution attempt.
 ///
 /// Exact binding fields are repeated deliberately. The runtime accepts the
-/// outcome only when every field exactly matches the request it minted. A
-/// mismatched receipt is treated as dispatch-uncertain and leaves durable state
+/// outcome only when every field exactly matches the opaque request it minted.
+/// A mismatched receipt is treated as dispatch-uncertain and leaves durable state
 /// PREPARED for reconciliation rather than guessing whether a side effect ran.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsUiaProviderExecutionReceipt {
@@ -220,15 +263,17 @@ pub struct WindowsUiaProviderExecutionReceipt {
 /// Narrow provider execution surface. No implementation is supplied for the real
 /// Windows UIA provider in this slice, so this trait does not enable writes.
 ///
-/// A future production implementation must execute one MTA command that keeps
-/// final exact lease/context/live-pattern checks adjacent to the UIA pattern call.
+/// The request is borrowed: the executor cannot obtain a replayable request value
+/// from the coordinator. A future production implementation must execute one MTA
+/// command that keeps final exact lease/context/live-pattern checks adjacent to
+/// the UIA pattern call.
 #[allow(async_fn_in_trait)]
 pub trait WindowsUiaDispatchExecutor: Send + Sync {
     type Error: StdError + Send + Sync + 'static;
 
     async fn execute(
         &self,
-        request: WindowsUiaProviderExecutionRequest,
+        request: &WindowsUiaProviderExecutionRequest,
     ) -> Result<WindowsUiaProviderExecutionReceipt, Self::Error>;
 }
 
@@ -316,7 +361,7 @@ where
     };
 
     let provider_receipt = executor
-        .execute(request.clone())
+        .execute(&request)
         .await
         .map_err(|error| WindowsUiaDispatchExecutionCoordinatorError::ProviderExecutionFailed {
             message: error.to_string(),
