@@ -47,6 +47,8 @@ jobs:
         run: cargo test -p localview-windows-observe-runtime --test prepared_dispatch_contract -- --nocapture
       - name: Phase 6 PREPARED execution arm + second volatile context
         run: cargo test -p localview-windows-observe-runtime --test prepared_dispatch_contract execution_arm -- --nocapture
+      - name: Phase 6 one-shot provider dispatch outcome coordinator
+        run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior -- --nocapture
       - name: Phase 5 resource accounting and governor contract
         run: cargo test -p localview-windows-observe-runtime --test resource_accounting_contract -- --nocapture
       - name: Phase 6 read-only semantic action contract
