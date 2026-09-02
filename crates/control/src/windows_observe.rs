@@ -162,7 +162,7 @@ async fn detach_windows_observe(
 }
 
 fn runtime_error_response(error: WindowsObserveRuntimeError) -> axum::response::Response {
-    let status = match error {
+    let status = match &error {
         WindowsObserveRuntimeError::AlreadyAttached { .. } => StatusCode::CONFLICT,
         WindowsObserveRuntimeError::NotAttached { .. } => StatusCode::NOT_FOUND,
         WindowsObserveRuntimeError::InvalidConfiguration => StatusCode::INTERNAL_SERVER_ERROR,
