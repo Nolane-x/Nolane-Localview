@@ -20,6 +20,8 @@ localview-protocol = { path = "../../crates/protocol" }
 localview-resource-governor = { path = "../../crates/resource-governor" }
 localview-security = { path = "../../crates/security" }
 localview-sessions = { path = "../../crates/sessions" }
+localview-windows-observe-runtime = { path = "../../crates/windows-observe-runtime" }
+localview-windows-uia-provider = { path = "../../crates/windows-uia-provider" }
 sysinfo = { version = "0.36.1", default-features = false, features = ["system"] }
 tokio.workspace = true
 tracing.workspace = true

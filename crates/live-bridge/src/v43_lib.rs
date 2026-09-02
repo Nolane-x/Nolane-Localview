@@ -462,6 +462,17 @@ impl LiveBridge {
         true
     }
 
+    /// Remove only provider-bound observation authority for one session.
+    ///
+    /// This deliberately preserves legacy web history, action results, and
+    /// canonical envelope evidence. The action gate prevents a canonical action
+    /// from being admitted concurrently against observation authority that is
+    /// being detached.
+    pub async fn release_provider_observation(&self, session_id: SessionId) -> bool {
+        let _gate = self.action_gate.lock().await;
+        self.continuity.write().await.remove(&session_id).is_some()
+    }
+
     pub async fn release_session(&self, session_id: SessionId) {
         let _gate = self.action_gate.lock().await;
         self.continuity.write().await.remove(&session_id);

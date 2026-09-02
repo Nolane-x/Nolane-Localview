@@ -9,13 +9,15 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
 use chrono::Utc;
 use localview_chromium::discover_chromium_executable;
 use localview_control::{
-    configure_chromium_executor_for_sessions, runtime_resource_governor_for_sessions, ControlState,
+    configure_chromium_executor_for_sessions, configure_windows_observe_runtime_for_sessions,
+    runtime_resource_governor_for_sessions, ControlState,
 };
 use localview_core::RuntimeConfig;
 use localview_discovery::{CommandListenerSource, DiscoveryEngine};
@@ -25,6 +27,14 @@ use localview_observation::ObservationBus;
 use localview_protocol::ObservationEvent;
 use localview_security::generate_control_token;
 use localview_sessions::SessionManager;
+use localview_windows_observe_runtime::WindowsUiaObserveRuntimeManager;
+#[cfg(windows)]
+use localview_windows_observe_runtime::{
+    spawn_windows_uia_runtime_manager, WindowsObserveRuntimeConfig,
+};
+#[cfg(windows)]
+use localview_windows_uia_provider::WindowsUiaWorkerConfig;
+use tokio::time::MissedTickBehavior;
 use tracing::{info, warn};
 
 #[tokio::main]
@@ -53,6 +63,33 @@ async fn main() -> Result<()> {
     let observations = ObservationBus::new(1024);
     let live = LiveBridge::default();
     let evidence = EvidenceStore::default();
+
+    #[cfg(windows)]
+    let windows_observe: Option<Arc<WindowsUiaObserveRuntimeManager>> =
+        match spawn_windows_uia_runtime_manager(
+            live.clone(),
+            WindowsUiaWorkerConfig::default(),
+            WindowsObserveRuntimeConfig::default(),
+        ) {
+            Ok(runtime) => {
+                let runtime = Arc::new(runtime);
+                info!("Windows UIA observe-only runtime available");
+                Some(runtime)
+            }
+            Err(error) => {
+                warn!(%error, "Windows UIA observe-only runtime unavailable; attachment routes fail closed");
+                None
+            }
+        };
+
+    #[cfg(not(windows))]
+    let windows_observe: Option<Arc<WindowsUiaObserveRuntimeManager>> = None;
+
+    configure_windows_observe_runtime_for_sessions(&sessions, windows_observe.clone());
+    if let Some(runtime) = windows_observe.clone() {
+        spawn_windows_observe_drain_loop(runtime);
+    }
+
     let paused = Arc::new(AtomicBool::new(matches!(
         config.auto_open,
         localview_core::AutoOpenMode::Paused
@@ -109,6 +146,13 @@ async fn main() -> Result<()> {
                             observations.publish(ObservationEvent::ServerReconnected { session_id: id }).await;
                         }
                         for id in result.removed {
+                            if let Some(runtime) = &windows_observe {
+                                if runtime.status(id).await.is_some() {
+                                    if let Err(error) = runtime.release(id).await {
+                                        warn!(session_id = %id, %error, "Windows observe provider cleanup failed after local authority was detached");
+                                    }
+                                }
+                            }
                             live.release_session(id).await;
                             evidence.release_session(id).await;
                             resources.release_session(&id.to_string());
@@ -119,7 +163,34 @@ async fn main() -> Result<()> {
             }
         }
     }
+
+    if let Some(runtime) = &windows_observe {
+        for id in runtime.attached_sessions().await {
+            if let Err(error) = runtime.release(id).await {
+                warn!(session_id = %id, %error, "Windows observe provider cleanup failed after shutdown detach");
+            }
+        }
+    }
+    configure_windows_observe_runtime_for_sessions(&sessions, None);
     Ok(())
+}
+
+fn spawn_windows_observe_drain_loop(runtime: Arc<WindowsUiaObserveRuntimeManager>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            for session_id in runtime.attached_sessions().await {
+                if let Err(error) = runtime.drain_once(session_id).await {
+                    warn!(%session_id, %error, "Windows observe callback drain failed; detaching fail-closed");
+                    if let Err(cleanup_error) = runtime.release(session_id).await {
+                        warn!(%session_id, %cleanup_error, "Windows observe provider cleanup failed after drain-error detach");
+                    }
+                }
+            }
+        }
+    });
 }
 
 async fn load_or_create_token() -> Result<String> {
