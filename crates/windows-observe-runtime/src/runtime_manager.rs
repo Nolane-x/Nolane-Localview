@@ -22,9 +22,10 @@ use localview_resource_governor::{
     RuntimeResourceGovernor,
 };
 use localview_windows_uia_provider::{
-    WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
-    WindowsUiaEventDrain, WindowsUiaEventSubscription, WindowsUiaEventSubscriptionOptions,
-    WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
+    WindowsUiaAttachment, WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest,
+    WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest, WindowsUiaEventDrain,
+    WindowsUiaEventSubscription, WindowsUiaEventSubscriptionOptions, WindowsUiaSnapshotRequest,
+    WindowsUiaWorker, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -106,6 +107,19 @@ pub trait WindowsObserveActionLeaseProvider: WindowsObserveProvider {
         attachment: &Self::Attachment,
         request: WindowsUiaElementLeaseRequest,
     ) -> Result<WindowsUiaElementLeaseReceipt, Self::Error>;
+}
+
+/// Narrow capability for the last volatile provider-context fence.
+///
+/// Implementations must observe context against the already-retained exact live
+/// element and return only data. No UIA write pattern or OS input may be emitted
+/// while collecting this receipt.
+pub trait WindowsObserveDispatchContextProvider: WindowsObserveActionLeaseProvider {
+    fn revalidate_dispatch_context(
+        &self,
+        attachment: &Self::Attachment,
+        request: WindowsUiaDispatchContextRequest,
+    ) -> Result<WindowsUiaBoundDispatchContextReceipt, Self::Error>;
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -696,6 +710,38 @@ where
     }
 }
 
+impl<P> WindowsObserveRuntimeManager<P>
+where
+    P: WindowsObserveDispatchContextProvider,
+{
+    /// Observe the volatile dispatch context against the exact current
+    /// attachment while serializing against attach/drain/reconcile/release.
+    ///
+    /// The provider owns the exact retained UIA element and performs the
+    /// foreground/focus/modal read on its MTA. Only a bound data receipt crosses
+    /// back into the runtime; this method never performs a side effect.
+    pub(crate) async fn revalidate_action_dispatch_context(
+        &self,
+        session_id: SessionId,
+        request: WindowsUiaDispatchContextRequest,
+    ) -> Result<WindowsUiaBoundDispatchContextReceipt, WindowsObserveRuntimeError> {
+        let _gate = self.operation_gate.lock().await;
+        let attachment = self
+            .active
+            .lock()
+            .await
+            .get(&session_id)
+            .map(|observation| observation.attachment.clone())
+            .ok_or(WindowsObserveRuntimeError::NotAttached { session_id })?;
+
+        let provider = self.provider.clone();
+        run_provider("revalidate_dispatch_context", move || {
+            provider.revalidate_dispatch_context(&attachment, request)
+        })
+        .await
+    }
+}
+
 fn validate_semantic_read_authority(
     authority: &ActionEnvelopeMetadata,
     snapshot: &NativeSemanticSnapshotRevision,
@@ -868,6 +914,16 @@ impl WindowsObserveActionLeaseProvider for WindowsUiaObserveProvider {
         request: WindowsUiaElementLeaseRequest,
     ) -> Result<WindowsUiaElementLeaseReceipt, Self::Error> {
         self.worker.bind_element_lease(attachment, request)
+    }
+}
+
+impl WindowsObserveDispatchContextProvider for WindowsUiaObserveProvider {
+    fn revalidate_dispatch_context(
+        &self,
+        attachment: &Self::Attachment,
+        request: WindowsUiaDispatchContextRequest,
+    ) -> Result<WindowsUiaBoundDispatchContextReceipt, Self::Error> {
+        self.worker.revalidate_dispatch_context(attachment, request)
     }
 }
 
