@@ -212,6 +212,22 @@ async fn verified_postconditions_append_and_replay_first_class_durable_receipt()
         vec!["evidence:visible:pass", "evidence:enabled:pass"]
     );
     assert_eq!(
+        receipt
+            .evidence_bindings
+            .iter()
+            .map(|binding| (binding.contract_ref.as_str(), binding.receipt_ref.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("post:visible", "evidence:visible:pass"),
+            ("post:enabled", "evidence:enabled:pass"),
+        ]
+    );
+    let encoded = serde_json::to_value(receipt).unwrap();
+    assert_eq!(
+        encoded["causal_assurance"]["kind"],
+        serde_json::Value::String("dispatch_linearized".into())
+    );
+    assert_eq!(
         receipt.verdict,
         ActionPostconditionVerdict::VerifiedExpected
     );
