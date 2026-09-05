@@ -164,12 +164,12 @@ mod windows_smoke {
         );
         assert_eq!(receipt.snapshot_cut_ref, snapshot.snapshot_cut_ref());
         assert_eq!(
-            receipt.provider_incarnation_ref,
-            *attachment.provider_incarnation_ref()
+            &receipt.provider_incarnation_ref,
+            attachment.provider_incarnation_ref()
         );
         assert_eq!(
-            receipt.target_incarnation_ref,
-            *attachment.target_incarnation_ref()
+            &receipt.target_incarnation_ref,
+            attachment.target_incarnation_ref()
         );
         assert_eq!(receipt.element_ref, fixture_node.element_ref);
         assert_eq!(receipt.required_pattern, WindowsUiaPattern::Invoke);
