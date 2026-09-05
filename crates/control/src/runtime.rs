@@ -651,6 +651,16 @@ async fn queue_action(
         )
             .into_response();
     }
+    if !matches!(&request.action, BridgeActionKind::Snapshot) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "canonical_consequential_action_authority_required",
+                "message": "UI-changing actions must use the canonical V4.3 consequential authority path"
+            })),
+        )
+            .into_response();
+    }
     let action = state
         .live
         .enqueue_action(id, request.reference, request.action)
