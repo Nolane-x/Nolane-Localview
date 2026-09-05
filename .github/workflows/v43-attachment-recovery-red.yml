@@ -1,0 +1,13 @@
+name: V43 attachment recovery RED
+
+on:
+  push:
+
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Attachment-bound recovery debt contract
+        run: cargo test -p localview-live-bridge --test v43_attachment_recovery_debt -- --nocapture
