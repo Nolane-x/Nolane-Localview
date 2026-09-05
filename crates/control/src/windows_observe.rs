@@ -172,7 +172,10 @@ fn runtime_error_response(error: WindowsObserveRuntimeError) -> axum::response::
         WindowsObserveRuntimeError::SubscriptionProviderIncarnationMismatch
         | WindowsObserveRuntimeError::SubscriptionTargetIncarnationMismatch
         | WindowsObserveRuntimeError::Bridge(_)
-        | WindowsObserveRuntimeError::ObservationStateMissing { .. } => StatusCode::CONFLICT,
+        | WindowsObserveRuntimeError::ObservationStateMissing { .. }
+        | WindowsObserveRuntimeError::PostconditionObservationAuthority { .. } => {
+            StatusCode::CONFLICT
+        }
     };
     (
         status,
@@ -231,4 +234,20 @@ fn lock_registry(registry: &Mutex<RuntimeRegistry>) -> MutexGuard<'_, RuntimeReg
     registry
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn postcondition_observation_authority_failure_is_exposed_as_conflict() {
+        let response = runtime_error_response(
+            WindowsObserveRuntimeError::PostconditionObservationAuthority {
+                message: "causal post-dispatch authority rejected".into(),
+            },
+        );
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
 }
