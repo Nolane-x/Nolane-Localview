@@ -14,16 +14,18 @@ mod windows_runtime_dispatch_smoke {
     use localview_live_bridge::{
         ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
         ConsequentialJournal, ConsequentialJournalTransition, ConsequentialPostconditionEvidence,
-        ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
-        ConsequentialRecoveryState, LiveBridge, reconcile_consequential_postconditions,
+        ConsequentialPostconditionStatus, ConsequentialRecoveryState, LiveBridge,
     };
-    use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
-    use localview_protocol::{DispatchResult, PrincipalRef, TransportResult, WorldOutcome};
+    use localview_native_provider::{
+        NativeSemanticSnapshotRevision, SnapshotBudget, UserSelectedWindowTarget,
+    };
+    use localview_protocol::{PrincipalRef, WorldOutcome};
     use localview_windows_observe_runtime::{
         WindowsObserveRuntimeConfig, WindowsUiaActionPreflightRequest,
         WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
-        WindowsUiaDispatchSealRequest, WindowsUiaPreparedDispatchRequest,
-        arm_uia_dispatch_execution, execute_armed_uia_dispatch, prepare_uia_dispatch,
+        WindowsUiaDispatchSealRequest, WindowsUiaPostconditionVerifier,
+        WindowsUiaPreparedDispatchRequest, WindowsUiaVerifiedExecutionOutcome,
+        arm_uia_dispatch_execution, execute_armed_uia_dispatch_verified, prepare_uia_dispatch,
         spawn_windows_uia_runtime_manager,
     };
     use localview_windows_uia_provider::{
@@ -80,6 +82,44 @@ mod windows_runtime_dispatch_smoke {
                 acting_principal_ref: authority.acting_principal_ref.clone(),
                 authorization_revision: authority.authorization_revision.clone(),
             })
+        }
+    }
+
+    struct SmokePostconditionVerifier {
+        pre_dispatch_cut: String,
+    }
+
+    impl WindowsUiaPostconditionVerifier for SmokePostconditionVerifier {
+        type Error = Infallible;
+
+        fn verify(
+            &self,
+            _action_id: Uuid,
+            expected_contract_refs: &[String],
+            snapshot: &NativeSemanticSnapshotRevision,
+        ) -> Result<Vec<ConsequentialPostconditionEvidence>, Self::Error> {
+            assert_eq!(expected_contract_refs, &[POSTCONDITION_REF.to_owned()]);
+            assert_ne!(
+                snapshot.snapshot_cut_ref(),
+                self.pre_dispatch_cut,
+                "production coordinator must verify a fresh post-dispatch cut"
+            );
+            let title_changed = snapshot
+                .nodes()
+                .iter()
+                .any(|node| node.name.as_deref() == Some(AFTER_TITLE));
+            Ok(vec![ConsequentialPostconditionEvidence {
+                contract_ref: POSTCONDITION_REF.into(),
+                status: if title_changed {
+                    ConsequentialPostconditionStatus::VerifiedPass
+                } else {
+                    ConsequentialPostconditionStatus::VerifiedFail
+                },
+                receipt_ref: format!(
+                    "postcondition:runtime-smoke:{}",
+                    snapshot.cache_revision_ref()
+                ),
+            }])
         }
     }
 
@@ -286,92 +326,64 @@ mod windows_runtime_dispatch_smoke {
             .await
             .expect("resolve exact attached runtime dispatch executor");
 
-        let result = execute_armed_uia_dispatch(&bridge, &journal, session_id, armed, &executor)
-            .await
-            .expect("real retained UIA Invoke must cross the one-shot runtime boundary");
-
-        assert_eq!(
-            result.provider_receipt.transport_result,
-            TransportResult::DeliveredToExecutor
-        );
-        assert_eq!(
-            result.provider_receipt.dispatch_result,
-            DispatchResult::DispatchedFull
-        );
-        assert_eq!(
-            journal.recovery_state(action_id).await,
-            Some(ConsequentialRecoveryState::PossiblyDispatched),
-            "provider success is dispatch evidence only until postcondition reconciliation"
-        );
-        assert!(matches!(
-            result.journal_entry.transition,
-            ConsequentialJournalTransition::DispatchLinearized { .. }
-        ));
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let observation_permit = journal
-            .begin_postcondition_observation(action_id)
-            .await
-            .expect("durable dispatch uncertainty must mint one post-dispatch observation permit");
-        let observation = manager
-            .capture_postcondition_observation(&journal, observation_permit)
-            .await
-            .expect("runtime must capture the exact journal-authorized fresh UIA snapshot");
-        let post_snapshot = manager
-            .current_semantic_snapshot(session_id)
-            .await
-            .expect("runtime must retain the post-dispatch semantic revision");
-        assert_eq!(
-            post_snapshot.snapshot_cut_ref(),
-            observation.snapshot_cut_ref()
-        );
-        assert_ne!(
-            post_snapshot.snapshot_cut_ref(),
-            snapshot.snapshot_cut_ref(),
-            "postcondition evidence must use a fresh cut after dispatch"
-        );
-
-        let title_changed = post_snapshot
-            .nodes()
-            .iter()
-            .any(|node| node.name.as_deref() == Some(AFTER_TITLE));
-        let reconciliation = reconcile_consequential_postconditions(
+        let outcome = execute_armed_uia_dispatch_verified(
             &bridge,
             &journal,
-            ConsequentialPostconditionReconciliationReceipt::from_observation(
-                observation,
-                vec![ConsequentialPostconditionEvidence {
-                    contract_ref: POSTCONDITION_REF.into(),
-                    status: if title_changed {
-                        ConsequentialPostconditionStatus::VerifiedPass
-                    } else {
-                        ConsequentialPostconditionStatus::VerifiedFail
-                    },
-                    receipt_ref: format!(
-                        "postcondition:runtime-smoke:{}",
-                        post_snapshot.cache_revision_ref()
-                    ),
-                }],
-            ),
+            &manager,
+            session_id,
+            armed,
+            &executor,
+            &SmokePostconditionVerifier {
+                pre_dispatch_cut: snapshot.snapshot_cut_ref().to_owned(),
+            },
         )
         .await
-        .expect("typed postcondition reconciliation must consume causal snapshot evidence");
+        .expect("production verified executor must close real Invoke through postcondition commit");
 
-        assert_eq!(reconciliation.world_outcome, WorldOutcome::VerifiedExpected);
-        assert!(reconciliation.postconditions_verified);
-        assert_eq!(
-            journal.recovery_state(action_id).await,
-            Some(ConsequentialRecoveryState::VerifiedUncommitted),
-            "only the observed expected world state may cross the verified boundary"
-        );
-        journal
-            .record_committed(action_id)
-            .await
-            .expect("verified expected postconditions may commit");
+        assert!(matches!(
+            outcome,
+            WindowsUiaVerifiedExecutionOutcome::Committed {
+                action_id: committed_action_id,
+                world_outcome: WorldOutcome::VerifiedExpected,
+                ..
+            } if committed_action_id == action_id
+        ));
         assert_eq!(
             journal.recovery_state(action_id).await,
             Some(ConsequentialRecoveryState::Committed)
         );
+        let entries = journal.entries_for(action_id).await;
+        let dispatch_sequence = entries
+            .iter()
+            .find(|entry| {
+                matches!(
+                    entry.transition,
+                    ConsequentialJournalTransition::DispatchLinearized { .. }
+                )
+            })
+            .map(|entry| entry.journal_sequence)
+            .expect("real provider dispatch must be durably linearized");
+        let reconciliation_sequence = entries
+            .iter()
+            .find(|entry| {
+                matches!(
+                    entry.transition,
+                    ConsequentialJournalTransition::ReconciliationOutcome {
+                        world_outcome: WorldOutcome::VerifiedExpected,
+                        postconditions_verified: true,
+                        ..
+                    }
+                )
+            })
+            .map(|entry| entry.journal_sequence)
+            .expect("fresh postcondition evidence must be durably reconciled");
+        let commit_sequence = entries
+            .iter()
+            .find(|entry| matches!(entry.transition, ConsequentialJournalTransition::Committed))
+            .map(|entry| entry.journal_sequence)
+            .expect("verified expected world outcome must be durably committed");
+        assert!(dispatch_sequence < reconciliation_sequence);
+        assert!(reconciliation_sequence < commit_sequence);
 
         manager
             .release(session_id)
