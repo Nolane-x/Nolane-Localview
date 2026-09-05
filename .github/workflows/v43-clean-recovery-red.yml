@@ -1,0 +1,13 @@
+name: V43 clean recovery RED
+
+on:
+  push:
+
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Recovery inventory contract is RED before implementation
+        run: cargo test -p localview-live-bridge --test v43_recovery_inventory -- --nocapture
