@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod action_preflight;
+mod attached_recovery;
 mod dispatch_authority;
 mod dispatch_seal;
 mod execution_arm;
@@ -8,6 +9,7 @@ mod prepared_dispatch;
 mod runtime_manager;
 mod verified_execution;
 pub use action_preflight::*;
+pub use attached_recovery::*;
 pub use dispatch_authority::*;
 pub use dispatch_seal::*;
 pub use execution_arm::*;
@@ -72,6 +74,12 @@ pub enum WindowsObserveBridgeError {
     ReconciliationRejected,
     #[error("LiveBridge observation state disappeared after reconciliation")]
     ObservationStateMissing,
+}
+
+impl From<WindowsObserveBridgeError> for WindowsObserveRuntimeError {
+    fn from(value: WindowsObserveBridgeError) -> Self {
+        Self::Bridge(value)
+    }
 }
 
 impl WindowsObserveBridgeBinding {
