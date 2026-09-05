@@ -4,6 +4,7 @@ mod consequential_recovery;
 mod process_metrics;
 
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::{
@@ -23,9 +24,11 @@ use localview_control::{
 use localview_core::RuntimeConfig;
 use localview_discovery::{CommandListenerSource, DiscoveryEngine};
 use localview_evidence::EvidenceStore;
-use localview_live_bridge::LiveBridge;
+use localview_live_bridge::{ConsequentialJournal, LiveBridge};
 use localview_observation::ObservationBus;
-use localview_protocol::ObservationEvent;
+use localview_protocol::{
+    ObservationEvent, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
+};
 use localview_security::generate_control_token;
 use localview_sessions::SessionManager;
 use localview_windows_observe_runtime::{
@@ -114,7 +117,7 @@ async fn main() -> Result<()> {
 
     configure_windows_observe_runtime_for_sessions(&sessions, windows_observe.clone());
     if let Some(runtime) = windows_observe.clone() {
-        spawn_windows_observe_drain_loop(runtime);
+        spawn_windows_observe_drain_loop(runtime, consequential_journal.clone());
     }
 
     let paused = Arc::new(AtomicBool::new(matches!(
@@ -200,20 +203,88 @@ async fn main() -> Result<()> {
     }
     configure_windows_observe_runtime_for_sessions(&sessions, None);
     // Keep the reopened durable journal authority alive for the full daemon
-    // lifetime. A later recovery phase may reconcile from it, but restart never
-    // recreates a dispatch permit.
+    // lifetime. Attachment recovery may commit an already-verified durable
+    // outcome, but restart never recreates a dispatch permit.
     drop(consequential_journal);
     drop(consequential_recovery);
     Ok(())
 }
 
-fn spawn_windows_observe_drain_loop(runtime: Arc<WindowsUiaObserveRuntimeManager>) {
+fn spawn_windows_observe_drain_loop(
+    runtime: Arc<WindowsUiaObserveRuntimeManager>,
+    journal: Arc<ConsequentialJournal>,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut recovered_attachments: HashMap<
+            SessionId,
+            (ProviderIncarnationRef, TargetIncarnationRef),
+        > = HashMap::new();
+
         loop {
             interval.tick().await;
-            for session_id in runtime.attached_sessions().await {
+            let attached_sessions = runtime.attached_sessions().await;
+            recovered_attachments
+                .retain(|session_id, _| attached_sessions.contains(session_id));
+
+            for session_id in attached_sessions {
+                if let Some(snapshot) = runtime.current_semantic_snapshot(session_id).await {
+                    let lineage = (
+                        snapshot.provider_incarnation_ref().clone(),
+                        snapshot.target_incarnation_ref().clone(),
+                    );
+                    if recovered_attachments.get(&session_id) != Some(&lineage) {
+                        match consequential_recovery::process_windows_attachment_recovery(
+                            journal.as_ref(),
+                            runtime.as_ref(),
+                            session_id,
+                        )
+                        .await
+                        {
+                            Ok(report) => {
+                                for action_id in report.committed_action_ids {
+                                    info!(
+                                        %session_id,
+                                        %action_id,
+                                        "committed durable VerifiedExpected consequential recovery after exact Windows attachment"
+                                    );
+                                }
+                                for action_id in report.historical_committed_action_ids {
+                                    info!(
+                                        %session_id,
+                                        %action_id,
+                                        "validated historical committed consequential recovery after exact Windows attachment"
+                                    );
+                                }
+                                for debt in report.verifier_required {
+                                    warn!(
+                                        %session_id,
+                                        action_id = %debt.action_id,
+                                        recovery_state = ?debt.recovery_state,
+                                        latest_journal_sequence = debt.latest_journal_sequence,
+                                        expected_postconditions = ?debt.expected_postcondition_contract_refs,
+                                        "durable consequential recovery is exact-lineage bound but requires an independent registered verifier; no observation or dispatch authority was fabricated"
+                                    );
+                                }
+                                recovered_attachments.insert(session_id, lineage);
+                            }
+                            Err(error) => {
+                                warn!(
+                                    %session_id,
+                                    %error,
+                                    "attachment-bound consequential recovery failed closed; durable debt remains retryable as recovery work only"
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    warn!(
+                        %session_id,
+                        "attached Windows observe session has no current semantic snapshot; consequential recovery remains untouched"
+                    );
+                }
+
                 match runtime.drain_once(session_id).await {
                     Ok(_) => {}
                     Err(WindowsObserveRuntimeError::ResourceDenied { .. }) => {
@@ -224,6 +295,7 @@ fn spawn_windows_observe_drain_loop(runtime: Arc<WindowsUiaObserveRuntimeManager
                     }
                     Err(error) => {
                         warn!(%session_id, %error, "Windows observe callback drain failed; detaching fail-closed");
+                        recovered_attachments.remove(&session_id);
                         if let Err(cleanup_error) = runtime.release(session_id).await {
                             warn!(%session_id, %cleanup_error, "Windows observe provider cleanup failed after drain-error detach");
                         }
