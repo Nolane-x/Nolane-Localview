@@ -1,15 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use localview_protocol::{
-    ProviderIncarnationRef, ReconciliationCompleteness, TargetIncarnationRef, WorldOutcome,
-};
+use localview_protocol::{ReconciliationCompleteness, WorldOutcome};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
     CanonicalActionEnvelope, ConsequentialJournal, ConsequentialJournalEntry,
-    ConsequentialJournalError, ConsequentialJournalTransition, LiveBridge,
+    ConsequentialJournalError, ConsequentialJournalTransition,
+    ConsequentialPostconditionObservationReceipt, LiveBridge,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,14 +26,37 @@ pub struct ConsequentialPostconditionEvidence {
     pub receipt_ref: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed reconciliation input whose causal lineage can only originate from a
+/// journal-minted post-dispatch observation receipt.
+///
+/// The observation binding and postcondition list are deliberately private. A
+/// caller may supply predicate evidence, but it cannot choose the action,
+/// provider/target incarnation, observation cut, or reconciliation receipt that
+/// authorizes that evidence to affect consequential world state.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsequentialPostconditionReconciliationReceipt {
-    pub action_id: Uuid,
-    pub provider_incarnation_ref: ProviderIncarnationRef,
-    pub target_incarnation_ref: TargetIncarnationRef,
-    pub snapshot_cut_ref: String,
-    pub reconciliation_receipt_ref: String,
-    pub postconditions: Vec<ConsequentialPostconditionEvidence>,
+    observation: ConsequentialPostconditionObservationReceipt,
+    postconditions: Vec<ConsequentialPostconditionEvidence>,
+}
+
+impl ConsequentialPostconditionReconciliationReceipt {
+    pub fn from_observation(
+        observation: ConsequentialPostconditionObservationReceipt,
+        postconditions: Vec<ConsequentialPostconditionEvidence>,
+    ) -> Self {
+        Self {
+            observation,
+            postconditions,
+        }
+    }
+
+    pub fn observation(&self) -> &ConsequentialPostconditionObservationReceipt {
+        &self.observation
+    }
+
+    pub fn postconditions(&self) -> &[ConsequentialPostconditionEvidence] {
+        &self.postconditions
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,35 +94,43 @@ pub enum ConsequentialReconciliationError {
 
 /// Reconcile one consequential action from independently observed postcondition evidence.
 ///
-/// This is the public authority boundary for postcondition outcome writes. Callers
-/// provide typed evidence and its exact reconciliation-snapshot binding; they do
-/// not choose `postconditions_verified` or write a verified world outcome directly.
+/// This is the public authority boundary for postcondition outcome writes. The
+/// causal observation lineage is not caller-authored: it comes from the opaque
+/// receipt minted by `ConsequentialJournal::complete_postcondition_observation`.
+/// The caller supplies only typed predicate evidence for declared contracts and
+/// never chooses `postconditions_verified` or a verified world outcome directly.
 pub async fn reconcile_consequential_postconditions(
     bridge: &LiveBridge,
     journal: &ConsequentialJournal,
     receipt: ConsequentialPostconditionReconciliationReceipt,
 ) -> Result<ConsequentialPostconditionReconciliationResult, ConsequentialReconciliationError> {
-    let envelope = admitted_envelope(journal, receipt.action_id).await.ok_or(
-        ConsequentialReconciliationError::UnknownAction {
-            action_id: receipt.action_id,
-        },
-    )?;
+    let ConsequentialPostconditionReconciliationReceipt {
+        observation,
+        postconditions,
+    } = receipt;
+    let action_id = observation.action_id();
+    let envelope = admitted_envelope(journal, action_id)
+        .await
+        .ok_or(ConsequentialReconciliationError::UnknownAction { action_id })?;
 
-    if receipt.provider_incarnation_ref != envelope.metadata.provider_incarnation_ref {
+    if observation.provider_incarnation_ref() != &envelope.metadata.provider_incarnation_ref {
         return Err(ConsequentialReconciliationError::ProviderIncarnationMismatch);
     }
-    if receipt.target_incarnation_ref != envelope.metadata.target_incarnation_ref {
+    if observation.target_incarnation_ref() != &envelope.metadata.target_incarnation_ref {
         return Err(ConsequentialReconciliationError::TargetIncarnationMismatch);
+    }
+    if observation.session_id() != envelope.session_id {
+        return Err(ConsequentialReconciliationError::ReconciliationSnapshotMismatch);
     }
 
     let snapshot = bridge
         .current_reconciliation_snapshot(envelope.session_id)
         .await
         .ok_or(ConsequentialReconciliationError::ReconciliationSnapshotMismatch)?;
-    if snapshot.receipt_id != receipt.reconciliation_receipt_ref
-        || snapshot.snapshot_cut_ref != receipt.snapshot_cut_ref
-        || snapshot.provider_incarnation_ref != receipt.provider_incarnation_ref
-        || snapshot.target_incarnation_ref != receipt.target_incarnation_ref
+    if snapshot.receipt_id != observation.reconciliation_receipt_ref()
+        || snapshot.snapshot_cut_ref != observation.snapshot_cut_ref()
+        || &snapshot.provider_incarnation_ref != observation.provider_incarnation_ref()
+        || &snapshot.target_incarnation_ref != observation.target_incarnation_ref()
     {
         return Err(ConsequentialReconciliationError::ReconciliationSnapshotMismatch);
     }
@@ -111,7 +141,7 @@ pub async fn reconcile_consequential_postconditions(
     }
 
     let expected = exact_expected_postconditions(&envelope)?;
-    let observed = exact_observed_postconditions(&expected, receipt.postconditions)?;
+    let observed = exact_observed_postconditions(&expected, postconditions)?;
 
     let any_failed = expected.iter().any(|contract_ref| {
         observed.get(contract_ref).is_some_and(|evidence| {
@@ -138,9 +168,9 @@ pub async fn reconcile_consequential_postconditions(
         .collect::<Vec<_>>();
     let journal_entry = journal
         .record_reconciliation_outcome(
-            receipt.action_id,
+            action_id,
             world_outcome,
-            Some(receipt.reconciliation_receipt_ref),
+            Some(observation.reconciliation_receipt_ref().to_owned()),
             postcondition_receipt_refs,
             postconditions_verified,
         )
