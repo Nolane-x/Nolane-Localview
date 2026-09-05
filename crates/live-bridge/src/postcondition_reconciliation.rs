@@ -70,6 +70,11 @@ pub enum ConsequentialReconciliationError {
     Journal(#[from] ConsequentialJournalError),
 }
 
+/// Reconcile one consequential action from independently observed postcondition evidence.
+///
+/// This is the public authority boundary for postcondition outcome writes. Callers
+/// provide typed evidence and its exact reconciliation-snapshot binding; they do
+/// not choose `postconditions_verified` or write a verified world outcome directly.
 pub async fn reconcile_consequential_postconditions(
     bridge: &LiveBridge,
     journal: &ConsequentialJournal,
