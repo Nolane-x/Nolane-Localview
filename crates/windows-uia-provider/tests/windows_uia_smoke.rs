@@ -2,8 +2,9 @@
 mod windows_smoke {
     use std::{
         sync::{
+            Arc,
             atomic::{AtomicBool, Ordering},
-            mpsc, Arc,
+            mpsc,
         },
         thread,
         time::Duration,
@@ -18,15 +19,15 @@ mod windows_smoke {
     };
     use uuid::Uuid;
     use windows::{
-        core::w,
         Win32::{
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, ShowWindow,
-                TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE, SW_SHOW, WS_OVERLAPPEDWINDOW,
+                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE,
+                PeekMessageW, SW_SHOW, ShowWindow, TranslateMessage, WS_OVERLAPPEDWINDOW,
                 WS_VISIBLE,
             },
         },
+        core::w,
     };
 
     #[test]
@@ -213,7 +214,9 @@ mod windows_smoke {
         assert_eq!(second_lease.element_ref, second_fixture_node.element_ref);
 
         let mut forged_element = second_fixture_node.element_ref.clone();
-        forged_element.opaque_provider_element_id.push_str(":forged");
+        forged_element
+            .opaque_provider_element_id
+            .push_str(":forged");
         assert_eq!(
             worker
                 .bind_element_lease(

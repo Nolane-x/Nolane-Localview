@@ -8,12 +8,13 @@ use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 use uuid::Uuid;
 
 use crate::{
+    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
+    WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
     event_buffer::{WindowsUiaEventBuffer, WindowsUiaEventDraft, WindowsUiaEventKind},
     worker::{
         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
         WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     },
-    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,20 +55,19 @@ mod platform {
         collections::HashMap,
         ffi::c_void,
         sync::{
-            mpsc::{self, Receiver, RecvTimeoutError, Sender},
             Arc, Mutex,
+            mpsc::{self, Receiver, RecvTimeoutError, Sender},
         },
         thread,
     };
 
     use windows::{
-        core::Ref,
         Win32::{
             Foundation::{CloseHandle, FILETIME, HWND},
             System::{
                 Com::{
-                    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-                    COINIT_MULTITHREADED,
+                    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+                    CoUninitialize,
                 },
                 Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
                 Variant::VARIANT,
@@ -82,6 +82,7 @@ mod platform {
                 WindowsAndMessaging::GetWindowThreadProcessId,
             },
         },
+        core::Ref,
     };
 
     use super::*;
@@ -187,7 +188,9 @@ mod platform {
                 }),
                 Ok(Err(error)) => Err(error),
                 Err(RecvTimeoutError::Timeout) => Err(WindowsUiaWorkerError::CommandTimeout),
-                Err(RecvTimeoutError::Disconnected) => Err(WindowsUiaWorkerError::WorkerUnavailable),
+                Err(RecvTimeoutError::Disconnected) => {
+                    Err(WindowsUiaWorkerError::WorkerUnavailable)
+                }
             }
         }
 
@@ -230,6 +233,14 @@ mod platform {
                     requirements,
                     context,
                 })
+        }
+
+        pub fn dispatch_pattern(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaPatternDispatchRequest,
+        ) -> Result<WindowsUiaPatternDispatchReceipt, WindowsUiaWorkerError> {
+            self.inner.dispatch_pattern(attachment, request)
         }
 
         pub fn subscribe_events(

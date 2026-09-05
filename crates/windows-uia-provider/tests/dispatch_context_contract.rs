@@ -1,6 +1,6 @@
 use localview_windows_uia_provider::{
-    evaluate_windows_uia_dispatch_context, WindowsUiaDispatchContextBlocker,
-    WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextRequirements,
+    WindowsUiaDispatchContextBlocker, WindowsUiaDispatchContextObservation,
+    WindowsUiaDispatchContextRequirements, evaluate_windows_uia_dispatch_context,
 };
 
 fn strict_requirements() -> WindowsUiaDispatchContextRequirements {

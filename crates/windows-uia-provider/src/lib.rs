@@ -86,6 +86,14 @@ pub enum WindowsUiaWorkerError {
     InvalidElementLeaseRequest,
     #[error("Windows UI Automation dispatch context request is invalid")]
     InvalidDispatchContextRequest,
+    #[error("Windows UI Automation pattern dispatch request is invalid")]
+    InvalidPatternDispatchRequest,
+    #[error("Windows UI Automation pattern is not enabled for real dispatch: {pattern:?}")]
+    PatternDispatchUnsupported { pattern: crate::WindowsUiaPattern },
+    #[error(
+        "Windows UI Automation pattern is unavailable at the final dispatch boundary: {pattern:?}"
+    )]
+    PatternUnavailable { pattern: crate::WindowsUiaPattern },
     #[error(
         "Windows UI Automation element lease snapshot expired: requested {requested_cut}, current {current_cut}"
     )]
@@ -115,9 +123,9 @@ mod platform {
     };
 
     use localview_native_provider::{
-        derive_windows_target_incarnation, provider_element_ref_from_runtime_id,
         NativeSemanticNodeObservation, NativeSemanticSnapshotDraft, SemanticSnapshotCache,
-        SnapshotBudgetGuard,
+        SnapshotBudgetGuard, derive_windows_target_incarnation,
+        provider_element_ref_from_runtime_id,
     };
     use localview_protocol::{ProviderElementRealization, ReconciliationCompleteness};
     use uuid::Uuid;
@@ -125,8 +133,8 @@ mod platform {
         Foundation::{CloseHandle, FILETIME, HWND},
         System::{
             Com::{
-                CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-                COINIT_MULTITHREADED, SAFEARRAY,
+                CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+                CoUninitialize, SAFEARRAY,
             },
             Ole::{
                 SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound,
@@ -136,10 +144,10 @@ mod platform {
         },
         UI::{
             Accessibility::{
-                CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
+                CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+                IUIAutomationTreeWalker, UIA_InvokePatternId,
                 UIA_IsExpandCollapsePatternAvailablePropertyId,
-                UIA_IsInvokePatternAvailablePropertyId,
-                UIA_IsScrollItemPatternAvailablePropertyId,
+                UIA_IsInvokePatternAvailablePropertyId, UIA_IsScrollItemPatternAvailablePropertyId,
                 UIA_IsSelectionItemPatternAvailablePropertyId,
                 UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
                 UIA_IsVirtualizedItemPatternAvailablePropertyId, UIA_PROPERTY_ID,
@@ -152,9 +160,10 @@ mod platform {
 
     use super::*;
     use crate::{
-        evaluate_windows_uia_dispatch_context, WindowsUiaActionCapabilities,
-        WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
-        WindowsUiaDispatchContextRequest, WindowsUiaPattern, WindowsUiaPatternSupport,
+        WindowsUiaActionCapabilities, WindowsUiaDispatchContextObservation,
+        WindowsUiaDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaPattern,
+        WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
+        WindowsUiaPatternSupport, evaluate_windows_uia_dispatch_context,
     };
 
     const PROPERTIES_PER_NODE: usize = 14;
@@ -180,6 +189,11 @@ mod platform {
             attachment: WindowsUiaAttachment,
             request: WindowsUiaDispatchContextRequest,
             reply: Sender<Result<WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError>>,
+        },
+        DispatchPattern {
+            attachment: WindowsUiaAttachment,
+            request: WindowsUiaPatternDispatchRequest,
+            reply: Sender<Result<WindowsUiaPatternDispatchReceipt, WindowsUiaWorkerError>>,
         },
         Shutdown,
     }
@@ -240,9 +254,11 @@ mod platform {
             let provider_incarnation_ref = match startup_rx.recv_timeout(config.command_timeout) {
                 Ok(Ok(provider)) => provider,
                 Ok(Err(error)) => return Err(error),
-                Err(RecvTimeoutError::Timeout) => return Err(WindowsUiaWorkerError::CommandTimeout),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(WindowsUiaWorkerError::CommandTimeout);
+                }
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(WindowsUiaWorkerError::WorkerUnavailable)
+                    return Err(WindowsUiaWorkerError::WorkerUnavailable);
                 }
             };
 
@@ -276,7 +292,8 @@ mod platform {
             attachment: &WindowsUiaAttachment,
             request: WindowsUiaSnapshotRequest,
         ) -> Result<Arc<NativeSemanticSnapshotRevision>, WindowsUiaWorkerError> {
-            if request.snapshot_cut_ref.trim().is_empty() || request.surface_scope.trim().is_empty() {
+            if request.snapshot_cut_ref.trim().is_empty() || request.surface_scope.trim().is_empty()
+            {
                 return Err(WindowsUiaWorkerError::InvalidSnapshotRequest);
             }
             if attachment.provider_incarnation_ref != self.provider_incarnation_ref {
@@ -332,6 +349,32 @@ mod platform {
             let (reply_tx, reply_rx) = mpsc::channel();
             self.sender
                 .send(WorkerCommand::RevalidateDispatchContext {
+                    attachment: attachment.clone(),
+                    request,
+                    reply: reply_tx,
+                })
+                .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
+            recv_command(reply_rx, self.command_timeout)
+        }
+        pub fn dispatch_pattern(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaPatternDispatchRequest,
+        ) -> Result<WindowsUiaPatternDispatchReceipt, WindowsUiaWorkerError> {
+            if request.dispatch_attempt_ref.is_nil()
+                || request.action_id.is_nil()
+                || request.preparation_journal_sequence == 0
+                || request.preparation_receipt_ref.trim().is_empty()
+                || request.snapshot_cut_ref.trim().is_empty()
+                || request.provider_incarnation_ref != self.provider_incarnation_ref
+                || request.provider_incarnation_ref != attachment.provider_incarnation_ref
+                || request.target_incarnation_ref != attachment.target_incarnation_ref
+            {
+                return Err(WindowsUiaWorkerError::InvalidPatternDispatchRequest);
+            }
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.sender
+                .send(WorkerCommand::DispatchPattern {
                     attachment: attachment.clone(),
                     request,
                     reply: reply_tx,
@@ -415,10 +458,8 @@ mod platform {
             }
         };
 
-        let provider_incarnation_ref = ProviderIncarnationRef::from(format!(
-            "provider:windows-uia:mta:{}",
-            Uuid::new_v4()
-        ));
+        let provider_incarnation_ref =
+            ProviderIncarnationRef::from(format!("provider:windows-uia:mta:{}", Uuid::new_v4()));
         let mut state = WorkerState {
             automation,
             walker,
@@ -460,6 +501,13 @@ mod platform {
                     reply,
                 } => {
                     let _ = reply.send(state.revalidate_dispatch_context(&attachment, request));
+                }
+                WorkerCommand::DispatchPattern {
+                    attachment,
+                    request,
+                    reply,
+                } => {
+                    let _ = reply.send(state.dispatch_pattern(&attachment, request));
                 }
                 WorkerCommand::Shutdown => break,
             }
@@ -670,6 +718,75 @@ mod platform {
             })
         }
 
+        fn dispatch_pattern(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaPatternDispatchRequest,
+        ) -> Result<WindowsUiaPatternDispatchReceipt, WindowsUiaWorkerError> {
+            if request.provider_incarnation_ref != self.provider_incarnation_ref
+                || request.provider_incarnation_ref != attachment.provider_incarnation_ref
+                || request.target_incarnation_ref != attachment.target_incarnation_ref
+            {
+                return Err(WindowsUiaWorkerError::TargetReincarnated);
+            }
+            let context = self.revalidate_dispatch_context(
+                attachment,
+                WindowsUiaDispatchContextRequest {
+                    snapshot_cut_ref: request.snapshot_cut_ref.clone(),
+                    element_ref: request.element_ref.clone(),
+                    requirements: request.context_requirements,
+                },
+            )?;
+            let retained = self.exact_retained_element(
+                attachment,
+                &request.snapshot_cut_ref,
+                &request.element_ref,
+            )?;
+            match request.required_pattern {
+                WindowsUiaPattern::Invoke => {
+                    if read_pattern_support(
+                        &retained.element,
+                        UIA_IsInvokePatternAvailablePropertyId,
+                    ) != WindowsUiaPatternSupport::Supported
+                    {
+                        return Err(WindowsUiaWorkerError::PatternUnavailable {
+                            pattern: WindowsUiaPattern::Invoke,
+                        });
+                    }
+                    let invoke = unsafe {
+                        retained
+                            .element
+                            .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                    }
+                    .map_err(|_| {
+                        WindowsUiaWorkerError::PatternUnavailable {
+                            pattern: WindowsUiaPattern::Invoke,
+                        }
+                    })?;
+                    unsafe { invoke.Invoke() }
+                        .map_err(|e| WindowsUiaWorkerError::ProviderFailure(e.to_string()))?;
+                }
+                pattern => {
+                    return Err(WindowsUiaWorkerError::PatternDispatchUnsupported { pattern });
+                }
+            }
+            Ok(WindowsUiaPatternDispatchReceipt {
+                dispatch_attempt_ref: request.dispatch_attempt_ref,
+                action_id: request.action_id,
+                preparation_journal_sequence: request.preparation_journal_sequence,
+                preparation_receipt_ref: request.preparation_receipt_ref,
+                snapshot_cut_ref: request.snapshot_cut_ref,
+                provider_incarnation_ref: request.provider_incarnation_ref,
+                target_incarnation_ref: request.target_incarnation_ref,
+                element_ref: request.element_ref,
+                required_pattern: request.required_pattern,
+                context_requirements: request.context_requirements,
+                final_context: context.observation,
+                transport_result: localview_protocol::TransportResult::DeliveredToExecutor,
+                dispatch_result: localview_protocol::DispatchResult::DispatchedFull,
+            })
+        }
+
         fn exact_retained_element<'a>(
             &'a self,
             attachment: &WindowsUiaAttachment,
@@ -778,13 +895,7 @@ mod platform {
         let result = unsafe {
             // SAFETY: all FILETIME pointers are valid for the duration of the call
             // and `process` was opened successfully above.
-            GetProcessTimes(
-                process,
-                &mut creation,
-                &mut exit,
-                &mut kernel,
-                &mut user,
-            )
+            GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user)
         };
         let _ = unsafe {
             // SAFETY: `process` is an owned handle returned by OpenProcess.
@@ -962,18 +1073,25 @@ mod platform {
         (nodes, retained_elements, usage, debt)
     }
 
-    fn observe_action_capabilities(
-        element: &IUIAutomationElement,
-    ) -> WindowsUiaActionCapabilities {
+    fn observe_action_capabilities(element: &IUIAutomationElement) -> WindowsUiaActionCapabilities {
         let mut capabilities = WindowsUiaActionCapabilities::default();
         for (pattern, property_id) in [
-            (WindowsUiaPattern::Invoke, UIA_IsInvokePatternAvailablePropertyId),
+            (
+                WindowsUiaPattern::Invoke,
+                UIA_IsInvokePatternAvailablePropertyId,
+            ),
             (
                 WindowsUiaPattern::SelectionItem,
                 UIA_IsSelectionItemPatternAvailablePropertyId,
             ),
-            (WindowsUiaPattern::Value, UIA_IsValuePatternAvailablePropertyId),
-            (WindowsUiaPattern::Toggle, UIA_IsTogglePatternAvailablePropertyId),
+            (
+                WindowsUiaPattern::Value,
+                UIA_IsValuePatternAvailablePropertyId,
+            ),
+            (
+                WindowsUiaPattern::Toggle,
+                UIA_IsTogglePatternAvailablePropertyId,
+            ),
             (
                 WindowsUiaPattern::ExpandCollapse,
                 UIA_IsExpandCollapsePatternAvailablePropertyId,
@@ -1049,11 +1167,7 @@ mod platform {
         for index in lower..=upper {
             let mut value = 0_i32;
             if unsafe {
-                SafeArrayGetElement(
-                    guard.0,
-                    &index,
-                    (&mut value as *mut i32).cast::<c_void>(),
-                )
+                SafeArrayGetElement(guard.0, &index, (&mut value as *mut i32).cast::<c_void>())
             }
             .is_err()
             {
@@ -1134,6 +1248,13 @@ impl WindowsUiaWorker {
         _attachment: &WindowsUiaAttachment,
         _request: crate::WindowsUiaDispatchContextRequest,
     ) -> Result<crate::WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError> {
+        Err(WindowsUiaWorkerError::UnsupportedPlatform)
+    }
+    pub fn dispatch_pattern(
+        &self,
+        _attachment: &WindowsUiaAttachment,
+        _request: crate::WindowsUiaPatternDispatchRequest,
+    ) -> Result<crate::WindowsUiaPatternDispatchReceipt, WindowsUiaWorkerError> {
         Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
 }

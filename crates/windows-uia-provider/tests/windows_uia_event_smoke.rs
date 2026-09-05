@@ -2,30 +2,33 @@
 mod windows_event_smoke {
     use std::{
         sync::{
+            Arc,
             atomic::{AtomicBool, Ordering},
-            mpsc, Arc,
+            mpsc,
         },
         thread,
         time::{Duration, Instant},
     };
 
-    use localview_native_provider::{ProviderEventOrdering, SnapshotBudget, UserSelectedWindowTarget};
+    use localview_native_provider::{
+        ProviderEventOrdering, SnapshotBudget, UserSelectedWindowTarget,
+    };
     use localview_windows_uia_provider::{
         WindowsUiaEventKind, WindowsUiaEventSubscriptionOptions, WindowsUiaWorker,
         WindowsUiaWorkerConfig,
     };
     use uuid::Uuid;
     use windows::{
-        core::w,
         Win32::{
             Foundation::HWND,
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, SetWindowTextW,
-                ShowWindow, TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE, SW_SHOW,
+                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE,
+                PeekMessageW, SW_SHOW, SetWindowTextW, ShowWindow, TranslateMessage,
                 WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
+        core::w,
     };
 
     #[test]
@@ -130,9 +133,11 @@ mod windows_event_smoke {
             let drained = worker
                 .drain_events(&subscription, 32)
                 .expect("drain UIA event subscription");
-            if let Some(event) = drained.events.into_iter().find(|event| {
-                matches!(event.kind, WindowsUiaEventKind::PropertyChanged { .. })
-            }) {
+            if let Some(event) = drained
+                .events
+                .into_iter()
+                .find(|event| matches!(event.kind, WindowsUiaEventKind::PropertyChanged { .. }))
+            {
                 observed = Some(event);
                 break;
             }
