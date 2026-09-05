@@ -76,12 +76,6 @@ pub enum WindowsObserveBridgeError {
     ObservationStateMissing,
 }
 
-impl From<WindowsObserveBridgeError> for WindowsObserveRuntimeError {
-    fn from(value: WindowsObserveBridgeError) -> Self {
-        Self::Bridge(value)
-    }
-}
-
 impl WindowsObserveBridgeBinding {
     pub fn new(
         session_id: SessionId,
