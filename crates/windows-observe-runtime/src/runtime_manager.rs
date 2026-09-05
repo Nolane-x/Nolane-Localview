@@ -235,6 +235,26 @@ impl WindowsObserveResourceAccounting {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct WindowsPostconditionObservationCapture {
+    observation_receipt: ConsequentialPostconditionObservationReceipt,
+    snapshot: Arc<NativeSemanticSnapshotRevision>,
+}
+
+impl WindowsPostconditionObservationCapture {
+    pub fn observation_receipt(&self) -> &ConsequentialPostconditionObservationReceipt {
+        &self.observation_receipt
+    }
+
+    pub fn snapshot(&self) -> &Arc<NativeSemanticSnapshotRevision> {
+        &self.snapshot
+    }
+
+    pub fn into_observation_receipt(self) -> ConsequentialPostconditionObservationReceipt {
+        self.observation_receipt
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsObserveDrainOutcome {
     pub report: ProviderIngestReport,
@@ -610,6 +630,20 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         journal: &ConsequentialJournal,
         permit: ConsequentialPostconditionObservationPermit,
     ) -> Result<ConsequentialPostconditionObservationReceipt, WindowsObserveRuntimeError> {
+        Ok(self
+            .capture_postcondition_observation_with_snapshot(journal, permit)
+            .await?
+            .into_observation_receipt())
+    }
+
+    /// Capture the exact immutable snapshot together with its opaque journal
+    /// observation receipt so downstream verification cannot race a later
+    /// runtime reconciliation and accidentally inspect a different revision.
+    pub async fn capture_postcondition_observation_with_snapshot(
+        &self,
+        journal: &ConsequentialJournal,
+        permit: ConsequentialPostconditionObservationPermit,
+    ) -> Result<WindowsPostconditionObservationCapture, WindowsObserveRuntimeError> {
         let _gate = self.operation_gate.lock().await;
         let session_id = permit.session_id();
         let action_id = permit.action_id();
@@ -711,18 +745,22 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             .await);
         }
 
-        self.update_reconciliation_snapshot(session_id, snapshot)
+        self.update_reconciliation_snapshot(session_id, snapshot.clone())
             .await;
         drop(reconciliation_reservation);
 
-        journal
+        let observation_receipt = journal
             .complete_postcondition_observation(permit, reconciliation_receipt)
             .await
             .map_err(
                 |error| WindowsObserveRuntimeError::PostconditionObservationAuthority {
                     message: error.to_string(),
                 },
-            )
+            )?;
+        Ok(WindowsPostconditionObservationCapture {
+            observation_receipt,
+            snapshot,
+        })
     }
 
     /// Return the immutable semantic revision currently bound to one attached session.
