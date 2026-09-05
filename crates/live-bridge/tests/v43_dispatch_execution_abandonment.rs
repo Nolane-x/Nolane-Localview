@@ -1,5 +1,6 @@
 // Regression: an execution-side failure must release only volatile execution authority;
 // durable PREPARED uncertainty remains the source of truth for same-process reconciliation.
+// The higher-level verified executor relies on this one-way authority boundary.
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
     ConsequentialJournal, ConsequentialJournalError, ConsequentialRecoveryState,
