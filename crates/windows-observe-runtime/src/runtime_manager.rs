@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    error::Error as StdError,
-    fmt,
-    sync::Arc,
-};
+use std::{collections::HashMap, error::Error as StdError, fmt, sync::Arc};
 
 use localview_live_bridge::{
     ActionEnvelopeBindingError, ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass,
@@ -24,8 +19,9 @@ use localview_resource_governor::{
 use localview_windows_uia_provider::{
     WindowsUiaAttachment, WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest,
     WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest, WindowsUiaEventDrain,
-    WindowsUiaEventSubscription, WindowsUiaEventSubscriptionOptions, WindowsUiaSnapshotRequest,
-    WindowsUiaWorker, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
+    WindowsUiaEventSubscription, WindowsUiaEventSubscriptionOptions,
+    WindowsUiaPatternDispatchRequest, WindowsUiaSnapshotRequest, WindowsUiaWorker,
+    WindowsUiaWorkerConfig, WindowsUiaWorkerError,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -62,10 +58,7 @@ pub trait WindowsObserveProvider: Send + Sync + 'static {
 
     fn provider_incarnation_ref(&self) -> ProviderIncarnationRef;
 
-    fn attach(
-        &self,
-        selection: UserSelectedWindowTarget,
-    ) -> Result<Self::Attachment, Self::Error>;
+    fn attach(&self, selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error>;
 
     fn target_incarnation_ref(&self, attachment: &Self::Attachment) -> TargetIncarnationRef;
 
@@ -259,9 +252,9 @@ pub struct WindowsObserveRuntimeManager<P: WindowsObserveProvider> {
     bridge: LiveBridge,
     config: WindowsObserveRuntimeConfig,
     resource_governor: RuntimeResourceGovernor,
-    active: Mutex<HashMap<SessionId, ActiveObservation<P>>>,
+    active: Arc<Mutex<HashMap<SessionId, ActiveObservation<P>>>>,
     generations: Mutex<HashMap<SessionId, u64>>,
-    operation_gate: Mutex<()>,
+    operation_gate: Arc<Mutex<()>>,
 }
 
 impl<P: WindowsObserveProvider> fmt::Debug for WindowsObserveRuntimeManager<P> {
@@ -273,18 +266,102 @@ impl<P: WindowsObserveProvider> fmt::Debug for WindowsObserveRuntimeManager<P> {
     }
 }
 
+pub struct WindowsUiaRuntimeDispatchExecutor {
+    provider: Arc<WindowsUiaObserveProvider>,
+    active: Arc<Mutex<HashMap<SessionId, ActiveObservation<WindowsUiaObserveProvider>>>>,
+    operation_gate: Arc<Mutex<()>>,
+    session_id: SessionId,
+    provider_incarnation_ref: ProviderIncarnationRef,
+    target_incarnation_ref: TargetIncarnationRef,
+}
+
+impl fmt::Debug for WindowsUiaRuntimeDispatchExecutor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WindowsUiaRuntimeDispatchExecutor")
+            .field("session_id", &self.session_id)
+            .field("provider_incarnation_ref", &self.provider_incarnation_ref)
+            .field("target_incarnation_ref", &self.target_incarnation_ref)
+            .finish_non_exhaustive()
+    }
+}
+
+impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
+    type Error = WindowsObserveRuntimeError;
+
+    async fn execute(
+        &self,
+        request: &crate::WindowsUiaProviderExecutionRequest,
+    ) -> Result<crate::WindowsUiaProviderExecutionReceipt, Self::Error> {
+        let provider_request = WindowsUiaPatternDispatchRequest {
+            dispatch_attempt_ref: request.dispatch_attempt_ref(),
+            action_id: request.action_id(),
+            preparation_journal_sequence: request.preparation_journal_sequence(),
+            preparation_receipt_ref: request.preparation_receipt_ref().to_owned(),
+            snapshot_cut_ref: request.snapshot_cut_ref().to_owned(),
+            provider_incarnation_ref: request.provider_incarnation_ref().clone(),
+            target_incarnation_ref: request.target_incarnation_ref().clone(),
+            element_ref: request.element_ref().clone(),
+            required_pattern: request.required_pattern(),
+            context_requirements: request.context_requirements(),
+        };
+
+        // Serialize the exact side-effect window against attach/drain/reconcile/release.
+        // Re-resolve the active attachment under this gate so an executor resolved
+        // earlier cannot dispatch after its session was detached or reincarnated.
+        let _gate = self.operation_gate.lock().await;
+        let attachment = self
+            .active
+            .lock()
+            .await
+            .get(&self.session_id)
+            .map(|observation| observation.attachment.clone())
+            .ok_or(WindowsObserveRuntimeError::NotAttached {
+                session_id: self.session_id,
+            })?;
+        if attachment.provider_incarnation_ref() != &self.provider_incarnation_ref
+            || attachment.target_incarnation_ref() != &self.target_incarnation_ref
+        {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "dispatch_pattern_session_revalidation",
+                message: "attached Windows UIA session lineage changed after executor resolution"
+                    .into(),
+            });
+        }
+
+        let provider = self.provider.clone();
+        let dispatch_attachment = attachment.clone();
+        let receipt = run_provider("dispatch_pattern", move || {
+            provider
+                .worker
+                .dispatch_pattern(&dispatch_attachment, provider_request)
+        })
+        .await?;
+
+        Ok(crate::WindowsUiaProviderExecutionReceipt {
+            dispatch_attempt_ref: receipt.dispatch_attempt_ref,
+            action_id: receipt.action_id,
+            preparation_journal_sequence: receipt.preparation_journal_sequence,
+            preparation_receipt_ref: receipt.preparation_receipt_ref,
+            snapshot_cut_ref: receipt.snapshot_cut_ref,
+            provider_incarnation_ref: receipt.provider_incarnation_ref,
+            target_incarnation_ref: receipt.target_incarnation_ref,
+            element_ref: receipt.element_ref,
+            required_pattern: receipt.required_pattern,
+            context_requirements: receipt.context_requirements,
+            transport_result: receipt.transport_result,
+            dispatch_result: receipt.dispatch_result,
+        })
+    }
+}
+
 impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
     pub fn new(
         provider: Arc<P>,
         bridge: LiveBridge,
         config: WindowsObserveRuntimeConfig,
     ) -> Result<Self, WindowsObserveRuntimeError> {
-        Self::with_resource_governor(
-            provider,
-            bridge,
-            config,
-            RuntimeResourceGovernor::default(),
-        )
+        Self::with_resource_governor(provider, bridge, config, RuntimeResourceGovernor::default())
     }
 
     pub fn with_resource_governor(
@@ -302,9 +379,9 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             bridge,
             config,
             resource_governor,
-            active: Mutex::new(HashMap::new()),
+            active: Arc::new(Mutex::new(HashMap::new())),
             generations: Mutex::new(HashMap::new()),
-            operation_gate: Mutex::new(()),
+            operation_gate: Arc::new(Mutex::new(())),
         })
     }
 
@@ -492,11 +569,7 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             let reconcile_attachment = attachment.clone();
             let reconcile_surface = surface_scope.clone();
             let snapshot = run_provider("reconciliation_snapshot", move || {
-                provider.snapshot(
-                    &reconcile_attachment,
-                    snapshot_cut_ref,
-                    reconcile_surface,
-                )
+                provider.snapshot(&reconcile_attachment, snapshot_cut_ref, reconcile_surface)
             })
             .await?;
             let receipt_id = format!(
@@ -507,7 +580,8 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             let status = binding
                 .record_snapshot_reconciliation(&self.bridge, snapshot.as_ref(), receipt_id)
                 .await?;
-            self.update_reconciliation_snapshot(session_id, snapshot).await;
+            self.update_reconciliation_snapshot(session_id, snapshot)
+                .await;
             status
         } else {
             observed_status
@@ -589,10 +663,7 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
     /// Provider cleanup errors are returned to the caller, but the manager and
     /// LiveBridge remain detached even when unregistering the OS event handler
     /// fails.
-    pub async fn release(
-        &self,
-        session_id: SessionId,
-    ) -> Result<(), WindowsObserveRuntimeError> {
+    pub async fn release(&self, session_id: SessionId) -> Result<(), WindowsObserveRuntimeError> {
         let _gate = self.operation_gate.lock().await;
         let observation = self
             .active
@@ -826,7 +897,10 @@ impl fmt::Debug for WindowsUiaObserveProvider {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("WindowsUiaObserveProvider")
-            .field("provider_incarnation_ref", self.worker.provider_incarnation_ref())
+            .field(
+                "provider_incarnation_ref",
+                self.worker.provider_incarnation_ref(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -848,10 +922,7 @@ impl WindowsObserveProvider for WindowsUiaObserveProvider {
         self.worker.provider_incarnation_ref().clone()
     }
 
-    fn attach(
-        &self,
-        selection: UserSelectedWindowTarget,
-    ) -> Result<Self::Attachment, Self::Error> {
+    fn attach(&self, selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
         self.worker.attach(selection)
     }
 
@@ -924,6 +995,37 @@ impl WindowsObserveDispatchContextProvider for WindowsUiaObserveProvider {
         request: WindowsUiaDispatchContextRequest,
     ) -> Result<WindowsUiaBoundDispatchContextReceipt, Self::Error> {
         self.worker.revalidate_dispatch_context(attachment, request)
+    }
+}
+
+impl WindowsObserveRuntimeManager<WindowsUiaObserveProvider> {
+    /// Resolve a narrow executor for one exact currently attached Windows UIA session.
+    ///
+    /// The returned executor never mints authority. At execution time it reacquires
+    /// the runtime operation gate, confirms the same provider/target incarnation
+    /// remains attached, and only then forwards the coordinator-minted opaque
+    /// request to the retained MTA worker.
+    pub async fn uia_dispatch_executor(
+        &self,
+        session_id: SessionId,
+    ) -> Result<WindowsUiaRuntimeDispatchExecutor, WindowsObserveRuntimeError> {
+        let _gate = self.operation_gate.lock().await;
+        let attachment = self
+            .active
+            .lock()
+            .await
+            .get(&session_id)
+            .map(|observation| observation.attachment.clone())
+            .ok_or(WindowsObserveRuntimeError::NotAttached { session_id })?;
+
+        Ok(WindowsUiaRuntimeDispatchExecutor {
+            provider: self.provider.clone(),
+            active: self.active.clone(),
+            operation_gate: self.operation_gate.clone(),
+            session_id,
+            provider_incarnation_ref: attachment.provider_incarnation_ref().clone(),
+            target_incarnation_ref: attachment.target_incarnation_ref().clone(),
+        })
     }
 }
 
