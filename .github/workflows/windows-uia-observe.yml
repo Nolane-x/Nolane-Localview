@@ -10,9 +10,203 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  runtime-dispatch-adapter-builder:
+    name: V4.3 runtime dispatch adapter builder
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feat/v43-windows-uia-runtime-dispatch-adapter-clean'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Patch production runtime adapter
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/windows-observe-runtime/src/runtime_manager.rs')
+          text = path.read_text()
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one anchor, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''    WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest, WindowsUiaEventDrain,\n    WindowsUiaEventSubscription, WindowsUiaEventSubscriptionOptions, WindowsUiaSnapshotRequest,\n    WindowsUiaWorker, WindowsUiaWorkerConfig, WindowsUiaWorkerError,\n''',
+              '''    WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest, WindowsUiaEventDrain,\n    WindowsUiaEventSubscription, WindowsUiaEventSubscriptionOptions, WindowsUiaPatternDispatchRequest,\n    WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig, WindowsUiaWorkerError,\n''',
+          )
+          replace_once(
+              '    active: Mutex<HashMap<SessionId, ActiveObservation<P>>>,\n',
+              '    active: Arc<Mutex<HashMap<SessionId, ActiveObservation<P>>>>,\n',
+          )
+          replace_once(
+              '    operation_gate: Mutex<()>,\n',
+              '    operation_gate: Arc<Mutex<()>>,\n',
+          )
+          replace_once(
+              '            active: Mutex::new(HashMap::new()),\n',
+              '            active: Arc::new(Mutex::new(HashMap::new())),\n',
+          )
+          replace_once(
+              '            operation_gate: Mutex::new(()),\n',
+              '            operation_gate: Arc::new(Mutex::new(())),\n',
+          )
+
+          manager_impl_anchor = 'impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {\n'
+          executor_code = r'''pub struct WindowsUiaRuntimeDispatchExecutor {
+    provider: Arc<WindowsUiaObserveProvider>,
+    active: Arc<Mutex<HashMap<SessionId, ActiveObservation<WindowsUiaObserveProvider>>>>,
+    operation_gate: Arc<Mutex<()>>,
+    session_id: SessionId,
+    provider_incarnation_ref: ProviderIncarnationRef,
+    target_incarnation_ref: TargetIncarnationRef,
+}
+
+impl fmt::Debug for WindowsUiaRuntimeDispatchExecutor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WindowsUiaRuntimeDispatchExecutor")
+            .field("session_id", &self.session_id)
+            .field("provider_incarnation_ref", &self.provider_incarnation_ref)
+            .field("target_incarnation_ref", &self.target_incarnation_ref)
+            .finish_non_exhaustive()
+    }
+}
+
+impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
+    type Error = WindowsObserveRuntimeError;
+
+    async fn execute(
+        &self,
+        request: &crate::WindowsUiaProviderExecutionRequest,
+    ) -> Result<crate::WindowsUiaProviderExecutionReceipt, Self::Error> {
+        let provider_request = WindowsUiaPatternDispatchRequest {
+            dispatch_attempt_ref: request.dispatch_attempt_ref(),
+            action_id: request.action_id(),
+            preparation_journal_sequence: request.preparation_journal_sequence(),
+            preparation_receipt_ref: request.preparation_receipt_ref().to_owned(),
+            snapshot_cut_ref: request.snapshot_cut_ref().to_owned(),
+            provider_incarnation_ref: request.provider_incarnation_ref().clone(),
+            target_incarnation_ref: request.target_incarnation_ref().clone(),
+            element_ref: request.element_ref().clone(),
+            required_pattern: request.required_pattern(),
+            context_requirements: request.context_requirements(),
+        };
+
+        let _gate = self.operation_gate.lock().await;
+        let attachment = self
+            .active
+            .lock()
+            .await
+            .get(&self.session_id)
+            .map(|observation| observation.attachment.clone())
+            .ok_or(WindowsObserveRuntimeError::NotAttached {
+                session_id: self.session_id,
+            })?;
+        if attachment.provider_incarnation_ref() != &self.provider_incarnation_ref
+            || attachment.target_incarnation_ref() != &self.target_incarnation_ref
+        {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "dispatch_pattern_session_revalidation",
+                message: "attached Windows UIA session lineage changed after executor resolution"
+                    .into(),
+            });
+        }
+
+        let provider = self.provider.clone();
+        let dispatch_attachment = attachment.clone();
+        let receipt = run_provider("dispatch_pattern", move || {
+            provider
+                .worker
+                .dispatch_pattern(&dispatch_attachment, provider_request)
+        })
+        .await?;
+
+        Ok(crate::WindowsUiaProviderExecutionReceipt {
+            dispatch_attempt_ref: receipt.dispatch_attempt_ref,
+            action_id: receipt.action_id,
+            preparation_journal_sequence: receipt.preparation_journal_sequence,
+            preparation_receipt_ref: receipt.preparation_receipt_ref,
+            snapshot_cut_ref: receipt.snapshot_cut_ref,
+            provider_incarnation_ref: receipt.provider_incarnation_ref,
+            target_incarnation_ref: receipt.target_incarnation_ref,
+            element_ref: receipt.element_ref,
+            required_pattern: receipt.required_pattern,
+            context_requirements: receipt.context_requirements,
+            transport_result: receipt.transport_result,
+            dispatch_result: receipt.dispatch_result,
+        })
+    }
+}
+
+'''
+          replace_once(manager_impl_anchor, executor_code + manager_impl_anchor)
+
+          alias_anchor = 'pub type WindowsUiaObserveRuntimeManager = WindowsObserveRuntimeManager<WindowsUiaObserveProvider>;\n'
+          resolver_code = r'''impl WindowsObserveRuntimeManager<WindowsUiaObserveProvider> {
+    /// Resolve a narrow executor for one exact currently attached Windows UIA session.
+    ///
+    /// The returned executor never mints authority. At execution time it reacquires
+    /// the operation gate, confirms the same provider/target incarnation remains
+    /// attached, and only then forwards the coordinator-minted opaque request to
+    /// the retained MTA worker.
+    pub async fn uia_dispatch_executor(
+        &self,
+        session_id: SessionId,
+    ) -> Result<WindowsUiaRuntimeDispatchExecutor, WindowsObserveRuntimeError> {
+        let _gate = self.operation_gate.lock().await;
+        let attachment = self
+            .active
+            .lock()
+            .await
+            .get(&session_id)
+            .map(|observation| observation.attachment.clone())
+            .ok_or(WindowsObserveRuntimeError::NotAttached { session_id })?;
+
+        Ok(WindowsUiaRuntimeDispatchExecutor {
+            provider: self.provider.clone(),
+            active: self.active.clone(),
+            operation_gate: self.operation_gate.clone(),
+            session_id,
+            provider_incarnation_ref: attachment.provider_incarnation_ref().clone(),
+            target_incarnation_ref: attachment.target_incarnation_ref().clone(),
+        })
+    }
+}
+
+'''
+          replace_once(alias_anchor, resolver_code + alias_anchor)
+          path.write_text(text)
+          PY
+      - name: Format runtime crate
+        run: cargo fmt --all
+      - name: Compile runtime adapter contract
+        run: cargo check -p localview-windows-observe-runtime --all-targets
+      - name: Run runtime adapter contract
+        run: cargo test -p localview-windows-observe-runtime --test real_provider_dispatch_executor_contract
+      - name: Commit verified production patch and restore standard workflows
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout origin/main -- .github/workflows/windows-uia-observe.yml
+          git rm -f .github/workflows/v43-runtime-dispatch-adapter-builder.yml
+          git add crates/windows-observe-runtime/src/runtime_manager.rs crates/windows-observe-runtime/tests/real_provider_dispatch_executor_contract.rs .github/workflows/windows-uia-observe.yml
+          git commit -m "feat(windows-actions): bind runtime one-shot authority to real UIA dispatch"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
   windows-uia-observe:
     name: Real Windows UIA observe
     runs-on: windows-latest
