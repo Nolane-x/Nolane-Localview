@@ -594,6 +594,24 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         })
     }
 
+    /// Return the immutable semantic revision currently bound to one attached session.
+    ///
+    /// This is observation evidence only. The returned revision does not reserve
+    /// an element, authorize a write, or prevent a later reconciliation. Any
+    /// consequential action must still pass preflight, exact lease binding,
+    /// dispatch-time context revalidation, durable PREPARED, and one-shot dispatch.
+    pub async fn current_semantic_snapshot(
+        &self,
+        session_id: SessionId,
+    ) -> Option<Arc<NativeSemanticSnapshotRevision>> {
+        let _gate = self.operation_gate.lock().await;
+        self.active
+            .lock()
+            .await
+            .get(&session_id)
+            .map(|observation| observation.current_snapshot.clone())
+    }
+
     pub async fn read_semantic(
         &self,
         session_id: SessionId,
