@@ -1,0 +1,44 @@
+name: V43 public action scoped cleanup
+
+on:
+  push:
+    branches:
+      - feat/v43-close-legacy-consequential-action-bypass
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch main baseline
+        run: git fetch origin main
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rebuild runtime from exact main baseline plus authority guard
+        run: python .github/scripts/v43_public_action_patch_cleanup.py
+      - name: Public action authority contract
+        run: cargo test -p localview-control --test public_action_authority -- --nocapture
+      - name: Control regression suite
+        run: cargo test -p localview-control --tests
+      - name: Control all-target compile
+        run: cargo check -p localview-control --all-targets
+      - name: Assert scoped runtime diff
+        shell: bash
+        run: |
+          git diff origin/main -- crates/control/src/runtime.rs > /tmp/runtime.diff
+          grep -q 'canonical_consequential_action_authority_required' /tmp/runtime.diff
+          test "$(grep -c '^@@' /tmp/runtime.diff)" -eq 1
+      - name: Commit clean production state and self-delete harness
+        shell: bash
+        run: |
+          rm -f .github/scripts/v43_public_action_patch_cleanup.py
+          rm -f .github/workflows/v43-public-action-cleanup.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/control/src/runtime.rs crates/control/tests/public_action_authority.rs .github/scripts/v43_public_action_patch_cleanup.py .github/workflows/v43-public-action-cleanup.yml
+          git commit -m 'fix(v43): scope legacy action authority guard' || exit 1
+          git push origin HEAD:feat/v43-close-legacy-consequential-action-bypass
