@@ -6,7 +6,8 @@ use std::{
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
-    ConsequentialJournal, ConsequentialJournalTransition, ConsequentialRecoveryState, LiveBridge,
+    ConsequentialJournal, ConsequentialJournalTransition, ConsequentialPostconditionEvidence,
+    ConsequentialPostconditionStatus, ConsequentialRecoveryState, LiveBridge,
 };
 use localview_native_provider::{
     NativeSemanticNodeObservation, NativeSemanticSnapshotDraft, NativeSemanticSnapshotRevision,
@@ -15,7 +16,7 @@ use localview_native_provider::{
 use localview_protocol::{
     DispatchResult, PrincipalRef, ProviderElementRealization, ProviderElementRef,
     ProviderIncarnationRef, ReconciliationCompleteness, SessionId, TargetIncarnationRef,
-    TransportResult,
+    TransportResult, WorldOutcome,
 };
 use localview_windows_observe_runtime::{
     WindowsObserveActionLeaseProvider, WindowsObserveDispatchContextProvider,
@@ -23,9 +24,11 @@ use localview_windows_observe_runtime::{
     WindowsObserveSubscriptionLineage, WindowsUiaActionPreflightRequest,
     WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
     WindowsUiaDispatchExecutionCoordinatorError, WindowsUiaDispatchExecutor,
-    WindowsUiaDispatchSealRequest, WindowsUiaPreparedDispatchRequest,
-    WindowsUiaProviderExecutionReceipt, WindowsUiaProviderExecutionRequest,
-    arm_uia_dispatch_execution, execute_armed_uia_dispatch, prepare_uia_dispatch,
+    WindowsUiaDispatchSealRequest, WindowsUiaPostconditionVerifier,
+    WindowsUiaPreparedDispatchRequest, WindowsUiaProviderExecutionReceipt,
+    WindowsUiaProviderExecutionRequest, WindowsUiaVerifiedExecutionOutcome,
+    arm_uia_dispatch_execution, execute_armed_uia_dispatch, execute_armed_uia_dispatch_verified,
+    prepare_uia_dispatch,
 };
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaBoundDispatchContextReceipt,
@@ -352,6 +355,72 @@ impl WindowsUiaDispatchExecutor for FakeExecutor {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum VerifierMode {
+    Pass,
+    Unknown,
+    Fail,
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[error("fake postcondition verifier failure")]
+struct FakeVerifierError;
+
+#[derive(Debug)]
+struct FakeVerifier {
+    mode: VerifierMode,
+    calls: Mutex<usize>,
+    cuts: Mutex<Vec<String>>,
+}
+
+impl FakeVerifier {
+    fn new(mode: VerifierMode) -> Self {
+        Self {
+            mode,
+            calls: Mutex::new(0),
+            cuts: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn call_count(&self) -> usize {
+        *self.calls.lock().unwrap()
+    }
+
+    fn observed_cuts(&self) -> Vec<String> {
+        self.cuts.lock().unwrap().clone()
+    }
+}
+
+impl WindowsUiaPostconditionVerifier for FakeVerifier {
+    type Error = FakeVerifierError;
+
+    fn verify(
+        &self,
+        _action_id: Uuid,
+        expected_contract_refs: &[String],
+        snapshot: &NativeSemanticSnapshotRevision,
+    ) -> Result<Vec<ConsequentialPostconditionEvidence>, Self::Error> {
+        *self.calls.lock().unwrap() += 1;
+        self.cuts
+            .lock()
+            .unwrap()
+            .push(snapshot.snapshot_cut_ref().to_owned());
+        let status = match self.mode {
+            VerifierMode::Pass => ConsequentialPostconditionStatus::VerifiedPass,
+            VerifierMode::Unknown => ConsequentialPostconditionStatus::Unknown,
+            VerifierMode::Fail => ConsequentialPostconditionStatus::VerifiedFail,
+        };
+        Ok(expected_contract_refs
+            .iter()
+            .map(|contract_ref| ConsequentialPostconditionEvidence {
+                contract_ref: contract_ref.clone(),
+                status,
+                receipt_ref: format!("verifier:{}:{}", snapshot.snapshot_cut_ref(), contract_ref),
+            })
+            .collect())
+    }
+}
+
 fn session() -> SessionId {
     Uuid::from_u128(0x1021)
 }
@@ -485,6 +554,33 @@ async fn prepared_and_armed(
     (bridge, journal, path, provider, armed)
 }
 
+async fn verified_prepared_and_armed(
+    label: &str,
+) -> (
+    LiveBridge,
+    ConsequentialJournal,
+    PathBuf,
+    FakeProvider,
+    WindowsObserveRuntimeManager<FakeProvider>,
+    localview_windows_observe_runtime::WindowsUiaDispatchExecutionPermit,
+) {
+    let (bridge, journal, path, provider, runtime, seal_request) = fixture(label).await;
+    let prepared = prepare_uia_dispatch(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        WindowsUiaPreparedDispatchRequest { seal: seal_request },
+        &FakeAuthorizationRevalidator,
+    )
+    .await
+    .unwrap();
+    let armed = arm_uia_dispatch_execution(&bridge, &journal, &runtime, session(), prepared)
+        .await
+        .unwrap();
+    (bridge, journal, path, provider, runtime, armed)
+}
+
 #[tokio::test]
 async fn exact_provider_receipt_is_durably_linearized_before_returning_success() {
     let (bridge, journal, path, provider, armed) = prepared_and_armed("coordinator-success").await;
@@ -603,6 +699,159 @@ async fn forged_provider_receipt_is_never_linearized_and_leaves_prepared_for_rec
         entry.transition,
         ConsequentialJournalTransition::DispatchLinearized { .. }
     )));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn verified_execution_commits_only_after_fresh_postdispatch_snapshot_passes() {
+    let (bridge, journal, path, provider, runtime, armed) =
+        verified_prepared_and_armed("verified-execution-pass").await;
+    let action_id = armed.action_id();
+    let pre_dispatch_cut = provider.snapshot().snapshot_cut_ref().to_owned();
+    let executor = FakeExecutor::new(ExecutorMode::Dispatched);
+    let verifier = FakeVerifier::new(VerifierMode::Pass);
+
+    let outcome = execute_armed_uia_dispatch_verified(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        armed,
+        &executor,
+        &verifier,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        WindowsUiaVerifiedExecutionOutcome::Committed {
+            world_outcome: WorldOutcome::VerifiedExpected,
+            ..
+        }
+    ));
+    assert_eq!(verifier.call_count(), 1);
+    let cuts = verifier.observed_cuts();
+    assert_eq!(cuts.len(), 1);
+    assert_ne!(cuts[0], pre_dispatch_cut);
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::Committed)
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn unknown_postcondition_never_becomes_committed_success() {
+    let (bridge, journal, path, _provider, runtime, armed) =
+        verified_prepared_and_armed("verified-execution-unknown").await;
+    let action_id = armed.action_id();
+    let executor = FakeExecutor::new(ExecutorMode::Dispatched);
+    let verifier = FakeVerifier::new(VerifierMode::Unknown);
+
+    let outcome = execute_armed_uia_dispatch_verified(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        armed,
+        &executor,
+        &verifier,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        WindowsUiaVerifiedExecutionOutcome::PostconditionNotVerified {
+            world_outcome: WorldOutcome::ReconciliationRequired,
+            ..
+        }
+    ));
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::OutcomeObservedUnverified)
+    );
+    assert!(
+        journal
+            .entries_for(action_id)
+            .await
+            .iter()
+            .all(|entry| !matches!(entry.transition, ConsequentialJournalTransition::Committed))
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn verified_failure_never_commits_expected_world_success() {
+    let (bridge, journal, path, _provider, runtime, armed) =
+        verified_prepared_and_armed("verified-execution-fail").await;
+    let action_id = armed.action_id();
+    let executor = FakeExecutor::new(ExecutorMode::Dispatched);
+    let verifier = FakeVerifier::new(VerifierMode::Fail);
+
+    let outcome = execute_armed_uia_dispatch_verified(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        armed,
+        &executor,
+        &verifier,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        WindowsUiaVerifiedExecutionOutcome::PostconditionNotVerified {
+            world_outcome: WorldOutcome::VerifiedUnexpected,
+            ..
+        }
+    ));
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::OutcomeObservedUnverified)
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn known_not_dispatched_does_not_invoke_postcondition_verifier() {
+    let (bridge, journal, path, _provider, runtime, armed) =
+        verified_prepared_and_armed("verified-execution-not-dispatched").await;
+    let action_id = armed.action_id();
+    let executor = FakeExecutor::new(ExecutorMode::KnownNotDispatched);
+    let verifier = FakeVerifier::new(VerifierMode::Pass);
+
+    let outcome = execute_armed_uia_dispatch_verified(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        armed,
+        &executor,
+        &verifier,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        WindowsUiaVerifiedExecutionOutcome::KnownNotDispatched {
+            dispatch_result: DispatchResult::DispatchBlockedFocus,
+            ..
+        }
+    ));
+    assert_eq!(verifier.call_count(), 0);
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::KnownNotDispatched)
+    );
 
     let _ = std::fs::remove_file(path);
 }
