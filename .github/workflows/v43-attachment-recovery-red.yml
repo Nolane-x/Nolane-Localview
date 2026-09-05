@@ -1,0 +1,14 @@
+name: V43 attachment recovery RED
+
+on:
+  push:
+
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile attachment recovery contract
+        run: cargo test -p localview-windows-observe-runtime --test attachment_recovery_plan --no-run
