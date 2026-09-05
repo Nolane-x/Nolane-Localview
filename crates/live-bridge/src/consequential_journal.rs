@@ -588,6 +588,68 @@ impl ConsequentialJournal {
         })
     }
 
+    /// Abandon one exact live execution permit without changing durable recovery state.
+    ///
+    /// This is the fail-closed counterpart to `record_dispatch_linearized` for
+    /// executor/receipt failures that occur after `begin_dispatch` consumed the
+    /// PREPARED capability but before a durable dispatch receipt exists. The
+    /// exact live grant is removed and never recreated; durable PREPARED remains
+    /// authoritative and therefore requires reconciliation rather than retry.
+    pub async fn abandon_dispatch_execution(
+        &self,
+        permit: DispatchExecutionPermit,
+    ) -> Result<(), ConsequentialJournalError> {
+        let action_id = permit.action_id;
+        if permit.journal_instance_ref != self.journal_instance_ref {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "journal_instance_mismatch",
+            });
+        }
+
+        let mut state = self.state.lock().await;
+        let Some(grant) = state.live_dispatch_execution.get(&action_id) else {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "live_execution_grant_missing",
+            });
+        };
+        if grant.permit_ref != permit.permit_ref
+            || grant.preparation_journal_sequence != permit.preparation_journal_sequence
+            || grant.preparation_receipt_ref != permit.preparation_receipt_ref
+        {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "execution_grant_binding_mismatch",
+            });
+        }
+
+        // Consume first and never restore it. Any later validation failure is
+        // still fail-closed: the durable journal remains the recovery authority.
+        state.live_dispatch_execution.remove(&action_id);
+
+        let current = recovery_state_for(&state.entries, action_id);
+        if current != Some(ConsequentialRecoveryState::DispatchPrepared) {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "durable_state_is_not_prepared",
+            });
+        }
+        if !durable_preparation_matches(
+            &state.entries,
+            action_id,
+            permit.preparation_journal_sequence,
+            &permit.preparation_receipt_ref,
+        ) {
+            return Err(ConsequentialJournalError::InvalidDispatchPermit {
+                action_id,
+                reason: "durable_prepared_entry_mismatch",
+            });
+        }
+
+        Ok(())
+    }
+
     /// Commit the executor/dispatch receipt using the exact one-shot permit.
     /// The permit is consumed before serialization/I/O; an error therefore leaves
     /// durable PREPARED state requiring reconciliation and never restores retry

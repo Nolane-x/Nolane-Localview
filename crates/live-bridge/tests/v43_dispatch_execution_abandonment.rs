@@ -3,9 +3,7 @@ use localview_live_bridge::{
     ConsequentialJournal, ConsequentialJournalError, ConsequentialRecoveryState,
     DispatchPreparationReceipt,
 };
-use localview_protocol::{
-    PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
-};
+use localview_protocol::{PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use uuid::Uuid;
 
 fn envelope() -> CanonicalActionEnvelope {
@@ -37,7 +35,10 @@ async fn abandoning_one_live_execution_permit_releases_only_execution_authority(
     let action = envelope();
     let action_id = action.transport_action_id;
 
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let authorization = journal
         .record_authorization(
             action_id,
