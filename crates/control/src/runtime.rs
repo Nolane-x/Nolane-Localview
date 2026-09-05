@@ -4,37 +4,37 @@ use std::{
     collections::BTreeSet,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use anyhow::Result;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use chrono::{TimeZone, Utc};
 use localview_evidence::{
     EvidenceDraft, EvidenceKind, EvidenceStore, Provenance, RetentionTier, UncertaintyClass,
 };
-use localview_live_analysis::{analyze_live, diagnose_live, FindingClass};
+use localview_live_analysis::{FindingClass, analyze_live, diagnose_live};
 use localview_live_bridge::{
     BridgeAction, BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch, ObserverEvent,
     ObserverEventKind,
 };
 use localview_observation::ObservationBus;
-use localview_project_state::{inspect_git, ProjectRevision};
+use localview_project_state::{ProjectRevision, inspect_git};
 use localview_protocol::{Health, ObservationEvent as RuntimeObservationEvent, Session, SessionId};
 use localview_security::SecretRedactor;
 use localview_sessions::SessionManager;
 use localview_verification::{
-    proof_from_verification, proof_staleness, strict_coverage_report, verify_current, CoverageTarget,
-    LiveVerificationPacket, LiveVerificationVerdict, StrictCoverageObservation, VerificationProof,
-    VerificationState,
+    CoverageTarget, LiveVerificationPacket, LiveVerificationVerdict, StrictCoverageObservation,
+    VerificationProof, VerificationState, proof_from_verification, proof_staleness,
+    strict_coverage_report, verify_current,
 };
 use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
@@ -89,7 +89,10 @@ pub fn router(state: ControlState) -> Router {
         .route("/health", get(health))
         .route("/v1/sessions", get(list_sessions))
         .route("/v1/sessions/{id}", get(get_session))
-        .route("/v1/sessions/{id}/project-state", get(session_project_state))
+        .route(
+            "/v1/sessions/{id}/project-state",
+            get(session_project_state),
+        )
         .route("/v1/sessions/{id}/preview", post(set_preview))
         .route("/v1/sessions/{id}/observer", post(ingest_observer))
         .route("/v1/sessions/{id}/observer/recent", get(recent_observer))
@@ -105,8 +108,14 @@ pub fn router(state: ControlState) -> Router {
         )
         .route("/v1/evidence/{evidence_id}", get(get_evidence))
         .route("/v1/evidence/{evidence_id}/trace", get(trace_evidence))
-        .route("/v1/proof/{evidence_id}/staleness", get(proof_evidence_staleness))
-        .route("/v1/sessions/{id}/actions", post(queue_action).get(take_actions))
+        .route(
+            "/v1/proof/{evidence_id}/staleness",
+            get(proof_evidence_staleness),
+        )
+        .route(
+            "/v1/sessions/{id}/actions",
+            post(queue_action).get(take_actions),
+        )
         .route(
             "/v1/sessions/{id}/actions/results",
             post(complete_action).get(action_results),
@@ -212,7 +221,11 @@ async fn set_preview(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if state.sessions.set_preview_visible(id, request.visible).await {
+    if state
+        .sessions
+        .set_preview_visible(id, request.visible)
+        .await
+    {
         StatusCode::NO_CONTENT.into_response()
     } else {
         StatusCode::NOT_FOUND.into_response()
@@ -485,7 +498,10 @@ async fn ingest_visual_evidence(
             .into_response();
     }
 
-    let Some(captured_at) = Utc.timestamp_millis_opt(request.captured_at_unix_ms).single() else {
+    let Some(captured_at) = Utc
+        .timestamp_millis_opt(request.captured_at_unix_ms)
+        .single()
+    else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "invalid_capture_timestamp"})),
@@ -651,6 +667,16 @@ async fn queue_action(
         )
             .into_response();
     }
+    if !matches!(&request.action, BridgeActionKind::Snapshot) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "canonical_consequential_action_authority_required",
+                "message": "UI-changing actions must use the canonical V4.3 consequential authority path"
+            })),
+        )
+            .into_response();
+    }
     let action = state
         .live
         .enqueue_action(id, request.reference, request.action)
@@ -777,10 +803,7 @@ async fn recent_events(
     Json(state.observations.recent(100).await).into_response()
 }
 
-async fn pause(
-    State(state): State<ControlState>,
-    headers: HeaderMap,
-) -> axum::response::Response {
+async fn pause(State(state): State<ControlState>, headers: HeaderMap) -> axum::response::Response {
     if !authorized(&headers, &state) {
         return denied();
     }
@@ -788,10 +811,7 @@ async fn pause(
     StatusCode::NO_CONTENT.into_response()
 }
 
-async fn resume(
-    State(state): State<ControlState>,
-    headers: HeaderMap,
-) -> axum::response::Response {
+async fn resume(State(state): State<ControlState>, headers: HeaderMap) -> axum::response::Response {
     if !authorized(&headers, &state) {
         return denied();
     }
@@ -864,9 +884,7 @@ fn sanitize_action_result(action: &BridgeAction, result: &BridgeActionResult) ->
         BridgeActionKind::Key { .. } => action_summary(action, result, "key", error),
         BridgeActionKind::Scroll { .. } => action_summary(action, result, "scroll", error),
         BridgeActionKind::Focus => action_summary(action, result, "focus", error),
-        BridgeActionKind::FreezeVisuals => {
-            action_summary(action, result, "freeze_visuals", error)
-        }
+        BridgeActionKind::FreezeVisuals => action_summary(action, result, "freeze_visuals", error),
         BridgeActionKind::RestoreVisuals { .. } => {
             action_summary(action, result, "restore_visuals", error)
         }
