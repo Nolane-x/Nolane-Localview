@@ -1,14 +1,22 @@
-name: V43 attachment recovery RED
+name: V43 attachment recovery GREEN
 
 on:
   push:
 
 jobs:
-  red:
+  green:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Compile attachment recovery contract
-        run: cargo test -p localview-windows-observe-runtime --test attachment_recovery_plan --no-run
+      - name: Attachment-bound recovery contract
+        run: cargo test -p localview-windows-observe-runtime --test attachment_recovery_plan -- --nocapture
+      - name: Consequential execution coordinator regressions
+        run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior -- --nocapture
+      - name: Windows observe runtime all-target check
+        run: cargo check -p localview-windows-observe-runtime --all-targets
+      - name: Windows observe runtime scoped Clippy
+        run: cargo clippy -p localview-windows-observe-runtime --all-targets --no-deps -- -D warnings
+      - name: Diff hygiene
+        run: git diff --check
