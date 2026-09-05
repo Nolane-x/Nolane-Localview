@@ -6,12 +6,14 @@ mod dispatch_seal;
 mod execution_arm;
 mod prepared_dispatch;
 mod runtime_manager;
+mod verified_execution;
 pub use action_preflight::*;
 pub use dispatch_authority::*;
 pub use dispatch_seal::*;
 pub use execution_arm::*;
 pub use prepared_dispatch::*;
 pub use runtime_manager::*;
+pub use verified_execution::*;
 
 use localview_live_bridge::{
     LiveBridge, ObservationStatus, ObserverEvent, ObserverEventKind, ProviderIngestReport,
@@ -58,9 +60,13 @@ pub enum WindowsObserveBridgeError {
     NonIncreasingSequence,
     #[error("Windows UIA drain latest sequence is behind retained event evidence")]
     InvalidLatestSequence,
-    #[error("semantic reconciliation snapshot provider incarnation does not match the runtime binding")]
+    #[error(
+        "semantic reconciliation snapshot provider incarnation does not match the runtime binding"
+    )]
     ReconciliationProviderIncarnationMismatch,
-    #[error("semantic reconciliation snapshot target incarnation does not match the runtime binding")]
+    #[error(
+        "semantic reconciliation snapshot target incarnation does not match the runtime binding"
+    )]
     ReconciliationTargetIncarnationMismatch,
     #[error("LiveBridge rejected the reconciliation receipt")]
     ReconciliationRejected,
@@ -201,7 +207,10 @@ impl WindowsObserveBridgeBinding {
         Ok(status)
     }
 
-    fn validate_drain(&self, drain: &WindowsUiaEventDrain) -> Result<(), WindowsObserveBridgeError> {
+    fn validate_drain(
+        &self,
+        drain: &WindowsUiaEventDrain,
+    ) -> Result<(), WindowsObserveBridgeError> {
         let mut previous_sequence = None;
         for event in &drain.events {
             if event.provider_incarnation_ref != self.provider_incarnation_ref {

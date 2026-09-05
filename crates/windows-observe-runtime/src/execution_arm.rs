@@ -6,21 +6,20 @@ use localview_live_bridge::{
     DispatchPreparationReceipt, LiveBridge,
 };
 use localview_protocol::{
-    DispatchResult, ProviderElementRef, ProviderIncarnationRef, SessionId,
-    TargetIncarnationRef, TransportResult,
+    DispatchResult, ProviderElementRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
+    TransportResult,
 };
 use localview_windows_uia_provider::{
-    evaluate_windows_uia_dispatch_context, WindowsUiaBoundDispatchContextReceipt,
-    WindowsUiaDispatchContextBlocker, WindowsUiaDispatchContextRequest,
-    WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
+    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextBlocker,
+    WindowsUiaDispatchContextRequest, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
+    evaluate_windows_uia_dispatch_context,
 };
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
     WindowsObserveDispatchContextProvider, WindowsObserveRuntimeError,
-    WindowsObserveRuntimeManager, WindowsUiaDispatchSealReceipt,
-    WindowsUiaPreparedDispatchReceipt,
+    WindowsObserveRuntimeManager, WindowsUiaDispatchSealReceipt, WindowsUiaPreparedDispatchReceipt,
 };
 
 /// Opaque, move-only Windows execution authority created from one exact durable
@@ -76,23 +75,33 @@ pub enum WindowsUiaDispatchExecutionArmError {
     },
     #[error("Windows UIA provider context revalidation failed during execution arm: {0}")]
     ContextProvider(#[from] WindowsObserveRuntimeError),
-    #[error("Windows UIA execution-arm context receipt does not match the exact prepared authority/lease")]
+    #[error(
+        "Windows UIA execution-arm context receipt does not match the exact prepared authority/lease"
+    )]
     ContextReceiptMismatch,
     #[error("Windows UIA execution-arm volatile context is blocked: {0}")]
     ContextBlocked(#[from] WindowsUiaDispatchContextBlocker),
-    #[error("Windows UIA canonical action envelope disappeared after execution-arm context observation")]
+    #[error(
+        "Windows UIA canonical action envelope disappeared after execution-arm context observation"
+    )]
     CanonicalEnvelopeMissingAfterContext,
-    #[error("Windows UIA canonical action envelope changed during execution-arm context observation")]
+    #[error(
+        "Windows UIA canonical action envelope changed during execution-arm context observation"
+    )]
     CanonicalEnvelopeChangedAfterContext,
     #[error("Windows UIA canonical action is stale after execution-arm context observation")]
     CanonicalEnvelopeStaleAfterContext,
-    #[error("Windows UIA journal left durable PREPARED during execution-arm context observation: {state:?}")]
+    #[error(
+        "Windows UIA journal left durable PREPARED during execution-arm context observation: {state:?}"
+    )]
     JournalStateChangedAfterContext {
         state: Option<ConsequentialRecoveryState>,
     },
     #[error("Windows UIA one-shot prepared capability could not begin dispatch: {message}")]
     BeginDispatchFailed { message: String },
-    #[error("Windows UIA generic dispatch permit does not match the exact prepared action/sequence")]
+    #[error(
+        "Windows UIA generic dispatch permit does not match the exact prepared action/sequence"
+    )]
     DispatchPermitMismatch,
 }
 
@@ -153,9 +162,11 @@ where
     let dispatch_permit = journal
         .begin_dispatch(prepared.dispatch_capability)
         .await
-        .map_err(|error| WindowsUiaDispatchExecutionArmError::BeginDispatchFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(
+            |error| WindowsUiaDispatchExecutionArmError::BeginDispatchFailed {
+                message: error.to_string(),
+            },
+        )?;
     if dispatch_permit.action_id() != action_id
         || dispatch_permit.preparation_journal_sequence() != preparation_journal_sequence
     {
@@ -295,15 +306,24 @@ pub enum WindowsUiaDispatchExecutionCoordinatorError {
     JournalStateChangedBeforeExecutor {
         state: Option<ConsequentialRecoveryState>,
     },
-    #[error("Windows UIA provider execution attempt failed or became transport-uncertain: {message}")]
+    #[error(
+        "Windows UIA provider execution attempt failed or became transport-uncertain: {message}"
+    )]
     ProviderExecutionFailed { message: String },
     #[error("Windows UIA provider execution receipt does not match the exact one-shot request")]
     ProviderReceiptMismatch,
     #[error("Windows UIA provider returned a receipt without executor delivery")]
     ProviderReceiptTransportMismatch,
+    #[error("Windows UIA execution authority abandonment failed after {stage}: {message}")]
+    ExecutionAuthorityAbandonmentFailed {
+        stage: &'static str,
+        message: String,
+    },
     #[error("Windows UIA durable dispatch linearization append failed: {message}")]
     JournalLinearizationFailed { message: String },
-    #[error("Windows UIA durable dispatch linearization entry did not match the exact provider outcome")]
+    #[error(
+        "Windows UIA durable dispatch linearization entry did not match the exact provider outcome"
+    )]
     LinearizationEntryMismatch,
 }
 
@@ -338,7 +358,20 @@ pub async fn execute_armed_uia_dispatch<E>(
 where
     E: WindowsUiaDispatchExecutor,
 {
-    verify_armed_canonical_before_executor(bridge, journal, session_id, &armed).await?;
+    if let Err(error) =
+        verify_armed_canonical_before_executor(bridge, journal, session_id, &armed).await
+    {
+        journal
+            .abandon_dispatch_execution(armed.dispatch_permit)
+            .await
+            .map_err(|abandonment| {
+                WindowsUiaDispatchExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                    stage: "pre_executor_revalidation_failed",
+                    message: abandonment.to_string(),
+                }
+            })?;
+        return Err(error);
+    }
 
     let action_id = armed.action_id;
     let lease = &armed.seal.authority.dispatch_revalidation.element_lease;
@@ -360,17 +393,47 @@ where
         context_requirements: armed.seal.context.requirements,
     };
 
-    let provider_receipt = executor
-        .execute(&request)
-        .await
-        .map_err(|error| WindowsUiaDispatchExecutionCoordinatorError::ProviderExecutionFailed {
-            message: error.to_string(),
-        })?;
+    let provider_receipt = match executor.execute(&request).await {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let message = error.to_string();
+            journal
+                .abandon_dispatch_execution(armed.dispatch_permit)
+                .await
+                .map_err(|abandonment| {
+                    WindowsUiaDispatchExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                        stage: "provider_execution_failed",
+                        message: abandonment.to_string(),
+                    }
+                })?;
+            return Err(
+                WindowsUiaDispatchExecutionCoordinatorError::ProviderExecutionFailed { message },
+            );
+        }
+    };
 
     if !provider_receipt_matches_request(&provider_receipt, &request) {
+        journal
+            .abandon_dispatch_execution(armed.dispatch_permit)
+            .await
+            .map_err(|abandonment| {
+                WindowsUiaDispatchExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                    stage: "provider_receipt_mismatch",
+                    message: abandonment.to_string(),
+                }
+            })?;
         return Err(WindowsUiaDispatchExecutionCoordinatorError::ProviderReceiptMismatch);
     }
     if provider_receipt.transport_result != TransportResult::DeliveredToExecutor {
+        journal
+            .abandon_dispatch_execution(armed.dispatch_permit)
+            .await
+            .map_err(|abandonment| {
+                WindowsUiaDispatchExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                    stage: "provider_receipt_transport_mismatch",
+                    message: abandonment.to_string(),
+                }
+            })?;
         return Err(WindowsUiaDispatchExecutionCoordinatorError::ProviderReceiptTransportMismatch);
     }
 
@@ -385,8 +448,10 @@ where
     let journal_entry = journal
         .record_dispatch_linearized(armed.dispatch_permit, linearization.clone())
         .await
-        .map_err(|error| WindowsUiaDispatchExecutionCoordinatorError::JournalLinearizationFailed {
-            message: error.to_string(),
+        .map_err(|error| {
+            WindowsUiaDispatchExecutionCoordinatorError::JournalLinearizationFailed {
+                message: error.to_string(),
+            }
         })?;
 
     if journal_entry.action_id != action_id
@@ -466,10 +531,9 @@ async fn verify_armed_canonical_before_executor(
     armed: &WindowsUiaDispatchExecutionPermit,
 ) -> Result<(), WindowsUiaDispatchExecutionCoordinatorError> {
     let action_id = armed.action_id;
-    let envelope = bridge
-        .action_envelope(action_id)
-        .await
-        .ok_or(WindowsUiaDispatchExecutionCoordinatorError::CanonicalEnvelopeMissingBeforeExecutor)?;
+    let envelope = bridge.action_envelope(action_id).await.ok_or(
+        WindowsUiaDispatchExecutionCoordinatorError::CanonicalEnvelopeMissingBeforeExecutor,
+    )?;
     if envelope.session_id != session_id
         || envelope.transport_action_id != action_id
         || envelope.metadata != armed.seal.authority.authority
