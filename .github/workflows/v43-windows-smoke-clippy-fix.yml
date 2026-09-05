@@ -20,7 +20,7 @@ jobs:
       - name: Apply minimal Clippy fix
         run: python .github/scripts/fix_windows_smoke_clippy.py
       - name: Format target
-        run: rustfmt crates/windows-observe-runtime/tests/windows_runtime_dispatch_smoke.rs
+        run: rustfmt --edition 2024 crates/windows-observe-runtime/tests/windows_runtime_dispatch_smoke.rs
       - name: Diff check
         run: git diff --check -- crates/windows-observe-runtime/tests/windows_runtime_dispatch_smoke.rs
       - name: Commit clean production fix
