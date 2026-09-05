@@ -12,8 +12,8 @@ use localview_native_provider::{
     SnapshotResourceUsage, UserSelectedWindowTarget,
 };
 use localview_protocol::{
-    DispatchResult, EventContinuityState, PrincipalRef, ProviderIncarnationRef,
-    ReconciliationCompleteness, SessionId, TargetIncarnationRef, TransportResult,
+    DispatchResult, PrincipalRef, ProviderIncarnationRef, ReconciliationCompleteness, SessionId,
+    TargetIncarnationRef, TransportResult,
 };
 use localview_windows_observe_runtime::{
     WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
@@ -237,7 +237,10 @@ async fn linearize(journal: &ConsequentialJournal, action: &CanonicalActionEnvel
         .unwrap();
 }
 
-async fn runtime(provider: FakeProvider, bridge: LiveBridge) -> WindowsObserveRuntimeManager<FakeProvider> {
+async fn runtime(
+    provider: FakeProvider,
+    bridge: LiveBridge,
+) -> WindowsObserveRuntimeManager<FakeProvider> {
     let manager = WindowsObserveRuntimeManager::new(
         Arc::new(provider),
         bridge,
@@ -256,7 +259,7 @@ async fn runtime_owns_exact_post_dispatch_snapshot_capture_and_journal_completio
     let path = journal_path("runtime-postcondition-capture");
     let provider = FakeProvider::new();
     let bridge = LiveBridge::new(32, 8);
-    let manager = runtime(provider.clone(), bridge.clone()).await;
+    let manager = runtime(provider.clone(), bridge).await;
     let journal = ConsequentialJournal::open(&path).await.unwrap();
     let action = action(&provider);
     linearize(&journal, &action).await;
@@ -274,15 +277,25 @@ async fn runtime_owns_exact_post_dispatch_snapshot_capture_and_journal_completio
     assert_eq!(receipt.action_id(), action.transport_action_id);
     assert_eq!(receipt.session_id(), session());
     assert_eq!(receipt.snapshot_cut_ref(), expected_cut);
-    assert_ne!(receipt.snapshot_cut_ref(), action.metadata.precondition_snapshot_cut_ref);
+    assert_ne!(
+        receipt.snapshot_cut_ref(),
+        action.metadata.precondition_snapshot_cut_ref
+    );
     assert_eq!(provider.requested_cuts().last(), Some(&expected_cut));
 
-    let current = bridge
-        .current_reconciliation_snapshot(session())
+    let current = manager
+        .current_semantic_snapshot(session())
         .await
-        .expect("runtime must publish the exact provider snapshot before completing authority");
-    assert_eq!(current.snapshot_cut_ref, expected_cut);
-    assert_eq!(current.receipt_id, receipt.reconciliation_receipt_ref());
+        .expect("runtime must retain the exact provider snapshot before completing authority");
+    assert_eq!(current.snapshot_cut_ref(), expected_cut);
+    let status = manager
+        .status(session())
+        .await
+        .expect("runtime must publish the exact reconciliation receipt to LiveBridge");
+    assert_eq!(
+        status.reconciliation_receipt_id.as_deref(),
+        Some(receipt.reconciliation_receipt_ref())
+    );
 
     let _ = std::fs::remove_file(path);
 }
@@ -315,8 +328,8 @@ async fn failed_provider_observation_is_safely_abandoned_without_reopening_dispa
     assert_ne!(second.snapshot_cut_ref(), first_cut);
     journal
         .abandon_postcondition_observation(second)
-        .expect("explicit observation abandonment must be safe and exact")
-        .await;
+        .await
+        .expect("explicit observation abandonment must be safe and exact");
 
     let retry = journal
         .record_authorization(
@@ -326,7 +339,10 @@ async fn failed_provider_observation_is_safely_abandoned_without_reopening_dispa
         )
         .await
         .unwrap_err();
-    assert!(matches!(retry, ConsequentialJournalError::InvalidTransition { .. }));
+    assert!(matches!(
+        retry,
+        ConsequentialJournalError::InvalidTransition { .. }
+    ));
 
     let _ = std::fs::remove_file(path);
 }
