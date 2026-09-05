@@ -8,6 +8,13 @@ use localview_live_bridge::{
     ConsequentialJournal, ConsequentialRecoveryInventoryEntry,
 };
 
+mod attachment;
+pub(crate) use attachment::{
+    AttachmentRecoveryDisposition, AttachmentRecoveryPlanEntry, AttachmentRecoveryReport,
+    classify_attachment_recovery_state, plan_attachment_recovery,
+    process_windows_attachment_recovery,
+};
+
 const CONSEQUENTIAL_JOURNAL_FILE: &str = "consequential-actions.v1.jsonl";
 
 /// Durable recovery authority opened before the daemon advertises readiness.
