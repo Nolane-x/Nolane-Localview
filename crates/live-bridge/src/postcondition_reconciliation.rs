@@ -1,62 +1,4 @@
-from pathlib import Path
-import subprocess
-
-BRANCH = "feat/v43-consequential-postcondition-reconciliation-clean"
-
-root = Path.cwd()
-v43 = root / "crates/live-bridge/src/v43_lib.rs"
-journal = root / "crates/live-bridge/src/consequential_journal.rs"
-module = root / "crates/live-bridge/src/postcondition_reconciliation.rs"
-
-v43_text = v43.read_text()
-if "mod postcondition_reconciliation;" not in v43_text:
-    v43_text = v43_text.replace(
-        "mod consequential_journal;\n",
-        "mod consequential_journal;\nmod postcondition_reconciliation;\n",
-        1,
-    )
-if "pub use postcondition_reconciliation::*;" not in v43_text:
-    v43_text = v43_text.replace(
-        "pub use consequential_journal::*;\n",
-        "pub use consequential_journal::*;\npub use postcondition_reconciliation::*;\n",
-        1,
-    )
-getter = '''    pub(crate) async fn current_reconciliation_snapshot(
-        &self,
-        session_id: SessionId,
-    ) -> Option<ReconciliationSnapshotReceipt> {
-        self.continuity
-            .read()
-            .await
-            .get(&session_id)
-            .and_then(|state| state.reconciliation.clone())
-    }
-
-'''
-if "current_reconciliation_snapshot" not in v43_text:
-    marker = "    pub async fn record_reconciliation(\n"
-    if marker not in v43_text:
-        raise SystemExit("record_reconciliation sentinel missing")
-    v43_text = v43_text.replace(marker, getter + marker, 1)
-v43.write_text(v43_text)
-
-journal_text = journal.read_text()
-old = '''            Some(ConsequentialRecoveryState::DispatchPrepared)
-            | Some(ConsequentialRecoveryState::PossiblyDispatched)
-            | Some(ConsequentialRecoveryState::KnownNotDispatched) => Ok(()),
-'''
-new = '''            Some(ConsequentialRecoveryState::DispatchPrepared)
-            | Some(ConsequentialRecoveryState::PossiblyDispatched)
-            | Some(ConsequentialRecoveryState::KnownNotDispatched)
-            | Some(ConsequentialRecoveryState::OutcomeObservedUnverified) => Ok(()),
-'''
-if old not in journal_text and new not in journal_text:
-    raise SystemExit("reconciliation transition sentinel missing")
-if new not in journal_text:
-    journal_text = journal_text.replace(old, new, 1)
-journal.write_text(journal_text)
-
-module.write_text(r'''use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use localview_protocol::{
     ProviderIncarnationRef, ReconciliationCompleteness, TargetIncarnationRef, WorldOutcome,
@@ -133,11 +75,11 @@ pub async fn reconcile_consequential_postconditions(
     journal: &ConsequentialJournal,
     receipt: ConsequentialPostconditionReconciliationReceipt,
 ) -> Result<ConsequentialPostconditionReconciliationResult, ConsequentialReconciliationError> {
-    let envelope = admitted_envelope(journal, receipt.action_id)
-        .await
-        .ok_or(ConsequentialReconciliationError::UnknownAction {
+    let envelope = admitted_envelope(journal, receipt.action_id).await.ok_or(
+        ConsequentialReconciliationError::UnknownAction {
             action_id: receipt.action_id,
-        })?;
+        },
+    )?;
 
     if receipt.provider_incarnation_ref != envelope.metadata.provider_incarnation_ref {
         return Err(ConsequentialReconciliationError::ProviderIncarnationMismatch);
@@ -167,14 +109,14 @@ pub async fn reconcile_consequential_postconditions(
     let observed = exact_observed_postconditions(&expected, receipt.postconditions)?;
 
     let any_failed = expected.iter().any(|contract_ref| {
-        observed
-            .get(contract_ref)
-            .is_some_and(|evidence| evidence.status == ConsequentialPostconditionStatus::VerifiedFail)
+        observed.get(contract_ref).is_some_and(|evidence| {
+            evidence.status == ConsequentialPostconditionStatus::VerifiedFail
+        })
     });
     let all_passed = expected.iter().all(|contract_ref| {
-        observed
-            .get(contract_ref)
-            .is_some_and(|evidence| evidence.status == ConsequentialPostconditionStatus::VerifiedPass)
+        observed.get(contract_ref).is_some_and(|evidence| {
+            evidence.status == ConsequentialPostconditionStatus::VerifiedPass
+        })
     });
 
     let (world_outcome, postconditions_verified) = if any_failed {
@@ -223,7 +165,11 @@ async fn admitted_envelope(
 fn exact_expected_postconditions(
     envelope: &CanonicalActionEnvelope,
 ) -> Result<BTreeSet<String>, ConsequentialReconciliationError> {
-    if envelope.metadata.expected_postcondition_contract_refs.is_empty() {
+    if envelope
+        .metadata
+        .expected_postcondition_contract_refs
+        .is_empty()
+    {
         return Err(ConsequentialReconciliationError::MissingExpectedPostconditions);
     }
 
@@ -243,7 +189,8 @@ fn exact_expected_postconditions(
 fn exact_observed_postconditions(
     expected: &BTreeSet<String>,
     evidence: Vec<ConsequentialPostconditionEvidence>,
-) -> Result<BTreeMap<String, ConsequentialPostconditionEvidence>, ConsequentialReconciliationError> {
+) -> Result<BTreeMap<String, ConsequentialPostconditionEvidence>, ConsequentialReconciliationError>
+{
     let mut observed = BTreeMap::new();
     for item in evidence {
         if !expected.contains(&item.contract_ref) {
@@ -254,9 +201,11 @@ fn exact_observed_postconditions(
             );
         }
         if item.receipt_ref.trim().is_empty() {
-            return Err(ConsequentialReconciliationError::MissingPostconditionReceipt {
-                contract_ref: item.contract_ref,
-            });
+            return Err(
+                ConsequentialReconciliationError::MissingPostconditionReceipt {
+                    contract_ref: item.contract_ref,
+                },
+            );
         }
         if observed.contains_key(&item.contract_ref) {
             return Err(
@@ -269,39 +218,3 @@ fn exact_observed_postconditions(
     }
     Ok(observed)
 }
-''')
-
-subprocess.run(["cargo", "fmt", "--all"], check=True)
-subprocess.run(
-    ["cargo", "check", "-p", "localview-live-bridge", "--all-targets"], check=True
-)
-subprocess.run(
-    ["cargo", "test", "-p", "localview-live-bridge", "--test", "v43_postcondition_reconciliation", "--", "--nocapture"],
-    check=True,
-)
-subprocess.run(
-    ["cargo", "test", "-p", "localview-live-bridge", "--test", "v43_consequential_journal"],
-    check=True,
-)
-
-subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
-subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
-subprocess.run(
-    [
-        "git",
-        "add",
-        "crates/live-bridge/src/v43_lib.rs",
-        "crates/live-bridge/src/consequential_journal.rs",
-        "crates/live-bridge/src/postcondition_reconciliation.rs",
-    ],
-    check=True,
-)
-subprocess.run(
-    ["git", "rm", ".github/workflows/v43-postcondition-builder.yml", ".github/scripts/v43_postcondition_builder.py"],
-    check=True,
-)
-subprocess.run(
-    ["git", "commit", "-m", "feat(v43): bind typed postcondition reconciliation to durable evidence"],
-    check=True,
-)
-subprocess.run(["git", "push", "origin", f"HEAD:{BRANCH}"], check=True)

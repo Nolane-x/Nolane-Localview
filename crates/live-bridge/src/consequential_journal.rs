@@ -595,7 +595,9 @@ fn durable_preparation_matches(
     })
 }
 
-fn load_and_repair(path: &Path) -> Result<Vec<ConsequentialJournalEntry>, ConsequentialJournalError> {
+fn load_and_repair(
+    path: &Path,
+) -> Result<Vec<ConsequentialJournalEntry>, ConsequentialJournalError> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent).map_err(|error| ConsequentialJournalError::Io {
@@ -809,7 +811,8 @@ fn validate_transition(
             None => Err(ConsequentialJournalError::UnknownAction { action_id }),
             Some(ConsequentialRecoveryState::DispatchPrepared)
             | Some(ConsequentialRecoveryState::PossiblyDispatched)
-            | Some(ConsequentialRecoveryState::KnownNotDispatched) => Ok(()),
+            | Some(ConsequentialRecoveryState::KnownNotDispatched)
+            | Some(ConsequentialRecoveryState::OutcomeObservedUnverified) => Ok(()),
             _ => Err(ConsequentialJournalError::InvalidTransition {
                 action_id,
                 attempted: "reconciliation_outcome",

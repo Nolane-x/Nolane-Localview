@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
-#[path = "cancellable_lib.rs"]
-mod legacy;
 mod action_envelope;
 mod consequential_journal;
+#[path = "cancellable_lib.rs"]
+mod legacy;
+mod postcondition_reconciliation;
 
 pub use action_envelope::*;
 pub use consequential_journal::*;
@@ -14,6 +15,7 @@ pub use legacy::{
     NativeExecutorCancellationState, NativeExecutorRequest, NativeExecutorResult, ObserverBatch,
     ObserverEvent, ObserverEventKind, PrivateBridgeAction, PrivateCaptureActionData,
 };
+pub use postcondition_reconciliation::*;
 
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
@@ -137,11 +139,7 @@ impl ProviderContinuityState {
         }
     }
 
-    fn restart_lineage(
-        &mut self,
-        batch: &ProviderObserverBatch,
-        continuity: EventContinuityState,
-    ) {
+    fn restart_lineage(&mut self, batch: &ProviderObserverBatch, continuity: EventContinuityState) {
         self.provider_incarnation_ref = batch.provider_incarnation_ref.clone();
         self.target_incarnation_ref = batch.target_incarnation_ref.clone();
         self.generation = batch.generation;
@@ -243,10 +241,7 @@ impl LiveBridge {
         self.ingest_collect(batch).await.0
     }
 
-    pub async fn ingest_collect(
-        &self,
-        batch: ObserverBatch,
-    ) -> (IngestReport, Vec<ObserverEvent>) {
+    pub async fn ingest_collect(&self, batch: ObserverBatch) -> (IngestReport, Vec<ObserverEvent>) {
         // The legacy web stream has no authority over provider-bound event
         // continuity or reconciliation. Mixing the two state domains here would
         // allow an unrelated web batch to erase an observed provider gap.
@@ -334,7 +329,9 @@ impl LiveBridge {
         action: BridgeActionKind,
     ) -> BridgeAction {
         let _gate = self.action_gate.lock().await;
-        self.legacy.enqueue_action(session_id, reference, action).await
+        self.legacy
+            .enqueue_action(session_id, reference, action)
+            .await
     }
 
     /// Queue an action only after binding the canonical V4.3 authority envelope.
@@ -442,6 +439,17 @@ impl LiveBridge {
         let continuity = self.continuity.read().await;
         let state = continuity.get(&session_id)?;
         Some(state.status())
+    }
+
+    pub(crate) async fn current_reconciliation_snapshot(
+        &self,
+        session_id: SessionId,
+    ) -> Option<ReconciliationSnapshotReceipt> {
+        self.continuity
+            .read()
+            .await
+            .get(&session_id)
+            .and_then(|state| state.reconciliation.clone())
     }
 
     pub async fn record_reconciliation(
