@@ -12,9 +12,10 @@ mod windows_runtime_dispatch_smoke {
     };
 
     use localview_live_bridge::{
-        ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
-        ConsequentialJournal, ConsequentialJournalTransition, ConsequentialPostconditionEvidence,
-        ConsequentialPostconditionStatus, ConsequentialRecoveryState, LiveBridge,
+        ActionEnvelopeMetadata, ActionIdempotencyClass, ActionPostconditionVerdict,
+        ActionRiskClass, BridgeActionKind, ConsequentialJournal, ConsequentialJournalTransition,
+        ConsequentialPostconditionEvidence, ConsequentialPostconditionStatus,
+        ConsequentialRecoveryState, LiveBridge,
     };
     use localview_native_provider::{
         NativeSemanticSnapshotRevision, SnapshotBudget, UserSelectedWindowTarget,
@@ -363,27 +364,33 @@ mod windows_runtime_dispatch_smoke {
             })
             .map(|entry| entry.journal_sequence)
             .expect("real provider dispatch must be durably linearized");
-        let reconciliation_sequence = entries
+        let postcondition_sequence = entries
             .iter()
-            .find(|entry| {
-                matches!(
-                    entry.transition,
-                    ConsequentialJournalTransition::ReconciliationOutcome {
-                        world_outcome: WorldOutcome::VerifiedExpected,
-                        postconditions_verified: true,
-                        ..
-                    }
-                )
+            .find_map(|entry| match &entry.transition {
+                ConsequentialJournalTransition::PostconditionReceiptRecorded { receipt }
+                    if receipt.verdict == ActionPostconditionVerdict::VerifiedExpected =>
+                {
+                    assert_eq!(
+                        receipt.completion_journal_sequence, entry.journal_sequence,
+                        "journal must mint the receipt completion sequence"
+                    );
+                    assert_eq!(
+                        receipt.causal_assurance.causal_journal_sequence(),
+                        dispatch_sequence,
+                        "verified receipt must causally bind to the real dispatch"
+                    );
+                    Some(entry.journal_sequence)
+                }
+                _ => None,
             })
-            .map(|entry| entry.journal_sequence)
-            .expect("fresh postcondition evidence must be durably reconciled");
+            .expect("fresh postcondition evidence must produce a durable verified receipt");
         let commit_sequence = entries
             .iter()
             .find(|entry| matches!(entry.transition, ConsequentialJournalTransition::Committed))
             .map(|entry| entry.journal_sequence)
             .expect("verified expected world outcome must be durably committed");
-        assert!(dispatch_sequence < reconciliation_sequence);
-        assert!(reconciliation_sequence < commit_sequence);
+        assert!(dispatch_sequence < postcondition_sequence);
+        assert!(postcondition_sequence < commit_sequence);
 
         manager
             .release(session_id)
