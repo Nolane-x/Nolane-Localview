@@ -9,6 +9,42 @@ use super::{
     ConsequentialRecoveryState,
 };
 
+/// Typed recovery work allowed by a durable consequential state.
+///
+/// This is classification only. It never recreates a dispatch permit, execution
+/// grant, observation grant, verifier, or provider capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsequentialRecoveryDebtDisposition {
+    NoDispatchProven,
+    ObservationRequired,
+    CommitOnly,
+    HistoricalTerminal,
+    ReconciliationRequired,
+}
+
+impl ConsequentialRecoveryState {
+    pub fn recovery_debt_disposition(&self) -> ConsequentialRecoveryDebtDisposition {
+        use ConsequentialRecoveryDebtDisposition::{
+            CommitOnly, HistoricalTerminal, NoDispatchProven, ObservationRequired,
+            ReconciliationRequired,
+        };
+
+        match self {
+            Self::Admitted | Self::AuthorizedNotDispatched | Self::KnownNotDispatched => {
+                NoDispatchProven
+            }
+            // PREPARED remains uncertain after restart. Recovery observes current
+            // state and never recreates dispatch authority or retries the action.
+            Self::DispatchPrepared
+            | Self::PossiblyDispatched
+            | Self::OutcomeObservedUnverified => ObservationRequired,
+            Self::VerifiedUncommitted => CommitOnly,
+            Self::Compensated | Self::Committed => HistoricalTerminal,
+            Self::CompensationFailed => ReconciliationRequired,
+        }
+    }
+}
+
 /// One replay-derived recovery summary per durable action. Ordering authority is
 /// the monotonic journal sequence, never wall-clock timestamps.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
