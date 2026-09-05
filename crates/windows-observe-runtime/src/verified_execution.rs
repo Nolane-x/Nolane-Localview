@@ -88,6 +88,9 @@ pub enum WindowsUiaVerifiedExecutionError {
 /// independent typed predicate verification, and durable reconciliation before
 /// `Committed` can be returned. Known-not-dispatched outcomes terminate without
 /// invoking the verifier because no world-side postcondition needs proving.
+/// Pre-executor authority rejection is handled by the lower dispatch coordinator,
+/// which releases only the process-local execution grant and preserves durable
+/// PREPARED uncertainty for same-process reconciliation.
 pub async fn execute_armed_uia_dispatch_verified<P, E, V>(
     bridge: &LiveBridge,
     journal: &ConsequentialJournal,
