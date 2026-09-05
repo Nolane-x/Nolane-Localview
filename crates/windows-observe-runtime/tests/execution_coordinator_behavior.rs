@@ -7,7 +7,8 @@ use std::{
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
     ConsequentialJournal, ConsequentialJournalTransition, ConsequentialPostconditionEvidence,
-    ConsequentialPostconditionStatus, ConsequentialRecoveryState, LiveBridge,
+    ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
+    ConsequentialRecoveryState, LiveBridge, reconcile_consequential_postconditions,
 };
 use localview_native_provider::{
     NativeSemanticNodeObservation, NativeSemanticSnapshotDraft, NativeSemanticSnapshotRevision,
@@ -23,12 +24,12 @@ use localview_windows_observe_runtime::{
     WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
     WindowsObserveSubscriptionLineage, WindowsUiaActionPreflightRequest,
     WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
-    WindowsUiaDispatchExecutionCoordinatorError, WindowsUiaDispatchExecutor,
-    WindowsUiaDispatchSealRequest, WindowsUiaPostconditionVerifier,
+    WindowsUiaConsequentialRecoveryOutcome, WindowsUiaDispatchExecutionCoordinatorError,
+    WindowsUiaDispatchExecutor, WindowsUiaDispatchSealRequest, WindowsUiaPostconditionVerifier,
     WindowsUiaPreparedDispatchRequest, WindowsUiaProviderExecutionReceipt,
     WindowsUiaProviderExecutionRequest, WindowsUiaVerifiedExecutionOutcome,
     arm_uia_dispatch_execution, execute_armed_uia_dispatch, execute_armed_uia_dispatch_verified,
-    prepare_uia_dispatch,
+    prepare_uia_dispatch, recover_consequential_uia_action,
 };
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaBoundDispatchContextReceipt,
@@ -54,6 +55,7 @@ struct FakeProviderError;
 struct FakeProviderState {
     snapshot: Option<Arc<NativeSemanticSnapshotRevision>>,
     context_calls: usize,
+    snapshot_calls: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +85,10 @@ impl FakeProvider {
 
     fn context_calls(&self) -> usize {
         self.state.lock().unwrap().context_calls
+    }
+
+    fn snapshot_call_count(&self) -> usize {
+        self.state.lock().unwrap().snapshot_calls
     }
 
     fn build_snapshot(&self, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
@@ -202,7 +208,9 @@ impl WindowsObserveProvider for FakeProvider {
         _surface_scope: String,
     ) -> Result<Arc<NativeSemanticSnapshotRevision>, Self::Error> {
         let snapshot = self.build_snapshot(snapshot_cut_ref);
-        self.state.lock().unwrap().snapshot = Some(snapshot.clone());
+        let mut state = self.state.lock().unwrap();
+        state.snapshot_calls += 1;
+        state.snapshot = Some(snapshot.clone());
         Ok(snapshot)
     }
 
@@ -893,5 +901,301 @@ async fn known_not_dispatched_does_not_invoke_postcondition_verifier() {
         Some(ConsequentialRecoveryState::KnownNotDispatched)
     );
 
+    let _ = std::fs::remove_file(path);
+}
+
+async fn reconcile_once_without_commit(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<FakeProvider>,
+    action_id: Uuid,
+    verifier: &FakeVerifier,
+) {
+    let permit = journal
+        .begin_postcondition_observation(action_id)
+        .await
+        .unwrap();
+    let capture = runtime
+        .capture_postcondition_observation_with_snapshot(journal, permit)
+        .await
+        .unwrap();
+    let envelope = journal
+        .entries_for(action_id)
+        .await
+        .into_iter()
+        .find_map(|entry| match entry.transition {
+            ConsequentialJournalTransition::IntentAdmitted { envelope } => Some(envelope),
+            _ => None,
+        })
+        .unwrap();
+    let evidence = verifier
+        .verify(
+            action_id,
+            &envelope.metadata.expected_postcondition_contract_refs,
+            capture.snapshot().as_ref(),
+        )
+        .unwrap();
+    reconcile_consequential_postconditions(
+        bridge,
+        journal,
+        ConsequentialPostconditionReconciliationReceipt::from_observation(
+            capture.into_observation_receipt(),
+            evidence,
+        ),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn restart_after_prepared_without_dispatch_receipt_reconciles_without_redispatch() {
+    let (bridge, journal, path, provider, runtime, seal_request) =
+        fixture("recovery-prepared-uncertain").await;
+    let prepared = prepare_uia_dispatch(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        WindowsUiaPreparedDispatchRequest { seal: seal_request },
+        &FakeAuthorizationRevalidator,
+    )
+    .await
+    .unwrap();
+    let armed = arm_uia_dispatch_execution(&bridge, &journal, &runtime, session(), prepared)
+        .await
+        .unwrap();
+    let action_id = armed.action_id();
+    drop(armed);
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::DispatchPrepared)
+    );
+    let snapshots_before = provider.snapshot_call_count();
+    drop(journal);
+
+    let reopened = ConsequentialJournal::open(&path).await.unwrap();
+    let verifier = FakeVerifier::new(VerifierMode::Pass);
+    let outcome =
+        recover_consequential_uia_action(&bridge, &reopened, &runtime, action_id, &verifier)
+            .await
+            .unwrap();
+
+    assert!(matches!(
+        outcome,
+        WindowsUiaConsequentialRecoveryOutcome::ReconciledCommitted { .. }
+    ));
+    assert_eq!(verifier.call_count(), 1);
+    assert_eq!(provider.snapshot_call_count(), snapshots_before + 1);
+    assert_eq!(
+        reopened.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::Committed)
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn restart_after_dispatch_reconciles_fresh_world_without_any_executor_input() {
+    let (bridge, journal, path, provider, runtime, armed) =
+        verified_prepared_and_armed("recovery-possibly-dispatched").await;
+    let action_id = armed.action_id();
+    let executor = FakeExecutor::new(ExecutorMode::Dispatched);
+    execute_armed_uia_dispatch(&bridge, &journal, session(), armed, &executor)
+        .await
+        .unwrap();
+    assert_eq!(executor.call_count(), 1);
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::PossiblyDispatched)
+    );
+    let snapshots_before = provider.snapshot_call_count();
+    drop(journal);
+
+    let reopened = ConsequentialJournal::open(&path).await.unwrap();
+    let verifier = FakeVerifier::new(VerifierMode::Pass);
+    let outcome =
+        recover_consequential_uia_action(&bridge, &reopened, &runtime, action_id, &verifier)
+            .await
+            .unwrap();
+
+    assert!(matches!(
+        outcome,
+        WindowsUiaConsequentialRecoveryOutcome::ReconciledCommitted { .. }
+    ));
+    assert_eq!(verifier.call_count(), 1);
+    assert_eq!(provider.snapshot_call_count(), snapshots_before + 1);
+    assert_eq!(
+        reopened.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::Committed)
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn restart_from_verified_uncommitted_is_commit_only_without_capture_or_verifier() {
+    let (bridge, journal, path, provider, runtime, armed) =
+        verified_prepared_and_armed("recovery-verified-uncommitted").await;
+    let action_id = armed.action_id();
+    let executor = FakeExecutor::new(ExecutorMode::Dispatched);
+    execute_armed_uia_dispatch(&bridge, &journal, session(), armed, &executor)
+        .await
+        .unwrap();
+    reconcile_once_without_commit(
+        &bridge,
+        &journal,
+        &runtime,
+        action_id,
+        &FakeVerifier::new(VerifierMode::Pass),
+    )
+    .await;
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::VerifiedUncommitted)
+    );
+    let durable_receipt = journal
+        .latest_action_postcondition_receipt(action_id)
+        .await
+        .unwrap();
+    let snapshots_before = provider.snapshot_call_count();
+    drop(journal);
+
+    let reopened = ConsequentialJournal::open(&path).await.unwrap();
+    let verifier = FakeVerifier::new(VerifierMode::Fail);
+    let outcome =
+        recover_consequential_uia_action(&bridge, &reopened, &runtime, action_id, &verifier)
+            .await
+            .unwrap();
+
+    match outcome {
+        WindowsUiaConsequentialRecoveryOutcome::CommittedFromDurableReceipt {
+            receipt_ref,
+            receipt_journal_sequence,
+            commit_journal_sequence,
+            ..
+        } => {
+            assert_eq!(receipt_ref, durable_receipt.receipt_ref);
+            assert_eq!(
+                receipt_journal_sequence,
+                durable_receipt.completion_journal_sequence
+            );
+            assert!(commit_journal_sequence > receipt_journal_sequence);
+        }
+        other => panic!("unexpected recovery outcome: {other:?}"),
+    }
+    assert_eq!(verifier.call_count(), 0);
+    assert_eq!(provider.snapshot_call_count(), snapshots_before);
+    assert_eq!(
+        reopened.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::Committed)
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn restart_from_unknown_reobserves_fresh_cut_and_never_reopens_dispatch_authority() {
+    let (bridge, journal, path, _provider, runtime, armed) =
+        verified_prepared_and_armed("recovery-unknown-reobserve").await;
+    let action_id = armed.action_id();
+    let executor = FakeExecutor::new(ExecutorMode::Dispatched);
+    execute_armed_uia_dispatch(&bridge, &journal, session(), armed, &executor)
+        .await
+        .unwrap();
+    drop(journal);
+
+    let reopened = ConsequentialJournal::open(&path).await.unwrap();
+    let unknown = FakeVerifier::new(VerifierMode::Unknown);
+    let first = recover_consequential_uia_action(&bridge, &reopened, &runtime, action_id, &unknown)
+        .await
+        .unwrap();
+    assert!(matches!(
+        first,
+        WindowsUiaConsequentialRecoveryOutcome::PostconditionNotVerified {
+            world_outcome: WorldOutcome::ReconciliationRequired,
+            ..
+        }
+    ));
+    assert_eq!(
+        reopened.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::OutcomeObservedUnverified)
+    );
+    assert!(
+        reopened
+            .record_authorization(action_id, "authorization:retry-forbidden".into(), true)
+            .await
+            .is_err(),
+        "unknown world outcome must never recreate dispatch authorization"
+    );
+    let first_cut = unknown.observed_cuts().into_iter().next().unwrap();
+    drop(reopened);
+
+    let reopened_again = ConsequentialJournal::open(&path).await.unwrap();
+    let pass = FakeVerifier::new(VerifierMode::Pass);
+    let second =
+        recover_consequential_uia_action(&bridge, &reopened_again, &runtime, action_id, &pass)
+            .await
+            .unwrap();
+    assert!(matches!(
+        second,
+        WindowsUiaConsequentialRecoveryOutcome::ReconciledCommitted { .. }
+    ));
+    let second_cut = pass.observed_cuts().into_iter().next().unwrap();
+    assert_ne!(
+        first_cut, second_cut,
+        "recovery must mint a fresh observation cut"
+    );
+    assert_eq!(executor.call_count(), 1, "recovery must never redispatch");
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn restart_from_committed_is_historical_terminal_without_capture_or_verifier() {
+    let (bridge, journal, path, provider, runtime, armed) =
+        verified_prepared_and_armed("recovery-committed-terminal").await;
+    let action_id = armed.action_id();
+    let executor = FakeExecutor::new(ExecutorMode::Dispatched);
+    let initial_verifier = FakeVerifier::new(VerifierMode::Pass);
+    let initial = execute_armed_uia_dispatch_verified(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        armed,
+        &executor,
+        &initial_verifier,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        initial,
+        WindowsUiaVerifiedExecutionOutcome::Committed { .. }
+    ));
+    let durable_receipt = journal
+        .latest_action_postcondition_receipt(action_id)
+        .await
+        .unwrap();
+    let snapshots_before = provider.snapshot_call_count();
+    drop(journal);
+
+    let reopened = ConsequentialJournal::open(&path).await.unwrap();
+    let verifier = FakeVerifier::new(VerifierMode::Fail);
+    let outcome =
+        recover_consequential_uia_action(&bridge, &reopened, &runtime, action_id, &verifier)
+            .await
+            .unwrap();
+    match outcome {
+        WindowsUiaConsequentialRecoveryOutcome::AlreadyCommitted {
+            receipt_ref,
+            receipt_journal_sequence,
+            ..
+        } => {
+            assert_eq!(receipt_ref, durable_receipt.receipt_ref);
+            assert_eq!(
+                receipt_journal_sequence,
+                durable_receipt.completion_journal_sequence
+            );
+        }
+        other => panic!("unexpected recovery outcome: {other:?}"),
+    }
+    assert_eq!(verifier.call_count(), 0);
+    assert_eq!(provider.snapshot_call_count(), snapshots_before);
     let _ = std::fs::remove_file(path);
 }
