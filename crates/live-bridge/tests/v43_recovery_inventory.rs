@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use localview_live_bridge::{
-    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
-    ConsequentialJournal, ConsequentialRecoveryState,
+    replay_consequential_recovery_inventory, ActionEnvelopeMetadata, ActionIdempotencyClass,
+    ActionRiskClass, CanonicalActionEnvelope, ConsequentialJournal, ConsequentialRecoveryState,
 };
 use localview_protocol::{
     PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
@@ -60,7 +60,9 @@ async fn reopened_journal_inventory_is_one_entry_per_action_in_latest_sequence_o
     drop(journal);
 
     let reopened = ConsequentialJournal::open(&path).await.unwrap();
-    let inventory = reopened.recovery_inventory().await;
+    let inventory = replay_consequential_recovery_inventory(&reopened, &path)
+        .await
+        .unwrap();
 
     assert_eq!(inventory.len(), 2);
     assert_eq!(inventory[0].action_id, second.transport_action_id);
