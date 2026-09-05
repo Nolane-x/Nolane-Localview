@@ -11,12 +11,13 @@ mod windows_runtime_dispatch_smoke {
     };
 
     use localview_live_bridge::{
-        ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
-        ConsequentialJournal, ConsequentialJournalTransition, ConsequentialRecoveryState,
-        LiveBridge,
+        reconcile_consequential_postconditions, ActionEnvelopeMetadata, ActionIdempotencyClass,
+        ActionRiskClass, BridgeActionKind, ConsequentialJournal, ConsequentialJournalTransition,
+        ConsequentialPostconditionEvidence, ConsequentialPostconditionReconciliationReceipt,
+        ConsequentialPostconditionStatus, ConsequentialRecoveryState, LiveBridge,
     };
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
-    use localview_protocol::{DispatchResult, PrincipalRef, TransportResult};
+    use localview_protocol::{DispatchResult, PrincipalRef, TransportResult, WorldOutcome};
     use localview_windows_observe_runtime::{
         arm_uia_dispatch_execution, execute_armed_uia_dispatch, prepare_uia_dispatch,
         spawn_windows_uia_runtime_manager, WindowsObserveRuntimeConfig,
@@ -32,14 +33,35 @@ mod windows_runtime_dispatch_smoke {
     use windows::{
         core::w,
         Win32::{
+            Foundation::{HWND, LPARAM, LRESULT, WPARAM},
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, ShowWindow,
-                TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE, SW_SHOW, WS_OVERLAPPEDWINDOW,
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW,
+                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, CW_USEDEFAULT,
+                GWLP_WNDPROC, MSG, PM_REMOVE, SW_SHOW, WM_COMMAND, WS_CHILD, WS_OVERLAPPEDWINDOW,
                 WS_VISIBLE,
             },
         },
     };
+
+    const BEFORE_TITLE: &str = "LocalView Runtime Before";
+    const AFTER_TITLE: &str = "LocalView Runtime Invoked";
+    const POSTCONDITION_REF: &str = "postcondition:runtime-smoke";
+
+    unsafe extern "system" fn smoke_parent_wndproc(
+        window: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if message == WM_COMMAND {
+            unsafe {
+                let _ = SetWindowTextW(window, w!("LocalView Runtime Invoked"));
+            }
+            return LRESULT(0);
+        }
+        unsafe { DefWindowProcW(window, message, wparam, lparam) }
+    }
 
     struct SmokeAuthorizationRevalidator;
 
@@ -62,7 +84,7 @@ mod windows_runtime_dispatch_smoke {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires a real interactive Windows UI Automation provider"]
-    async fn real_runtime_coordinator_linearizes_exact_retained_invoke_dispatch() {
+    async fn real_runtime_invoke_is_verified_by_fresh_post_dispatch_snapshot_before_commit() {
         assert!(
             std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
             "real UIA smoke must be explicitly enabled"
@@ -72,31 +94,51 @@ mod windows_runtime_dispatch_smoke {
         let ui_stop = Arc::clone(&stop);
         let (window_tx, window_rx) = mpsc::sync_channel(1);
         let ui_thread = thread::Builder::new()
-            .name("localview-uia-runtime-dispatch-smoke-ui".into())
+            .name("localview-uia-runtime-postcondition-smoke-ui".into())
             .spawn(move || {
                 let window = unsafe {
                     CreateWindowExW(
                         Default::default(),
-                        w!("BUTTON"),
-                        w!("LocalView Runtime Dispatch"),
+                        w!("STATIC"),
+                        w!("LocalView Runtime Before"),
                         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                         CW_USEDEFAULT,
                         CW_USEDEFAULT,
-                        420,
-                        180,
+                        460,
+                        220,
                         None,
                         None,
                         None,
                         None,
                     )
-                    .expect("create Win32 runtime dispatch fixture")
+                    .expect("create Win32 runtime postcondition parent fixture")
+                };
+                unsafe {
+                    let _ = SetWindowLongPtrW(window, GWLP_WNDPROC, smoke_parent_wndproc as isize);
+                }
+                let _button = unsafe {
+                    CreateWindowExW(
+                        Default::default(),
+                        w!("BUTTON"),
+                        w!("Invoke Postcondition"),
+                        WS_CHILD | WS_VISIBLE,
+                        36,
+                        52,
+                        220,
+                        52,
+                        Some(window),
+                        None,
+                        None,
+                        None,
+                    )
+                    .expect("create child Win32 Invoke button")
                 };
                 unsafe {
                     let _ = ShowWindow(window, SW_SHOW);
                 }
                 window_tx
                     .send(window.0 as usize as u64)
-                    .expect("publish runtime dispatch fixture HWND");
+                    .expect("publish runtime postcondition fixture HWND");
 
                 let mut message = MSG::default();
                 while !ui_stop.load(Ordering::Acquire) {
@@ -110,14 +152,14 @@ mod windows_runtime_dispatch_smoke {
                 }
 
                 unsafe {
-                    DestroyWindow(window).expect("destroy Win32 runtime dispatch fixture");
+                    DestroyWindow(window).expect("destroy Win32 runtime postcondition fixture");
                 }
             })
-            .expect("spawn responsive Win32 runtime dispatch fixture thread");
+            .expect("spawn responsive Win32 runtime postcondition fixture thread");
 
         let window_handle = window_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("receive runtime dispatch fixture HWND");
+            .expect("receive runtime postcondition fixture HWND");
         let bridge = LiveBridge::new(128, 16);
         let manager = spawn_windows_uia_runtime_manager(
             bridge.clone(),
@@ -153,6 +195,13 @@ mod windows_runtime_dispatch_smoke {
             .current_semantic_snapshot(session_id)
             .await
             .expect("attached runtime must expose its immutable current semantic revision");
+        assert!(
+            snapshot
+                .nodes()
+                .iter()
+                .any(|node| node.name.as_deref() == Some(BEFORE_TITLE)),
+            "initial UIA snapshot must observe the pre-dispatch world state"
+        );
         let node = snapshot
             .nodes()
             .iter()
@@ -161,7 +210,7 @@ mod windows_runtime_dispatch_smoke {
                     == WindowsUiaPatternSupport::Supported
             })
             .cloned()
-            .expect("real BUTTON snapshot must advertise Invoke support");
+            .expect("real child BUTTON snapshot must advertise Invoke support");
 
         let authority = ActionEnvelopeMetadata {
             decision_principal_ref: PrincipalRef::from("principal:decision:runtime-smoke"),
@@ -172,7 +221,7 @@ mod windows_runtime_dispatch_smoke {
             target_incarnation_ref: snapshot.target_incarnation_ref().clone(),
             risk_class: ActionRiskClass::ReversibleUiState,
             idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
-            expected_postcondition_contract_refs: vec!["postcondition:runtime-smoke".into()],
+            expected_postcondition_contract_refs: vec![POSTCONDITION_REF.into()],
         };
         let queued = bridge
             .enqueue_canonical_action(
@@ -185,7 +234,7 @@ mod windows_runtime_dispatch_smoke {
             .expect("enqueue canonical consequential action");
 
         let journal_path = std::env::temp_dir().join(format!(
-            "localview-windows-runtime-dispatch-{}.jsonl",
+            "localview-windows-runtime-postcondition-{}.jsonl",
             Uuid::new_v4()
         ));
         let journal = ConsequentialJournal::open(&journal_path)
@@ -271,12 +320,74 @@ mod windows_runtime_dispatch_smoke {
             ConsequentialJournalTransition::DispatchLinearized { .. }
         ));
 
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let observation_permit = journal
+            .begin_postcondition_observation(action_id)
+            .await
+            .expect("durable dispatch uncertainty must mint one post-dispatch observation permit");
+        let observation = manager
+            .capture_postcondition_observation(&journal, observation_permit)
+            .await
+            .expect("runtime must capture the exact journal-authorized fresh UIA snapshot");
+        let post_snapshot = manager
+            .current_semantic_snapshot(session_id)
+            .await
+            .expect("runtime must retain the post-dispatch semantic revision");
+        assert_eq!(post_snapshot.snapshot_cut_ref(), observation.snapshot_cut_ref());
+        assert_ne!(
+            post_snapshot.snapshot_cut_ref(),
+            snapshot.snapshot_cut_ref(),
+            "postcondition evidence must use a fresh cut after dispatch"
+        );
+
+        let title_changed = post_snapshot
+            .nodes()
+            .iter()
+            .any(|node| node.name.as_deref() == Some(AFTER_TITLE));
+        let reconciliation = reconcile_consequential_postconditions(
+            &bridge,
+            &journal,
+            ConsequentialPostconditionReconciliationReceipt::from_observation(
+                observation,
+                vec![ConsequentialPostconditionEvidence {
+                    contract_ref: POSTCONDITION_REF.into(),
+                    status: if title_changed {
+                        ConsequentialPostconditionStatus::VerifiedPass
+                    } else {
+                        ConsequentialPostconditionStatus::VerifiedFail
+                    },
+                    receipt_ref: format!(
+                        "postcondition:runtime-smoke:{}",
+                        post_snapshot.cache_revision_ref()
+                    ),
+                }],
+            ),
+        )
+        .await
+        .expect("typed postcondition reconciliation must consume causal snapshot evidence");
+
+        assert_eq!(reconciliation.world_outcome, WorldOutcome::VerifiedExpected);
+        assert!(reconciliation.postconditions_verified);
+        assert_eq!(
+            journal.recovery_state(action_id).await,
+            Some(ConsequentialRecoveryState::VerifiedUncommitted),
+            "only the observed expected world state may cross the verified boundary"
+        );
+        journal
+            .record_committed(action_id)
+            .await
+            .expect("verified expected postconditions may commit");
+        assert_eq!(
+            journal.recovery_state(action_id).await,
+            Some(ConsequentialRecoveryState::Committed)
+        );
+
         manager
             .release(session_id)
             .await
-            .expect("release runtime after exact dispatch");
+            .expect("release runtime after verified postcondition commit");
         stop.store(true, Ordering::Release);
-        ui_thread.join().expect("join runtime dispatch fixture UI thread");
+        ui_thread.join().expect("join runtime postcondition fixture UI thread");
         let _ = std::fs::remove_file(journal_path);
     }
 }
