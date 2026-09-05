@@ -1,0 +1,46 @@
+name: V43 runtime postcondition GREEN builder
+
+on:
+  push:
+    branches:
+      - feat/v43-windows-runtime-postcondition-capture
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-windows-runtime-postcondition-capture
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Apply production patch
+        run: python .github/scripts/apply_v43_runtime_postcondition_capture.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Diff check
+        run: git diff --check
+      - name: Compile runtime
+        run: cargo check -p localview-windows-observe-runtime
+      - name: Runtime-owned postcondition capture contract
+        run: cargo test -p localview-windows-observe-runtime --test postcondition_capture_contract
+      - name: Causal post-dispatch observation authority regressions
+        run: cargo test -p localview-live-bridge --test v43_post_dispatch_observation_authority
+      - name: Postcondition reconciliation regressions
+        run: cargo test -p localview-live-bridge --test v43_postcondition_reconciliation
+      - name: Consequential journal regressions
+        run: cargo test -p localview-live-bridge --test v43_consequential_journal
+      - name: Commit clean production change
+        shell: bash
+        run: |
+          rm -f .github/workflows/v43-runtime-postcondition-red.yml
+          rm -f .github/workflows/v43-runtime-postcondition-builder.yml
+          rm -f .github/scripts/apply_v43_runtime_postcondition_capture.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/live-bridge/src/consequential_journal.rs crates/windows-observe-runtime/src/runtime_manager.rs crates/windows-observe-runtime/tests/postcondition_capture_contract.rs .github/workflows .github/scripts
+          git commit -m "feat(v43): capture postcondition snapshots in Windows runtime"
+          git push origin HEAD:feat/v43-windows-runtime-postcondition-capture
