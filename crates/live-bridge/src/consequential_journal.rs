@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -43,6 +43,87 @@ pub struct DispatchLinearizationReceipt {
     pub dispatch_result: DispatchResult,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionPostconditionVerdict {
+    VerifiedExpected,
+    VerifiedUnexpected,
+    ReconciliationRequired,
+}
+
+impl ActionPostconditionVerdict {
+    pub fn world_outcome(self) -> WorldOutcome {
+        match self {
+            Self::VerifiedExpected => WorldOutcome::VerifiedExpected,
+            Self::VerifiedUnexpected => WorldOutcome::VerifiedUnexpected,
+            Self::ReconciliationRequired => WorldOutcome::ReconciliationRequired,
+        }
+    }
+
+    pub fn postconditions_verified(self) -> bool {
+        self == Self::VerifiedExpected
+    }
+}
+
+/// First-class durable proof of independently observed action postconditions.
+///
+/// Receipt identity and completion ordering are journal-minted. Contract
+/// classifications form an exact partition of the admitted expected contracts,
+/// while causal assurance binds the observation to durable dispatch history.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionPostconditionEvidenceBinding {
+    pub contract_ref: String,
+    pub receipt_ref: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionPostconditionReceipt {
+    pub receipt_ref: String,
+    pub action_id: Uuid,
+    pub session_id: SessionId,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub expected_postcondition_contract_refs: Vec<String>,
+    pub observation_snapshot_cut_ref: String,
+    pub reconciliation_receipt_ref: String,
+    /// Ordered evidence receipt summary. Receipt refs may repeat when one
+    /// evidence artifact proves multiple declared postcondition contracts.
+    pub evidence_receipt_refs: Vec<String>,
+    /// Exact contract-to-evidence provenance. A contract appears at most once;
+    /// verified/failed contracts always have a binding, while an unresolved
+    /// unknown may have no evidence artifact at all.
+    pub evidence_bindings: Vec<ActionPostconditionEvidenceBinding>,
+    pub verified_contract_refs: Vec<String>,
+    pub failed_contract_refs: Vec<String>,
+    pub verdict: ActionPostconditionVerdict,
+    pub unresolved_unknown_contract_refs: Vec<String>,
+    pub causal_assurance: ConsequentialPostconditionObservationCause,
+    pub completion_journal_sequence: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ActionPostconditionReceiptDraft {
+    pub action_id: Uuid,
+    pub session_id: SessionId,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub expected_postcondition_contract_refs: Vec<String>,
+    pub observation_snapshot_cut_ref: String,
+    pub reconciliation_receipt_ref: String,
+    /// Ordered evidence receipt summary. Receipt refs may repeat when one
+    /// evidence artifact proves multiple declared postcondition contracts.
+    pub evidence_receipt_refs: Vec<String>,
+    /// Exact contract-to-evidence provenance. A contract appears at most once;
+    /// verified/failed contracts always have a binding, while an unresolved
+    /// unknown may have no evidence artifact at all.
+    pub evidence_bindings: Vec<ActionPostconditionEvidenceBinding>,
+    pub verified_contract_refs: Vec<String>,
+    pub failed_contract_refs: Vec<String>,
+    pub verdict: ActionPostconditionVerdict,
+    pub unresolved_unknown_contract_refs: Vec<String>,
+    pub causal_assurance: ConsequentialPostconditionObservationCause,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ConsequentialJournalTransition {
@@ -59,6 +140,11 @@ pub enum ConsequentialJournalTransition {
     DispatchLinearized {
         receipt: DispatchLinearizationReceipt,
     },
+    PostconditionReceiptRecorded {
+        receipt: ActionPostconditionReceipt,
+    },
+    /// Historical aggregate transition retained strictly for replay compatibility.
+    /// New postcondition outcomes must use `PostconditionReceiptRecorded`.
     ReconciliationOutcome {
         world_outcome: WorldOutcome,
         reconciliation_receipt_ref: Option<String>,
@@ -161,7 +247,8 @@ impl DispatchExecutionPermit {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ConsequentialPostconditionObservationCause {
     DispatchLinearized {
         journal_sequence: u64,
@@ -174,7 +261,7 @@ pub enum ConsequentialPostconditionObservationCause {
 }
 
 impl ConsequentialPostconditionObservationCause {
-    fn causal_journal_sequence(&self) -> u64 {
+    pub fn causal_journal_sequence(&self) -> u64 {
         match self {
             Self::DispatchLinearized {
                 journal_sequence, ..
@@ -437,6 +524,29 @@ impl ConsequentialJournal {
     pub async fn recovery_state(&self, action_id: Uuid) -> Option<ConsequentialRecoveryState> {
         let state = self.state.lock().await;
         recovery_state_for(&state.entries, action_id)
+    }
+
+    pub async fn latest_action_postcondition_receipt(
+        &self,
+        action_id: Uuid,
+    ) -> Option<ActionPostconditionReceipt> {
+        self.state
+            .lock()
+            .await
+            .entries
+            .iter()
+            .rev()
+            .find_map(|entry| {
+                if entry.action_id != action_id {
+                    return None;
+                }
+                match &entry.transition {
+                    ConsequentialJournalTransition::PostconditionReceiptRecorded { receipt } => {
+                        Some(receipt.clone())
+                    }
+                    _ => None,
+                }
+            })
     }
 
     pub async fn requires_reconciliation(&self, action_id: Uuid) -> Option<bool> {
@@ -930,24 +1040,42 @@ impl ConsequentialJournal {
         })
     }
 
-    pub(crate) async fn record_reconciliation_outcome(
+    pub(crate) async fn record_action_postcondition_receipt(
         &self,
-        action_id: Uuid,
-        world_outcome: WorldOutcome,
-        reconciliation_receipt_ref: Option<String>,
-        postcondition_receipt_refs: Vec<String>,
-        postconditions_verified: bool,
-    ) -> Result<ConsequentialJournalEntry, ConsequentialJournalError> {
-        self.append_validated(
+        draft: ActionPostconditionReceiptDraft,
+    ) -> Result<(ConsequentialJournalEntry, ActionPostconditionReceipt), ConsequentialJournalError>
+    {
+        let action_id = draft.action_id;
+        let mut state = self.state.lock().await;
+        let completion_journal_sequence = state.next_sequence;
+        let receipt = ActionPostconditionReceipt {
+            receipt_ref: format!("postcondition:{action_id}:{completion_journal_sequence}"),
             action_id,
-            ConsequentialJournalTransition::ReconciliationOutcome {
-                world_outcome,
-                reconciliation_receipt_ref,
-                postcondition_receipt_refs,
-                postconditions_verified,
-            },
-        )
-        .await
+            session_id: draft.session_id,
+            provider_incarnation_ref: draft.provider_incarnation_ref,
+            target_incarnation_ref: draft.target_incarnation_ref,
+            expected_postcondition_contract_refs: draft.expected_postcondition_contract_refs,
+            observation_snapshot_cut_ref: draft.observation_snapshot_cut_ref,
+            reconciliation_receipt_ref: draft.reconciliation_receipt_ref,
+            evidence_receipt_refs: draft.evidence_receipt_refs,
+            evidence_bindings: draft.evidence_bindings,
+            verified_contract_refs: draft.verified_contract_refs,
+            failed_contract_refs: draft.failed_contract_refs,
+            verdict: draft.verdict,
+            unresolved_unknown_contract_refs: draft.unresolved_unknown_contract_refs,
+            causal_assurance: draft.causal_assurance,
+            completion_journal_sequence,
+        };
+        let entry = self
+            .append_validated_locked(
+                &mut state,
+                action_id,
+                ConsequentialJournalTransition::PostconditionReceiptRecorded {
+                    receipt: receipt.clone(),
+                },
+            )
+            .await?;
+        Ok((entry, receipt))
     }
 
     pub async fn record_compensation(
@@ -1294,18 +1422,45 @@ fn validate_transition(
                 current,
             }),
         },
-        ConsequentialJournalTransition::ReconciliationOutcome { .. } => match current {
-            None => Err(ConsequentialJournalError::UnknownAction { action_id }),
-            Some(ConsequentialRecoveryState::DispatchPrepared)
-            | Some(ConsequentialRecoveryState::PossiblyDispatched)
-            | Some(ConsequentialRecoveryState::KnownNotDispatched)
-            | Some(ConsequentialRecoveryState::OutcomeObservedUnverified) => Ok(()),
-            _ => Err(ConsequentialJournalError::InvalidTransition {
-                action_id,
-                attempted: "reconciliation_outcome",
+        ConsequentialJournalTransition::PostconditionReceiptRecorded { receipt } => {
+            if current.is_none() {
+                return Err(ConsequentialJournalError::UnknownAction { action_id });
+            }
+            if !matches!(
                 current,
-            }),
-        },
+                Some(ConsequentialRecoveryState::DispatchPrepared)
+                    | Some(ConsequentialRecoveryState::PossiblyDispatched)
+                    | Some(ConsequentialRecoveryState::OutcomeObservedUnverified)
+            ) {
+                return Err(ConsequentialJournalError::InvalidTransition {
+                    action_id,
+                    attempted: "postcondition_receipt_recorded",
+                    current,
+                });
+            }
+            validate_action_postcondition_receipt(entries, action_id, receipt, current)
+        }
+        ConsequentialJournalTransition::ReconciliationOutcome { .. } => {
+            if mode != TransitionValidationMode::Replay {
+                return Err(ConsequentialJournalError::InvalidTransition {
+                    action_id,
+                    attempted: "legacy_reconciliation_outcome_append_forbidden",
+                    current,
+                });
+            }
+            match current {
+                None => Err(ConsequentialJournalError::UnknownAction { action_id }),
+                Some(ConsequentialRecoveryState::DispatchPrepared)
+                | Some(ConsequentialRecoveryState::PossiblyDispatched)
+                | Some(ConsequentialRecoveryState::KnownNotDispatched)
+                | Some(ConsequentialRecoveryState::OutcomeObservedUnverified) => Ok(()),
+                _ => Err(ConsequentialJournalError::InvalidTransition {
+                    action_id,
+                    attempted: "reconciliation_outcome",
+                    current,
+                }),
+            }
+        }
         ConsequentialJournalTransition::CompensationRecorded { .. } => match current {
             None => Err(ConsequentialJournalError::UnknownAction { action_id }),
             Some(ConsequentialRecoveryState::OutcomeObservedUnverified) => Ok(()),
@@ -1420,6 +1575,131 @@ fn validate_dispatch_preparation(
     Ok(())
 }
 
+fn validate_action_postcondition_receipt(
+    entries: &[ConsequentialJournalEntry],
+    action_id: Uuid,
+    receipt: &ActionPostconditionReceipt,
+    current: Option<ConsequentialRecoveryState>,
+) -> Result<(), ConsequentialJournalError> {
+    let invalid = |attempted: &'static str| ConsequentialJournalError::InvalidTransition {
+        action_id,
+        attempted,
+        current,
+    };
+    let envelope = admitted_envelope_for(entries, action_id)
+        .ok_or(ConsequentialJournalError::UnknownAction { action_id })?;
+
+    if receipt.action_id != action_id {
+        return Err(invalid("postcondition_receipt_action_mismatch"));
+    }
+    if receipt.session_id != envelope.session_id {
+        return Err(invalid("postcondition_receipt_session_mismatch"));
+    }
+    if receipt.provider_incarnation_ref != envelope.metadata.provider_incarnation_ref {
+        return Err(invalid("postcondition_receipt_provider_mismatch"));
+    }
+    if receipt.target_incarnation_ref != envelope.metadata.target_incarnation_ref {
+        return Err(invalid("postcondition_receipt_target_mismatch"));
+    }
+    if receipt.expected_postcondition_contract_refs
+        != envelope.metadata.expected_postcondition_contract_refs
+    {
+        return Err(invalid("postcondition_receipt_expected_contracts_mismatch"));
+    }
+    if receipt.observation_snapshot_cut_ref.trim().is_empty()
+        || receipt.observation_snapshot_cut_ref == envelope.metadata.precondition_snapshot_cut_ref
+    {
+        return Err(invalid("postcondition_receipt_observation_cut_not_fresh"));
+    }
+    if receipt.reconciliation_receipt_ref.trim().is_empty() {
+        return Err(invalid("postcondition_receipt_missing_reconciliation_ref"));
+    }
+
+    let expected_sequence = entries.len() as u64 + 1;
+    if receipt.completion_journal_sequence != expected_sequence {
+        return Err(invalid(
+            "postcondition_receipt_completion_sequence_mismatch",
+        ));
+    }
+    if receipt.receipt_ref != format!("postcondition:{action_id}:{expected_sequence}") {
+        return Err(invalid("postcondition_receipt_identity_mismatch"));
+    }
+    if receipt.causal_assurance.causal_journal_sequence() >= expected_sequence {
+        return Err(invalid("postcondition_receipt_causal_sequence_not_prior"));
+    }
+    if postcondition_observation_cause_for(entries, action_id).as_ref()
+        != Some(&receipt.causal_assurance)
+    {
+        return Err(invalid("postcondition_receipt_causal_history_mismatch"));
+    }
+
+    let expected = receipt
+        .expected_postcondition_contract_refs
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if expected.len() != receipt.expected_postcondition_contract_refs.len() || expected.is_empty() {
+        return Err(invalid(
+            "postcondition_receipt_invalid_expected_contract_set",
+        ));
+    }
+
+    let mut classified = BTreeSet::new();
+    for contract_ref in receipt
+        .verified_contract_refs
+        .iter()
+        .chain(receipt.failed_contract_refs.iter())
+        .chain(receipt.unresolved_unknown_contract_refs.iter())
+    {
+        if !expected.contains(contract_ref) || !classified.insert(contract_ref.clone()) {
+            return Err(invalid("postcondition_receipt_invalid_contract_partition"));
+        }
+    }
+    if classified != expected {
+        return Err(invalid(
+            "postcondition_receipt_incomplete_contract_partition",
+        ));
+    }
+
+    let expected_verdict = if !receipt.failed_contract_refs.is_empty() {
+        ActionPostconditionVerdict::VerifiedUnexpected
+    } else if receipt.unresolved_unknown_contract_refs.is_empty() {
+        ActionPostconditionVerdict::VerifiedExpected
+    } else {
+        ActionPostconditionVerdict::ReconciliationRequired
+    };
+    if receipt.verdict != expected_verdict {
+        return Err(invalid("postcondition_receipt_verdict_partition_mismatch"));
+    }
+
+    let mut bound_contracts = BTreeSet::new();
+    let mut bound_receipt_refs = Vec::with_capacity(receipt.evidence_bindings.len());
+    for binding in &receipt.evidence_bindings {
+        if !expected.contains(&binding.contract_ref)
+            || !bound_contracts.insert(binding.contract_ref.clone())
+            || binding.receipt_ref.trim().is_empty()
+        {
+            return Err(invalid("postcondition_receipt_invalid_evidence_binding"));
+        }
+        bound_receipt_refs.push(binding.receipt_ref.clone());
+    }
+    if bound_receipt_refs != receipt.evidence_receipt_refs {
+        return Err(invalid("postcondition_receipt_evidence_summary_mismatch"));
+    }
+    if receipt
+        .verified_contract_refs
+        .iter()
+        .chain(receipt.failed_contract_refs.iter())
+        .any(|contract_ref| !bound_contracts.contains(contract_ref))
+    {
+        return Err(invalid(
+            "postcondition_receipt_decisive_contract_without_evidence",
+        ));
+    }
+
+    Ok(())
+}
+
 fn recovery_state_for(
     entries: &[ConsequentialJournalEntry],
     action_id: Uuid,
@@ -1451,6 +1731,13 @@ fn recovery_state_for(
                     | DispatchResult::DispatchBlockedProvider => {
                         ConsequentialRecoveryState::KnownNotDispatched
                     }
+                }
+            }
+            ConsequentialJournalTransition::PostconditionReceiptRecorded { receipt } => {
+                if receipt.verdict == ActionPostconditionVerdict::VerifiedExpected {
+                    ConsequentialRecoveryState::VerifiedUncommitted
+                } else {
+                    ConsequentialRecoveryState::OutcomeObservedUnverified
                 }
             }
             ConsequentialJournalTransition::ReconciliationOutcome {
