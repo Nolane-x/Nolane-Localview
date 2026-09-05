@@ -3,27 +3,28 @@ mod windows_runtime_dispatch_smoke {
     use std::{
         convert::Infallible,
         sync::{
+            Arc,
             atomic::{AtomicBool, Ordering},
-            mpsc, Arc,
+            mpsc,
         },
         thread,
         time::Duration,
     };
 
     use localview_live_bridge::{
-        reconcile_consequential_postconditions, ActionEnvelopeMetadata, ActionIdempotencyClass,
-        ActionRiskClass, BridgeActionKind, ConsequentialJournal, ConsequentialJournalTransition,
-        ConsequentialPostconditionEvidence, ConsequentialPostconditionReconciliationReceipt,
-        ConsequentialPostconditionStatus, ConsequentialRecoveryState, LiveBridge,
+        ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
+        ConsequentialJournal, ConsequentialJournalTransition, ConsequentialPostconditionEvidence,
+        ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
+        ConsequentialRecoveryState, LiveBridge, reconcile_consequential_postconditions,
     };
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
     use localview_protocol::{DispatchResult, PrincipalRef, TransportResult, WorldOutcome};
     use localview_windows_observe_runtime::{
+        WindowsObserveRuntimeConfig, WindowsUiaActionPreflightRequest,
+        WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
+        WindowsUiaDispatchSealRequest, WindowsUiaPreparedDispatchRequest,
         arm_uia_dispatch_execution, execute_armed_uia_dispatch, prepare_uia_dispatch,
-        spawn_windows_uia_runtime_manager, WindowsObserveRuntimeConfig,
-        WindowsUiaActionPreflightRequest, WindowsUiaAuthorizationRevalidationReceipt,
-        WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchSealRequest,
-        WindowsUiaPreparedDispatchRequest,
+        spawn_windows_uia_runtime_manager,
     };
     use localview_windows_uia_provider::{
         WindowsUiaActionCapabilities, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
@@ -31,17 +32,17 @@ mod windows_runtime_dispatch_smoke {
     };
     use uuid::Uuid;
     use windows::{
-        core::w,
         Win32::{
             Foundation::{HWND, LPARAM, LRESULT, WPARAM},
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW,
-                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, CW_USEDEFAULT,
-                GWLP_WNDPROC, MSG, PM_REMOVE, SW_SHOW, WM_COMMAND, WS_CHILD, WS_OVERLAPPEDWINDOW,
-                WS_VISIBLE,
+                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+                GWLP_WNDPROC, MSG, PM_REMOVE, PeekMessageW, SW_SHOW, SetWindowLongPtrW,
+                SetWindowTextW, ShowWindow, TranslateMessage, WM_COMMAND, WS_CHILD,
+                WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
+        core::w,
     };
 
     const BEFORE_TITLE: &str = "LocalView Runtime Before";
@@ -114,7 +115,11 @@ mod windows_runtime_dispatch_smoke {
                     .expect("create Win32 runtime postcondition parent fixture")
                 };
                 unsafe {
-                    let _ = SetWindowLongPtrW(window, GWLP_WNDPROC, smoke_parent_wndproc as isize);
+                    let _ = SetWindowLongPtrW(
+                        window,
+                        GWLP_WNDPROC,
+                        smoke_parent_wndproc as *const () as isize,
+                    );
                 }
                 let _button = unsafe {
                     CreateWindowExW(
@@ -224,12 +229,7 @@ mod windows_runtime_dispatch_smoke {
             expected_postcondition_contract_refs: vec![POSTCONDITION_REF.into()],
         };
         let queued = bridge
-            .enqueue_canonical_action(
-                session_id,
-                None,
-                BridgeActionKind::Focus,
-                authority.clone(),
-            )
+            .enqueue_canonical_action(session_id, None, BridgeActionKind::Focus, authority.clone())
             .await
             .expect("enqueue canonical consequential action");
 
@@ -277,30 +277,18 @@ mod windows_runtime_dispatch_smoke {
         )
         .await
         .expect("durably prepare real Windows UIA dispatch");
-        let armed = arm_uia_dispatch_execution(
-            &bridge,
-            &journal,
-            &manager,
-            session_id,
-            prepared,
-        )
-        .await
-        .expect("arm exactly one provider execution request");
+        let armed = arm_uia_dispatch_execution(&bridge, &journal, &manager, session_id, prepared)
+            .await
+            .expect("arm exactly one provider execution request");
         let action_id = armed.action_id();
         let executor = manager
             .uia_dispatch_executor(session_id)
             .await
             .expect("resolve exact attached runtime dispatch executor");
 
-        let result = execute_armed_uia_dispatch(
-            &bridge,
-            &journal,
-            session_id,
-            armed,
-            &executor,
-        )
-        .await
-        .expect("real retained UIA Invoke must cross the one-shot runtime boundary");
+        let result = execute_armed_uia_dispatch(&bridge, &journal, session_id, armed, &executor)
+            .await
+            .expect("real retained UIA Invoke must cross the one-shot runtime boundary");
 
         assert_eq!(
             result.provider_receipt.transport_result,
@@ -333,7 +321,10 @@ mod windows_runtime_dispatch_smoke {
             .current_semantic_snapshot(session_id)
             .await
             .expect("runtime must retain the post-dispatch semantic revision");
-        assert_eq!(post_snapshot.snapshot_cut_ref(), observation.snapshot_cut_ref());
+        assert_eq!(
+            post_snapshot.snapshot_cut_ref(),
+            observation.snapshot_cut_ref()
+        );
         assert_ne!(
             post_snapshot.snapshot_cut_ref(),
             snapshot.snapshot_cut_ref(),
@@ -387,7 +378,9 @@ mod windows_runtime_dispatch_smoke {
             .await
             .expect("release runtime after verified postcondition commit");
         stop.store(true, Ordering::Release);
-        ui_thread.join().expect("join runtime postcondition fixture UI thread");
+        ui_thread
+            .join()
+            .expect("join runtime postcondition fixture UI thread");
         let _ = std::fs::remove_file(journal_path);
     }
 }
