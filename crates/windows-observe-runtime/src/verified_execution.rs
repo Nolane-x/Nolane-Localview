@@ -92,6 +92,29 @@ pub enum WindowsUiaConsequentialRecoveryOutcome {
     },
 }
 
+/// Durable-only recovery result that can be computed without a provider,
+/// verifier, bridge, executor, or dispatch permit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowsUiaCommitOnlyRecoveryOutcome {
+    CommittedFromDurableReceipt {
+        action_id: Uuid,
+        world_outcome: WorldOutcome,
+        receipt_ref: String,
+        receipt_journal_sequence: u64,
+        commit_journal_sequence: u64,
+    },
+    AlreadyCommitted {
+        action_id: Uuid,
+        world_outcome: WorldOutcome,
+        receipt_ref: String,
+        receipt_journal_sequence: u64,
+    },
+    NotCommitReady {
+        action_id: Uuid,
+        durable_state: ConsequentialRecoveryState,
+    },
+}
+
 #[derive(Debug, Error)]
 pub enum WindowsUiaVerifiedExecutionError {
     #[error(transparent)]
@@ -251,25 +274,16 @@ where
     )
 }
 
-/// Recover one consequential UIA action using only durable journal authority.
+/// Finish only the durable commit portion of consequential recovery.
 ///
-/// This API intentionally accepts no dispatch executor or dispatch permit. A
-/// reopened journal reconstructs no process-local dispatch grant, so PREPARED,
-/// possibly-dispatched, and previously-unknown states can only move forward by
-/// observing the current world and reconciling. `VerifiedUncommitted` is
-/// commit-only from the durable VerifiedExpected receipt; `Committed` is a
-/// historical terminal read with no provider capture or verifier invocation.
-pub async fn recover_consequential_uia_action<P, V>(
-    bridge: &LiveBridge,
+/// This API deliberately accepts only the durable journal and action id. It can
+/// never observe a provider, verify a predicate, or redispatch an action. The
+/// only state transition it may append is `VerifiedUncommitted -> Committed`,
+/// and only from the journal's durable `VerifiedExpected` postcondition receipt.
+pub async fn recover_consequential_uia_commit_only(
     journal: &ConsequentialJournal,
-    runtime: &WindowsObserveRuntimeManager<P>,
     action_id: Uuid,
-    verifier: &V,
-) -> Result<WindowsUiaConsequentialRecoveryOutcome, WindowsUiaVerifiedExecutionError>
-where
-    P: WindowsObserveProvider,
-    V: WindowsUiaPostconditionVerifier,
-{
+) -> Result<WindowsUiaCommitOnlyRecoveryOutcome, WindowsUiaVerifiedExecutionError> {
     let state = journal.recovery_state(action_id).await;
     match state {
         Some(ConsequentialRecoveryState::Committed) => {
@@ -290,12 +304,12 @@ where
                     },
                 );
             }
-            return Ok(WindowsUiaConsequentialRecoveryOutcome::AlreadyCommitted {
+            Ok(WindowsUiaCommitOnlyRecoveryOutcome::AlreadyCommitted {
                 action_id,
                 world_outcome: receipt.verdict.world_outcome(),
                 receipt_ref: receipt.receipt_ref,
                 receipt_journal_sequence: receipt.completion_journal_sequence,
-            });
+            })
         }
         Some(ConsequentialRecoveryState::VerifiedUncommitted) => {
             let receipt = journal
@@ -323,33 +337,96 @@ where
                     message: error.to_string(),
                 }
             })?;
-            return Ok(
-                WindowsUiaConsequentialRecoveryOutcome::CommittedFromDurableReceipt {
+            Ok(
+                WindowsUiaCommitOnlyRecoveryOutcome::CommittedFromDurableReceipt {
                     action_id,
                     world_outcome,
                     receipt_ref,
                     receipt_journal_sequence,
                     commit_journal_sequence: commit.journal_sequence,
                 },
+            )
+        }
+        Some(durable_state) => Ok(WindowsUiaCommitOnlyRecoveryOutcome::NotCommitReady {
+            action_id,
+            durable_state,
+        }),
+        None => Err(WindowsUiaVerifiedExecutionError::UnexpectedRecoveryState { state }),
+    }
+}
+
+/// Recover one consequential UIA action using only durable journal authority.
+///
+/// This API intentionally accepts no dispatch executor or dispatch permit. A
+/// reopened journal reconstructs no process-local dispatch grant, so PREPARED,
+/// possibly-dispatched, and previously-unknown states can only move forward by
+/// observing the current world and reconciling. `VerifiedUncommitted` is
+/// commit-only from the durable VerifiedExpected receipt; `Committed` is a
+/// historical terminal read with no provider capture or verifier invocation.
+pub async fn recover_consequential_uia_action<P, V>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    action_id: Uuid,
+    verifier: &V,
+) -> Result<WindowsUiaConsequentialRecoveryOutcome, WindowsUiaVerifiedExecutionError>
+where
+    P: WindowsObserveProvider,
+    V: WindowsUiaPostconditionVerifier,
+{
+    let durable_state = match recover_consequential_uia_commit_only(journal, action_id).await? {
+        WindowsUiaCommitOnlyRecoveryOutcome::AlreadyCommitted {
+            action_id,
+            world_outcome,
+            receipt_ref,
+            receipt_journal_sequence,
+        } => {
+            return Ok(WindowsUiaConsequentialRecoveryOutcome::AlreadyCommitted {
+                action_id,
+                world_outcome,
+                receipt_ref,
+                receipt_journal_sequence,
+            });
+        }
+        WindowsUiaCommitOnlyRecoveryOutcome::CommittedFromDurableReceipt {
+            action_id,
+            world_outcome,
+            receipt_ref,
+            receipt_journal_sequence,
+            commit_journal_sequence,
+        } => {
+            return Ok(
+                WindowsUiaConsequentialRecoveryOutcome::CommittedFromDurableReceipt {
+                    action_id,
+                    world_outcome,
+                    receipt_ref,
+                    receipt_journal_sequence,
+                    commit_journal_sequence,
+                },
             );
         }
-        Some(
-            durable_state @ (ConsequentialRecoveryState::Admitted
-            | ConsequentialRecoveryState::AuthorizedNotDispatched
-            | ConsequentialRecoveryState::KnownNotDispatched),
-        ) => {
+        WindowsUiaCommitOnlyRecoveryOutcome::NotCommitReady { durable_state, .. } => durable_state,
+    };
+
+    match durable_state {
+        durable_state @ (ConsequentialRecoveryState::Admitted
+        | ConsequentialRecoveryState::AuthorizedNotDispatched
+        | ConsequentialRecoveryState::KnownNotDispatched) => {
             return Ok(WindowsUiaConsequentialRecoveryOutcome::NotDispatched {
                 action_id,
                 durable_state,
             });
         }
-        Some(ConsequentialRecoveryState::DispatchPrepared)
-        | Some(ConsequentialRecoveryState::PossiblyDispatched)
-        | Some(ConsequentialRecoveryState::OutcomeObservedUnverified) => {}
-        other => {
+        ConsequentialRecoveryState::DispatchPrepared
+        | ConsequentialRecoveryState::PossiblyDispatched
+        | ConsequentialRecoveryState::OutcomeObservedUnverified => {}
+        ConsequentialRecoveryState::Compensated | ConsequentialRecoveryState::CompensationFailed => {
             return Err(WindowsUiaVerifiedExecutionError::UnexpectedRecoveryState {
-                state: other,
+                state: Some(durable_state),
             });
+        }
+        ConsequentialRecoveryState::VerifiedUncommitted | ConsequentialRecoveryState::Committed => {
+            unreachable!("commit-only recovery handles durable terminal verification states")
         }
     }
 
