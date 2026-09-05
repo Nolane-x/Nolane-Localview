@@ -358,7 +358,20 @@ pub async fn execute_armed_uia_dispatch<E>(
 where
     E: WindowsUiaDispatchExecutor,
 {
-    verify_armed_canonical_before_executor(bridge, journal, session_id, &armed).await?;
+    if let Err(error) =
+        verify_armed_canonical_before_executor(bridge, journal, session_id, &armed).await
+    {
+        journal
+            .abandon_dispatch_execution(armed.dispatch_permit)
+            .await
+            .map_err(|abandonment| {
+                WindowsUiaDispatchExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                    stage: "pre_executor_revalidation_failed",
+                    message: abandonment.to_string(),
+                }
+            })?;
+        return Err(error);
+    }
 
     let action_id = armed.action_id;
     let lease = &armed.seal.authority.dispatch_revalidation.element_lease;
