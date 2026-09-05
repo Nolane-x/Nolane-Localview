@@ -1,0 +1,22 @@
+name: V43 postcondition receipt hardening GREEN builder
+
+on:
+  push:
+    branches:
+      - feat/v43-durable-action-postcondition-receipt
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: python .github/scripts/v43_postcondition_receipt_hardening_green.py
