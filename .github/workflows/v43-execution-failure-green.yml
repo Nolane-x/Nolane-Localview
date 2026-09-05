@@ -1,0 +1,22 @@
+name: V43 execution failure GREEN builder
+
+on:
+  push:
+    branches:
+      - feat/v43-consequential-verified-execution-coordinator
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: python .github/scripts/v43_execution_failure_green.py
