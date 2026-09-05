@@ -8,3 +8,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p localview-live-bridge --test v43_recovery_debt_classification -- --nocapture
+      - run: cargo test -p localview-live-bridge --test v43_recovery_binding_inventory -- --nocapture
+      - run: cargo test -p localview-live-bridge --test v43_recovery_inventory -- --nocapture
+      - run: cargo test -p localview-live-bridge --test v43_consequential_journal -- --nocapture
