@@ -148,4 +148,95 @@ mod tests {
         drop(boot);
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn attachment_recovery_dispositions_are_fail_closed() {
+        use super::{AttachmentRecoveryDisposition, classify_attachment_recovery_state};
+
+        let cases = [
+            (
+                ConsequentialRecoveryState::VerifiedUncommitted,
+                AttachmentRecoveryDisposition::CommitOnly,
+            ),
+            (
+                ConsequentialRecoveryState::Committed,
+                AttachmentRecoveryDisposition::HistoricalCommitted,
+            ),
+            (
+                ConsequentialRecoveryState::DispatchPrepared,
+                AttachmentRecoveryDisposition::VerifierRequired,
+            ),
+            (
+                ConsequentialRecoveryState::PossiblyDispatched,
+                AttachmentRecoveryDisposition::VerifierRequired,
+            ),
+            (
+                ConsequentialRecoveryState::OutcomeObservedUnverified,
+                AttachmentRecoveryDisposition::VerifierRequired,
+            ),
+            (
+                ConsequentialRecoveryState::Admitted,
+                AttachmentRecoveryDisposition::NoProviderRecovery,
+            ),
+            (
+                ConsequentialRecoveryState::AuthorizedNotDispatched,
+                AttachmentRecoveryDisposition::NoProviderRecovery,
+            ),
+            (
+                ConsequentialRecoveryState::KnownNotDispatched,
+                AttachmentRecoveryDisposition::NoProviderRecovery,
+            ),
+            (
+                ConsequentialRecoveryState::Compensated,
+                AttachmentRecoveryDisposition::NoProviderRecovery,
+            ),
+            (
+                ConsequentialRecoveryState::CompensationFailed,
+                AttachmentRecoveryDisposition::NoProviderRecovery,
+            ),
+        ];
+
+        for (state, expected) in cases {
+            assert_eq!(classify_attachment_recovery_state(state), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn attachment_plan_contains_only_exact_durable_lineage() {
+        let root = state_root();
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(super::CONSEQUENTIAL_JOURNAL_FILE);
+        let journal = ConsequentialJournal::open(&path).await.unwrap();
+
+        let exact = envelope();
+        let mut wrong_provider = exact.clone();
+        wrong_provider.envelope_id = Uuid::new_v4();
+        wrong_provider.transport_action_id = Uuid::new_v4();
+        wrong_provider.metadata.provider_incarnation_ref =
+            ProviderIncarnationRef::from("provider:daemon-test:wrong");
+
+        journal.record_intent_admitted(exact.clone()).await.unwrap();
+        journal.record_intent_admitted(wrong_provider).await.unwrap();
+
+        let plan = super::plan_attachment_recovery(
+            &journal,
+            exact.session_id,
+            &exact.metadata.provider_incarnation_ref,
+            &exact.metadata.target_incarnation_ref,
+        )
+        .await;
+
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].action_id, exact.transport_action_id);
+        assert_eq!(
+            plan[0].disposition,
+            super::AttachmentRecoveryDisposition::NoProviderRecovery
+        );
+        assert_eq!(
+            plan[0].expected_postcondition_contract_refs,
+            exact.metadata.expected_postcondition_contract_refs
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
