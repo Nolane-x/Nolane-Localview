@@ -484,7 +484,7 @@ impl ConsequentialJournal {
         .await
     }
 
-    pub async fn record_reconciliation_outcome(
+    pub(crate) async fn record_reconciliation_outcome(
         &self,
         action_id: Uuid,
         world_outcome: WorldOutcome,

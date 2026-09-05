@@ -2,11 +2,15 @@ use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
-    ConsequentialJournal, ConsequentialJournalError, ConsequentialRecoveryState,
-    DispatchExecutionPermit, DispatchLinearizationReceipt, DispatchPreparationReceipt,
+    ConsequentialJournal, ConsequentialJournalError, ConsequentialPostconditionEvidence,
+    ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
+    ConsequentialRecoveryState, DispatchExecutionPermit, DispatchLinearizationReceipt,
+    DispatchPreparationReceipt, LiveBridge, ProviderObservationBinding,
+    reconcile_consequential_postconditions,
 };
 use localview_protocol::{
-    DispatchResult, PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
+    DispatchResult, EventContinuityState, PrincipalRef, ProviderIncarnationRef,
+    ReconciliationCompleteness, ReconciliationSnapshotReceipt, SessionId, TargetIncarnationRef,
     TransportResult, WorldOutcome,
 };
 use uuid::Uuid;
@@ -55,6 +59,65 @@ fn dispatch_receipt() -> DispatchLinearizationReceipt {
     }
 }
 
+async fn record_typed_reconciliation(
+    journal: &ConsequentialJournal,
+    action: &CanonicalActionEnvelope,
+    receipt_id: &str,
+    status: ConsequentialPostconditionStatus,
+) {
+    let bridge = LiveBridge::new(16, 4);
+    bridge
+        .bind_provider_observation(ProviderObservationBinding {
+            session_id: action.session_id,
+            generation: 1,
+            provider_incarnation_ref: action.metadata.provider_incarnation_ref.clone(),
+            target_incarnation_ref: action.metadata.target_incarnation_ref.clone(),
+            initial_continuity: EventContinuityState::OrderingOpaque,
+            sequence_baseline: Some(0),
+        })
+        .await
+        .unwrap();
+    let snapshot_cut_ref = format!("cut:postcondition:{receipt_id}");
+    assert!(
+        bridge
+            .record_reconciliation(
+                action.session_id,
+                ReconciliationSnapshotReceipt {
+                    receipt_id: receipt_id.into(),
+                    provider_incarnation_ref: action.metadata.provider_incarnation_ref.clone(),
+                    target_incarnation_ref: action.metadata.target_incarnation_ref.clone(),
+                    snapshot_cut_ref: snapshot_cut_ref.clone(),
+                    surface_scope: "journal-contract-fixture".into(),
+                    completeness: ReconciliationCompleteness::Established,
+                    cache_profile_revision: "cache:test:v1".into(),
+                    permission_visibility_revision: "visibility:test:v1".into(),
+                    capture_sequence: 1,
+                    observed_digest: format!("digest:{receipt_id}"),
+                    incompleteness_debt: Vec::new(),
+                },
+            )
+            .await
+    );
+    reconcile_consequential_postconditions(
+        &bridge,
+        journal,
+        ConsequentialPostconditionReconciliationReceipt {
+            action_id: action.transport_action_id,
+            provider_incarnation_ref: action.metadata.provider_incarnation_ref.clone(),
+            target_incarnation_ref: action.metadata.target_incarnation_ref.clone(),
+            snapshot_cut_ref,
+            reconciliation_receipt_ref: receipt_id.into(),
+            postconditions: vec![ConsequentialPostconditionEvidence {
+                contract_ref: "postcondition:message-visible".into(),
+                status,
+                receipt_ref: format!("postcondition:message-visible:{receipt_id}"),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+}
+
 async fn authorize_prepare_and_begin(
     journal: &ConsequentialJournal,
     action: &CanonicalActionEnvelope,
@@ -84,7 +147,10 @@ async fn journal_sequence_survives_reopen_and_is_the_causal_order() {
     let action = envelope();
 
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    let admitted = journal.record_intent_admitted(action.clone()).await.unwrap();
+    let admitted = journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let authorized = journal
         .record_authorization(
             action.transport_action_id,
@@ -123,7 +189,10 @@ async fn crash_after_prepare_before_dispatch_receipt_replays_as_dispatch_uncerta
     let action = envelope();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
 
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let authorized = journal
         .record_authorization(
             action.transport_action_id,
@@ -145,7 +214,10 @@ async fn crash_after_prepare_before_dispatch_receipt_replays_as_dispatch_uncerta
 
     let reopened = ConsequentialJournal::open(&path).await.unwrap();
     assert_eq!(
-        reopened.recovery_state(action.transport_action_id).await.unwrap(),
+        reopened
+            .recovery_state(action.transport_action_id)
+            .await
+            .unwrap(),
         ConsequentialRecoveryState::DispatchPrepared
     );
     assert!(
@@ -176,7 +248,10 @@ async fn preparation_requires_latest_revalidated_authority_and_exact_binding() {
     let path = journal_path("prepared-binding");
     let action = envelope();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
 
     let non_revalidated = journal
         .record_authorization(
@@ -193,7 +268,10 @@ async fn preparation_requires_latest_revalidated_authority_and_exact_binding() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(error, ConsequentialJournalError::InvalidTransition { .. }));
+    assert!(matches!(
+        error,
+        ConsequentialJournalError::InvalidTransition { .. }
+    ));
 
     let revalidated = journal
         .record_authorization(
@@ -208,7 +286,10 @@ async fn preparation_requires_latest_revalidated_authority_and_exact_binding() {
         .record_dispatch_prepared(action.transport_action_id, stale.clone())
         .await
         .unwrap_err();
-    assert!(matches!(stale_error, ConsequentialJournalError::InvalidTransition { .. }));
+    assert!(matches!(
+        stale_error,
+        ConsequentialJournalError::InvalidTransition { .. }
+    ));
 
     stale.authorization_journal_sequence = revalidated.journal_sequence;
     stale.target_incarnation_ref = TargetIncarnationRef::from("target:webview:forged");
@@ -216,7 +297,10 @@ async fn preparation_requires_latest_revalidated_authority_and_exact_binding() {
         .record_dispatch_prepared(action.transport_action_id, stale)
         .await
         .unwrap_err();
-    assert!(matches!(forged_error, ConsequentialJournalError::InvalidTransition { .. }));
+    assert!(matches!(
+        forged_error,
+        ConsequentialJournalError::InvalidTransition { .. }
+    ));
 
     journal
         .record_dispatch_prepared(
@@ -234,7 +318,10 @@ async fn authorization_alone_remains_not_dispatched_without_prepared_capability(
     let path = journal_path("no-prepare-bypass");
     let action = envelope();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     journal
         .record_authorization(
             action.transport_action_id,
@@ -258,7 +345,10 @@ async fn crash_after_dispatch_replays_as_possibly_dispatched_and_requires_reconc
     let action = envelope();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
 
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let permit = authorize_prepare_and_begin(&journal, &action).await;
     journal
         .record_dispatch_linearized(permit, dispatch_receipt())
@@ -268,7 +358,10 @@ async fn crash_after_dispatch_replays_as_possibly_dispatched_and_requires_reconc
 
     let reopened = ConsequentialJournal::open(&path).await.unwrap();
     assert_eq!(
-        reopened.recovery_state(action.transport_action_id).await.unwrap(),
+        reopened
+            .recovery_state(action.transport_action_id)
+            .await
+            .unwrap(),
         ConsequentialRecoveryState::PossiblyDispatched
     );
     assert!(
@@ -287,25 +380,28 @@ async fn verified_outcome_remains_uncommitted_until_commit_is_durable() {
     let action = envelope();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
 
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let permit = authorize_prepare_and_begin(&journal, &action).await;
     journal
         .record_dispatch_linearized(permit, dispatch_receipt())
         .await
         .unwrap();
-    journal
-        .record_reconciliation_outcome(
-            action.transport_action_id,
-            WorldOutcome::VerifiedExpected,
-            Some("reconcile:1".into()),
-            vec!["postcondition:message-visible:receipt".into()],
-            true,
-        )
-        .await
-        .unwrap();
+    record_typed_reconciliation(
+        &journal,
+        &action,
+        "reconcile:1",
+        ConsequentialPostconditionStatus::VerifiedPass,
+    )
+    .await;
 
     assert_eq!(
-        journal.recovery_state(action.transport_action_id).await.unwrap(),
+        journal
+            .recovery_state(action.transport_action_id)
+            .await
+            .unwrap(),
         ConsequentialRecoveryState::VerifiedUncommitted
     );
 
@@ -314,7 +410,10 @@ async fn verified_outcome_remains_uncommitted_until_commit_is_durable() {
         .await
         .unwrap();
     assert_eq!(
-        journal.recovery_state(action.transport_action_id).await.unwrap(),
+        journal
+            .recovery_state(action.transport_action_id)
+            .await
+            .unwrap(),
         ConsequentialRecoveryState::Committed
     );
 
@@ -327,22 +426,22 @@ async fn compensation_is_additive_history_not_rewrite_of_prior_effect() {
     let action = envelope();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
 
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let permit = authorize_prepare_and_begin(&journal, &action).await;
     journal
         .record_dispatch_linearized(permit, dispatch_receipt())
         .await
         .unwrap();
-    journal
-        .record_reconciliation_outcome(
-            action.transport_action_id,
-            WorldOutcome::VerifiedUnexpected,
-            Some("reconcile:unexpected".into()),
-            Vec::new(),
-            false,
-        )
-        .await
-        .unwrap();
+    record_typed_reconciliation(
+        &journal,
+        &action,
+        "reconcile:unexpected",
+        ConsequentialPostconditionStatus::VerifiedFail,
+    )
+    .await;
     journal
         .record_compensation(
             action.transport_action_id,
@@ -354,11 +453,16 @@ async fn compensation_is_additive_history_not_rewrite_of_prior_effect() {
 
     let entries = journal.entries_for(action.transport_action_id).await;
     assert_eq!(entries.len(), 6);
-    assert!(entries
-        .windows(2)
-        .all(|pair| pair[0].journal_sequence < pair[1].journal_sequence));
+    assert!(
+        entries
+            .windows(2)
+            .all(|pair| pair[0].journal_sequence < pair[1].journal_sequence)
+    );
     assert_eq!(
-        journal.recovery_state(action.transport_action_id).await.unwrap(),
+        journal
+            .recovery_state(action.transport_action_id)
+            .await
+            .unwrap(),
         ConsequentialRecoveryState::Compensated
     );
 
@@ -385,7 +489,10 @@ async fn invalid_lifecycle_transitions_are_typed_and_never_appended() {
             if action_id == action.transport_action_id
     ));
 
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let invalid_commit = journal
         .record_committed(action.transport_action_id)
         .await
@@ -395,7 +502,10 @@ async fn invalid_lifecycle_transitions_are_typed_and_never_appended() {
         ConsequentialJournalError::InvalidTransition { action_id, .. }
             if action_id == action.transport_action_id
     ));
-    assert_eq!(journal.entries_for(action.transport_action_id).await.len(), 1);
+    assert_eq!(
+        journal.entries_for(action.transport_action_id).await.len(),
+        1
+    );
 
     let _ = std::fs::remove_file(path);
 }
@@ -405,7 +515,10 @@ async fn incomplete_trailing_record_is_discarded_before_new_durable_append() {
     let path = journal_path("truncated-tail");
     let action = envelope();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     drop(journal);
 
     let mut file = OpenOptions::new().append(true).open(&path).unwrap();
