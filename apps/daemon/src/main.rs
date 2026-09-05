@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod consequential_recovery;
 mod process_metrics;
 
 use std::{
@@ -49,6 +50,29 @@ async fn main() -> Result<()> {
         .init();
 
     let config = RuntimeConfig::default();
+    let consequential_recovery =
+        consequential_recovery::open_boot_consequential_recovery(&state_dir()?).await?;
+    let consequential_journal = consequential_recovery.journal().clone();
+    if consequential_recovery.inventory().is_empty() {
+        info!(
+            journal = %consequential_recovery.journal_path().display(),
+            "durable consequential recovery journal replayed with no action history"
+        );
+    } else {
+        warn!(
+            actions = consequential_recovery.inventory().len(),
+            journal = %consequential_recovery.journal_path().display(),
+            "durable consequential action history replayed; no process-local dispatch authority was restored"
+        );
+        for entry in consequential_recovery.inventory() {
+            info!(
+                action_id = %entry.action_id,
+                recovery_state = ?entry.recovery_state,
+                latest_journal_sequence = entry.latest_journal_sequence,
+                "replayed durable consequential recovery inventory entry"
+            );
+        }
+    }
     let sessions = Arc::new(SessionManager::new(config.disconnect_grace));
     let resources = runtime_resource_governor_for_sessions(&sessions);
     process_metrics::spawn(resources.clone());
@@ -175,6 +199,11 @@ async fn main() -> Result<()> {
         }
     }
     configure_windows_observe_runtime_for_sessions(&sessions, None);
+    // Keep the reopened durable journal authority alive for the full daemon
+    // lifetime. A later recovery phase may reconcile from it, but restart never
+    // recreates a dispatch permit.
+    drop(consequential_journal);
+    drop(consequential_recovery);
     Ok(())
 }
 
