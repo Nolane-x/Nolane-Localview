@@ -582,6 +582,46 @@ async fn verified_prepared_and_armed(
 }
 
 #[tokio::test]
+async fn stale_canonical_authority_before_executor_releases_live_execution_grant() {
+    let (bridge, journal, path, _provider, _runtime, armed) =
+        verified_prepared_and_armed("stale-canonical-before-executor").await;
+    let action_id = armed.action_id();
+    assert!(
+        bridge.release_provider_observation(session()).await,
+        "test must invalidate the provider-bound canonical freshness after arming"
+    );
+    let executor = FakeExecutor::new(ExecutorMode::Dispatched);
+
+    let error = execute_armed_uia_dispatch(&bridge, &journal, session(), armed, &executor)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        WindowsUiaDispatchExecutionCoordinatorError::CanonicalEnvelopeStaleBeforeExecutor
+    ));
+    assert_eq!(
+        executor.call_count(),
+        0,
+        "stale canonical authority must fail before provider execution"
+    );
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::DispatchPrepared)
+    );
+
+    let observation = journal
+        .begin_postcondition_observation(action_id)
+        .await
+        .expect("pre-executor rejection must release live execution authority for reconciliation");
+    journal
+        .abandon_postcondition_observation(observation)
+        .await
+        .unwrap();
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn exact_provider_receipt_is_durably_linearized_before_returning_success() {
     let (bridge, journal, path, provider, armed) = prepared_and_armed("coordinator-success").await;
     let action_id = armed.action_id();
