@@ -1,20 +1,20 @@
 name: V4.3 Runtime Dispatch Adapter Builder
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches:
+      - feat/v43-windows-uia-runtime-dispatch-adapter-clean
 
 permissions:
   contents: write
 
 jobs:
   build-runtime-dispatch-adapter:
-    if: github.event.pull_request.head.ref == 'feat/v43-windows-uia-runtime-dispatch-adapter-clean'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -148,8 +148,7 @@ impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
 }
 
 '''
-          if executor_code.strip() not in text:
-              replace_once(manager_impl_anchor, executor_code + manager_impl_anchor)
+          replace_once(manager_impl_anchor, executor_code + manager_impl_anchor)
 
           alias_anchor = 'pub type WindowsUiaObserveRuntimeManager = WindowsObserveRuntimeManager<WindowsUiaObserveProvider>;\n'
           resolver_code = r'''impl WindowsObserveRuntimeManager<WindowsUiaObserveProvider> {
@@ -184,8 +183,7 @@ impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
 }
 
 '''
-          if resolver_code.strip() not in text:
-              replace_once(alias_anchor, resolver_code + alias_anchor)
+          replace_once(alias_anchor, resolver_code + alias_anchor)
 
           path.write_text(text)
           PY
@@ -195,12 +193,14 @@ impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
         run: cargo check -p localview-windows-observe-runtime --all-targets
       - name: Run runtime adapter contract
         run: cargo test -p localview-windows-observe-runtime --test real_provider_dispatch_executor_contract
-      - name: Commit verified production patch and remove builder
+      - name: Commit verified production patch and remove builder scaffolding
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout origin/main -- .github/workflows/windows-uia-observe.yml
           git rm .github/workflows/v43-runtime-dispatch-adapter-builder.yml
-          git add crates/windows-observe-runtime/src/runtime_manager.rs crates/windows-observe-runtime/tests/real_provider_dispatch_executor_contract.rs
+          git add crates/windows-observe-runtime/src/runtime_manager.rs crates/windows-observe-runtime/tests/real_provider_dispatch_executor_contract.rs .github/workflows/windows-uia-observe.yml
           git commit -m "feat(windows-actions): bind runtime one-shot authority to real UIA dispatch"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          git push origin HEAD:feat/v43-windows-uia-runtime-dispatch-adapter-clean
