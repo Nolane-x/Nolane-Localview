@@ -6,6 +6,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    ActionPostconditionReceipt, ActionPostconditionReceiptDraft, ActionPostconditionVerdict,
     CanonicalActionEnvelope, ConsequentialJournal, ConsequentialJournalEntry,
     ConsequentialJournalError, ConsequentialJournalTransition,
     ConsequentialPostconditionObservationReceipt, LiveBridge,
@@ -64,6 +65,7 @@ pub struct ConsequentialPostconditionReconciliationResult {
     pub world_outcome: WorldOutcome,
     pub postconditions_verified: bool,
     pub journal_entry: ConsequentialJournalEntry,
+    pub postcondition_receipt: ActionPostconditionReceipt,
 }
 
 #[derive(Debug, Error)]
@@ -143,43 +145,76 @@ pub async fn reconcile_consequential_postconditions(
     let expected = exact_expected_postconditions(&envelope)?;
     let observed = exact_observed_postconditions(&expected, postconditions)?;
 
-    let any_failed = expected.iter().any(|contract_ref| {
-        observed.get(contract_ref).is_some_and(|evidence| {
-            evidence.status == ConsequentialPostconditionStatus::VerifiedFail
+    let expected_order = envelope
+        .metadata
+        .expected_postcondition_contract_refs
+        .clone();
+    let verified_contract_refs = expected_order
+        .iter()
+        .filter(|contract_ref| {
+            observed.get(*contract_ref).is_some_and(|evidence| {
+                evidence.status == ConsequentialPostconditionStatus::VerifiedPass
+            })
         })
-    });
-    let all_passed = expected.iter().all(|contract_ref| {
-        observed.get(contract_ref).is_some_and(|evidence| {
-            evidence.status == ConsequentialPostconditionStatus::VerifiedPass
+        .cloned()
+        .collect::<Vec<_>>();
+    let failed_contract_refs = expected_order
+        .iter()
+        .filter(|contract_ref| {
+            observed.get(*contract_ref).is_some_and(|evidence| {
+                evidence.status == ConsequentialPostconditionStatus::VerifiedFail
+            })
         })
-    });
-
-    let (world_outcome, postconditions_verified) = if any_failed {
-        (WorldOutcome::VerifiedUnexpected, false)
-    } else if all_passed {
-        (WorldOutcome::VerifiedExpected, true)
-    } else {
-        (WorldOutcome::ReconciliationRequired, false)
-    };
-
-    let postcondition_receipt_refs = observed
-        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    let unresolved_unknown_contract_refs = expected_order
+        .iter()
+        .filter(|contract_ref| {
+            observed
+                .get(*contract_ref)
+                .is_none_or(|evidence| evidence.status == ConsequentialPostconditionStatus::Unknown)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let evidence_receipt_refs = expected_order
+        .iter()
+        .filter_map(|contract_ref| observed.get(contract_ref))
         .map(|evidence| evidence.receipt_ref.clone())
         .collect::<Vec<_>>();
-    let journal_entry = journal
-        .record_reconciliation_outcome(
+
+    let verdict = if !failed_contract_refs.is_empty() {
+        ActionPostconditionVerdict::VerifiedUnexpected
+    } else if unresolved_unknown_contract_refs.is_empty() {
+        ActionPostconditionVerdict::VerifiedExpected
+    } else {
+        ActionPostconditionVerdict::ReconciliationRequired
+    };
+    let world_outcome = verdict.world_outcome();
+    let postconditions_verified = verdict.postconditions_verified();
+
+    let (journal_entry, postcondition_receipt) = journal
+        .record_action_postcondition_receipt(ActionPostconditionReceiptDraft {
             action_id,
-            world_outcome,
-            Some(observation.reconciliation_receipt_ref().to_owned()),
-            postcondition_receipt_refs,
-            postconditions_verified,
-        )
+            session_id: observation.session_id(),
+            provider_incarnation_ref: observation.provider_incarnation_ref().clone(),
+            target_incarnation_ref: observation.target_incarnation_ref().clone(),
+            expected_postcondition_contract_refs: expected_order,
+            observation_snapshot_cut_ref: observation.snapshot_cut_ref().to_owned(),
+            reconciliation_receipt_ref: observation.reconciliation_receipt_ref().to_owned(),
+            evidence_receipt_refs,
+            verified_contract_refs,
+            failed_contract_refs,
+            verdict,
+            unresolved_unknown_contract_refs,
+            causal_assurance: observation.cause().clone(),
+        })
         .await?;
 
     Ok(ConsequentialPostconditionReconciliationResult {
         world_outcome,
         postconditions_verified,
         journal_entry,
+        postcondition_receipt,
     })
 }
 

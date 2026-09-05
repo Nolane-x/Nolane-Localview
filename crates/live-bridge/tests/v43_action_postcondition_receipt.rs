@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use localview_live_bridge::{
-    reconcile_consequential_postconditions, ActionEnvelopeMetadata, ActionIdempotencyClass,
-    ActionPostconditionVerdict, ActionRiskClass, CanonicalActionEnvelope, ConsequentialJournal,
-    ConsequentialJournalTransition, ConsequentialPostconditionEvidence,
-    ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
-    ConsequentialRecoveryState, DispatchLinearizationReceipt, DispatchPreparationReceipt,
-    LiveBridge, ProviderObservationBinding,
+    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionPostconditionVerdict, ActionRiskClass,
+    CanonicalActionEnvelope, ConsequentialJournal, ConsequentialJournalTransition,
+    ConsequentialPostconditionEvidence, ConsequentialPostconditionReconciliationReceipt,
+    ConsequentialPostconditionStatus, ConsequentialRecoveryState, DispatchLinearizationReceipt,
+    DispatchPreparationReceipt, LiveBridge, ProviderObservationBinding,
+    reconcile_consequential_postconditions,
 };
 use localview_protocol::{
     DispatchResult, EventContinuityState, PrincipalRef, ProviderIncarnationRef,
@@ -29,17 +29,27 @@ fn envelope() -> CanonicalActionEnvelope {
             acting_principal_ref: PrincipalRef::from("principal:acting:postcondition-receipt"),
             authorization_revision: "authorization:postcondition-receipt:v1".into(),
             precondition_snapshot_cut_ref: "cut:before:postcondition-receipt".into(),
-            provider_incarnation_ref: ProviderIncarnationRef::from("provider:uia:postcondition-receipt"),
-            target_incarnation_ref: TargetIncarnationRef::from("target:window:postcondition-receipt"),
+            provider_incarnation_ref: ProviderIncarnationRef::from(
+                "provider:uia:postcondition-receipt",
+            ),
+            target_incarnation_ref: TargetIncarnationRef::from(
+                "target:window:postcondition-receipt",
+            ),
             risk_class: ActionRiskClass::ReversibleUiState,
             idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
-            expected_postcondition_contract_refs: vec!["post:visible".into(), "post:enabled".into()],
+            expected_postcondition_contract_refs: vec![
+                "post:visible".into(),
+                "post:enabled".into(),
+            ],
         },
     }
 }
 
 async fn linearize(journal: &ConsequentialJournal, action: &CanonicalActionEnvelope) -> u64 {
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let authorization = journal
         .record_authorization(
             action.transport_action_id,
@@ -54,7 +64,10 @@ async fn linearize(journal: &ConsequentialJournal, action: &CanonicalActionEnvel
             DispatchPreparationReceipt {
                 receipt_ref: "dispatch:prepared:postcondition-receipt".into(),
                 authorization_journal_sequence: authorization.journal_sequence,
-                precondition_snapshot_cut_ref: action.metadata.precondition_snapshot_cut_ref.clone(),
+                precondition_snapshot_cut_ref: action
+                    .metadata
+                    .precondition_snapshot_cut_ref
+                    .clone(),
                 provider_incarnation_ref: action.metadata.provider_incarnation_ref.clone(),
                 target_incarnation_ref: action.metadata.target_incarnation_ref.clone(),
             },
@@ -116,7 +129,11 @@ async fn bind_and_observe(
         observed_digest: format!("digest:{reconciliation_ref}"),
         incompleteness_debt: vec![],
     };
-    assert!(bridge.record_reconciliation(action.session_id, snapshot.clone()).await);
+    assert!(
+        bridge
+            .record_reconciliation(action.session_id, snapshot.clone())
+            .await
+    );
     let observation = journal
         .complete_postcondition_observation(permit, snapshot)
         .await
@@ -194,10 +211,19 @@ async fn verified_postconditions_append_and_replay_first_class_durable_receipt()
         receipt.evidence_receipt_refs,
         vec!["evidence:visible:pass", "evidence:enabled:pass"]
     );
-    assert_eq!(receipt.verdict, ActionPostconditionVerdict::VerifiedExpected);
+    assert_eq!(
+        receipt.verdict,
+        ActionPostconditionVerdict::VerifiedExpected
+    );
     assert!(receipt.unresolved_unknown_contract_refs.is_empty());
-    assert_eq!(receipt.causal_assurance.causal_journal_sequence(), dispatch_sequence);
-    assert_eq!(receipt.completion_journal_sequence, result.journal_entry.journal_sequence);
+    assert_eq!(
+        receipt.causal_assurance.causal_journal_sequence(),
+        dispatch_sequence
+    );
+    assert_eq!(
+        receipt.completion_journal_sequence,
+        result.journal_entry.journal_sequence
+    );
     assert_eq!(
         receipt.receipt_ref,
         format!(
@@ -263,17 +289,21 @@ async fn unresolved_unknowns_are_durable_and_never_become_verified_success() {
         ActionPostconditionVerdict::ReconciliationRequired
     );
     assert_eq!(
-        result.postcondition_receipt.unresolved_unknown_contract_refs,
+        result
+            .postcondition_receipt
+            .unresolved_unknown_contract_refs,
         vec!["post:enabled"]
     );
     assert_eq!(
         journal.recovery_state(action.transport_action_id).await,
         Some(ConsequentialRecoveryState::OutcomeObservedUnverified)
     );
-    assert!(journal
-        .record_committed(action.transport_action_id)
-        .await
-        .is_err());
+    assert!(
+        journal
+            .record_committed(action.transport_action_id)
+            .await
+            .is_err()
+    );
 
     drop(journal);
     let reopened = ConsequentialJournal::open(&path).await.unwrap();
