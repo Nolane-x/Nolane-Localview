@@ -1,0 +1,14 @@
+name: V43 action postcondition receipt RED evidence
+
+on:
+  push:
+    branches:
+      - feat/v43-durable-action-postcondition-receipt
+
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p localview-live-bridge --test v43_action_postcondition_receipt -- --nocapture
