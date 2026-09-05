@@ -18,7 +18,6 @@ use localview_protocol::{
     TransportResult,
 };
 use localview_windows_observe_runtime::{
-    arm_uia_dispatch_execution, execute_armed_uia_dispatch, prepare_uia_dispatch,
     WindowsObserveActionLeaseProvider, WindowsObserveDispatchContextProvider,
     WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
     WindowsObserveSubscriptionLineage, WindowsUiaActionPreflightRequest,
@@ -26,6 +25,7 @@ use localview_windows_observe_runtime::{
     WindowsUiaDispatchExecutionCoordinatorError, WindowsUiaDispatchExecutor,
     WindowsUiaDispatchSealRequest, WindowsUiaPreparedDispatchRequest,
     WindowsUiaProviderExecutionReceipt, WindowsUiaProviderExecutionRequest,
+    arm_uia_dispatch_execution, execute_armed_uia_dispatch, prepare_uia_dispatch,
 };
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaBoundDispatchContextReceipt,
@@ -84,7 +84,10 @@ impl FakeProvider {
 
     fn build_snapshot(&self, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
         let mut capabilities = WindowsUiaActionCapabilities::default();
-        capabilities.record(WindowsUiaPattern::Toggle, WindowsUiaPatternSupport::Supported);
+        capabilities.record(
+            WindowsUiaPattern::Toggle,
+            WindowsUiaPatternSupport::Supported,
+        );
         let mut attributes = BTreeMap::from([("provider".into(), "windows_uia".into())]);
         capabilities.write_attributes(&mut attributes);
 
@@ -112,7 +115,8 @@ impl FakeProvider {
             attributes,
         };
 
-        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache =
+            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -386,7 +390,10 @@ fn authority(
 }
 
 fn journal_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("localview-windows-{label}-{}.jsonl", Uuid::new_v4()))
+    std::env::temp_dir().join(format!(
+        "localview-windows-{label}-{}.jsonl",
+        Uuid::new_v4()
+    ))
 }
 
 async fn fixture(
@@ -521,7 +528,10 @@ async fn exact_known_not_dispatched_receipt_is_recorded_as_known_not_dispatched(
         journal.recovery_state(action_id).await,
         Some(ConsequentialRecoveryState::KnownNotDispatched)
     );
-    assert_eq!(journal.requires_reconciliation(action_id).await, Some(false));
+    assert_eq!(
+        journal.requires_reconciliation(action_id).await,
+        Some(false)
+    );
 
     let _ = std::fs::remove_file(path);
 }
@@ -547,6 +557,14 @@ async fn provider_failure_consumes_execution_authority_and_leaves_prepared_for_r
         Some(ConsequentialRecoveryState::DispatchPrepared)
     );
     assert_eq!(journal.requires_reconciliation(action_id).await, Some(true));
+    let observation = journal
+        .begin_postcondition_observation(action_id)
+        .await
+        .expect("provider failure must release the live execution grant for same-process reconciliation");
+    journal
+        .abandon_postcondition_observation(observation)
+        .await
+        .unwrap();
 
     let _ = std::fs::remove_file(path);
 }
@@ -571,6 +589,14 @@ async fn forged_provider_receipt_is_never_linearized_and_leaves_prepared_for_rec
         Some(ConsequentialRecoveryState::DispatchPrepared)
     );
     assert_eq!(journal.requires_reconciliation(action_id).await, Some(true));
+    let observation = journal
+        .begin_postcondition_observation(action_id)
+        .await
+        .expect("forged provider receipt must release the live execution grant for same-process reconciliation");
+    journal
+        .abandon_postcondition_observation(observation)
+        .await
+        .unwrap();
 
     let entries = journal.entries_for(action_id).await;
     assert!(!entries.iter().any(|entry| matches!(
