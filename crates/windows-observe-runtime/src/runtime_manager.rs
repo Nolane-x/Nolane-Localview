@@ -2,7 +2,9 @@ use std::{collections::HashMap, error::Error as StdError, fmt, sync::Arc};
 
 use localview_live_bridge::{
     ActionEnvelopeBindingError, ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass,
-    LiveBridge, ObservationStatus, ProviderIngestReport,
+    ConsequentialJournal, ConsequentialPostconditionObservationPermit,
+    ConsequentialPostconditionObservationReceipt, LiveBridge, ObservationStatus,
+    ProviderIngestReport,
 };
 use localview_native_provider::{
     NativeSemanticNodeObservation, NativeSemanticSnapshotRevision, SnapshotResourceUsage,
@@ -147,6 +149,8 @@ pub enum WindowsObserveRuntimeError {
     Bridge(WindowsObserveBridgeError),
     #[error("Windows observe LiveBridge state disappeared for session {session_id}")]
     ObservationStateMissing { session_id: SessionId },
+    #[error("Windows postcondition observation authority failed: {message}")]
+    PostconditionObservationAuthority { message: String },
 }
 
 impl From<WindowsObserveBridgeError> for WindowsObserveRuntimeError {
@@ -594,6 +598,133 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         })
     }
 
+    /// Capture one exact journal-authorized post-dispatch semantic snapshot.
+    ///
+    /// The operation gate serializes the full observation transaction against
+    /// attach/drain/reconciliation/release and the real UIA dispatch executor.
+    /// Provider or bridge failures abandon only the live observation grant; they
+    /// never recreate PREPARED/execution authority and therefore cannot enable a
+    /// blind retry of the consequential action.
+    pub async fn capture_postcondition_observation(
+        &self,
+        journal: &ConsequentialJournal,
+        permit: ConsequentialPostconditionObservationPermit,
+    ) -> Result<ConsequentialPostconditionObservationReceipt, WindowsObserveRuntimeError> {
+        let _gate = self.operation_gate.lock().await;
+        let session_id = permit.session_id();
+        let action_id = permit.action_id();
+        let expected_provider = permit.provider_incarnation_ref().clone();
+        let expected_target = permit.target_incarnation_ref().clone();
+        let expected_cut = permit.snapshot_cut_ref().to_owned();
+
+        let active = {
+            let observations = self.active.lock().await;
+            observations.get(&session_id).map(|observation| {
+                (
+                    observation.attachment.clone(),
+                    observation.binding.clone(),
+                    observation.surface_scope.clone(),
+                )
+            })
+        };
+        let Some((attachment, binding, surface_scope)) = active else {
+            let failure = WindowsObserveRuntimeError::NotAttached { session_id };
+            return Err(abandon_postcondition_capture(journal, permit, failure).await);
+        };
+
+        let active_provider = self.provider.provider_incarnation_ref();
+        let active_target = self.provider.target_incarnation_ref(&attachment);
+        if active_provider != expected_provider
+            || binding.provider_incarnation_ref() != &expected_provider
+        {
+            let failure = WindowsObserveRuntimeError::Provider {
+                operation: "postcondition_observation_session_revalidation",
+                message: "attached Windows observation provider incarnation does not match the journal permit"
+                    .into(),
+            };
+            return Err(abandon_postcondition_capture(journal, permit, failure).await);
+        }
+        if active_target != expected_target || binding.target_incarnation_ref() != &expected_target
+        {
+            let failure = WindowsObserveRuntimeError::Provider {
+                operation: "postcondition_observation_session_revalidation",
+                message: "attached Windows observation target incarnation does not match the journal permit"
+                    .into(),
+            };
+            return Err(abandon_postcondition_capture(journal, permit, failure).await);
+        }
+
+        let reconciliation_reservation = match self
+            .reserve_resource(session_id, ResourceWorkKind::NativeSemanticReconciliation)
+            .await
+        {
+            Ok(reservation) => reservation,
+            Err(failure) => {
+                return Err(abandon_postcondition_capture(journal, permit, failure).await);
+            }
+        };
+
+        let provider = self.provider.clone();
+        let snapshot_attachment = attachment.clone();
+        let snapshot_cut_ref = expected_cut.clone();
+        let snapshot = match run_provider("postcondition_snapshot", move || {
+            provider.snapshot(&snapshot_attachment, snapshot_cut_ref, surface_scope)
+        })
+        .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(failure) => {
+                drop(reconciliation_reservation);
+                return Err(abandon_postcondition_capture(journal, permit, failure).await);
+            }
+        };
+
+        if snapshot.provider_incarnation_ref() != &expected_provider
+            || snapshot.target_incarnation_ref() != &expected_target
+            || snapshot.snapshot_cut_ref() != expected_cut
+        {
+            drop(reconciliation_reservation);
+            let failure = WindowsObserveRuntimeError::Provider {
+                operation: "postcondition_snapshot_validation",
+                message:
+                    "provider returned a snapshot outside the exact journal-authorized lineage/cut"
+                        .into(),
+            };
+            return Err(abandon_postcondition_capture(journal, permit, failure).await);
+        }
+
+        let receipt_id = format!(
+            "reconcile:windows-observe:postdispatch:{session_id}:{action_id}:{}",
+            Uuid::new_v4()
+        );
+        let reconciliation_receipt = snapshot.reconciliation_receipt(receipt_id.clone());
+        if let Err(error) = binding
+            .record_snapshot_reconciliation(&self.bridge, snapshot.as_ref(), receipt_id)
+            .await
+        {
+            drop(reconciliation_reservation);
+            return Err(abandon_postcondition_capture(
+                journal,
+                permit,
+                WindowsObserveRuntimeError::Bridge(error),
+            )
+            .await);
+        }
+
+        self.update_reconciliation_snapshot(session_id, snapshot)
+            .await;
+        drop(reconciliation_reservation);
+
+        journal
+            .complete_postcondition_observation(permit, reconciliation_receipt)
+            .await
+            .map_err(
+                |error| WindowsObserveRuntimeError::PostconditionObservationAuthority {
+                    message: error.to_string(),
+                },
+            )
+    }
+
     /// Return the immutable semantic revision currently bound to one attached session.
     ///
     /// This is observation evidence only. The returned revision does not reserve
@@ -860,6 +991,21 @@ fn validate_semantic_read_authority(
         });
     }
     Ok(())
+}
+
+async fn abandon_postcondition_capture(
+    journal: &ConsequentialJournal,
+    permit: ConsequentialPostconditionObservationPermit,
+    failure: WindowsObserveRuntimeError,
+) -> WindowsObserveRuntimeError {
+    match journal.abandon_postcondition_observation(permit).await {
+        Ok(()) => failure,
+        Err(error) => WindowsObserveRuntimeError::PostconditionObservationAuthority {
+            message: format!(
+                "postcondition capture failed ({failure}); exact observation abandonment also failed ({error})"
+            ),
+        },
+    }
 }
 
 fn resource_denial_error(denial: ResourceAdmissionDenial) -> WindowsObserveRuntimeError {

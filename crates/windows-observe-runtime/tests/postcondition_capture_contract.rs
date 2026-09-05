@@ -1,6 +1,4 @@
-use std::{
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
@@ -77,7 +75,10 @@ impl WindowsObserveProvider for FakeProvider {
         self.provider.clone()
     }
 
-    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
+    fn attach(
+        &self,
+        _selection: UserSelectedWindowTarget,
+    ) -> Result<Self::Attachment, Self::Error> {
         Ok(Attachment {
             target: self.target.clone(),
         })
@@ -135,7 +136,8 @@ impl WindowsObserveProvider for FakeProvider {
             }
             state.requested_cuts.len() as u64
         };
-        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache =
+            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         Ok(cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -200,7 +202,10 @@ fn action(provider: &FakeProvider) -> CanonicalActionEnvelope {
 }
 
 async fn linearize(journal: &ConsequentialJournal, action: &CanonicalActionEnvelope) {
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let authorization = journal
         .record_authorization(
             action.transport_action_id,
@@ -215,7 +220,10 @@ async fn linearize(journal: &ConsequentialJournal, action: &CanonicalActionEnvel
             DispatchPreparationReceipt {
                 receipt_ref: "prepared:postcondition-runtime".into(),
                 authorization_journal_sequence: authorization.journal_sequence,
-                precondition_snapshot_cut_ref: action.metadata.precondition_snapshot_cut_ref.clone(),
+                precondition_snapshot_cut_ref: action
+                    .metadata
+                    .precondition_snapshot_cut_ref
+                    .clone(),
                 provider_incarnation_ref: action.metadata.provider_incarnation_ref.clone(),
                 target_incarnation_ref: action.metadata.target_incarnation_ref.clone(),
             },
