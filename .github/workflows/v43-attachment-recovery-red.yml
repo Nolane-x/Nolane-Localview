@@ -1,13 +1,19 @@
-name: V43 attachment recovery RED
+name: V43 attachment recovery GREEN
 
 on:
   push:
 
 jobs:
-  red:
+  green:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Attachment-bound recovery debt contract
+        run: cargo test -p localview-live-bridge --test v43_attachment_recovery_debt -- --nocapture
       - name: Commit-only recovery API contract
         run: cargo test -p localview-windows-observe-runtime --test commit_only_recovery_contract -- --nocapture
+      - name: Verified and restart coordinator regressions
+        run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior -- --nocapture
+      - name: Runtime all-target compile
+        run: cargo check -p localview-windows-observe-runtime --all-targets
