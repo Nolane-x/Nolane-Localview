@@ -8,11 +8,12 @@ use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 use uuid::Uuid;
 
 use crate::{
+    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
+    WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
     worker::{
         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
         WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     },
-    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +106,14 @@ impl WindowsUiaWorker {
                 requirements,
                 context,
             })
+    }
+
+    pub fn dispatch_pattern(
+        &self,
+        attachment: &WindowsUiaAttachment,
+        request: WindowsUiaPatternDispatchRequest,
+    ) -> Result<WindowsUiaPatternDispatchReceipt, WindowsUiaWorkerError> {
+        self.inner.dispatch_pattern(attachment, request)
     }
 
     pub fn subscribe_events(

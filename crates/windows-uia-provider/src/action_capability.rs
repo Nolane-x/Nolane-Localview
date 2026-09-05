@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 
 use localview_native_provider::NativeSemanticNodeObservation;
 
-pub const WINDOWS_UIA_ACTION_CAPABILITY_PROFILE_V1: &str =
-    "windows-uia-action-capabilities-v1";
+pub const WINDOWS_UIA_ACTION_CAPABILITY_PROFILE_V1: &str = "windows-uia-action-capabilities-v1";
 const PROFILE_ATTRIBUTE_KEY: &str = "windows_uia.action_capability_profile";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

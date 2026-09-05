@@ -78,28 +78,26 @@ pub fn evaluate_windows_uia_dispatch_context(
             .foreground_process_id
             .ok_or(WindowsUiaDispatchContextBlocker::ForegroundProcessUnavailable)?;
         if foreground_process != observation.target_process_id {
-            return Err(WindowsUiaDispatchContextBlocker::ForegroundProcessMismatch {
-                expected: observation.target_process_id,
-                actual: foreground_process,
-            });
+            return Err(
+                WindowsUiaDispatchContextBlocker::ForegroundProcessMismatch {
+                    expected: observation.target_process_id,
+                    actual: foreground_process,
+                },
+            );
         }
     }
 
     if requirements.require_exact_element_focus {
         match observation.exact_element_focused {
             Some(true) => {}
-            Some(false) => {
-                return Err(WindowsUiaDispatchContextBlocker::ExactElementFocusMismatch)
-            }
+            Some(false) => return Err(WindowsUiaDispatchContextBlocker::ExactElementFocusMismatch),
             None => return Err(WindowsUiaDispatchContextBlocker::FocusUnavailable),
         }
     }
 
     if requirements.require_no_modal_blocker {
         if let Some(window_handle) = observation.modal_blocker_window_handle {
-            return Err(WindowsUiaDispatchContextBlocker::ModalBlockerPresent {
-                window_handle,
-            });
+            return Err(WindowsUiaDispatchContextBlocker::ModalBlockerPresent { window_handle });
         }
     }
 

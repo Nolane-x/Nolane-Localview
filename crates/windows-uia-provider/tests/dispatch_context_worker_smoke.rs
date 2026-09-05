@@ -2,8 +2,9 @@
 mod windows_smoke {
     use std::{
         sync::{
+            Arc,
             atomic::{AtomicBool, Ordering},
-            mpsc, Arc,
+            mpsc,
         },
         thread,
         time::Duration,
@@ -16,18 +17,18 @@ mod windows_smoke {
     };
     use uuid::Uuid;
     use windows::{
-        core::w,
         Win32::{
             System::Threading::GetCurrentProcessId,
             UI::{
                 Input::KeyboardAndMouse::SetFocus,
                 WindowsAndMessaging::{
-                    CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW,
-                    SetForegroundWindow, ShowWindow, TranslateMessage, CW_USEDEFAULT, MSG,
-                    PM_REMOVE, SW_SHOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                    CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW, MSG,
+                    PM_REMOVE, PeekMessageW, SW_SHOW, SetForegroundWindow, ShowWindow,
+                    TranslateMessage, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
                 },
             },
         },
+        core::w,
     };
 
     #[test]
@@ -157,7 +158,10 @@ mod windows_smoke {
         );
         assert_eq!(receipt.observation.target_window_handle, window_handle);
         assert_eq!(receipt.observation.target_process_id, process_id);
-        assert_eq!(receipt.observation.foreground_window_handle, Some(window_handle));
+        assert_eq!(
+            receipt.observation.foreground_window_handle,
+            Some(window_handle)
+        );
         assert_eq!(receipt.observation.foreground_process_id, Some(process_id));
         assert_eq!(receipt.observation.exact_element_focused, Some(true));
         assert_eq!(receipt.observation.modal_blocker_window_handle, None);

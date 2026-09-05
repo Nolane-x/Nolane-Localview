@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use localview_native_provider::SnapshotBudget;
+#[cfg(not(windows))]
+use localview_windows_uia_provider::WindowsUiaWorkerError;
 use localview_windows_uia_provider::{
     WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig,
 };
-#[cfg(not(windows))]
-use localview_windows_uia_provider::WindowsUiaWorkerError;
 
 #[test]
 fn worker_config_is_bounded_and_observe_only() {

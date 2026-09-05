@@ -5,8 +5,8 @@ use localview_protocol::{
     ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef,
 };
 use localview_windows_uia_provider::{
-    WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport,
-    WINDOWS_UIA_ACTION_CAPABILITY_PROFILE_V1,
+    WINDOWS_UIA_ACTION_CAPABILITY_PROFILE_V1, WindowsUiaActionCapabilities, WindowsUiaPattern,
+    WindowsUiaPatternSupport,
 };
 
 fn node(
@@ -16,7 +16,9 @@ fn node(
     NativeSemanticNodeObservation {
         element_ref: ProviderElementRef {
             provider_family: "windows_uia".into(),
-            provider_incarnation_ref: ProviderIncarnationRef::from("provider:uia-capability-contract"),
+            provider_incarnation_ref: ProviderIncarnationRef::from(
+                "provider:uia-capability-contract",
+            ),
             target_incarnation_ref: TargetIncarnationRef::from("target:uia-capability-contract"),
             opaque_provider_element_id: "uia-runtime:[42,7]".into(),
             semantic_locator_hints: vec![],
@@ -175,8 +177,14 @@ fn first_reversible_pattern_taxonomy_has_stable_attribute_keys() {
     for (pattern, expected) in cases {
         assert_eq!(pattern.attribute_key(), expected);
     }
-    assert_eq!(WindowsUiaPatternSupport::Supported.as_wire_value(), "supported");
-    assert_eq!(WindowsUiaPatternSupport::Unsupported.as_wire_value(), "unsupported");
+    assert_eq!(
+        WindowsUiaPatternSupport::Supported.as_wire_value(),
+        "supported"
+    );
+    assert_eq!(
+        WindowsUiaPatternSupport::Unsupported.as_wire_value(),
+        "unsupported"
+    );
     assert_eq!(WindowsUiaPatternSupport::Unknown.as_wire_value(), "unknown");
 }
 

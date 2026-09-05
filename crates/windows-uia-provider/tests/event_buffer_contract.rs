@@ -15,7 +15,10 @@ fn target() -> TargetIncarnationRef {
     TargetIncarnationRef::from("target:windows:selection=event-buffer")
 }
 
-fn element_ref(provider: ProviderIncarnationRef, target: TargetIncarnationRef) -> ProviderElementRef {
+fn element_ref(
+    provider: ProviderIncarnationRef,
+    target: TargetIncarnationRef,
+) -> ProviderElementRef {
     ProviderElementRef {
         provider_family: "windows_uia".into(),
         provider_incarnation_ref: provider,
