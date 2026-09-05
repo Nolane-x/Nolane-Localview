@@ -16,19 +16,17 @@ mod windows_runtime_dispatch_smoke {
         LiveBridge,
     };
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
-    use localview_protocol::{
-        DispatchResult, PrincipalRef, TransportResult,
-    };
+    use localview_protocol::{DispatchResult, PrincipalRef, TransportResult};
     use localview_windows_observe_runtime::{
         arm_uia_dispatch_execution, execute_armed_uia_dispatch, prepare_uia_dispatch,
         spawn_windows_uia_runtime_manager, WindowsObserveRuntimeConfig,
         WindowsUiaActionPreflightRequest, WindowsUiaAuthorizationRevalidationReceipt,
-        WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchContextRequirements,
-        WindowsUiaDispatchSealRequest, WindowsUiaPreparedDispatchRequest,
+        WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchSealRequest,
+        WindowsUiaPreparedDispatchRequest,
     };
     use localview_windows_uia_provider::{
-        WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport,
-        WindowsUiaWorkerConfig,
+        WindowsUiaActionCapabilities, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
+        WindowsUiaPatternSupport, WindowsUiaWorkerConfig,
     };
     use uuid::Uuid;
     use windows::{
