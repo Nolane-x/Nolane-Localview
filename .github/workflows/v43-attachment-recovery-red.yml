@@ -10,4 +10,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Daemon attachment recovery planner contract
-        run: cargo test -p localview-daemon consequential_recovery::tests:: -- --nocapture
+        run: |
+          cargo test -p localview-daemon 'consequential_recovery::tests::' -- --nocapture
