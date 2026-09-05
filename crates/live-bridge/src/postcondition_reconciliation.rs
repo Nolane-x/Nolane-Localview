@@ -6,10 +6,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    ActionPostconditionReceipt, ActionPostconditionReceiptDraft, ActionPostconditionVerdict,
-    CanonicalActionEnvelope, ConsequentialJournal, ConsequentialJournalEntry,
-    ConsequentialJournalError, ConsequentialJournalTransition,
-    ConsequentialPostconditionObservationReceipt, LiveBridge,
+    ActionPostconditionEvidenceBinding, ActionPostconditionReceipt,
+    ActionPostconditionReceiptDraft, ActionPostconditionVerdict, CanonicalActionEnvelope,
+    ConsequentialJournal, ConsequentialJournalEntry, ConsequentialJournalError,
+    ConsequentialJournalTransition, ConsequentialPostconditionObservationReceipt, LiveBridge,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -176,10 +176,20 @@ pub async fn reconcile_consequential_postconditions(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let evidence_receipt_refs = expected_order
+    let evidence_bindings = expected_order
         .iter()
-        .filter_map(|contract_ref| observed.get(contract_ref))
-        .map(|evidence| evidence.receipt_ref.clone())
+        .filter_map(|contract_ref| {
+            observed
+                .get(contract_ref)
+                .map(|evidence| ActionPostconditionEvidenceBinding {
+                    contract_ref: contract_ref.clone(),
+                    receipt_ref: evidence.receipt_ref.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    let evidence_receipt_refs = evidence_bindings
+        .iter()
+        .map(|binding| binding.receipt_ref.clone())
         .collect::<Vec<_>>();
 
     let verdict = if !failed_contract_refs.is_empty() {
@@ -202,6 +212,7 @@ pub async fn reconcile_consequential_postconditions(
             observation_snapshot_cut_ref: observation.snapshot_cut_ref().to_owned(),
             reconciliation_receipt_ref: observation.reconciliation_receipt_ref().to_owned(),
             evidence_receipt_refs,
+            evidence_bindings,
             verified_contract_refs,
             failed_contract_refs,
             verdict,

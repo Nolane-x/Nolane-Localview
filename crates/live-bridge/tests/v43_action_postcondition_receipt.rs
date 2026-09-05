@@ -175,7 +175,7 @@ async fn verified_postconditions_append_and_replay_first_class_durable_receipt()
             evidence(
                 "post:enabled",
                 ConsequentialPostconditionStatus::VerifiedPass,
-                "evidence:enabled:pass",
+                "evidence:visible:pass",
             ),
         ],
     )
@@ -209,7 +209,7 @@ async fn verified_postconditions_append_and_replay_first_class_durable_receipt()
     );
     assert_eq!(
         receipt.evidence_receipt_refs,
-        vec!["evidence:visible:pass", "evidence:enabled:pass"]
+        vec!["evidence:visible:pass", "evidence:visible:pass"]
     );
     assert_eq!(
         receipt
@@ -219,7 +219,7 @@ async fn verified_postconditions_append_and_replay_first_class_durable_receipt()
             .collect::<Vec<_>>(),
         vec![
             ("post:visible", "evidence:visible:pass"),
-            ("post:enabled", "evidence:enabled:pass"),
+            ("post:enabled", "evidence:visible:pass"),
         ]
     );
     let encoded = serde_json::to_value(receipt).unwrap();

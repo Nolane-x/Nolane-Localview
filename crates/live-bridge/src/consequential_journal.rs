@@ -71,6 +71,12 @@ impl ActionPostconditionVerdict {
 /// classifications form an exact partition of the admitted expected contracts,
 /// while causal assurance binds the observation to durable dispatch history.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionPostconditionEvidenceBinding {
+    pub contract_ref: String,
+    pub receipt_ref: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionPostconditionReceipt {
     pub receipt_ref: String,
     pub action_id: Uuid,
@@ -80,7 +86,13 @@ pub struct ActionPostconditionReceipt {
     pub expected_postcondition_contract_refs: Vec<String>,
     pub observation_snapshot_cut_ref: String,
     pub reconciliation_receipt_ref: String,
+    /// Ordered evidence receipt summary. Receipt refs may repeat when one
+    /// evidence artifact proves multiple declared postcondition contracts.
     pub evidence_receipt_refs: Vec<String>,
+    /// Exact contract-to-evidence provenance. A contract appears at most once;
+    /// verified/failed contracts always have a binding, while an unresolved
+    /// unknown may have no evidence artifact at all.
+    pub evidence_bindings: Vec<ActionPostconditionEvidenceBinding>,
     pub verified_contract_refs: Vec<String>,
     pub failed_contract_refs: Vec<String>,
     pub verdict: ActionPostconditionVerdict,
@@ -98,7 +110,13 @@ pub(crate) struct ActionPostconditionReceiptDraft {
     pub expected_postcondition_contract_refs: Vec<String>,
     pub observation_snapshot_cut_ref: String,
     pub reconciliation_receipt_ref: String,
+    /// Ordered evidence receipt summary. Receipt refs may repeat when one
+    /// evidence artifact proves multiple declared postcondition contracts.
     pub evidence_receipt_refs: Vec<String>,
+    /// Exact contract-to-evidence provenance. A contract appears at most once;
+    /// verified/failed contracts always have a binding, while an unresolved
+    /// unknown may have no evidence artifact at all.
+    pub evidence_bindings: Vec<ActionPostconditionEvidenceBinding>,
     pub verified_contract_refs: Vec<String>,
     pub failed_contract_refs: Vec<String>,
     pub verdict: ActionPostconditionVerdict,
@@ -230,6 +248,7 @@ impl DispatchExecutionPermit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ConsequentialPostconditionObservationCause {
     DispatchLinearized {
         journal_sequence: u64,
@@ -1039,6 +1058,7 @@ impl ConsequentialJournal {
             observation_snapshot_cut_ref: draft.observation_snapshot_cut_ref,
             reconciliation_receipt_ref: draft.reconciliation_receipt_ref,
             evidence_receipt_refs: draft.evidence_receipt_refs,
+            evidence_bindings: draft.evidence_bindings,
             verified_contract_refs: draft.verified_contract_refs,
             failed_contract_refs: draft.failed_contract_refs,
             verdict: draft.verdict,
@@ -1652,18 +1672,28 @@ fn validate_action_postcondition_receipt(
         return Err(invalid("postcondition_receipt_verdict_partition_mismatch"));
     }
 
-    let mut evidence_refs = BTreeSet::new();
-    for evidence_ref in &receipt.evidence_receipt_refs {
-        if evidence_ref.trim().is_empty() || !evidence_refs.insert(evidence_ref.clone()) {
-            return Err(invalid("postcondition_receipt_invalid_evidence_refs"));
+    let mut bound_contracts = BTreeSet::new();
+    let mut bound_receipt_refs = Vec::with_capacity(receipt.evidence_bindings.len());
+    for binding in &receipt.evidence_bindings {
+        if !expected.contains(&binding.contract_ref)
+            || !bound_contracts.insert(binding.contract_ref.clone())
+            || binding.receipt_ref.trim().is_empty()
+        {
+            return Err(invalid("postcondition_receipt_invalid_evidence_binding"));
         }
+        bound_receipt_refs.push(binding.receipt_ref.clone());
     }
-    if receipt.evidence_receipt_refs.len() > expected.len()
-        || receipt.evidence_receipt_refs.len()
-            < receipt.verified_contract_refs.len() + receipt.failed_contract_refs.len()
+    if bound_receipt_refs != receipt.evidence_receipt_refs {
+        return Err(invalid("postcondition_receipt_evidence_summary_mismatch"));
+    }
+    if receipt
+        .verified_contract_refs
+        .iter()
+        .chain(receipt.failed_contract_refs.iter())
+        .any(|contract_ref| !bound_contracts.contains(contract_ref))
     {
         return Err(invalid(
-            "postcondition_receipt_evidence_cardinality_mismatch",
+            "postcondition_receipt_decisive_contract_without_evidence",
         ));
     }
 
