@@ -1,0 +1,48 @@
+name: V43 post-dispatch observation builder
+
+on:
+  push:
+    branches:
+      - feat/v43-post-dispatch-observation-authority
+    paths:
+      - tools/v43_post_observation_patch.py
+      - .github/workflows/v43-post-observation-builder.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-post-dispatch-observation-authority
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Patch production authority
+        run: python tools/v43_post_observation_patch.py
+      - name: Normalize formatting
+        run: cargo fmt --all
+      - name: Compile live bridge
+        run: cargo check -p localview-live-bridge --all-targets
+      - name: Post-dispatch observation authority contract
+        run: cargo test -p localview-live-bridge --test v43_post_dispatch_observation_authority -- --nocapture
+      - name: Consequential journal regression
+        run: cargo test -p localview-live-bridge --test v43_consequential_journal -- --nocapture
+      - name: Postcondition reconciliation regressions
+        run: |
+          cargo test -p localview-live-bridge --test v43_postcondition_reconciliation -- --nocapture
+          cargo test -p localview-live-bridge --test v43_postcondition_reconciliation_recovery -- --nocapture
+      - name: Remove temporary builder
+        run: git rm .github/workflows/v43-post-observation-builder.yml tools/v43_post_observation_patch.py
+      - name: Commit production result
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/live-bridge/src/consequential_journal.rs
+          git commit -m "feat(v43): mint one-shot post-dispatch observation authority"
+          git push origin HEAD:feat/v43-post-dispatch-observation-authority
