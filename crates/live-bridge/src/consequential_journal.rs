@@ -738,6 +738,49 @@ impl ConsequentialJournal {
         })
     }
 
+    /// Abandon one exact live postcondition observation authority without
+    /// changing durable recovery state or recreating dispatch authority.
+    ///
+    /// Observation capture is read-only. A failed provider/bridge capture may
+    /// therefore release only this process-local grant so recovery can mint a
+    /// fresh post-dispatch cut and observe again. The exact permit binding is
+    /// required to prevent one caller from clearing another live observation.
+    pub async fn abandon_postcondition_observation(
+        &self,
+        permit: ConsequentialPostconditionObservationPermit,
+    ) -> Result<(), ConsequentialPostconditionObservationError> {
+        let action_id = permit.action_id;
+        if permit.journal_instance_ref != self.journal_instance_ref {
+            return Err(ConsequentialPostconditionObservationError::InvalidPermit {
+                action_id,
+                reason: "journal_instance_mismatch",
+            });
+        }
+
+        let mut state = self.state.lock().await;
+        let Some(grant) = state.live_postcondition_observation.get(&action_id) else {
+            return Err(ConsequentialPostconditionObservationError::InvalidPermit {
+                action_id,
+                reason: "live_observation_grant_missing",
+            });
+        };
+        if grant.observation_ref != permit.observation_ref
+            || grant.session_id != permit.session_id
+            || grant.provider_incarnation_ref != permit.provider_incarnation_ref
+            || grant.target_incarnation_ref != permit.target_incarnation_ref
+            || grant.snapshot_cut_ref != permit.snapshot_cut_ref
+            || grant.cause != permit.cause
+        {
+            return Err(ConsequentialPostconditionObservationError::InvalidPermit {
+                action_id,
+                reason: "observation_grant_binding_mismatch",
+            });
+        }
+
+        state.live_postcondition_observation.remove(&action_id);
+        Ok(())
+    }
+
     /// Consume one exact observation permit and bind the returned provider
     /// snapshot to its fresh cut. The permit is consumed before validating the
     /// snapshot, so a stale/forged completion cannot be retried with the same
