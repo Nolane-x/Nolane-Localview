@@ -1,9 +1,9 @@
 use std::error::Error as StdError;
 
 use localview_live_bridge::{
-    ConsequentialJournal, ConsequentialJournalEntry, ConsequentialJournalTransition,
-    ConsequentialRecoveryState, DispatchExecutionPermit, DispatchLinearizationReceipt,
-    DispatchPreparationReceipt, LiveBridge,
+    CanonicalActionOperation, ConsequentialJournal, ConsequentialJournalEntry,
+    ConsequentialJournalTransition, ConsequentialRecoveryState, DispatchExecutionPermit,
+    DispatchLinearizationReceipt, DispatchPreparationReceipt, LiveBridge,
 };
 use localview_protocol::{
     DispatchResult, ProviderElementRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
@@ -12,7 +12,7 @@ use localview_protocol::{
 use localview_windows_uia_provider::{
     WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextBlocker,
     WindowsUiaDispatchContextRequest, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
-    evaluate_windows_uia_dispatch_context,
+    WindowsUiaPatternDispatchOperation, evaluate_windows_uia_dispatch_context,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -204,6 +204,7 @@ pub struct WindowsUiaProviderExecutionRequest {
     target_incarnation_ref: TargetIncarnationRef,
     element_ref: ProviderElementRef,
     required_pattern: WindowsUiaPattern,
+    dispatch_operation: WindowsUiaPatternDispatchOperation,
     context_requirements: WindowsUiaDispatchContextRequirements,
 }
 
@@ -242,6 +243,10 @@ impl WindowsUiaProviderExecutionRequest {
 
     pub fn required_pattern(&self) -> WindowsUiaPattern {
         self.required_pattern
+    }
+
+    pub fn dispatch_operation(&self) -> WindowsUiaPatternDispatchOperation {
+        self.dispatch_operation
     }
 
     pub fn context_requirements(&self) -> WindowsUiaDispatchContextRequirements {
@@ -306,6 +311,17 @@ pub enum WindowsUiaDispatchExecutionCoordinatorError {
     JournalStateChangedBeforeExecutor {
         state: Option<ConsequentialRecoveryState>,
     },
+    #[error("Windows UIA canonical operation binding disappeared before provider execution")]
+    CanonicalOperationMissingBeforeExecutor,
+    #[error("Windows UIA canonical operation binding is invalid before provider execution: {message}")]
+    CanonicalOperationBindingInvalidBeforeExecutor { message: String },
+    #[error(
+        "Windows UIA canonical operation {canonical:?} cannot select a provider verb for pattern {required_pattern:?}"
+    )]
+    CanonicalOperationProviderVerbMismatch {
+        canonical: CanonicalActionOperation,
+        required_pattern: WindowsUiaPattern,
+    },
     #[error(
         "Windows UIA provider execution attempt failed or became transport-uncertain: {message}"
     )]
@@ -335,11 +351,13 @@ pub enum WindowsUiaDispatchExecutionCoordinatorError {
 /// implementation must obey:
 /// 1. canonical authority and durable PREPARED are checked immediately before
 ///    handing control to the provider;
-/// 2. the request is derived exclusively from the sealed exact lease, pattern,
-///    lineage, context requirements and PREPARED record;
-/// 3. a returned receipt must match that exact request and prove it reached the
+/// 2. the exact provider verb is re-derived from the durably admitted canonical
+///    operation and must agree with the sealed UIA capability pattern;
+/// 3. the request is derived exclusively from that durable operation, the sealed
+///    exact lease/pattern/lineage/context requirements and PREPARED record;
+/// 4. a returned receipt must match that exact request and prove it reached the
 ///    executor;
-/// 4. once a valid provider receipt exists, its outcome is fsync'd immediately
+/// 5. once a valid provider receipt exists, its outcome is fsync'd immediately
 ///    using the embedded one-shot generic dispatch permit.
 ///
 /// There is deliberately no canonical-authority recheck between a valid provider
@@ -374,6 +392,67 @@ where
     }
 
     let action_id = armed.action_id;
+    let required_pattern = armed
+        .seal
+        .authority
+        .dispatch_revalidation
+        .preflight
+        .required_pattern;
+    let canonical_operation = match journal.admitted_operation(action_id).await {
+        Ok(Some(operation)) => operation,
+        Ok(None) => {
+            journal
+                .abandon_dispatch_execution(armed.dispatch_permit)
+                .await
+                .map_err(|abandonment| {
+                    WindowsUiaDispatchExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                        stage: "canonical_operation_missing_before_executor",
+                        message: abandonment.to_string(),
+                    }
+                })?;
+            return Err(
+                WindowsUiaDispatchExecutionCoordinatorError::CanonicalOperationMissingBeforeExecutor,
+            );
+        }
+        Err(error) => {
+            let message = error.to_string();
+            journal
+                .abandon_dispatch_execution(armed.dispatch_permit)
+                .await
+                .map_err(|abandonment| {
+                    WindowsUiaDispatchExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                        stage: "canonical_operation_invalid_before_executor",
+                        message: abandonment.to_string(),
+                    }
+                })?;
+            return Err(
+                WindowsUiaDispatchExecutionCoordinatorError::CanonicalOperationBindingInvalidBeforeExecutor {
+                    message,
+                },
+            );
+        }
+    };
+    let dispatch_operation = match provider_dispatch_operation(canonical_operation, required_pattern) {
+        Some(operation) => operation,
+        None => {
+            journal
+                .abandon_dispatch_execution(armed.dispatch_permit)
+                .await
+                .map_err(|abandonment| {
+                    WindowsUiaDispatchExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                        stage: "canonical_operation_provider_verb_mismatch",
+                        message: abandonment.to_string(),
+                    }
+                })?;
+            return Err(
+                WindowsUiaDispatchExecutionCoordinatorError::CanonicalOperationProviderVerbMismatch {
+                    canonical: canonical_operation,
+                    required_pattern,
+                },
+            );
+        }
+    };
+
     let lease = &armed.seal.authority.dispatch_revalidation.element_lease;
     let request = WindowsUiaProviderExecutionRequest {
         dispatch_attempt_ref: Uuid::new_v4(),
@@ -384,12 +463,8 @@ where
         provider_incarnation_ref: lease.provider_incarnation_ref.clone(),
         target_incarnation_ref: lease.target_incarnation_ref.clone(),
         element_ref: lease.element_ref.clone(),
-        required_pattern: armed
-            .seal
-            .authority
-            .dispatch_revalidation
-            .preflight
-            .required_pattern,
+        required_pattern,
+        dispatch_operation,
         context_requirements: armed.seal.context.requirements,
     };
 
@@ -556,6 +631,30 @@ async fn verify_armed_canonical_before_executor(
         );
     }
     Ok(())
+}
+
+fn provider_dispatch_operation(
+    canonical: CanonicalActionOperation,
+    required_pattern: WindowsUiaPattern,
+) -> Option<WindowsUiaPatternDispatchOperation> {
+    match (canonical, required_pattern) {
+        (CanonicalActionOperation::Activate, WindowsUiaPattern::Invoke) => {
+            Some(WindowsUiaPatternDispatchOperation::Invoke)
+        }
+        (CanonicalActionOperation::Select, WindowsUiaPattern::SelectionItem) => {
+            Some(WindowsUiaPatternDispatchOperation::Select)
+        }
+        (CanonicalActionOperation::Toggle, WindowsUiaPattern::Toggle) => {
+            Some(WindowsUiaPatternDispatchOperation::Toggle)
+        }
+        (CanonicalActionOperation::Expand, WindowsUiaPattern::ExpandCollapse) => {
+            Some(WindowsUiaPatternDispatchOperation::Expand)
+        }
+        (CanonicalActionOperation::Collapse, WindowsUiaPattern::ExpandCollapse) => {
+            Some(WindowsUiaPatternDispatchOperation::Collapse)
+        }
+        _ => None,
+    }
 }
 
 fn provider_receipt_matches_request(
