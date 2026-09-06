@@ -85,6 +85,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test toggle_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real retained Win32 UIA Expand state observation
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-uia-provider --test expand_collapse_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Invoke to verified post-dispatch commit
         env:
           LOCALVIEW_UIA_SMOKE: "1"
