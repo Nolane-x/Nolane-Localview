@@ -171,11 +171,12 @@ mod platform {
         evaluate_windows_uia_dispatch_context,
     };
 
-    const PROPERTIES_PER_NODE: usize = 16;
+    const PROPERTIES_PER_NODE: usize = 17;
     const CACHE_PROFILE_REVISION: &str = "windows-uia-control-view-v1";
     const PERMISSION_VISIBILITY_REVISION: &str = "windows-uia-interactive-user-v1";
     const SELECTION_ITEM_IS_SELECTED_ATTRIBUTE: &str = "windows_uia.selection_item.is_selected";
     const TOGGLE_STATE_ATTRIBUTE: &str = "windows_uia.toggle.state";
+    const EXPAND_COLLAPSE_STATE_ATTRIBUTE: &str = "windows_uia.expand_collapse.state";
 
     enum WorkerCommand {
         Attach {
@@ -1112,6 +1113,33 @@ mod platform {
             } else {
                 None
             };
+            let expand_collapse_state = if action_capabilities
+                .support_for(WindowsUiaPattern::ExpandCollapse)
+                == WindowsUiaPatternSupport::Supported
+            {
+                match unsafe {
+                    element.GetCurrentPropertyValue(
+                        windows::Win32::UI::Accessibility::UIA_ExpandCollapseExpandCollapseStatePropertyId,
+                    )
+                } {
+                    Ok(value) => match i32::try_from(&value) {
+                        Ok(0) => Some("collapsed"),
+                        Ok(1) => Some("expanded"),
+                        Ok(2) => Some("partially_expanded"),
+                        Ok(3) => Some("leaf_node"),
+                        Ok(_) | Err(_) => {
+                            node_debt.push("uia_property_expand_collapse_state_unavailable".into());
+                            None
+                        }
+                    },
+                    Err(_) => {
+                        node_debt.push("uia_property_expand_collapse_state_unavailable".into());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             let runtime_id = unsafe { runtime_id_hint(&element) }.unwrap_or_default();
             let mut element_ref = provider_element_ref_from_runtime_id(
@@ -1156,6 +1184,9 @@ mod platform {
             }
             if let Some(state) = toggle_state {
                 attributes.insert(TOGGLE_STATE_ATTRIBUTE.into(), state.into());
+            }
+            if let Some(state) = expand_collapse_state {
+                attributes.insert(EXPAND_COLLAPSE_STATE_ATTRIBUTE.into(), state.into());
             }
             retained_elements.push(RetainedElementLease {
                 element_ref: element_ref.clone(),
