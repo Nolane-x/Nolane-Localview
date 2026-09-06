@@ -2,16 +2,18 @@ use std::collections::BTreeMap;
 
 use localview_live_bridge::ConsequentialPostconditionStatus;
 use localview_native_provider::{
-    NativeSemanticNodeMatcherV1, NativeSemanticNodeObservation,
-    NativeSemanticPostconditionContractV1, NativeSemanticPostconditionExpectation,
-    NativeSemanticSnapshotDraft, SemanticSnapshotCache, SnapshotResourceUsage,
+    NativeSemanticNodeObservation, NativeSemanticSnapshotDraft, SemanticSnapshotCache,
+    SnapshotResourceUsage,
 };
 use localview_protocol::{
     ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef,
     ReconciliationCompleteness, TargetIncarnationRef,
 };
 use localview_windows_observe_runtime::{
-    WindowsUiaPostconditionVerifier, WindowsUiaSemanticPostconditionVerifier,
+    NativeSemanticNodeMatcherV1, NativeSemanticPostconditionContractError,
+    NativeSemanticPostconditionContractV1, NativeSemanticPostconditionEvaluation,
+    NativeSemanticPostconditionExpectation, WindowsUiaPostconditionVerifier,
+    WindowsUiaSemanticPostconditionVerifier,
 };
 use uuid::Uuid;
 
@@ -39,11 +41,11 @@ fn snapshot(
         role: Some("window".into()),
         name: Some("LocalView Runtime Invoked".into()),
         control_type: Some("uia_control_type:50032".into()),
-        automation_id: None,
+        automation_id: Some("runtime-window".into()),
         class_name: Some("Window".into()),
         is_enabled: Some(true),
         is_offscreen: Some(false),
-        attributes: BTreeMap::new(),
+        attributes: BTreeMap::from([("state".into(), "ready".into())]),
     };
     let mut cache = SemanticSnapshotCache::for_lineage(provider.clone(), target.clone());
     cache
@@ -58,7 +60,7 @@ fn snapshot(
             nodes: vec![node],
             resource_usage: SnapshotResourceUsage {
                 nodes_observed: 1,
-                properties_read: 5,
+                properties_read: 8,
                 max_depth_observed: 0,
                 exhausted: vec![],
                 incomplete: false,
@@ -67,6 +69,19 @@ fn snapshot(
             incompleteness_debt: debt,
         })
         .unwrap()
+}
+
+fn invoked_window_matcher() -> NativeSemanticNodeMatcherV1 {
+    NativeSemanticNodeMatcherV1 {
+        role: Some("window".into()),
+        name: Some("LocalView Runtime Invoked".into()),
+        control_type: Some("uia_control_type:50032".into()),
+        automation_id: Some("runtime-window".into()),
+        class_name: Some("Window".into()),
+        is_enabled: Some(true),
+        is_offscreen: Some(false),
+        attributes: BTreeMap::from([("state".into(), "ready".into())]),
+    }
 }
 
 fn title_contract(title: &str) -> String {
@@ -80,6 +95,102 @@ fn title_contract(title: &str) -> String {
     }
     .to_contract_ref()
     .unwrap()
+}
+
+#[test]
+fn contract_ref_is_versioned_canonical_and_rejects_ambiguous_forms() {
+    let contract = NativeSemanticPostconditionContractV1 {
+        expectation: NativeSemanticPostconditionExpectation::Present,
+        matcher: invoked_window_matcher(),
+    };
+
+    let encoded = contract.to_contract_ref().unwrap();
+    assert!(encoded.starts_with("lvpc:native-semantic:v1:"));
+    assert_eq!(
+        NativeSemanticPostconditionContractV1::from_contract_ref(&encoded).unwrap(),
+        contract
+    );
+
+    let unsupported = encoded.replacen(
+        "lvpc:native-semantic:v1:",
+        "lvpc:native-semantic:v2:",
+        1,
+    );
+    assert!(matches!(
+        NativeSemanticPostconditionContractV1::from_contract_ref(&unsupported),
+        Err(NativeSemanticPostconditionContractError::UnsupportedVersion { .. })
+    ));
+
+    let non_canonical = encoded.replacen(
+        "lvpc:native-semantic:v1:{",
+        "lvpc:native-semantic:v1: {",
+        1,
+    );
+    assert!(matches!(
+        NativeSemanticPostconditionContractV1::from_contract_ref(&non_canonical),
+        Err(NativeSemanticPostconditionContractError::NonCanonicalReference)
+    ));
+
+    let empty = NativeSemanticPostconditionContractV1 {
+        expectation: NativeSemanticPostconditionExpectation::Present,
+        matcher: NativeSemanticNodeMatcherV1::default(),
+    };
+    assert!(matches!(
+        empty.to_contract_ref(),
+        Err(NativeSemanticPostconditionContractError::EmptyMatcher)
+    ));
+}
+
+#[test]
+fn complete_snapshot_can_prove_presence_absence_and_failure_but_incomplete_is_unknown() {
+    let complete = snapshot(ReconciliationCompleteness::Established, vec![]);
+    let present = NativeSemanticPostconditionContractV1 {
+        expectation: NativeSemanticPostconditionExpectation::Present,
+        matcher: invoked_window_matcher(),
+    };
+    assert_eq!(
+        present.evaluate(complete.as_ref()),
+        NativeSemanticPostconditionEvaluation::VerifiedPass
+    );
+
+    let absent_error = NativeSemanticPostconditionContractV1 {
+        expectation: NativeSemanticPostconditionExpectation::Absent,
+        matcher: NativeSemanticNodeMatcherV1 {
+            role: Some("dialog".into()),
+            name: Some("Error".into()),
+            ..Default::default()
+        },
+    };
+    assert_eq!(
+        absent_error.evaluate(complete.as_ref()),
+        NativeSemanticPostconditionEvaluation::VerifiedPass
+    );
+
+    let missing_expected = NativeSemanticPostconditionContractV1 {
+        expectation: NativeSemanticPostconditionExpectation::Present,
+        matcher: NativeSemanticNodeMatcherV1 {
+            name: Some("Never Appeared".into()),
+            ..Default::default()
+        },
+    };
+    assert_eq!(
+        missing_expected.evaluate(complete.as_ref()),
+        NativeSemanticPostconditionEvaluation::VerifiedFail
+    );
+
+    let incomplete = snapshot(
+        ReconciliationCompleteness::Incomplete,
+        vec!["enumeration:incomplete".into()],
+    );
+    assert_eq!(
+        present.evaluate(incomplete.as_ref()),
+        NativeSemanticPostconditionEvaluation::Unknown
+    );
+    assert_eq!(
+        absent_error.evaluate(incomplete.as_ref()),
+        NativeSemanticPostconditionEvaluation::Unknown,
+        "negative absence must never be inferred from incomplete enumeration"
+    );
 }
 
 #[test]
@@ -101,10 +212,16 @@ fn typed_verifier_proves_supported_contracts_and_keeps_unknown_refs_fail_closed(
 
     assert_eq!(evidence.len(), 3);
     assert_eq!(evidence[0].contract_ref, expected);
-    assert_eq!(evidence[0].status, ConsequentialPostconditionStatus::VerifiedPass);
+    assert_eq!(
+        evidence[0].status,
+        ConsequentialPostconditionStatus::VerifiedPass
+    );
     assert!(!evidence[0].receipt_ref.trim().is_empty());
     assert_eq!(evidence[1].contract_ref, missing);
-    assert_eq!(evidence[1].status, ConsequentialPostconditionStatus::VerifiedFail);
+    assert_eq!(
+        evidence[1].status,
+        ConsequentialPostconditionStatus::VerifiedFail
+    );
     assert_eq!(evidence[2].contract_ref, legacy);
     assert_eq!(
         evidence[2].status,
