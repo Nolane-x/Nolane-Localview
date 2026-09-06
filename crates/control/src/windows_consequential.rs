@@ -18,8 +18,8 @@ use axum::{
     Json, Router,
 };
 use localview_live_bridge::{
-    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalQueuedAction,
-    ConsequentialJournal,
+    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionOperation,
+    CanonicalQueuedAction, ConsequentialJournal,
 };
 use localview_postcondition_contracts::PostconditionContractRegistry;
 use localview_protocol::{PrincipalRef, ProviderElementRef, SessionId};
@@ -72,10 +72,29 @@ static WINDOWS_CONSEQUENTIAL_CONTROL: OnceLock<StdMutex<WindowsConsequentialCont
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WindowsConsequentialInvokePlanRequest {
+struct WindowsConsequentialPlanRequest {
     element_ref: ProviderElementRef,
     expected_postcondition_contract_refs: Vec<String>,
 }
+
+#[derive(Debug, Clone, Copy)]
+struct WindowsConsequentialSemanticAction {
+    operation: CanonicalActionOperation,
+    required_pattern: WindowsUiaPattern,
+    response_operation: &'static str,
+}
+
+const WINDOWS_INVOKE_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
+    operation: CanonicalActionOperation::Activate,
+    required_pattern: WindowsUiaPattern::Invoke,
+    response_operation: "invoke",
+};
+
+const WINDOWS_SELECT_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
+    operation: CanonicalActionOperation::Select,
+    required_pattern: WindowsUiaPattern::SelectionItem,
+    response_operation: "select",
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +170,10 @@ pub(crate) fn router(state: ControlState) -> Router {
             post(plan_windows_consequential_invoke),
         )
         .route(
+            "/v1/sessions/{id}/windows-observe/consequential/select/plan",
+            post(plan_windows_consequential_select),
+        )
+        .route(
             "/v1/sessions/{id}/windows-observe/consequential/{action_id}/confirm",
             post(confirm_windows_consequential_action),
         )
@@ -223,7 +246,40 @@ async fn plan_windows_consequential_invoke(
     State(state): State<ControlState>,
     headers: HeaderMap,
     Path(session_id): Path<SessionId>,
-    Json(request): Json<WindowsConsequentialInvokePlanRequest>,
+    Json(request): Json<WindowsConsequentialPlanRequest>,
+) -> axum::response::Response {
+    plan_windows_consequential_action(
+        state,
+        headers,
+        session_id,
+        request,
+        WINDOWS_INVOKE_ACTION,
+    )
+    .await
+}
+
+async fn plan_windows_consequential_select(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(session_id): Path<SessionId>,
+    Json(request): Json<WindowsConsequentialPlanRequest>,
+) -> axum::response::Response {
+    plan_windows_consequential_action(
+        state,
+        headers,
+        session_id,
+        request,
+        WINDOWS_SELECT_ACTION,
+    )
+    .await
+}
+
+async fn plan_windows_consequential_action(
+    state: ControlState,
+    headers: HeaderMap,
+    session_id: SessionId,
+    request: WindowsConsequentialPlanRequest,
+    semantic_action: WindowsConsequentialSemanticAction,
 ) -> axum::response::Response {
     if !authorized(&headers, &state) {
         return denied();
@@ -294,6 +350,8 @@ async fn plan_windows_consequential_invoke(
     // Confirmation and durable authorization revision are deliberately distinct
     // random values. Only the confirmation_ref is returned to the bearer holder
     // and retained process-locally; it is never written to the durable journal.
+    // Selection intentionally retains the conservative S4/irreversible floor:
+    // generic UIA capability evidence does not prove application-level semantics.
     let confirmation_ref = Uuid::new_v4();
     let authorization_revision_ref = Uuid::new_v4();
     let authority = ActionEnvelopeMetadata {
@@ -312,16 +370,17 @@ async fn plan_windows_consequential_invoke(
             .clone(),
     };
 
-    // Plan-time preflight remains evidence-only. It now evaluates the exact
-    // refreshed element at the exact fresh cut; the coordinator repeats this gate
-    // at confirmation time and later binds a fresh worker-owned dispatch lease.
+    // Plan-time preflight remains evidence-only. It evaluates the exact refreshed
+    // element and the server-owned semantic pattern at the exact fresh cut; the
+    // coordinator repeats this gate at confirmation time and later binds a fresh
+    // worker-owned dispatch lease.
     let preflight = match runtime
         .preflight_uia_action(
             session_id,
             WindowsUiaActionPreflightRequest {
                 authority: authority.clone(),
                 element_ref: refreshed_element_ref,
-                required_pattern: WindowsUiaPattern::Invoke,
+                required_pattern: semantic_action.required_pattern,
             },
         )
         .await
@@ -341,6 +400,9 @@ async fn plan_windows_consequential_invoke(
         }
     };
 
+    // Keep the V1-V3 public wire carrier unchanged. The exact V4 semantic
+    // operation is persisted separately below and is the authority-bearing
+    // operation checked by the verified dispatch coordinator.
     let queued = match state
         .live
         .bind_direct_canonical_action(
@@ -377,7 +439,11 @@ async fn plan_windows_consequential_invoke(
             error.to_string(),
         );
     }
-    if let Err(error) = control.journal.record_intent_operation_bound(&queued).await {
+    if let Err(error) = control
+        .journal
+        .record_intent_operation_bound_explicit(&queued, semantic_action.operation)
+        .await
+    {
         return durable_admission_failure(
             queued.action.id,
             "operation_binding_failed",
@@ -387,7 +453,7 @@ async fn plan_windows_consequential_invoke(
 
     let target = WindowsUiaVerifiedActionTarget {
         element_ref: preflight.element_ref,
-        required_pattern: WindowsUiaPattern::Invoke,
+        required_pattern: semantic_action.required_pattern,
         context_requirements: WindowsUiaDispatchContextRequirements {
             require_foreground_target: true,
             require_exact_element_focus: false,
@@ -411,7 +477,7 @@ async fn plan_windows_consequential_invoke(
             "confirmation_ref": confirmation_ref,
             "confirmation_required": true,
             "confirmation_authority": "bearer_holder_explicit_confirmation",
-            "operation": "invoke",
+            "operation": semantic_action.response_operation,
             "risk_class": "s4_destructive_or_irreversible",
             "idempotency_class": "irreversible",
             "precondition_snapshot_cut_ref": authority.precondition_snapshot_cut_ref,
@@ -815,6 +881,19 @@ mod tests {
     fn decision_principal_names_only_the_authority_actually_proven() {
         assert!(DECISION_PRINCIPAL_REF.contains("bearer-holder"));
         assert!(!DECISION_PRINCIPAL_REF.contains("user"));
+    }
+
+    #[test]
+    fn server_owned_semantic_profiles_bind_exact_operation_and_pattern() {
+        assert_eq!(WINDOWS_INVOKE_ACTION.operation, CanonicalActionOperation::Activate);
+        assert_eq!(WINDOWS_INVOKE_ACTION.required_pattern, WindowsUiaPattern::Invoke);
+        assert_eq!(WINDOWS_INVOKE_ACTION.response_operation, "invoke");
+        assert_eq!(WINDOWS_SELECT_ACTION.operation, CanonicalActionOperation::Select);
+        assert_eq!(
+            WINDOWS_SELECT_ACTION.required_pattern,
+            WindowsUiaPattern::SelectionItem
+        );
+        assert_eq!(WINDOWS_SELECT_ACTION.response_operation, "select");
     }
 
     #[test]
