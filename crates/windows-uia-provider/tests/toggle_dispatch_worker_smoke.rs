@@ -62,7 +62,7 @@ mod windows_smoke {
                     .expect("create Toggle fixture parent")
                 };
                 let checkbox_style =
-                    WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | BS_AUTOCHECKBOX.0);
+                    WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | BS_AUTOCHECKBOX as u32);
                 unsafe {
                     CreateWindowExW(
                         Default::default(),
