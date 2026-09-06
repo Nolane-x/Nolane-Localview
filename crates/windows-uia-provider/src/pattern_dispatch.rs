@@ -8,6 +8,30 @@ use crate::{
     WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
 };
 
+/// Exact provider-side semantic method selected by the trusted runtime from the
+/// durably admitted canonical operation. This is deliberately distinct from the
+/// capability pattern: Expand and Collapse share one UIA pattern but are not the
+/// same side effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsUiaPatternDispatchOperation {
+    Invoke,
+    Select,
+    Toggle,
+    Expand,
+    Collapse,
+}
+
+impl WindowsUiaPatternDispatchOperation {
+    pub const fn required_pattern(self) -> WindowsUiaPattern {
+        match self {
+            Self::Invoke => WindowsUiaPattern::Invoke,
+            Self::Select => WindowsUiaPattern::SelectionItem,
+            Self::Toggle => WindowsUiaPattern::Toggle,
+            Self::Expand | Self::Collapse => WindowsUiaPattern::ExpandCollapse,
+        }
+    }
+}
+
 /// One exact provider-side dispatch attempt. These fields deliberately repeat
 /// the runtime authority binding so the MTA worker can reject cross-cut,
 /// cross-incarnation, cross-element, or replayed execution attempts before it
