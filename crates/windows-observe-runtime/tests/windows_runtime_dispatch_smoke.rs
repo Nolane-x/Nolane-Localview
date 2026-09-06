@@ -338,9 +338,14 @@ mod windows_runtime_dispatch_smoke {
                     if receipt.verdict == ActionPostconditionVerdict::VerifiedExpected =>
                 {
                     assert_eq!(
-                        receipt.expected_contract_refs,
+                        receipt.expected_postcondition_contract_refs,
                         vec![postcondition_ref.clone()],
                         "durable receipt must retain the exact typed postcondition contract"
+                    );
+                    assert_ne!(
+                        receipt.observation_snapshot_cut_ref,
+                        snapshot.snapshot_cut_ref(),
+                        "verified typed postcondition must come from a fresh post-dispatch cut"
                     );
                     assert_eq!(
                         receipt.completion_journal_sequence, entry.journal_sequence,
