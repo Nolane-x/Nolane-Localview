@@ -145,13 +145,15 @@ mod platform {
         UI::{
             Accessibility::{
                 CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
-                IUIAutomationSelectionItemPattern, IUIAutomationTreeWalker, UIA_InvokePatternId,
+                IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern,
+                IUIAutomationTreeWalker, UIA_InvokePatternId,
                 UIA_IsExpandCollapsePatternAvailablePropertyId,
                 UIA_IsInvokePatternAvailablePropertyId, UIA_IsScrollItemPatternAvailablePropertyId,
                 UIA_IsSelectionItemPatternAvailablePropertyId,
                 UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
                 UIA_IsVirtualizedItemPatternAvailablePropertyId,
-                UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId, UIA_PROPERTY_ID,
+                UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId,
+                UIA_TogglePatternId, UIA_PROPERTY_ID,
             },
             WindowsAndMessaging::{
                 GetForegroundWindow, GetLastActivePopup, GetWindowThreadProcessId, IsWindowVisible,
@@ -787,6 +789,27 @@ mod platform {
                         pattern: WindowsUiaPattern::SelectionItem,
                     })?;
                     unsafe { selection_item.Select() }
+                        .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+                }
+                WindowsUiaPattern::Toggle => {
+                    if read_pattern_support(
+                        &retained.element,
+                        UIA_IsTogglePatternAvailablePropertyId,
+                    ) != WindowsUiaPatternSupport::Supported
+                    {
+                        return Err(WindowsUiaWorkerError::PatternUnavailable {
+                            pattern: WindowsUiaPattern::Toggle,
+                        });
+                    }
+                    let toggle = unsafe {
+                        retained
+                            .element
+                            .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
+                    }
+                    .map_err(|_| WindowsUiaWorkerError::PatternUnavailable {
+                        pattern: WindowsUiaPattern::Toggle,
+                    })?;
+                    unsafe { toggle.Toggle() }
                         .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
                 pattern => {
