@@ -75,6 +75,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test pattern_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real retained Win32 UIA SelectionItem dispatch
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-uia-provider --test selection_item_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Invoke to verified post-dispatch commit
         env:
           LOCALVIEW_UIA_SMOKE: "1"
