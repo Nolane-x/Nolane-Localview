@@ -1,18 +1,22 @@
 use std::{
+    convert::Infallible,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use anyhow::{Context, Result};
 use localview_live_bridge::{
-    ConsequentialJournal, ConsequentialRecoveryInventoryEntry, LiveBridge,
+    ConsequentialJournal, ConsequentialPostconditionEvidence, ConsequentialRecoveryInventoryEntry,
+    LiveBridge,
 };
+use localview_native_provider::NativeSemanticSnapshotRevision;
 use localview_protocol::{ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use localview_windows_observe_runtime::{
     recover_attached_consequential_debt, WindowsObserveProvider, WindowsObserveRuntimeManager,
     WindowsUiaAttachedRecoveryDrain, WindowsUiaAttachedRecoveryDrainError,
     WindowsUiaPostconditionVerifier, WindowsUiaSemanticPostconditionVerifier,
 };
+use uuid::Uuid;
 
 const CONSEQUENTIAL_JOURNAL_FILE: &str = "consequential-actions.v1.jsonl";
 
@@ -41,13 +45,31 @@ impl BootConsequentialRecovery {
     }
 }
 
-/// Compatibility name retained for the daemon recovery loop.
+/// Compatibility wrapper retained for the daemon recovery loop.
 ///
-/// The implementation is now the production typed semantic verifier. Supported
-/// V1 contracts can produce evidence from the exact immutable recovery snapshot;
-/// unknown, legacy, malformed, or unsupported contract refs remain `Unknown`, so
-/// this surface stays fail-closed without blocking typed postconditions forever.
-pub(crate) type FailClosedWindowsPostconditionVerifier = WindowsUiaSemanticPostconditionVerifier;
+/// The implementation delegates exactly to the production typed semantic
+/// verifier. Supported V1 contracts can produce evidence from the immutable
+/// recovery snapshot; unknown, legacy, malformed, or unsupported refs remain
+/// `Unknown`, so the historical fail-closed surface remains fail-closed.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FailClosedWindowsPostconditionVerifier;
+
+impl WindowsUiaPostconditionVerifier for FailClosedWindowsPostconditionVerifier {
+    type Error = Infallible;
+
+    fn verify(
+        &self,
+        action_id: Uuid,
+        expected_contract_refs: &[String],
+        snapshot: &NativeSemanticSnapshotRevision,
+    ) -> Result<Vec<ConsequentialPostconditionEvidence>, Self::Error> {
+        WindowsUiaSemanticPostconditionVerifier.verify(
+            action_id,
+            expected_contract_refs,
+            snapshot,
+        )
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WindowsRecoveryAttachmentLineage {
