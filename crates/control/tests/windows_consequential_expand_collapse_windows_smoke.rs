@@ -207,9 +207,9 @@ mod windows_consequential_expand_collapse_windows_smoke {
                     snapshot_budget: SnapshotBudget {
                         max_nodes: 32,
                         max_depth: 4,
-                        // Preserve the old 20-node capacity after the provider grew
-                        // from 16 to 17 tracked properties per semantic node.
-                        max_properties: 340,
+                        // Keep the property ceiling aligned with the explicit node ceiling:
+                        // 32 bounded nodes × 17 tracked properties per semantic node.
+                        max_properties: 544,
                     },
                     command_timeout: Duration::from_secs(5),
                 },
