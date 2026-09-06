@@ -31,12 +31,16 @@ jobs:
         run: cargo test -p localview-windows-uia-provider --test dispatch_context_contract -- --nocapture
       - name: Compile observe runtime manager
         run: cargo check -p localview-windows-observe-runtime --all-targets
+      - name: V4.3 direct canonical action isolation
+        run: cargo test -p localview-live-bridge --test v43_direct_canonical_action -- --nocapture
       - name: V4.3 durable pre-dispatch WAL crash boundary
         run: cargo test -p localview-live-bridge --test v43_consequential_journal -- --nocapture
       - name: V4.3 one-shot PREPARED dispatch capability
         run: cargo test -p localview-live-bridge --test v43_dispatch_capability -- --nocapture
       - name: Phase 6 UIA action capability preflight contract
         run: cargo test -p localview-windows-observe-runtime --test action_capability_preflight_contract -- --nocapture
+      - name: V4.3 UIA preflight continuity reconciliation contract
+        run: cargo test -p localview-windows-observe-runtime --test preflight_continuity_contract -- --nocapture
       - name: Phase 6 dispatch-time exact lease revalidation contract
         run: cargo test -p localview-windows-observe-runtime --test dispatch_revalidation_contract -- --nocapture
       - name: Phase 6 canonical dispatch authority + durable journal contract
@@ -55,6 +59,8 @@ jobs:
         run: cargo test -p localview-windows-observe-runtime --test read_only_semantic_action_contract -- --nocapture
       - name: V4.3 runtime-owned post-dispatch capture contract
         run: cargo test -p localview-windows-observe-runtime --test postcondition_capture_contract -- --nocapture
+      - name: V4.3 consequential HTTP boundary contract
+        run: cargo test -p localview-control --test windows_consequential_control -- --nocapture
       - name: Real Win32 UIA snapshot + exact element lease lifetime
         env:
           LOCALVIEW_UIA_SMOKE: "1"
@@ -71,6 +77,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-observe-runtime --test windows_runtime_dispatch_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real HTTP plan + confirm to verified durable Invoke commit
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-control --test windows_consequential_control_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real bounded Win32 UIA event subscription
         env:
           LOCALVIEW_UIA_SMOKE: "1"
