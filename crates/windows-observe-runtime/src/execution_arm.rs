@@ -684,3 +684,48 @@ fn context_matches_prepared_lease(
         && context.target_incarnation_ref == lease.target_incarnation_ref
         && context.element_ref == lease.element_ref
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durable_expand_and_collapse_mint_distinct_provider_verbs() {
+        assert_eq!(
+            provider_dispatch_operation(
+                CanonicalActionOperation::Expand,
+                WindowsUiaPattern::ExpandCollapse,
+            ),
+            Some(WindowsUiaPatternDispatchOperation::Expand)
+        );
+        assert_eq!(
+            provider_dispatch_operation(
+                CanonicalActionOperation::Collapse,
+                WindowsUiaPattern::ExpandCollapse,
+            ),
+            Some(WindowsUiaPatternDispatchOperation::Collapse)
+        );
+    }
+
+    #[test]
+    fn provider_verb_mapping_rejects_semantic_pattern_mismatches() {
+        assert_eq!(
+            provider_dispatch_operation(CanonicalActionOperation::Expand, WindowsUiaPattern::Invoke),
+            None
+        );
+        assert_eq!(
+            provider_dispatch_operation(
+                CanonicalActionOperation::Collapse,
+                WindowsUiaPattern::Toggle,
+            ),
+            None
+        );
+        assert_eq!(
+            provider_dispatch_operation(
+                CanonicalActionOperation::Toggle,
+                WindowsUiaPattern::ExpandCollapse,
+            ),
+            None
+        );
+    }
+}
