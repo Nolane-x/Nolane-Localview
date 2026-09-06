@@ -14,8 +14,9 @@ mod windows_smoke {
     use localview_protocol::{DispatchResult, TransportResult};
     use localview_windows_uia_provider::{
         WindowsUiaActionCapabilities, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
-        WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport, WindowsUiaSnapshotRequest,
-        WindowsUiaWorker, WindowsUiaWorkerConfig,
+        WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchRequest,
+        WindowsUiaPatternSupport, WindowsUiaSnapshotRequest, WindowsUiaWorker,
+        WindowsUiaWorkerConfig,
     };
     use uuid::Uuid;
     use windows::{
@@ -148,6 +149,7 @@ mod windows_smoke {
             target_incarnation_ref: attachment.target_incarnation_ref().clone(),
             element_ref: fixture_node.element_ref.clone(),
             required_pattern: WindowsUiaPattern::Invoke,
+            dispatch_operation: WindowsUiaPatternDispatchOperation::Invoke,
             context_requirements: requirements,
         };
 
@@ -173,6 +175,10 @@ mod windows_smoke {
         );
         assert_eq!(receipt.element_ref, fixture_node.element_ref);
         assert_eq!(receipt.required_pattern, WindowsUiaPattern::Invoke);
+        assert_eq!(
+            receipt.dispatch_operation,
+            WindowsUiaPatternDispatchOperation::Invoke
+        );
         assert_eq!(receipt.context_requirements, requirements);
         assert_eq!(receipt.final_context.target_window_handle, window_handle);
         assert_eq!(receipt.final_context.target_process_id, process_id);
