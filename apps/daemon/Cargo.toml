@@ -28,4 +28,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+localview-native-provider = { path = "../../crates/native-provider" }
 uuid.workspace = true
