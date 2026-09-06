@@ -1,0 +1,12 @@
+[package]
+name = "localview-postcondition-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+localview-native-provider = { path = "../native-provider" }
+localview-protocol = { path = "../protocol" }
+serde_json.workspace = true
+thiserror.workspace = true
