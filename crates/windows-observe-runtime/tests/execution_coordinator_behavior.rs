@@ -94,7 +94,7 @@ impl FakeProvider {
     fn build_snapshot(&self, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
         let mut capabilities = WindowsUiaActionCapabilities::default();
         capabilities.record(
-            WindowsUiaPattern::Toggle,
+            WindowsUiaPattern::Invoke,
             WindowsUiaPatternSupport::Supported,
         );
         let mut attributes = BTreeMap::from([("provider".into(), "windows_uia".into())]);
@@ -498,7 +498,7 @@ async fn fixture(
     let snapshot = provider.snapshot();
     let metadata = authority(&provider, &snapshot);
     let queued = bridge
-        .enqueue_canonical_action(session(), None, BridgeActionKind::Focus, metadata.clone())
+        .enqueue_canonical_action(session(), None, BridgeActionKind::Click, metadata.clone())
         .await
         .unwrap();
 
@@ -508,6 +508,10 @@ async fn fixture(
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
+    journal
+        .record_intent_operation_bound(&queued)
+        .await
+        .unwrap();
 
     let preflight = runtime
         .preflight_uia_action(
@@ -515,7 +519,7 @@ async fn fixture(
             WindowsUiaActionPreflightRequest {
                 authority: metadata.clone(),
                 element_ref: snapshot.nodes()[0].element_ref.clone(),
-                required_pattern: WindowsUiaPattern::Toggle,
+                required_pattern: WindowsUiaPattern::Invoke,
             },
         )
         .await

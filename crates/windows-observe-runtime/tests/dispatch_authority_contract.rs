@@ -14,9 +14,7 @@ use localview_windows_observe_runtime::{
     WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
     WindowsUiaDispatchAuthorityError, WindowsUiaDispatchRevalidationReceipt,
 };
-use localview_windows_uia_provider::{
-    WindowsUiaElementLeaseReceipt, WindowsUiaPattern,
-};
+use localview_windows_uia_provider::{WindowsUiaElementLeaseReceipt, WindowsUiaPattern};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -46,7 +44,7 @@ fn authority(cut: &str) -> ActionEnvelopeMetadata {
         target_incarnation_ref: target(),
         risk_class: ActionRiskClass::ReversibleUiState,
         idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
-        expected_postcondition_contract_refs: vec!["postcondition:focus-current".into()],
+        expected_postcondition_contract_refs: vec!["postcondition:activate-current".into()],
     }
 }
 
@@ -77,7 +75,7 @@ fn dispatch_revalidation(
             cache_revision_ref: "cache:authority-fence:1".into(),
             observed_digest: "digest:authority-fence:1".into(),
             element_ref: element_ref.clone(),
-            required_pattern: WindowsUiaPattern::Toggle,
+            required_pattern: WindowsUiaPattern::Invoke,
         },
         element_lease: WindowsUiaElementLeaseReceipt {
             snapshot_cut_ref: cut.into(),
@@ -109,7 +107,10 @@ impl WindowsUiaAuthorizationRevalidator for FakeAuthorizationRevalidator {
     }
 }
 
-fn revalidator_for(action_id: Uuid, metadata: &ActionEnvelopeMetadata) -> FakeAuthorizationRevalidator {
+fn revalidator_for(
+    action_id: Uuid,
+    metadata: &ActionEnvelopeMetadata,
+) -> FakeAuthorizationRevalidator {
     FakeAuthorizationRevalidator {
         receipt: WindowsUiaAuthorizationRevalidationReceipt {
             action_id,
@@ -140,7 +141,7 @@ async fn exact_canonical_authority_is_revalidated_and_durably_recorded_before_di
     bind_bridge(&bridge).await;
     let metadata = authority("cut:authority-fence:1");
     let queued = bridge
-        .enqueue_canonical_action(session(), None, BridgeActionKind::Focus, metadata.clone())
+        .enqueue_canonical_action(session(), None, BridgeActionKind::Click, metadata.clone())
         .await
         .unwrap();
 
@@ -150,6 +151,7 @@ async fn exact_canonical_authority_is_revalidated_and_durably_recorded_before_di
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
+    journal.record_intent_operation_bound(&queued).await.unwrap();
     journal
         .record_authorization(
             queued.action.id,
@@ -186,7 +188,8 @@ async fn exact_canonical_authority_is_revalidated_and_durably_recorded_before_di
         } if authorization_revision == "authorization:authority-fence:v7"
     ));
 
-    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{}.operation-{}.json", path.display(), queued.action.id));
 }
 
 #[tokio::test]
@@ -195,7 +198,7 @@ async fn principal_substitution_fails_before_journal_revalidation_is_appended() 
     bind_bridge(&bridge).await;
     let metadata = authority("cut:authority-fence:2");
     let queued = bridge
-        .enqueue_canonical_action(session(), None, BridgeActionKind::Focus, metadata.clone())
+        .enqueue_canonical_action(session(), None, BridgeActionKind::Click, metadata.clone())
         .await
         .unwrap();
 
@@ -205,6 +208,7 @@ async fn principal_substitution_fails_before_journal_revalidation_is_appended() 
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
+    journal.record_intent_operation_bound(&queued).await.unwrap();
 
     let mut forged = revalidator_for(queued.action.id, &metadata);
     forged.receipt.acting_principal_ref = PrincipalRef::from("principal:acting:forged");
@@ -220,10 +224,14 @@ async fn principal_substitution_fails_before_journal_revalidation_is_appended() 
     .await
     .unwrap_err();
 
-    assert_eq!(error, WindowsUiaDispatchAuthorityError::AuthorizationReceiptMismatch);
+    assert_eq!(
+        error,
+        WindowsUiaDispatchAuthorityError::AuthorizationReceiptMismatch
+    );
     assert_eq!(journal.entries_for(queued.action.id).await.len(), 1);
 
-    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{}.operation-{}.json", path.display(), queued.action.id));
 }
 
 #[tokio::test]
@@ -232,7 +240,7 @@ async fn previously_linearized_action_cannot_be_reauthorized_for_blind_redispatc
     bind_bridge(&bridge).await;
     let metadata = authority("cut:authority-fence:3");
     let queued = bridge
-        .enqueue_canonical_action(session(), None, BridgeActionKind::Focus, metadata.clone())
+        .enqueue_canonical_action(session(), None, BridgeActionKind::Click, metadata.clone())
         .await
         .unwrap();
 
@@ -242,6 +250,7 @@ async fn previously_linearized_action_cannot_be_reauthorized_for_blind_redispatc
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
+    journal.record_intent_operation_bound(&queued).await.unwrap();
     let authorized = journal
         .record_authorization(
             queued.action.id,
@@ -294,5 +303,6 @@ async fn previously_linearized_action_cannot_be_reauthorized_for_blind_redispatc
     ));
     assert_eq!(journal.entries_for(queued.action.id).await.len(), 4);
 
-    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{}.operation-{}.json", path.display(), queued.action.id));
 }
