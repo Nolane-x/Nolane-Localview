@@ -11,13 +11,18 @@ pub struct WindowsFreshActionEvidenceReceipt {
 impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
     /// Capture a fresh semantic revision for consequential planning and rebind
     /// the requested provider element only when the exact provider-local identity
-    /// still exists in the newly observed revision.
+    /// still exists in a complete newly observed revision.
     ///
     /// This operation is observation-only. It mints no action, confirmation,
     /// dispatch lease, PREPARED authority, or execution permit. The operation
     /// gate serializes the entire refresh against attach/drain/reconciliation,
     /// detach, and real provider dispatch so the returned cut is the same cut
     /// installed as the runtime's current immutable snapshot.
+    ///
+    /// Once a provider snapshot has passed exact lineage/cut validation it is
+    /// published as current world evidence even when the requested element is
+    /// absent, duplicated, or the observation is incomplete. Those conditions
+    /// prevent action binding; they do not justify retaining an older world view.
     pub async fn refresh_uia_action_evidence(
         &self,
         session_id: SessionId,
@@ -91,31 +96,10 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             });
         }
 
-        let mut matches = snapshot.nodes().iter().filter(|node| {
-            node.element_ref.provider_family == previous_element_ref.provider_family
-                && node.element_ref.provider_incarnation_ref
-                    == previous_element_ref.provider_incarnation_ref
-                && node.element_ref.target_incarnation_ref
-                    == previous_element_ref.target_incarnation_ref
-                && node.element_ref.opaque_provider_element_id
-                    == previous_element_ref.opaque_provider_element_id
-        });
-        let refreshed_element_ref = matches
-            .next()
-            .map(|node| node.element_ref.clone())
-            .ok_or_else(|| WindowsObserveRuntimeError::Provider {
-                operation: "fresh_action_evidence_element_rebind",
-                message: "exact provider element identity is absent from the fresh planning revision"
-                    .into(),
-            })?;
-        if matches.next().is_some() {
-            return Err(WindowsObserveRuntimeError::Provider {
-                operation: "fresh_action_evidence_element_rebind",
-                message: "exact provider element identity is ambiguous in the fresh planning revision"
-                    .into(),
-            });
-        }
-
+        // A valid provider observation is current-world evidence regardless of
+        // whether it can safely rebind this action. Publish it before evaluating
+        // completeness or element identity so LocalView never falls back to an
+        // older snapshot merely because the intended target disappeared.
         let reconciliation_receipt_ref = format!(
             "reconcile:windows-uia:action-plan:{session_id}:{}:{}",
             binding.generation(),
@@ -130,6 +114,48 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             .await?;
         self.update_reconciliation_snapshot(session_id, snapshot.clone())
             .await;
+
+        if snapshot.completeness() != ReconciliationCompleteness::Established
+            || snapshot.resource_usage().incomplete
+            || !snapshot.incompleteness_debt().is_empty()
+        {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "fresh_action_evidence_snapshot_incomplete",
+                message: format!(
+                    "fresh planning observation {} is incomplete and cannot authorize action binding",
+                    snapshot.snapshot_cut_ref()
+                ),
+            });
+        }
+
+        let mut matches = snapshot.nodes().iter().filter(|node| {
+            node.element_ref.provider_family == previous_element_ref.provider_family
+                && node.element_ref.provider_incarnation_ref
+                    == previous_element_ref.provider_incarnation_ref
+                && node.element_ref.target_incarnation_ref
+                    == previous_element_ref.target_incarnation_ref
+                && node.element_ref.opaque_provider_element_id
+                    == previous_element_ref.opaque_provider_element_id
+        });
+        let refreshed_element_ref = matches
+            .next()
+            .map(|node| node.element_ref.clone())
+            .ok_or_else(|| WindowsObserveRuntimeError::Provider {
+                operation: "fresh_action_evidence_element_rebind",
+                message: format!(
+                    "exact provider element identity is absent from fresh planning revision {}",
+                    snapshot.snapshot_cut_ref()
+                ),
+            })?;
+        if matches.next().is_some() {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "fresh_action_evidence_element_rebind",
+                message: format!(
+                    "exact provider element identity is ambiguous in fresh planning revision {}",
+                    snapshot.snapshot_cut_ref()
+                ),
+            });
+        }
 
         Ok(WindowsFreshActionEvidenceReceipt {
             previous_element_ref,
