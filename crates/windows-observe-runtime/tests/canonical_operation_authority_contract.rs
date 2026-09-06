@@ -61,7 +61,10 @@ fn element_ref() -> ProviderElementRef {
     }
 }
 
-fn revalidation(authority: ActionEnvelopeMetadata, pattern: WindowsUiaPattern) -> WindowsUiaDispatchRevalidationReceipt {
+fn revalidation(
+    authority: ActionEnvelopeMetadata,
+    pattern: WindowsUiaPattern,
+) -> WindowsUiaDispatchRevalidationReceipt {
     let element = element_ref();
     WindowsUiaDispatchRevalidationReceipt {
         authority: authority.clone(),
@@ -128,10 +131,6 @@ async fn focus_intent_cannot_be_substituted_with_invoke_or_other_uia_pattern() {
         .enqueue_canonical_action(session(), None, BridgeActionKind::Focus, authority.clone())
         .await
         .unwrap();
-    assert_eq!(
-        bridge.action_operation(queued.action.id).await,
-        Some(CanonicalActionOperation::Focus)
-    );
 
     let journal_path = path();
     let journal = ConsequentialJournal::open(&journal_path).await.unwrap();
@@ -139,10 +138,7 @@ async fn focus_intent_cannot_be_substituted_with_invoke_or_other_uia_pattern() {
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
-    journal
-        .record_intent_operation_bound(queued.action.id, CanonicalActionOperation::Focus)
-        .await
-        .unwrap();
+    journal.record_intent_operation_bound(&queued).await.unwrap();
 
     let error = validate_uia_dispatch_authority(
         &bridge,
@@ -164,11 +160,16 @@ async fn focus_intent_cannot_be_substituted_with_invoke_or_other_uia_pattern() {
     );
     assert_eq!(
         journal.entries_for(queued.action.id).await.len(),
-        2,
+        1,
         "operation mismatch must fail before authorization is appended"
     );
 
-    let _ = std::fs::remove_file(journal_path);
+    let _ = std::fs::remove_file(&journal_path);
+    let _ = std::fs::remove_file(format!(
+        "{}.operation-{}.json",
+        journal_path.display(),
+        queued.action.id
+    ));
 }
 
 #[tokio::test]
