@@ -1,0 +1,13 @@
+name: V43 attachment recovery plan RED
+
+on:
+  push:
+
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Attachment recovery plan contract
+        run: cargo test -p localview-windows-observe-runtime --test attachment_recovery_plan -- --nocapture
