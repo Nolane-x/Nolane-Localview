@@ -14,7 +14,7 @@ use localview_protocol::{ProviderIncarnationRef, SessionId, TargetIncarnationRef
 use localview_windows_observe_runtime::{
     recover_attached_consequential_debt, WindowsObserveProvider, WindowsObserveRuntimeManager,
     WindowsUiaAttachedRecoveryDrain, WindowsUiaAttachedRecoveryDrainError,
-    WindowsUiaPostconditionVerifier,
+    WindowsUiaPostconditionVerifier, WindowsUiaSemanticPostconditionVerifier,
 };
 use uuid::Uuid;
 
@@ -45,12 +45,12 @@ impl BootConsequentialRecovery {
     }
 }
 
-/// Production daemon verifier used until a typed postcondition-contract verifier
-/// is registered for Windows UIA recovery.
+/// Compatibility wrapper retained for the daemon recovery loop.
 ///
-/// Contract refs are currently opaque identifiers. Returning no evidence is the
-/// only sound default: reconciliation classifies every unproved expected contract
-/// as unresolved/unknown and therefore cannot manufacture a verified commit.
+/// The implementation delegates exactly to the production typed semantic
+/// verifier. Supported V1 contracts can produce evidence from the immutable
+/// recovery snapshot; unknown, legacy, malformed, or unsupported refs remain
+/// `Unknown`, so the historical fail-closed surface remains fail-closed.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct FailClosedWindowsPostconditionVerifier;
 
@@ -59,11 +59,15 @@ impl WindowsUiaPostconditionVerifier for FailClosedWindowsPostconditionVerifier 
 
     fn verify(
         &self,
-        _action_id: Uuid,
-        _expected_contract_refs: &[String],
-        _snapshot: &NativeSemanticSnapshotRevision,
+        action_id: Uuid,
+        expected_contract_refs: &[String],
+        snapshot: &NativeSemanticSnapshotRevision,
     ) -> Result<Vec<ConsequentialPostconditionEvidence>, Self::Error> {
-        Ok(Vec::new())
+        WindowsUiaSemanticPostconditionVerifier.verify(
+            action_id,
+            expected_contract_refs,
+            snapshot,
+        )
     }
 }
 

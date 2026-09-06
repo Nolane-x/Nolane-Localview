@@ -7,6 +7,7 @@ mod dispatch_seal;
 mod execution_arm;
 mod prepared_dispatch;
 mod runtime_manager;
+mod semantic_postcondition;
 mod verified_execution;
 pub use action_preflight::*;
 pub use attached_recovery::*;
@@ -15,6 +16,7 @@ pub use dispatch_seal::*;
 pub use execution_arm::*;
 pub use prepared_dispatch::*;
 pub use runtime_manager::*;
+pub use semantic_postcondition::*;
 pub use verified_execution::*;
 
 use localview_live_bridge::{

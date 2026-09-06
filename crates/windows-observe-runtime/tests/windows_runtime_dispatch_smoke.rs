@@ -14,19 +14,18 @@ mod windows_runtime_dispatch_smoke {
     use localview_live_bridge::{
         ActionEnvelopeMetadata, ActionIdempotencyClass, ActionPostconditionVerdict,
         ActionRiskClass, BridgeActionKind, ConsequentialJournal, ConsequentialJournalTransition,
-        ConsequentialPostconditionEvidence, ConsequentialPostconditionStatus,
         ConsequentialRecoveryState, LiveBridge,
     };
-    use localview_native_provider::{
-        NativeSemanticSnapshotRevision, SnapshotBudget, UserSelectedWindowTarget,
-    };
+    use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
     use localview_protocol::{PrincipalRef, WorldOutcome};
     use localview_windows_observe_runtime::{
-        WindowsObserveRuntimeConfig, WindowsUiaActionPreflightRequest,
-        WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
-        WindowsUiaDispatchSealRequest, WindowsUiaPostconditionVerifier,
-        WindowsUiaPreparedDispatchRequest, WindowsUiaVerifiedExecutionOutcome,
-        arm_uia_dispatch_execution, execute_armed_uia_dispatch_verified, prepare_uia_dispatch,
+        NativeSemanticNodeMatcherV1, NativeSemanticPostconditionContractV1,
+        NativeSemanticPostconditionExpectation, WindowsObserveRuntimeConfig,
+        WindowsUiaActionPreflightRequest, WindowsUiaAuthorizationRevalidationReceipt,
+        WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchSealRequest,
+        WindowsUiaPreparedDispatchRequest, WindowsUiaSemanticPostconditionVerifier,
+        WindowsUiaVerifiedExecutionOutcome, arm_uia_dispatch_execution,
+        execute_armed_uia_dispatch_verified, prepare_uia_dispatch,
         spawn_windows_uia_runtime_manager,
     };
     use localview_windows_uia_provider::{
@@ -50,7 +49,6 @@ mod windows_runtime_dispatch_smoke {
 
     const BEFORE_TITLE: &str = "LocalView Runtime Before";
     const AFTER_TITLE: &str = "LocalView Runtime Invoked";
-    const POSTCONDITION_REF: &str = "postcondition:runtime-smoke";
 
     unsafe extern "system" fn smoke_parent_wndproc(
         window: HWND,
@@ -83,44 +81,6 @@ mod windows_runtime_dispatch_smoke {
                 acting_principal_ref: authority.acting_principal_ref.clone(),
                 authorization_revision: authority.authorization_revision.clone(),
             })
-        }
-    }
-
-    struct SmokePostconditionVerifier {
-        pre_dispatch_cut: String,
-    }
-
-    impl WindowsUiaPostconditionVerifier for SmokePostconditionVerifier {
-        type Error = Infallible;
-
-        fn verify(
-            &self,
-            _action_id: Uuid,
-            expected_contract_refs: &[String],
-            snapshot: &NativeSemanticSnapshotRevision,
-        ) -> Result<Vec<ConsequentialPostconditionEvidence>, Self::Error> {
-            assert_eq!(expected_contract_refs, &[POSTCONDITION_REF.to_owned()]);
-            assert_ne!(
-                snapshot.snapshot_cut_ref(),
-                self.pre_dispatch_cut,
-                "production coordinator must verify a fresh post-dispatch cut"
-            );
-            let title_changed = snapshot
-                .nodes()
-                .iter()
-                .any(|node| node.name.as_deref() == Some(AFTER_TITLE));
-            Ok(vec![ConsequentialPostconditionEvidence {
-                contract_ref: POSTCONDITION_REF.into(),
-                status: if title_changed {
-                    ConsequentialPostconditionStatus::VerifiedPass
-                } else {
-                    ConsequentialPostconditionStatus::VerifiedFail
-                },
-                receipt_ref: format!(
-                    "postcondition:runtime-smoke:{}",
-                    snapshot.cache_revision_ref()
-                ),
-            }])
         }
     }
 
@@ -257,6 +217,15 @@ mod windows_runtime_dispatch_smoke {
             })
             .cloned()
             .expect("real child BUTTON snapshot must advertise Invoke support");
+        let postcondition_ref = NativeSemanticPostconditionContractV1 {
+            expectation: NativeSemanticPostconditionExpectation::Present,
+            matcher: NativeSemanticNodeMatcherV1 {
+                name: Some(AFTER_TITLE.into()),
+                ..Default::default()
+            },
+        }
+        .to_contract_ref()
+        .expect("encode typed observable postcondition contract");
 
         let authority = ActionEnvelopeMetadata {
             decision_principal_ref: PrincipalRef::from("principal:decision:runtime-smoke"),
@@ -267,7 +236,7 @@ mod windows_runtime_dispatch_smoke {
             target_incarnation_ref: snapshot.target_incarnation_ref().clone(),
             risk_class: ActionRiskClass::ReversibleUiState,
             idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
-            expected_postcondition_contract_refs: vec![POSTCONDITION_REF.into()],
+            expected_postcondition_contract_refs: vec![postcondition_ref.clone()],
         };
         let queued = bridge
             .enqueue_canonical_action(session_id, None, BridgeActionKind::Focus, authority.clone())
@@ -334,12 +303,10 @@ mod windows_runtime_dispatch_smoke {
             session_id,
             armed,
             &executor,
-            &SmokePostconditionVerifier {
-                pre_dispatch_cut: snapshot.snapshot_cut_ref().to_owned(),
-            },
+            &WindowsUiaSemanticPostconditionVerifier,
         )
         .await
-        .expect("production verified executor must close real Invoke through postcondition commit");
+        .expect("production typed verifier must close real Invoke through postcondition commit");
 
         assert!(matches!(
             outcome,
@@ -371,6 +338,16 @@ mod windows_runtime_dispatch_smoke {
                     if receipt.verdict == ActionPostconditionVerdict::VerifiedExpected =>
                 {
                     assert_eq!(
+                        receipt.expected_postcondition_contract_refs,
+                        vec![postcondition_ref.clone()],
+                        "durable receipt must retain the exact typed postcondition contract"
+                    );
+                    assert_ne!(
+                        receipt.observation_snapshot_cut_ref,
+                        snapshot.snapshot_cut_ref(),
+                        "verified typed postcondition must come from a fresh post-dispatch cut"
+                    );
+                    assert_eq!(
                         receipt.completion_journal_sequence, entry.journal_sequence,
                         "journal must mint the receipt completion sequence"
                     );
@@ -383,7 +360,7 @@ mod windows_runtime_dispatch_smoke {
                 }
                 _ => None,
             })
-            .expect("fresh postcondition evidence must produce a durable verified receipt");
+            .expect("fresh typed postcondition evidence must produce a durable verified receipt");
         let commit_sequence = entries
             .iter()
             .find(|entry| matches!(entry.transition, ConsequentialJournalTransition::Committed))
