@@ -21,7 +21,10 @@ use localview_windows_observe_runtime::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::ControlState;
+use crate::{
+    windows_consequential::release_windows_consequential_control_session_for_sessions,
+    ControlState,
+};
 
 #[derive(Debug)]
 struct RuntimeEntry {
@@ -156,7 +159,10 @@ async fn detach_windows_observe(
     };
 
     match runtime.release(id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            release_windows_consequential_control_session_for_sessions(&state.sessions, id).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(error) => runtime_error_response(error),
     }
 }
