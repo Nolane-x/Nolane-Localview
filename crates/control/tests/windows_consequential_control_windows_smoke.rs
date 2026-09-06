@@ -29,9 +29,9 @@ mod windows_consequential_control_windows_smoke {
     };
     use localview_sessions::SessionManager;
     use localview_windows_observe_runtime::{
-        NativeSemanticNodeMatcherV1, NativeSemanticPostconditionContractV1,
-        NativeSemanticPostconditionExpectation, WindowsObserveRuntimeConfig,
-        spawn_windows_uia_runtime_manager,
+        spawn_windows_uia_runtime_manager, NativeSemanticNodeMatcherV1,
+        NativeSemanticPostconditionContractV1, NativeSemanticPostconditionExpectation,
+        WindowsObserveRuntimeConfig,
     };
     use localview_windows_uia_provider::{
         WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport,
@@ -40,17 +40,17 @@ mod windows_consequential_control_windows_smoke {
     use tower::ServiceExt;
     use uuid::Uuid;
     use windows::{
+        core::w,
         Win32::{
             Foundation::{HWND, LPARAM, LRESULT, WPARAM},
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GWLP_WNDPROC, MSG, PM_REMOVE, PeekMessageW, SW_SHOW, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WM_COMMAND,
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+                PeekMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+                TranslateMessage, CW_USEDEFAULT, GWLP_WNDPROC, MSG, PM_REMOVE, SW_SHOW, WM_COMMAND,
                 WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
-        core::w,
     };
 
     const BEFORE_TITLE: &str = "LocalView Control Before";
@@ -224,6 +224,7 @@ mod windows_consequential_control_windows_smoke {
             .current_semantic_snapshot(session_id)
             .await
             .expect("attached runtime must expose current semantic snapshot");
+        let initial_snapshot_cut = snapshot.snapshot_cut_ref().to_owned();
         assert!(
             snapshot
                 .nodes()
@@ -240,6 +241,10 @@ mod windows_consequential_control_windows_smoke {
             })
             .cloned()
             .expect("real child BUTTON must advertise UIA Invoke support");
+        assert_eq!(
+            invoke_node.element_ref.acquisition_cut_ref, initial_snapshot_cut,
+            "the HTTP request deliberately starts from the initial cached element ref"
+        );
         let postcondition_ref = NativeSemanticPostconditionContractV1 {
             expectation: NativeSemanticPostconditionExpectation::Present,
             matcher: NativeSemanticNodeMatcherV1 {
@@ -307,6 +312,19 @@ mod windows_consequential_control_windows_smoke {
             .as_str()
             .expect("plan response must contain precondition cut")
             .to_owned();
+        assert_ne!(
+            precondition_cut, initial_snapshot_cut,
+            "consequential planning must re-observe the provider instead of admitting the cached initial cut"
+        );
+        let planning_snapshot = runtime
+            .current_semantic_snapshot(session_id)
+            .await
+            .expect("fresh plan observation must remain the runtime current snapshot");
+        assert_eq!(
+            planning_snapshot.snapshot_cut_ref(),
+            precondition_cut,
+            "canonical plan authority must bind the same fresh cut installed as current world evidence"
+        );
         assert!(
             live.take_public_actions(session_id, 16).await.is_empty(),
             "production consequential control actions must never enter the legacy V1-V3 executor queue"
