@@ -11,7 +11,7 @@ mod windows_smoke {
     };
 
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
-    use localview_protocol::{DispatchResult, TransportResult};
+    use localview_protocol::{DispatchResult, ReconciliationCompleteness, TransportResult};
     use localview_windows_uia_provider::{
         WindowsUiaActionCapabilities, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
         WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchRequest,
@@ -152,6 +152,13 @@ mod windows_smoke {
                 },
             )
             .expect("publish retained semantic snapshot before Expand dispatch");
+        assert_eq!(
+            initial.completeness(),
+            ReconciliationCompleteness::Established,
+            "collapsed fixture snapshot must begin complete; debt={:?}, usage={:?}",
+            initial.incompleteness_debt(),
+            initial.resource_usage()
+        );
         let combo = initial
             .nodes()
             .iter()
@@ -220,6 +227,19 @@ mod windows_smoke {
                 .map(String::as_str),
             Some("expanded"),
             "blocking UIA Expand must be followed by fresh provider evidence of expanded state"
+        );
+        assert_eq!(
+            postdispatch.completeness(),
+            ReconciliationCompleteness::Established,
+            "expanded fresh snapshot must remain verifier-eligible; debt={:?}, usage={:?}",
+            postdispatch.incompleteness_debt(),
+            postdispatch.resource_usage()
+        );
+        assert!(
+            postdispatch.incompleteness_debt().is_empty() && !postdispatch.resource_usage().incomplete,
+            "expanded fresh snapshot must carry no hidden incompleteness; debt={:?}, usage={:?}",
+            postdispatch.incompleteness_debt(),
+            postdispatch.resource_usage()
         );
 
         stop.store(true, Ordering::Release);
