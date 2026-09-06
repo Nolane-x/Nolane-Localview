@@ -1,10 +1,22 @@
 use std::{
+    convert::Infallible,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use anyhow::{Context, Result};
-use localview_live_bridge::{ConsequentialJournal, ConsequentialRecoveryInventoryEntry};
+use localview_live_bridge::{
+    ConsequentialJournal, ConsequentialPostconditionEvidence, ConsequentialRecoveryInventoryEntry,
+    LiveBridge,
+};
+use localview_native_provider::NativeSemanticSnapshotRevision;
+use localview_protocol::{ProviderIncarnationRef, SessionId, TargetIncarnationRef};
+use localview_windows_observe_runtime::{
+    recover_attached_consequential_debt, WindowsObserveProvider, WindowsObserveRuntimeManager,
+    WindowsUiaAttachedRecoveryDrain, WindowsUiaAttachedRecoveryDrainError,
+    WindowsUiaPostconditionVerifier,
+};
+use uuid::Uuid;
 
 const CONSEQUENTIAL_JOURNAL_FILE: &str = "consequential-actions.v1.jsonl";
 
@@ -31,6 +43,113 @@ impl BootConsequentialRecovery {
     pub(crate) fn inventory(&self) -> &[ConsequentialRecoveryInventoryEntry] {
         &self.inventory
     }
+}
+
+/// Production daemon verifier used until a typed postcondition-contract verifier
+/// is registered for Windows UIA recovery.
+///
+/// Contract refs are currently opaque identifiers. Returning no evidence is the
+/// only sound default: reconciliation classifies every unproved expected contract
+/// as unresolved/unknown and therefore cannot manufacture a verified commit.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FailClosedWindowsPostconditionVerifier;
+
+impl WindowsUiaPostconditionVerifier for FailClosedWindowsPostconditionVerifier {
+    type Error = Infallible;
+
+    fn verify(
+        &self,
+        _action_id: Uuid,
+        _expected_contract_refs: &[String],
+        _snapshot: &NativeSemanticSnapshotRevision,
+    ) -> Result<Vec<ConsequentialPostconditionEvidence>, Self::Error> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsRecoveryAttachmentLineage {
+    session_id: SessionId,
+    provider_incarnation_ref: ProviderIncarnationRef,
+    target_incarnation_ref: TargetIncarnationRef,
+}
+
+/// Process-local guard preventing unresolved boot debt from being observed and
+/// reconciled forever on a stable attachment.
+///
+/// This tracker is intentionally non-durable and contains no authority. A new
+/// daemon process may re-observe unresolved debt after the user re-establishes an
+/// exact attachment, while one process attempts each exact attachment lineage at
+/// most once after a successful recovery drain.
+#[derive(Debug, Default)]
+pub(crate) struct WindowsBootRecoveryTracker {
+    completed_lineages: Vec<WindowsRecoveryAttachmentLineage>,
+}
+
+impl WindowsBootRecoveryTracker {
+    fn contains(&self, lineage: &WindowsRecoveryAttachmentLineage) -> bool {
+        self.completed_lineages.contains(lineage)
+    }
+
+    fn record_completed(&mut self, drain: &WindowsUiaAttachedRecoveryDrain) {
+        let lineage = WindowsRecoveryAttachmentLineage {
+            session_id: drain.session_id,
+            provider_incarnation_ref: drain.provider_incarnation_ref.clone(),
+            target_incarnation_ref: drain.target_incarnation_ref.clone(),
+        };
+        if !self.contains(&lineage) {
+            self.completed_lineages.push(lineage);
+        }
+    }
+}
+
+/// Recover durable boot history only after an exact Windows UIA attachment has
+/// been established by normal control-plane authority.
+///
+/// The function accepts no executor, dispatch permit, or execution grant. It
+/// delegates only to the attachment-bound no-redispatch recovery coordinator.
+/// Failed drains are deliberately not tracked so transient provider/resource
+/// failures remain retryable; successful drains, including unresolved outcomes,
+/// are attempted only once per exact attachment lineage in this daemon process.
+pub(crate) async fn recover_newly_attached_boot_debt<P, V>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    verifier: &V,
+    tracker: &mut WindowsBootRecoveryTracker,
+) -> Result<Vec<WindowsUiaAttachedRecoveryDrain>, WindowsUiaAttachedRecoveryDrainError>
+where
+    P: WindowsObserveProvider,
+    V: WindowsUiaPostconditionVerifier,
+{
+    let mut drains = Vec::new();
+
+    for session_id in runtime.attached_sessions().await {
+        let Some(snapshot) = runtime.current_semantic_snapshot(session_id).await else {
+            continue;
+        };
+        let candidate = WindowsRecoveryAttachmentLineage {
+            session_id,
+            provider_incarnation_ref: snapshot.provider_incarnation_ref().clone(),
+            target_incarnation_ref: snapshot.target_incarnation_ref().clone(),
+        };
+        if tracker.contains(&candidate) {
+            continue;
+        }
+
+        let drain = recover_attached_consequential_debt(
+            bridge,
+            journal,
+            runtime,
+            session_id,
+            verifier,
+        )
+        .await?;
+        tracker.record_completed(&drain);
+        drains.push(drain);
+    }
+
+    Ok(drains)
 }
 
 pub(crate) async fn open_boot_consequential_recovery(
