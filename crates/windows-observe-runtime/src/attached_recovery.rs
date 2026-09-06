@@ -1,11 +1,16 @@
 use localview_live_bridge::{
     ConsequentialJournal, ConsequentialRecoveryDebtDisposition, ConsequentialRecoveryState,
+    LiveBridge,
 };
 use localview_protocol::{ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{WindowsObserveProvider, WindowsObserveRuntimeManager};
+use crate::{
+    recover_consequential_uia_action, WindowsObserveProvider, WindowsObserveRuntimeManager,
+    WindowsUiaConsequentialRecoveryOutcome, WindowsUiaPostconditionVerifier,
+    WindowsUiaVerifiedExecutionError,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsUiaAttachedRecoveryPlanEntry {
@@ -28,6 +33,48 @@ pub struct WindowsUiaAttachedRecoveryPlan {
 pub enum WindowsUiaAttachedRecoveryPlanError {
     #[error("Windows UIA recovery planning requires an attached session {session_id}")]
     NotAttached { session_id: SessionId },
+}
+
+/// One attachment-bound recovery result in the exact monotonic order returned by
+/// the durable recovery plan.
+///
+/// Report-only variants deliberately carry no executor, dispatch permit, or
+/// provider capability. They describe durable state without creating authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowsUiaAttachedRecoveryDrainOutcome {
+    NoDispatchProven {
+        action_id: Uuid,
+        durable_state: ConsequentialRecoveryState,
+    },
+    Recovered(WindowsUiaConsequentialRecoveryOutcome),
+    HistoricalTerminal {
+        action_id: Uuid,
+        durable_state: ConsequentialRecoveryState,
+    },
+    ReconciliationRequired {
+        action_id: Uuid,
+        durable_state: ConsequentialRecoveryState,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUiaAttachedRecoveryDrain {
+    pub session_id: SessionId,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub entries: Vec<WindowsUiaAttachedRecoveryDrainOutcome>,
+}
+
+#[derive(Debug, Error)]
+pub enum WindowsUiaAttachedRecoveryDrainError {
+    #[error(transparent)]
+    Plan(#[from] WindowsUiaAttachedRecoveryPlanError),
+    #[error("Windows UIA consequential recovery failed for action {action_id}: {source}")]
+    Recovery {
+        action_id: Uuid,
+        #[source]
+        source: WindowsUiaVerifiedExecutionError,
+    },
 }
 
 /// Build a read-only recovery plan for the exact currently attached Windows UIA
@@ -73,5 +120,74 @@ pub async fn plan_attached_consequential_recovery<P: WindowsObserveProvider>(
         provider_incarnation_ref,
         target_incarnation_ref,
         entries,
+    })
+}
+
+/// Drain durable consequential recovery debt for the exact currently attached
+/// Windows UIA provider/target incarnation.
+///
+/// This API intentionally has no executor or dispatch-permit parameter. Restart
+/// recovery can observe, independently verify, reconcile, or commit an already
+/// verified durable receipt, but it can never recreate process-local dispatch
+/// authority or blind-retry an action.
+pub async fn recover_attached_consequential_debt<P, V>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    session_id: SessionId,
+    verifier: &V,
+) -> Result<WindowsUiaAttachedRecoveryDrain, WindowsUiaAttachedRecoveryDrainError>
+where
+    P: WindowsObserveProvider,
+    V: WindowsUiaPostconditionVerifier,
+{
+    let plan = plan_attached_consequential_recovery(journal, runtime, session_id).await?;
+    let mut outcomes = Vec::with_capacity(plan.entries.len());
+
+    for entry in &plan.entries {
+        let outcome = match entry.disposition {
+            ConsequentialRecoveryDebtDisposition::NoDispatchProven => {
+                WindowsUiaAttachedRecoveryDrainOutcome::NoDispatchProven {
+                    action_id: entry.action_id,
+                    durable_state: entry.recovery_state,
+                }
+            }
+            ConsequentialRecoveryDebtDisposition::ObservationRequired
+            | ConsequentialRecoveryDebtDisposition::CommitOnly => {
+                let recovered = recover_consequential_uia_action(
+                    bridge,
+                    journal,
+                    runtime,
+                    entry.action_id,
+                    verifier,
+                )
+                .await
+                .map_err(|source| WindowsUiaAttachedRecoveryDrainError::Recovery {
+                    action_id: entry.action_id,
+                    source,
+                })?;
+                WindowsUiaAttachedRecoveryDrainOutcome::Recovered(recovered)
+            }
+            ConsequentialRecoveryDebtDisposition::HistoricalTerminal => {
+                WindowsUiaAttachedRecoveryDrainOutcome::HistoricalTerminal {
+                    action_id: entry.action_id,
+                    durable_state: entry.recovery_state,
+                }
+            }
+            ConsequentialRecoveryDebtDisposition::ReconciliationRequired => {
+                WindowsUiaAttachedRecoveryDrainOutcome::ReconciliationRequired {
+                    action_id: entry.action_id,
+                    durable_state: entry.recovery_state,
+                }
+            }
+        };
+        outcomes.push(outcome);
+    }
+
+    Ok(WindowsUiaAttachedRecoveryDrain {
+        session_id: plan.session_id,
+        provider_incarnation_ref: plan.provider_incarnation_ref,
+        target_incarnation_ref: plan.target_incarnation_ref,
+        entries: outcomes,
     })
 }
