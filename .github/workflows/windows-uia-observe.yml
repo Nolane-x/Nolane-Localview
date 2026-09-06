@@ -41,6 +41,8 @@ jobs:
         run: cargo test -p localview-windows-observe-runtime --test dispatch_revalidation_contract -- --nocapture
       - name: Phase 6 canonical dispatch authority + durable journal contract
         run: cargo test -p localview-windows-observe-runtime --test dispatch_authority_contract -- --nocapture
+      - name: Phase 6 canonical operation binding authority contract
+        run: cargo test -p localview-windows-observe-runtime --test canonical_operation_authority_contract -- --nocapture
       - name: Phase 6 runtime dispatch seal contract
         run: cargo test -p localview-windows-observe-runtime --test dispatch_seal_contract -- --nocapture
       - name: Phase 6 sealed durable PREPARED dispatch boundary
@@ -49,6 +51,8 @@ jobs:
         run: cargo test -p localview-windows-observe-runtime --test prepared_dispatch_contract execution_arm -- --nocapture
       - name: Phase 6 one-shot provider dispatch outcome coordinator
         run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior -- --nocapture
+      - name: Phase 6 canonical verified-action coordinator
+        run: cargo test -p localview-windows-observe-runtime --test verified_action_coordinator_contract -- --nocapture
       - name: Phase 5 resource accounting and governor contract
         run: cargo test -p localview-windows-observe-runtime --test resource_accounting_contract -- --nocapture
       - name: Phase 6 read-only semantic action contract
@@ -67,7 +71,7 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test pattern_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
-      - name: Real retained Invoke to verified post-dispatch commit
+      - name: Real retained canonical Invoke to verified post-dispatch commit
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-observe-runtime --test windows_runtime_dispatch_smoke -- --ignored --nocapture --test-threads=1
