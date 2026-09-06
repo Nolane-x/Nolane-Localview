@@ -22,9 +22,7 @@ use localview_live_bridge::{
     ConsequentialJournal,
 };
 use localview_postcondition_contracts::PostconditionContractRegistry;
-use localview_protocol::{
-    PrincipalRef, ProviderElementRef, ReconciliationCompleteness, SessionId,
-};
+use localview_protocol::{PrincipalRef, ProviderElementRef, SessionId};
 use localview_sessions::SessionManager;
 use localview_windows_observe_runtime::{
     execute_verified_canonical_uia_action, WindowsUiaActionPreflightRequest,
@@ -253,8 +251,8 @@ async fn plan_windows_consequential_invoke(
         return unavailable("durable consequential control journal is unavailable");
     };
 
-    // Serialize plan admission so the process-local confirmation set has a hard
-    // bounded denominator and session invalidation cannot race a durable admit.
+    // Serialize planning so pending-confirmation capacity, fresh observation,
+    // canonical admission, and session invalidation form one process-local order.
     let _plan_gate = control.plan_gate.lock().await;
     if control.pending.lock().await.len() >= MAX_PENDING_WINDOWS_CONSEQUENTIAL_PLANS {
         return (
@@ -267,22 +265,31 @@ async fn plan_windows_consequential_invoke(
             .into_response();
     }
 
-    let Some(snapshot) = runtime.current_semantic_snapshot(session_id).await else {
-        return not_attached();
-    };
-    if snapshot.completeness() != ReconciliationCompleteness::Established
-        || snapshot.resource_usage().incomplete
-        || !snapshot.incompleteness_debt().is_empty()
+    // Consequential planning never admits authority from the cached request cut.
+    // The runtime first captures a fresh provider revision, publishes that exact
+    // world evidence, and rebinds the requested opaque provider identity onto
+    // the fresh cut. Missing, ambiguous, stale, or incomplete evidence fails
+    // closed before any confirmation or durable action intent can be created.
+    let fresh_evidence = match runtime
+        .refresh_uia_action_evidence(session_id, request.element_ref)
+        .await
     {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "windows_consequential_snapshot_incomplete",
-                "message": "consequential planning requires a complete current semantic snapshot",
-            })),
-        )
-            .into_response();
-    }
+        Ok(receipt) => receipt,
+        Err(error) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "windows_consequential_fresh_evidence_rejected",
+                    "message": error.to_string(),
+                    "dispatch_performed": false,
+                    "confirmation_created": false,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let refreshed_element_ref = fresh_evidence.refreshed_element_ref;
 
     // Confirmation and durable authorization revision are deliberately distinct
     // random values. Only the confirmation_ref is returned to the bearer holder
@@ -295,9 +302,9 @@ async fn plan_windows_consequential_invoke(
         authorization_revision: format!(
             "authorization:local-control:confirmation-v1:{authorization_revision_ref}"
         ),
-        precondition_snapshot_cut_ref: snapshot.snapshot_cut_ref().to_owned(),
-        provider_incarnation_ref: snapshot.provider_incarnation_ref().clone(),
-        target_incarnation_ref: snapshot.target_incarnation_ref().clone(),
+        precondition_snapshot_cut_ref: fresh_evidence.snapshot_cut_ref.clone(),
+        provider_incarnation_ref: refreshed_element_ref.provider_incarnation_ref.clone(),
+        target_incarnation_ref: refreshed_element_ref.target_incarnation_ref.clone(),
         risk_class: ActionRiskClass::DestructiveOrIrreversible,
         idempotency_class: ActionIdempotencyClass::Irreversible,
         expected_postcondition_contract_refs: request
@@ -305,14 +312,15 @@ async fn plan_windows_consequential_invoke(
             .clone(),
     };
 
-    // Plan-time preflight is evidence only. The coordinator repeats this exact
-    // gate at confirmation time and later binds a fresh worker-owned lease.
+    // Plan-time preflight remains evidence-only. It now evaluates the exact
+    // refreshed element at the exact fresh cut; the coordinator repeats this gate
+    // at confirmation time and later binds a fresh worker-owned dispatch lease.
     let preflight = match runtime
         .preflight_uia_action(
             session_id,
             WindowsUiaActionPreflightRequest {
                 authority: authority.clone(),
-                element_ref: request.element_ref,
+                element_ref: refreshed_element_ref,
                 required_pattern: WindowsUiaPattern::Invoke,
             },
         )
@@ -326,6 +334,7 @@ async fn plan_windows_consequential_invoke(
                     "error": "windows_consequential_preflight_rejected",
                     "message": error.to_string(),
                     "dispatch_performed": false,
+                    "confirmation_created": false,
                 })),
             )
                 .into_response();
@@ -350,6 +359,7 @@ async fn plan_windows_consequential_invoke(
                     "error": "windows_consequential_canonical_binding_rejected",
                     "binding_error": format!("{error:?}"),
                     "dispatch_performed": false,
+                    "confirmation_created": false,
                 })),
             )
                 .into_response();
@@ -405,6 +415,7 @@ async fn plan_windows_consequential_invoke(
             "risk_class": "s4_destructive_or_irreversible",
             "idempotency_class": "irreversible",
             "precondition_snapshot_cut_ref": authority.precondition_snapshot_cut_ref,
+            "planning_reconciliation_receipt_ref": fresh_evidence.reconciliation_receipt_ref,
             "expected_postcondition_contract_refs": authority.expected_postcondition_contract_refs,
             "restart_restores_confirmation_authority": false,
         })),
@@ -759,7 +770,7 @@ mod tests {
                     action: localview_live_bridge::BridgeActionKind::Click,
                     created_at: chrono::Utc::now(),
                 },
-                envelope: CanonicalActionEnvelope {
+                envelope: localview_live_bridge::CanonicalActionEnvelope {
                     envelope_id: Uuid::from_u128(0x91c3),
                     transport_action_id: action_id,
                     session_id,
