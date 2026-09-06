@@ -83,14 +83,14 @@ mod windows_smoke {
                     SendMessageW(
                         listbox,
                         LB_ADDSTRING,
-                        WPARAM(0),
-                        LPARAM(w!("Alpha").as_ptr() as isize),
+                        Some(WPARAM(0)),
+                        Some(LPARAM(w!("Alpha").as_ptr() as isize)),
                     );
                     SendMessageW(
                         listbox,
                         LB_ADDSTRING,
-                        WPARAM(0),
-                        LPARAM(w!("Beta").as_ptr() as isize),
+                        Some(WPARAM(0)),
+                        Some(LPARAM(w!("Beta").as_ptr() as isize)),
                     );
                     let _ = ShowWindow(window, SW_SHOW);
                 }
