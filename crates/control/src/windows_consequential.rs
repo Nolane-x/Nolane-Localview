@@ -44,7 +44,8 @@ use crate::{windows_observe_runtime_for_sessions, ControlState};
 const MAX_PENDING_WINDOWS_CONSEQUENTIAL_PLANS: usize = 64;
 const MAX_POSTCONDITION_CONTRACTS: usize = 8;
 const MAX_POSTCONDITION_CONTRACT_REF_BYTES: usize = 4 * 1024;
-const DECISION_PRINCIPAL_REF: &str = "principal:local-control:authenticated-user-confirmation-v1";
+const DECISION_PRINCIPAL_REF: &str =
+    "principal:local-control:bearer-holder-explicit-confirmation-v1";
 const ACTING_PRINCIPAL_REF: &str = "principal:localview-daemon:windows-uia-v1";
 
 #[derive(Debug, Clone)]
@@ -284,8 +285,8 @@ async fn plan_windows_consequential_invoke(
     }
 
     // Confirmation and durable authorization revision are deliberately distinct
-    // random values. Only the confirmation_ref is returned to the caller and
-    // retained process-locally; it is never written to the durable journal.
+    // random values. Only the confirmation_ref is returned to the bearer holder
+    // and retained process-locally; it is never written to the durable journal.
     let confirmation_ref = Uuid::new_v4();
     let authorization_revision_ref = Uuid::new_v4();
     let authority = ActionEnvelopeMetadata {
@@ -399,6 +400,7 @@ async fn plan_windows_consequential_invoke(
             "action_id": action_id,
             "confirmation_ref": confirmation_ref,
             "confirmation_required": true,
+            "confirmation_authority": "bearer_holder_explicit_confirmation",
             "operation": "invoke",
             "risk_class": "s4_destructive_or_irreversible",
             "idempotency_class": "irreversible",
@@ -719,6 +721,8 @@ fn lock_registry(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use localview_live_bridge::{
         ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
@@ -784,6 +788,32 @@ mod tests {
         }
     }
 
+    fn journal_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "localview-windows-consequential-control-{label}-{}.jsonl",
+            Uuid::new_v4()
+        ))
+    }
+
+    async fn control_handle(label: &str) -> (WindowsConsequentialControlHandle, std::path::PathBuf) {
+        let path = journal_path(label);
+        let journal = Arc::new(ConsequentialJournal::open(&path).await.unwrap());
+        (
+            WindowsConsequentialControlHandle {
+                journal,
+                pending: Arc::new(Mutex::new(HashMap::new())),
+                plan_gate: Arc::new(Mutex::new(())),
+            },
+            path,
+        )
+    }
+
+    #[test]
+    fn decision_principal_names_only_the_authority_actually_proven() {
+        assert!(DECISION_PRINCIPAL_REF.contains("bearer-holder"));
+        assert!(!DECISION_PRINCIPAL_REF.contains("user"));
+    }
+
     #[test]
     fn process_local_confirmation_is_exact_and_one_shot() {
         let plan = pending_plan();
@@ -809,6 +839,71 @@ mod tests {
                 .revalidate(plan.queued.action.id, &substituted)
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn wrong_confirmation_does_not_consume_exact_confirmation_and_exact_is_one_shot() {
+        let (control, path) = control_handle("one-shot").await;
+        let plan = pending_plan();
+        let action_id = plan.queued.action.id;
+        let session_id = plan.queued.action.session_id;
+        let confirmation_ref = plan.confirmation_ref;
+        control.pending.lock().await.insert(action_id, plan);
+
+        assert!(
+            consume_pending_plan(
+                &control,
+                session_id,
+                action_id,
+                Uuid::from_u128(0xdead),
+            )
+            .await
+            .is_none()
+        );
+        assert!(
+            peek_pending_plan(&control, session_id, action_id, confirmation_ref)
+                .await
+                .is_some(),
+            "wrong confirmation must not burn the exact pending authority"
+        );
+        assert!(
+            consume_pending_plan(&control, session_id, action_id, confirmation_ref)
+                .await
+                .is_some()
+        );
+        assert!(
+            consume_pending_plan(&control, session_id, action_id, confirmation_ref)
+                .await
+                .is_none(),
+            "exact confirmation must be consumable only once"
+        );
+
+        drop(control);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn reconfiguration_with_same_durable_journal_restores_no_pending_confirmation() {
+        let sessions = Arc::new(SessionManager::new(Duration::from_secs(1)));
+        let path = journal_path("reconfigure");
+        let journal = Arc::new(ConsequentialJournal::open(&path).await.unwrap());
+        configure_windows_consequential_control_for_sessions(&sessions, Some(journal.clone()));
+        let first = windows_consequential_control_for_sessions(&sessions).unwrap();
+        let plan = pending_plan();
+        first.pending.lock().await.insert(plan.queued.action.id, plan);
+        assert_eq!(first.pending.lock().await.len(), 1);
+
+        configure_windows_consequential_control_for_sessions(&sessions, Some(journal));
+        let restarted = windows_consequential_control_for_sessions(&sessions).unwrap();
+        assert!(
+            restarted.pending.lock().await.is_empty(),
+            "durable journal reuse must never reconstruct process-local confirmation authority"
+        );
+
+        configure_windows_consequential_control_for_sessions(&sessions, None);
+        drop(first);
+        drop(restarted);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
