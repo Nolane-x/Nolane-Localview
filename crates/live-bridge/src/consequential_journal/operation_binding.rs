@@ -29,9 +29,9 @@ pub struct DurableCanonicalActionOperationBinding {
 }
 
 impl ConsequentialJournal {
-    /// Persist the canonical operation while the exact intent is still merely
-    /// admitted. The journal state lock is retained through the fsync so a
-    /// concurrent authorization append cannot overtake operation binding.
+    /// Persist the canonical operation derived from the legacy bridge action.
+    /// New semantic product surfaces whose intent is more specific than the
+    /// compatibility carrier must use `record_intent_operation_bound_explicit`.
     pub async fn record_intent_operation_bound(
         &self,
         queued: &CanonicalQueuedAction,
@@ -43,6 +43,23 @@ impl ConsequentialJournal {
                 attempted: "intent_operation_binding_for_internal_action",
                 current: None,
             })?;
+        self.record_intent_operation_bound_explicit(queued, operation)
+            .await
+    }
+
+    /// Persist an exact server-owned semantic operation while the canonical
+    /// intent is still merely admitted.
+    ///
+    /// This seam deliberately accepts a typed operation rather than deriving it
+    /// from the legacy bridge carrier. It lets product planning bind semantics
+    /// such as `Select` without teaching the compatibility wire format a new
+    /// public action kind, while keeping the durable authority record explicit.
+    pub async fn record_intent_operation_bound_explicit(
+        &self,
+        queued: &CanonicalQueuedAction,
+        operation: CanonicalActionOperation,
+    ) -> Result<DurableCanonicalActionOperationBinding, ConsequentialJournalError> {
+        let action_id = queued.action.id;
 
         if queued.envelope.transport_action_id != action_id
             || queued.envelope.session_id != queued.action.session_id
