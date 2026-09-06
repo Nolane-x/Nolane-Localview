@@ -6,7 +6,10 @@ mod dispatch_authority;
 mod dispatch_seal;
 mod execution_arm;
 mod prepared_dispatch;
-mod runtime_manager;
+mod runtime_manager {
+    include!("runtime_manager.rs");
+    include!("fresh_action_evidence.rs");
+}
 mod semantic_postcondition;
 mod verified_action_coordinator;
 mod verified_execution;
