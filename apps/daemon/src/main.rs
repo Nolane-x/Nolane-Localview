@@ -23,7 +23,7 @@ use localview_control::{
 use localview_core::RuntimeConfig;
 use localview_discovery::{CommandListenerSource, DiscoveryEngine};
 use localview_evidence::EvidenceStore;
-use localview_live_bridge::{ConsequentialJournal, LiveBridge};
+use localview_live_bridge::{ConsequentialJournal, ConsequentialRecoveryActionScope, LiveBridge};
 use localview_observation::ObservationBus;
 use localview_protocol::ObservationEvent;
 use localview_security::generate_control_token;
@@ -53,7 +53,8 @@ async fn main() -> Result<()> {
     let consequential_recovery =
         consequential_recovery::open_boot_consequential_recovery(&state_dir()?).await?;
     let consequential_journal = consequential_recovery.journal().clone();
-    let has_consequential_boot_history = !consequential_recovery.inventory().is_empty();
+    let consequential_boot_scope = consequential_recovery.scope().clone();
+    let has_consequential_boot_history = !consequential_boot_scope.is_empty();
     if !has_consequential_boot_history {
         info!(
             journal = %consequential_recovery.journal_path().display(),
@@ -121,6 +122,7 @@ async fn main() -> Result<()> {
                 runtime,
                 live.clone(),
                 consequential_journal.clone(),
+                consequential_boot_scope,
             );
         }
     }
@@ -246,6 +248,7 @@ fn spawn_windows_consequential_recovery_loop(
     runtime: Arc<WindowsUiaObserveRuntimeManager>,
     live: LiveBridge,
     journal: Arc<ConsequentialJournal>,
+    scope: ConsequentialRecoveryActionScope,
 ) {
     tokio::spawn(async move {
         let verifier = consequential_recovery::FailClosedWindowsPostconditionVerifier;
@@ -255,17 +258,19 @@ fn spawn_windows_consequential_recovery_loop(
 
         loop {
             interval.tick().await;
-            match consequential_recovery::recover_newly_attached_boot_debt(
+            let attempts = consequential_recovery::recover_newly_attached_boot_debt(
                 &live,
                 journal.as_ref(),
                 runtime.as_ref(),
                 &verifier,
+                &scope,
                 &mut tracker,
             )
-            .await
-            {
-                Ok(drains) => {
-                    for drain in drains {
+            .await;
+
+            for attempt in attempts {
+                match attempt.outcome {
+                    Ok(drain) => {
                         if drain.entries.is_empty() {
                             info!(
                                 session_id = %drain.session_id,
@@ -285,12 +290,15 @@ fn spawn_windows_consequential_recovery_loop(
                             );
                         }
                     }
-                }
-                Err(error) => {
-                    warn!(
-                        %error,
-                        "attachment-bound consequential boot recovery failed fail-closed; eligible exact attachments remain retryable"
-                    );
+                    Err(error) => {
+                        warn!(
+                            session_id = %attempt.session_id,
+                            provider_incarnation_ref = ?attempt.provider_incarnation_ref,
+                            target_incarnation_ref = ?attempt.target_incarnation_ref,
+                            %error,
+                            "attachment-bound consequential boot recovery failed fail-closed; this exact lineage remains retryable while later attachments continue"
+                        );
+                    }
                 }
             }
         }

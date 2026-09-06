@@ -7,7 +7,9 @@ use std::{
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
-    ConsequentialJournal, ConsequentialPostconditionStatus, DispatchPreparationReceipt, LiveBridge,
+    ConsequentialJournal, ConsequentialPostconditionEvidence, ConsequentialPostconditionStatus,
+    ConsequentialRecoveryActionScope, ConsequentialRecoveryState, DispatchPreparationReceipt,
+    LiveBridge,
 };
 use localview_native_provider::{
     NativeSemanticNodeObservation, NativeSemanticSnapshotDraft, NativeSemanticSnapshotRevision,
@@ -174,23 +176,81 @@ impl WindowsObserveProvider for FakeProvider {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SelectiveVerifierError;
+
+impl fmt::Display for SelectiveVerifierError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("selective verifier failure")
+    }
+}
+
+impl StdError for SelectiveVerifierError {}
+
+struct SelectiveVerifier {
+    failing_action_id: Uuid,
+}
+
+impl WindowsUiaPostconditionVerifier for SelectiveVerifier {
+    type Error = SelectiveVerifierError;
+
+    fn verify(
+        &self,
+        action_id: Uuid,
+        expected_contract_refs: &[String],
+        _snapshot: &NativeSemanticSnapshotRevision,
+    ) -> Result<Vec<ConsequentialPostconditionEvidence>, Self::Error> {
+        if action_id == self.failing_action_id {
+            return Err(SelectiveVerifierError);
+        }
+        Ok(expected_contract_refs
+            .iter()
+            .enumerate()
+            .map(|(index, contract_ref)| ConsequentialPostconditionEvidence {
+                contract_ref: contract_ref.clone(),
+                status: ConsequentialPostconditionStatus::Unknown,
+                receipt_ref: format!("selective-verifier:{action_id}:{index}"),
+            })
+            .collect())
+    }
+}
+
 fn recovery_session() -> SessionId {
     Uuid::from_u128(0x8401)
 }
 
+fn second_recovery_session() -> SessionId {
+    Uuid::from_u128(0x8405)
+}
+
 fn selection() -> UserSelectedWindowTarget {
+    selection_for(0x8402, 0x8403)
+}
+
+fn second_selection() -> UserSelectedWindowTarget {
+    selection_for(0x8406, 0x8407)
+}
+
+fn selection_for(native_window_handle: u64, selection_nonce: u128) -> UserSelectedWindowTarget {
     UserSelectedWindowTarget {
-        native_window_handle: 0x8402,
+        native_window_handle,
         expected_process_id: 84,
-        selection_nonce: Uuid::from_u128(0x8403),
+        selection_nonce: Uuid::from_u128(selection_nonce),
     }
 }
 
 fn recovery_envelope(provider: &FakeProvider) -> CanonicalActionEnvelope {
+    recovery_envelope_for_session(provider, recovery_session())
+}
+
+fn recovery_envelope_for_session(
+    provider: &FakeProvider,
+    session_id: SessionId,
+) -> CanonicalActionEnvelope {
     CanonicalActionEnvelope {
         envelope_id: Uuid::new_v4(),
         transport_action_id: Uuid::new_v4(),
-        session_id: recovery_session(),
+        session_id,
         metadata: ActionEnvelopeMetadata {
             decision_principal_ref: PrincipalRef::from("principal:daemon-recovery:planner"),
             acting_principal_ref: PrincipalRef::from("principal:daemon-recovery:executor"),
@@ -276,11 +336,15 @@ async fn boot_debt_recovery_runs_once_per_exact_attachment_and_leaves_opaque_con
         "localview-v43-daemon-attachment-recovery-{}.jsonl",
         Uuid::new_v4()
     ));
-    let journal = ConsequentialJournal::open(&path).await.unwrap();
+    let pre_boot_journal = ConsequentialJournal::open(&path).await.unwrap();
     let action = recovery_envelope(&provider);
-    record_prepared(&journal, &action).await;
-    drop(journal);
+    record_prepared(&pre_boot_journal, &action).await;
+    drop(pre_boot_journal);
+
+    // Crossing the journal reopen boundary is the restart model: durable PREPARED
+    // survives, while process-local dispatch grants deliberately do not.
     let journal = ConsequentialJournal::open(&path).await.unwrap();
+    let scope = ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
 
     let mut tracker = super::WindowsBootRecoveryTracker::default();
     let verifier = super::FailClosedWindowsPostconditionVerifier;
@@ -289,15 +353,16 @@ async fn boot_debt_recovery_runs_once_per_exact_attachment_and_leaves_opaque_con
         &journal,
         &runtime,
         &verifier,
+        &scope,
         &mut tracker,
     )
-    .await
-    .unwrap();
+    .await;
 
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0].entries.len(), 1);
+    let drain = first[0].outcome.as_ref().expect("first recovery must succeed");
+    assert_eq!(drain.entries.len(), 1);
     assert!(matches!(
-        &first[0].entries[0],
+        &drain.entries[0],
         WindowsUiaAttachedRecoveryDrainOutcome::Recovered(
             WindowsUiaConsequentialRecoveryOutcome::PostconditionNotVerified {
                 action_id,
@@ -313,12 +378,162 @@ async fn boot_debt_recovery_runs_once_per_exact_attachment_and_leaves_opaque_con
         &journal,
         &runtime,
         &verifier,
+        &scope,
         &mut tracker,
     )
-    .await
-    .unwrap();
+    .await;
     assert!(second.is_empty());
     assert_eq!(provider.snapshot_calls(), 2);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn boot_recovery_scope_excludes_actions_admitted_after_boot_inventory_was_frozen() {
+    let bridge = LiveBridge::new(64, 8);
+    let provider = FakeProvider::new();
+    let runtime = WindowsObserveRuntimeManager::new(
+        Arc::new(provider.clone()),
+        bridge.clone(),
+        WindowsObserveRuntimeConfig {
+            event_capacity: 16,
+            drain_limit: 8,
+        },
+    )
+    .unwrap();
+    runtime.attach(recovery_session(), selection()).await.unwrap();
+
+    let path = std::env::temp_dir().join(format!(
+        "localview-v43-daemon-boot-scope-{}.jsonl",
+        Uuid::new_v4()
+    ));
+    let pre_boot_journal = ConsequentialJournal::open(&path).await.unwrap();
+    let boot_action = recovery_envelope(&provider);
+    record_prepared(&pre_boot_journal, &boot_action).await;
+    drop(pre_boot_journal);
+
+    let journal = ConsequentialJournal::open(&path).await.unwrap();
+    let boot_scope = ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
+
+    // This action is deliberately admitted after the boot scope was frozen. Its
+    // live PREPARED grant stays active, but scoped boot recovery must never touch
+    // it and therefore must not race that live dispatch authority.
+    let live_action = recovery_envelope(&provider);
+    record_prepared(&journal, &live_action).await;
+
+    let mut tracker = super::WindowsBootRecoveryTracker::default();
+    let attempts = super::recover_newly_attached_boot_debt(
+        &bridge,
+        &journal,
+        &runtime,
+        &super::FailClosedWindowsPostconditionVerifier,
+        &boot_scope,
+        &mut tracker,
+    )
+    .await;
+
+    assert_eq!(attempts.len(), 1);
+    let drain = attempts[0]
+        .outcome
+        .as_ref()
+        .expect("boot-scoped drain must succeed");
+    assert_eq!(drain.entries.len(), 1, "post-boot action must be excluded");
+    assert!(matches!(
+        &drain.entries[0],
+        WindowsUiaAttachedRecoveryDrainOutcome::Recovered(
+            WindowsUiaConsequentialRecoveryOutcome::PostconditionNotVerified { action_id, .. }
+        ) if *action_id == boot_action.transport_action_id
+    ));
+    assert_eq!(
+        journal.recovery_state(live_action.transport_action_id).await,
+        Some(ConsequentialRecoveryState::DispatchPrepared),
+        "watcher must not mutate consequential work admitted after boot"
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn one_failed_attachment_does_not_starve_later_boot_recovery_and_only_failure_retries() {
+    let bridge = LiveBridge::new(64, 8);
+    let provider = FakeProvider::new();
+    let runtime = WindowsObserveRuntimeManager::new(
+        Arc::new(provider.clone()),
+        bridge.clone(),
+        WindowsObserveRuntimeConfig {
+            event_capacity: 16,
+            drain_limit: 8,
+        },
+    )
+    .unwrap();
+    runtime.attach(recovery_session(), selection()).await.unwrap();
+    runtime
+        .attach(second_recovery_session(), second_selection())
+        .await
+        .unwrap();
+
+    let path = std::env::temp_dir().join(format!(
+        "localview-v43-daemon-recovery-fairness-{}.jsonl",
+        Uuid::new_v4()
+    ));
+    let pre_boot_journal = ConsequentialJournal::open(&path).await.unwrap();
+    let failing_action = recovery_envelope_for_session(&provider, recovery_session());
+    let later_action = recovery_envelope_for_session(&provider, second_recovery_session());
+    record_prepared(&pre_boot_journal, &failing_action).await;
+    record_prepared(&pre_boot_journal, &later_action).await;
+    drop(pre_boot_journal);
+
+    let journal = ConsequentialJournal::open(&path).await.unwrap();
+    let scope = ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
+
+    let verifier = SelectiveVerifier {
+        failing_action_id: failing_action.transport_action_id,
+    };
+    let mut tracker = super::WindowsBootRecoveryTracker::default();
+    let first = super::recover_newly_attached_boot_debt(
+        &bridge,
+        &journal,
+        &runtime,
+        &verifier,
+        &scope,
+        &mut tracker,
+    )
+    .await;
+
+    assert_eq!(first.len(), 2, "all exact attachments must get an attempt");
+    let failed = first
+        .iter()
+        .find(|attempt| attempt.session_id == recovery_session())
+        .expect("failing lineage must be represented");
+    assert!(failed.outcome.is_err());
+    let later = first
+        .iter()
+        .find(|attempt| attempt.session_id == second_recovery_session())
+        .expect("later lineage must not be starved");
+    let later_drain = later
+        .outcome
+        .as_ref()
+        .expect("later lineage should recover independently");
+    assert_eq!(later_drain.entries.len(), 1);
+    assert!(matches!(
+        &later_drain.entries[0],
+        WindowsUiaAttachedRecoveryDrainOutcome::Recovered(
+            WindowsUiaConsequentialRecoveryOutcome::PostconditionNotVerified { action_id, .. }
+        ) if *action_id == later_action.transport_action_id
+    ));
+
+    let second = super::recover_newly_attached_boot_debt(
+        &bridge,
+        &journal,
+        &runtime,
+        &verifier,
+        &scope,
+        &mut tracker,
+    )
+    .await;
+    assert_eq!(second.len(), 1, "only the failed lineage stays retryable");
+    assert_eq!(second[0].session_id, recovery_session());
+    assert!(second[0].outcome.is_err());
 
     let _ = std::fs::remove_file(path);
 }

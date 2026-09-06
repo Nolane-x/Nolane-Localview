@@ -2,6 +2,6 @@ include!("consequential_journal/base.rs");
 
 mod recovery_inventory;
 pub use recovery_inventory::{
-    ConsequentialRecoveryBindingEntry, ConsequentialRecoveryDebtDisposition,
-    ConsequentialRecoveryInventoryEntry,
+    ConsequentialRecoveryActionScope, ConsequentialRecoveryBindingEntry,
+    ConsequentialRecoveryDebtDisposition, ConsequentialRecoveryInventoryEntry,
 };

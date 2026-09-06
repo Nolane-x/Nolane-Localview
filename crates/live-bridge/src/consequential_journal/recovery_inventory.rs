@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use localview_protocol::{ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,39 @@ pub struct ConsequentialRecoveryInventoryEntry {
     pub action_id: Uuid,
     pub recovery_state: ConsequentialRecoveryState,
     pub latest_journal_sequence: u64,
+}
+
+/// Immutable membership boundary for one recovery epoch such as daemon boot.
+///
+/// The scope freezes action identity, not journal sequence. Recovery may append
+/// newer observation/reconciliation records for an in-scope action and that same
+/// action must remain retryable after a transient failure. Actions admitted after
+/// the scope was frozen receive a different action id and are therefore excluded.
+/// This is data scoping only: it carries no dispatch, execution, observation, or
+/// provider authority.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConsequentialRecoveryActionScope {
+    action_ids: BTreeSet<Uuid>,
+}
+
+impl ConsequentialRecoveryActionScope {
+    pub fn from_inventory(entries: &[ConsequentialRecoveryInventoryEntry]) -> Self {
+        Self {
+            action_ids: entries.iter().map(|entry| entry.action_id).collect(),
+        }
+    }
+
+    pub fn contains(&self, action_id: Uuid) -> bool {
+        self.action_ids.contains(&action_id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.action_ids.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.action_ids.len()
+    }
 }
 
 /// Replay-derived recovery debt bound to the exact durable action lineage.
