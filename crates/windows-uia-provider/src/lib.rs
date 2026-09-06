@@ -144,9 +144,10 @@ mod platform {
         },
         UI::{
             Accessibility::{
-                CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+                CUIAutomation, IUIAutomation, IUIAutomationElement,
+                IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
                 IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern,
-                IUIAutomationTreeWalker, UIA_InvokePatternId,
+                IUIAutomationTreeWalker, UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
                 UIA_IsExpandCollapsePatternAvailablePropertyId,
                 UIA_IsInvokePatternAvailablePropertyId, UIA_IsScrollItemPatternAvailablePropertyId,
                 UIA_IsSelectionItemPatternAvailablePropertyId,
@@ -165,8 +166,9 @@ mod platform {
     use crate::{
         WindowsUiaActionCapabilities, WindowsUiaDispatchContextObservation,
         WindowsUiaDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaPattern,
-        WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
-        WindowsUiaPatternSupport, evaluate_windows_uia_dispatch_context,
+        WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchReceipt,
+        WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport,
+        evaluate_windows_uia_dispatch_context,
     };
 
     const PROPERTIES_PER_NODE: usize = 16;
@@ -361,6 +363,7 @@ mod platform {
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
             recv_command(reply_rx, self.command_timeout)
         }
+
         pub fn dispatch_pattern(
             &self,
             attachment: &WindowsUiaAttachment,
@@ -374,6 +377,7 @@ mod platform {
                 || request.provider_incarnation_ref != self.provider_incarnation_ref
                 || request.provider_incarnation_ref != attachment.provider_incarnation_ref
                 || request.target_incarnation_ref != attachment.target_incarnation_ref
+                || request.dispatch_operation.required_pattern() != request.required_pattern
             {
                 return Err(WindowsUiaWorkerError::InvalidPatternDispatchRequest);
             }
@@ -731,8 +735,9 @@ mod platform {
             if request.provider_incarnation_ref != self.provider_incarnation_ref
                 || request.provider_incarnation_ref != attachment.provider_incarnation_ref
                 || request.target_incarnation_ref != attachment.target_incarnation_ref
+                || request.dispatch_operation.required_pattern() != request.required_pattern
             {
-                return Err(WindowsUiaWorkerError::TargetReincarnated);
+                return Err(WindowsUiaWorkerError::InvalidPatternDispatchRequest);
             }
             let context = self.revalidate_dispatch_context(
                 attachment,
@@ -747,8 +752,8 @@ mod platform {
                 &request.snapshot_cut_ref,
                 &request.element_ref,
             )?;
-            match request.required_pattern {
-                WindowsUiaPattern::Invoke => {
+            match request.dispatch_operation {
+                WindowsUiaPatternDispatchOperation::Invoke => {
                     if read_pattern_support(
                         &retained.element,
                         UIA_IsInvokePatternAvailablePropertyId,
@@ -769,7 +774,7 @@ mod platform {
                     unsafe { invoke.Invoke() }
                         .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
-                WindowsUiaPattern::SelectionItem => {
+                WindowsUiaPatternDispatchOperation::Select => {
                     if read_pattern_support(
                         &retained.element,
                         UIA_IsSelectionItemPatternAvailablePropertyId,
@@ -792,7 +797,7 @@ mod platform {
                     unsafe { selection_item.Select() }
                         .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
-                WindowsUiaPattern::Toggle => {
+                WindowsUiaPatternDispatchOperation::Toggle => {
                     if read_pattern_support(
                         &retained.element,
                         UIA_IsTogglePatternAvailablePropertyId,
@@ -813,8 +818,36 @@ mod platform {
                     unsafe { toggle.Toggle() }
                         .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
-                pattern => {
-                    return Err(WindowsUiaWorkerError::PatternDispatchUnsupported { pattern });
+                WindowsUiaPatternDispatchOperation::Expand
+                | WindowsUiaPatternDispatchOperation::Collapse => {
+                    if read_pattern_support(
+                        &retained.element,
+                        UIA_IsExpandCollapsePatternAvailablePropertyId,
+                    ) != WindowsUiaPatternSupport::Supported
+                    {
+                        return Err(WindowsUiaWorkerError::PatternUnavailable {
+                            pattern: WindowsUiaPattern::ExpandCollapse,
+                        });
+                    }
+                    let expand_collapse = unsafe {
+                        retained.element.GetCurrentPatternAs::<
+                            IUIAutomationExpandCollapsePattern,
+                        >(UIA_ExpandCollapsePatternId)
+                    }
+                    .map_err(|_| WindowsUiaWorkerError::PatternUnavailable {
+                        pattern: WindowsUiaPattern::ExpandCollapse,
+                    })?;
+                    let dispatch_result = unsafe {
+                        match request.dispatch_operation {
+                            WindowsUiaPatternDispatchOperation::Expand => expand_collapse.Expand(),
+                            WindowsUiaPatternDispatchOperation::Collapse => {
+                                expand_collapse.Collapse()
+                            }
+                            _ => unreachable!("ExpandCollapse dispatch arm is operation-exact"),
+                        }
+                    };
+                    dispatch_result
+                        .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
             }
             Ok(WindowsUiaPatternDispatchReceipt {
@@ -827,6 +860,7 @@ mod platform {
                 target_incarnation_ref: request.target_incarnation_ref,
                 element_ref: request.element_ref,
                 required_pattern: request.required_pattern,
+                dispatch_operation: request.dispatch_operation,
                 context_requirements: request.context_requirements,
                 final_context: context.observation,
                 transport_result: localview_protocol::TransportResult::DeliveredToExecutor,
@@ -1352,6 +1386,7 @@ impl WindowsUiaWorker {
     ) -> Result<crate::WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError> {
         Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
+
     pub fn dispatch_pattern(
         &self,
         _attachment: &WindowsUiaAttachment,
