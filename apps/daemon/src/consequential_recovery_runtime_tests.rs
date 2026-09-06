@@ -336,9 +336,14 @@ async fn boot_debt_recovery_runs_once_per_exact_attachment_and_leaves_opaque_con
         "localview-v43-daemon-attachment-recovery-{}.jsonl",
         Uuid::new_v4()
     ));
-    let journal = ConsequentialJournal::open(&path).await.unwrap();
+    let pre_boot_journal = ConsequentialJournal::open(&path).await.unwrap();
     let action = recovery_envelope(&provider);
-    record_prepared(&journal, &action).await;
+    record_prepared(&pre_boot_journal, &action).await;
+    drop(pre_boot_journal);
+
+    // Crossing the journal reopen boundary is the restart model: durable PREPARED
+    // survives, while process-local dispatch grants deliberately do not.
+    let journal = ConsequentialJournal::open(&path).await.unwrap();
     let scope = ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
 
     let mut tracker = super::WindowsBootRecoveryTracker::default();
@@ -402,11 +407,17 @@ async fn boot_recovery_scope_excludes_actions_admitted_after_boot_inventory_was_
         "localview-v43-daemon-boot-scope-{}.jsonl",
         Uuid::new_v4()
     ));
-    let journal = ConsequentialJournal::open(&path).await.unwrap();
+    let pre_boot_journal = ConsequentialJournal::open(&path).await.unwrap();
     let boot_action = recovery_envelope(&provider);
-    record_prepared(&journal, &boot_action).await;
+    record_prepared(&pre_boot_journal, &boot_action).await;
+    drop(pre_boot_journal);
+
+    let journal = ConsequentialJournal::open(&path).await.unwrap();
     let boot_scope = ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
 
+    // This action is deliberately admitted after the boot scope was frozen. Its
+    // live PREPARED grant stays active, but scoped boot recovery must never touch
+    // it and therefore must not race that live dispatch authority.
     let live_action = recovery_envelope(&provider);
     record_prepared(&journal, &live_action).await;
 
@@ -465,11 +476,14 @@ async fn one_failed_attachment_does_not_starve_later_boot_recovery_and_only_fail
         "localview-v43-daemon-recovery-fairness-{}.jsonl",
         Uuid::new_v4()
     ));
-    let journal = ConsequentialJournal::open(&path).await.unwrap();
+    let pre_boot_journal = ConsequentialJournal::open(&path).await.unwrap();
     let failing_action = recovery_envelope_for_session(&provider, recovery_session());
     let later_action = recovery_envelope_for_session(&provider, second_recovery_session());
-    record_prepared(&journal, &failing_action).await;
-    record_prepared(&journal, &later_action).await;
+    record_prepared(&pre_boot_journal, &failing_action).await;
+    record_prepared(&pre_boot_journal, &later_action).await;
+    drop(pre_boot_journal);
+
+    let journal = ConsequentialJournal::open(&path).await.unwrap();
     let scope = ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
 
     let verifier = SelectiveVerifier {
