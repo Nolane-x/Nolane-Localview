@@ -1,7 +1,10 @@
 use localview_live_bridge::{
     ActionEnvelopeBindingError, ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass,
 };
-use localview_protocol::{ProviderElementRealization, ProviderElementRef, SessionId};
+use localview_protocol::{
+    EventContinuityState, ProviderElementRealization, ProviderElementRef, ReconciliationCompleteness,
+    SessionId,
+};
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
     WindowsUiaPattern, WindowsUiaPatternSupport,
@@ -48,6 +51,8 @@ pub enum WindowsUiaActionPreflightError {
     NotAttached { session_id: SessionId },
     #[error("Windows UIA action preflight canonical lineage authority rejected: {0:?}")]
     Authority(ActionEnvelopeBindingError),
+    #[error("Windows UIA action preflight provider continuity is unreconciled: {continuity:?}")]
+    ContinuityUnreconciled { continuity: EventContinuityState },
     #[error("Windows UIA action preflight precondition cut does not match the current snapshot")]
     PreconditionSnapshotCutMismatch { expected: String, actual: String },
     #[error("Windows UIA action preflight current snapshot is incomplete")]
@@ -107,15 +112,29 @@ where
 {
     /// Validate point-in-time semantic capability without calling the provider.
     ///
-    /// `read_semantic` is deliberately reused as the serialized current-snapshot
-    /// boundary. A read-only authority projection preserves the caller's exact
-    /// provider/target/precondition cut while preventing this capability check
-    /// from being mistaken for side-effect authorization.
+    /// Existing continuity debt must already have an Established reconciliation
+    /// receipt before cached semantic evidence is eligible for action planning.
+    /// This keeps provider-event gaps orthogonal to snapshot completeness: an old
+    /// complete snapshot cannot launder a newer gap/reset/reconnect into action
+    /// authority. Normal runtime drains serialize reconciliation with semantic
+    /// reads; the later dispatch revalidation repeats this gate again.
     pub async fn preflight_uia_action(
         &self,
         session_id: SessionId,
         request: WindowsUiaActionPreflightRequest,
     ) -> Result<WindowsUiaActionPreflightReceipt, WindowsUiaActionPreflightError> {
+        let status = self
+            .status(session_id)
+            .await
+            .ok_or(WindowsUiaActionPreflightError::NotAttached { session_id })?;
+        if continuity_requires_reconciliation(status.event_continuity)
+            && status.current_snapshot_completeness != Some(ReconciliationCompleteness::Established)
+        {
+            return Err(WindowsUiaActionPreflightError::ContinuityUnreconciled {
+                continuity: status.event_continuity,
+            });
+        }
+
         let mut read_authority = request.authority.clone();
         read_authority.risk_class = ActionRiskClass::ObserveOnly;
         read_authority.idempotency_class = ActionIdempotencyClass::PureRead;
@@ -222,6 +241,18 @@ where
             element_lease,
         })
     }
+}
+
+fn continuity_requires_reconciliation(continuity: EventContinuityState) -> bool {
+    matches!(
+        continuity,
+        EventContinuityState::GapDetected
+            | EventContinuityState::SequenceReset
+            | EventContinuityState::ProviderReincarnated
+            | EventContinuityState::ReconciliationRequired
+            | EventContinuityState::ReconnectedUnreconciled
+            | EventContinuityState::Broken
+    )
 }
 
 fn map_read_error(error: WindowsSemanticReadError) -> WindowsUiaActionPreflightError {
