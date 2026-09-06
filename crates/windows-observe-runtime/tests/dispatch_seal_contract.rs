@@ -6,7 +6,7 @@ use std::{
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
-    CanonicalActionOperation, ConsequentialJournal, LiveBridge,
+    ConsequentialJournal, LiveBridge,
 };
 use localview_native_provider::{
     NativeSemanticNodeObservation, NativeSemanticSnapshotDraft, NativeSemanticSnapshotRevision,
@@ -381,7 +381,7 @@ async fn fixture(
         .await
         .unwrap();
     journal
-        .record_intent_operation_bound(queued.action.id, CanonicalActionOperation::Activate)
+        .record_intent_operation_bound(&queued)
         .await
         .unwrap();
 
