@@ -145,13 +145,15 @@ mod platform {
         UI::{
             Accessibility::{
                 CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
-                IUIAutomationSelectionItemPattern, IUIAutomationTreeWalker, UIA_InvokePatternId,
+                IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern,
+                IUIAutomationTreeWalker, UIA_InvokePatternId,
                 UIA_IsExpandCollapsePatternAvailablePropertyId,
                 UIA_IsInvokePatternAvailablePropertyId, UIA_IsScrollItemPatternAvailablePropertyId,
                 UIA_IsSelectionItemPatternAvailablePropertyId,
                 UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
                 UIA_IsVirtualizedItemPatternAvailablePropertyId,
-                UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId, UIA_PROPERTY_ID,
+                UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId,
+                UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId, UIA_PROPERTY_ID,
             },
             WindowsAndMessaging::{
                 GetForegroundWindow, GetLastActivePopup, GetWindowThreadProcessId, IsWindowVisible,
@@ -167,10 +169,11 @@ mod platform {
         WindowsUiaPatternSupport, evaluate_windows_uia_dispatch_context,
     };
 
-    const PROPERTIES_PER_NODE: usize = 15;
+    const PROPERTIES_PER_NODE: usize = 16;
     const CACHE_PROFILE_REVISION: &str = "windows-uia-control-view-v1";
     const PERMISSION_VISIBILITY_REVISION: &str = "windows-uia-interactive-user-v1";
     const SELECTION_ITEM_IS_SELECTED_ATTRIBUTE: &str = "windows_uia.selection_item.is_selected";
+    const TOGGLE_STATE_ATTRIBUTE: &str = "windows_uia.toggle.state";
 
     enum WorkerCommand {
         Attach {
@@ -789,6 +792,27 @@ mod platform {
                     unsafe { selection_item.Select() }
                         .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
+                WindowsUiaPattern::Toggle => {
+                    if read_pattern_support(
+                        &retained.element,
+                        UIA_IsTogglePatternAvailablePropertyId,
+                    ) != WindowsUiaPatternSupport::Supported
+                    {
+                        return Err(WindowsUiaWorkerError::PatternUnavailable {
+                            pattern: WindowsUiaPattern::Toggle,
+                        });
+                    }
+                    let toggle = unsafe {
+                        retained
+                            .element
+                            .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
+                    }
+                    .map_err(|_| WindowsUiaWorkerError::PatternUnavailable {
+                        pattern: WindowsUiaPattern::Toggle,
+                    })?;
+                    unsafe { toggle.Toggle() }
+                        .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+                }
                 pattern => {
                     return Err(WindowsUiaWorkerError::PatternDispatchUnsupported { pattern });
                 }
@@ -1033,6 +1057,27 @@ mod platform {
             } else {
                 None
             };
+            let toggle_state = if action_capabilities.support_for(WindowsUiaPattern::Toggle)
+                == WindowsUiaPatternSupport::Supported
+            {
+                match unsafe { element.GetCurrentPropertyValue(UIA_ToggleToggleStatePropertyId) } {
+                    Ok(value) => match i32::try_from(&value) {
+                        Ok(0) => Some("off"),
+                        Ok(1) => Some("on"),
+                        Ok(2) => Some("indeterminate"),
+                        Ok(_) | Err(_) => {
+                            node_debt.push("uia_property_toggle_state_unavailable".into());
+                            None
+                        }
+                    },
+                    Err(_) => {
+                        node_debt.push("uia_property_toggle_state_unavailable".into());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             let runtime_id = unsafe { runtime_id_hint(&element) }.unwrap_or_default();
             let mut element_ref = provider_element_ref_from_runtime_id(
@@ -1074,6 +1119,9 @@ mod platform {
                     SELECTION_ITEM_IS_SELECTED_ATTRIBUTE.into(),
                     selected.to_string(),
                 );
+            }
+            if let Some(state) = toggle_state {
+                attributes.insert(TOGGLE_STATE_ATTRIBUTE.into(), state.into());
             }
             retained_elements.push(RetainedElementLease {
                 element_ref: element_ref.clone(),

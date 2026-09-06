@@ -57,6 +57,7 @@ pub enum ActionIdempotencyClass {
 pub enum CanonicalActionOperation {
     Activate,
     Select,
+    Toggle,
     InputText,
     KeyInput,
     Scroll,

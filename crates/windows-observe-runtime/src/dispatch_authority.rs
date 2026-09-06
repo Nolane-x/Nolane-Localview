@@ -214,6 +214,10 @@ fn canonical_operation_matches_uia_pattern(
                 CanonicalActionOperation::Select,
                 WindowsUiaPattern::SelectionItem
             )
+            | (
+                CanonicalActionOperation::Toggle,
+                WindowsUiaPattern::Toggle
+            )
     )
 }
 
