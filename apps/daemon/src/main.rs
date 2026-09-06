@@ -23,7 +23,7 @@ use localview_control::{
 use localview_core::RuntimeConfig;
 use localview_discovery::{CommandListenerSource, DiscoveryEngine};
 use localview_evidence::EvidenceStore;
-use localview_live_bridge::LiveBridge;
+use localview_live_bridge::{ConsequentialJournal, LiveBridge};
 use localview_observation::ObservationBus;
 use localview_protocol::ObservationEvent;
 use localview_security::generate_control_token;
@@ -53,7 +53,8 @@ async fn main() -> Result<()> {
     let consequential_recovery =
         consequential_recovery::open_boot_consequential_recovery(&state_dir()?).await?;
     let consequential_journal = consequential_recovery.journal().clone();
-    if consequential_recovery.inventory().is_empty() {
+    let has_consequential_boot_history = !consequential_recovery.inventory().is_empty();
+    if !has_consequential_boot_history {
         info!(
             journal = %consequential_recovery.journal_path().display(),
             "durable consequential recovery journal replayed with no action history"
@@ -114,7 +115,14 @@ async fn main() -> Result<()> {
 
     configure_windows_observe_runtime_for_sessions(&sessions, windows_observe.clone());
     if let Some(runtime) = windows_observe.clone() {
-        spawn_windows_observe_drain_loop(runtime);
+        spawn_windows_observe_drain_loop(runtime.clone());
+        if has_consequential_boot_history {
+            spawn_windows_consequential_recovery_loop(
+                runtime,
+                live.clone(),
+                consequential_journal.clone(),
+            );
+        }
     }
 
     let paused = Arc::new(AtomicBool::new(matches!(
@@ -199,9 +207,9 @@ async fn main() -> Result<()> {
         }
     }
     configure_windows_observe_runtime_for_sessions(&sessions, None);
-    // Keep the reopened durable journal authority alive for the full daemon
-    // lifetime. A later recovery phase may reconcile from it, but restart never
-    // recreates a dispatch permit.
+    // The durable journal remains alive for the full daemon lifetime. Recovery
+    // may observe/reconcile only after normal attachment authority is restored;
+    // restart never recreates a dispatch permit or executor capability.
     drop(consequential_journal);
     drop(consequential_recovery);
     Ok(())
@@ -228,6 +236,61 @@ fn spawn_windows_observe_drain_loop(runtime: Arc<WindowsUiaObserveRuntimeManager
                             warn!(%session_id, %cleanup_error, "Windows observe provider cleanup failed after drain-error detach");
                         }
                     }
+                }
+            }
+        }
+    });
+}
+
+fn spawn_windows_consequential_recovery_loop(
+    runtime: Arc<WindowsUiaObserveRuntimeManager>,
+    live: LiveBridge,
+    journal: Arc<ConsequentialJournal>,
+) {
+    tokio::spawn(async move {
+        let verifier = consequential_recovery::FailClosedWindowsPostconditionVerifier;
+        let mut tracker = consequential_recovery::WindowsBootRecoveryTracker::default();
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            interval.tick().await;
+            match consequential_recovery::recover_newly_attached_boot_debt(
+                &live,
+                journal.as_ref(),
+                runtime.as_ref(),
+                &verifier,
+                &mut tracker,
+            )
+            .await
+            {
+                Ok(drains) => {
+                    for drain in drains {
+                        if drain.entries.is_empty() {
+                            info!(
+                                session_id = %drain.session_id,
+                                provider_incarnation_ref = ?drain.provider_incarnation_ref,
+                                target_incarnation_ref = ?drain.target_incarnation_ref,
+                                "exact Windows attachment had no matching consequential boot recovery debt"
+                            );
+                            continue;
+                        }
+                        for outcome in drain.entries {
+                            info!(
+                                session_id = %drain.session_id,
+                                provider_incarnation_ref = ?drain.provider_incarnation_ref,
+                                target_incarnation_ref = ?drain.target_incarnation_ref,
+                                recovery_outcome = ?outcome,
+                                "processed attachment-bound consequential boot recovery debt"
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        %error,
+                        "attachment-bound consequential boot recovery failed fail-closed; eligible exact attachments remain retryable"
+                    );
                 }
             }
         }
