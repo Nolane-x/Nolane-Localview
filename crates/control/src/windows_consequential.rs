@@ -691,14 +691,6 @@ fn session_not_found() -> axum::response::Response {
         .into_response()
 }
 
-fn not_attached() -> axum::response::Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({"error": "windows_observe_not_attached"})),
-    )
-        .into_response()
-}
-
 fn unavailable(message: &'static str) -> axum::response::Response {
     (
         StatusCode::NOT_IMPLEMENTED,
@@ -770,7 +762,7 @@ mod tests {
                     action: localview_live_bridge::BridgeActionKind::Click,
                     created_at: chrono::Utc::now(),
                 },
-                envelope: localview_live_bridge::CanonicalActionEnvelope {
+                envelope: CanonicalActionEnvelope {
                     envelope_id: Uuid::from_u128(0x91c3),
                     transport_action_id: action_id,
                     session_id,
