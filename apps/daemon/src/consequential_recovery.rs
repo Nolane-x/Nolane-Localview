@@ -6,15 +6,16 @@ use std::{
 
 use anyhow::{Context, Result};
 use localview_live_bridge::{
-    ConsequentialJournal, ConsequentialPostconditionEvidence, ConsequentialRecoveryInventoryEntry,
-    LiveBridge,
+    ConsequentialJournal, ConsequentialPostconditionEvidence, ConsequentialRecoveryActionScope,
+    ConsequentialRecoveryInventoryEntry, LiveBridge,
 };
 use localview_native_provider::NativeSemanticSnapshotRevision;
 use localview_protocol::{ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use localview_windows_observe_runtime::{
-    recover_attached_consequential_debt, WindowsObserveProvider, WindowsObserveRuntimeManager,
-    WindowsUiaAttachedRecoveryDrain, WindowsUiaAttachedRecoveryDrainError,
-    WindowsUiaPostconditionVerifier, WindowsUiaSemanticPostconditionVerifier,
+    recover_attached_consequential_debt_scoped, WindowsObserveProvider,
+    WindowsObserveRuntimeManager, WindowsUiaAttachedRecoveryDrain,
+    WindowsUiaAttachedRecoveryDrainError, WindowsUiaPostconditionVerifier,
+    WindowsUiaSemanticPostconditionVerifier,
 };
 use uuid::Uuid;
 
@@ -24,11 +25,13 @@ const CONSEQUENTIAL_JOURNAL_FILE: &str = "consequential-actions.v1.jsonl";
 ///
 /// Reopening the journal reconstructs durable history only. `ConsequentialJournal`
 /// deliberately does not reconstruct any process-local dispatch capabilities,
-/// execution permits, or observation grants.
+/// execution permits, or observation grants. `scope` freezes only the action ids
+/// that existed in the replayed inventory at this boot.
 pub(crate) struct BootConsequentialRecovery {
     journal: Arc<ConsequentialJournal>,
     journal_path: PathBuf,
     inventory: Vec<ConsequentialRecoveryInventoryEntry>,
+    scope: ConsequentialRecoveryActionScope,
 }
 
 impl BootConsequentialRecovery {
@@ -42,6 +45,10 @@ impl BootConsequentialRecovery {
 
     pub(crate) fn inventory(&self) -> &[ConsequentialRecoveryInventoryEntry] {
         &self.inventory
+    }
+
+    pub(crate) fn scope(&self) -> &ConsequentialRecoveryActionScope {
+        &self.scope
     }
 }
 
@@ -78,6 +85,20 @@ struct WindowsRecoveryAttachmentLineage {
     target_incarnation_ref: TargetIncarnationRef,
 }
 
+/// One independent boot-recovery attempt for an exact attached lineage.
+///
+/// An error belongs only to this lineage. It does not abort the caller's scan of
+/// later attachments, and the failed lineage is deliberately left untracked so
+/// it remains retryable. The result contains no executor or dispatch authority.
+#[derive(Debug)]
+pub(crate) struct WindowsBootRecoveryAttempt {
+    pub(crate) session_id: SessionId,
+    pub(crate) provider_incarnation_ref: ProviderIncarnationRef,
+    pub(crate) target_incarnation_ref: TargetIncarnationRef,
+    pub(crate) outcome:
+        Result<WindowsUiaAttachedRecoveryDrain, WindowsUiaAttachedRecoveryDrainError>,
+}
+
 /// Process-local guard preventing unresolved boot debt from being observed and
 /// reconciled forever on a stable attachment.
 ///
@@ -107,26 +128,28 @@ impl WindowsBootRecoveryTracker {
     }
 }
 
-/// Recover durable boot history only after an exact Windows UIA attachment has
-/// been established by normal control-plane authority.
+/// Recover only durable actions captured in the immutable boot scope, and only
+/// after an exact Windows UIA attachment has been established by normal control-
+/// plane authority.
 ///
-/// The function accepts no executor, dispatch permit, or execution grant. It
-/// delegates only to the attachment-bound no-redispatch recovery coordinator.
-/// Failed drains are deliberately not tracked so transient provider/resource
-/// failures remain retryable; successful drains, including unresolved outcomes,
-/// are attempted only once per exact attachment lineage in this daemon process.
+/// Each attachment is attempted independently. A provider/verifier/recovery
+/// failure for one lineage is returned as data and cannot starve later attached
+/// sessions. Failed drains remain retryable; successful drains, including
+/// unresolved outcomes, are attempted only once per exact attachment lineage.
+/// The function accepts no executor, dispatch permit, or execution grant.
 pub(crate) async fn recover_newly_attached_boot_debt<P, V>(
     bridge: &LiveBridge,
     journal: &ConsequentialJournal,
     runtime: &WindowsObserveRuntimeManager<P>,
     verifier: &V,
+    scope: &ConsequentialRecoveryActionScope,
     tracker: &mut WindowsBootRecoveryTracker,
-) -> Result<Vec<WindowsUiaAttachedRecoveryDrain>, WindowsUiaAttachedRecoveryDrainError>
+) -> Vec<WindowsBootRecoveryAttempt>
 where
     P: WindowsObserveProvider,
     V: WindowsUiaPostconditionVerifier,
 {
-    let mut drains = Vec::new();
+    let mut attempts = Vec::new();
 
     for session_id in runtime.attached_sessions().await {
         let Some(snapshot) = runtime.current_semantic_snapshot(session_id).await else {
@@ -141,19 +164,22 @@ where
             continue;
         }
 
-        let drain = recover_attached_consequential_debt(
-            bridge,
-            journal,
-            runtime,
-            session_id,
-            verifier,
+        let outcome = recover_attached_consequential_debt_scoped(
+            bridge, journal, runtime, session_id, verifier, scope,
         )
-        .await?;
-        tracker.record_completed(&drain);
-        drains.push(drain);
+        .await;
+        if let Ok(drain) = &outcome {
+            tracker.record_completed(drain);
+        }
+        attempts.push(WindowsBootRecoveryAttempt {
+            session_id: candidate.session_id,
+            provider_incarnation_ref: candidate.provider_incarnation_ref,
+            target_incarnation_ref: candidate.target_incarnation_ref,
+            outcome,
+        });
     }
 
-    Ok(drains)
+    attempts
 }
 
 pub(crate) async fn open_boot_consequential_recovery(
@@ -174,11 +200,13 @@ pub(crate) async fn open_boot_consequential_recovery(
             })?,
     );
     let inventory = journal.recovery_inventory().await;
+    let scope = ConsequentialRecoveryActionScope::from_inventory(&inventory);
 
     Ok(BootConsequentialRecovery {
         journal,
         journal_path,
         inventory,
+        scope,
     })
 }
 
@@ -237,6 +265,8 @@ mod tests {
         assert_eq!(boot.journal_path(), path.as_path());
         assert_eq!(boot.inventory().len(), 1);
         assert_eq!(boot.inventory()[0].action_id, action.transport_action_id);
+        assert!(boot.scope().contains(action.transport_action_id));
+        assert_eq!(boot.scope().len(), 1);
         assert_eq!(
             boot.inventory()[0].recovery_state,
             ConsequentialRecoveryState::Admitted
@@ -265,6 +295,7 @@ mod tests {
         assert!(root.is_dir());
         assert!(boot.journal_path().exists());
         assert!(boot.inventory().is_empty());
+        assert!(boot.scope().is_empty());
 
         drop(boot);
         let _ = std::fs::remove_dir_all(root);
