@@ -239,7 +239,7 @@ mod windows_runtime_dispatch_smoke {
             expected_postcondition_contract_refs: vec![postcondition_ref.clone()],
         };
         let queued = bridge
-            .enqueue_canonical_action(session_id, None, BridgeActionKind::Focus, authority.clone())
+            .enqueue_canonical_action(session_id, None, BridgeActionKind::Click, authority.clone())
             .await
             .expect("enqueue canonical consequential action");
 
@@ -254,6 +254,10 @@ mod windows_runtime_dispatch_smoke {
             .record_intent_admitted(queued.envelope.clone())
             .await
             .expect("durably admit canonical action intent");
+        journal
+            .record_intent_operation_bound(&queued)
+            .await
+            .expect("durably bind canonical Activate operation before authority revalidation");
 
         let preflight = manager
             .preflight_uia_action(
