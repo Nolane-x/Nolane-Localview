@@ -150,8 +150,8 @@ mod platform {
                 UIA_IsInvokePatternAvailablePropertyId, UIA_IsScrollItemPatternAvailablePropertyId,
                 UIA_IsSelectionItemPatternAvailablePropertyId,
                 UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
-                UIA_IsVirtualizedItemPatternAvailablePropertyId, UIA_SelectionItemPatternId,
-                UIA_PROPERTY_ID,
+                UIA_IsVirtualizedItemPatternAvailablePropertyId,
+                UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId, UIA_PROPERTY_ID,
             },
             WindowsAndMessaging::{
                 GetForegroundWindow, GetLastActivePopup, GetWindowThreadProcessId, IsWindowVisible,
@@ -167,9 +167,10 @@ mod platform {
         WindowsUiaPatternSupport, evaluate_windows_uia_dispatch_context,
     };
 
-    const PROPERTIES_PER_NODE: usize = 14;
+    const PROPERTIES_PER_NODE: usize = 15;
     const CACHE_PROFILE_REVISION: &str = "windows-uia-control-view-v1";
     const PERMISSION_VISIBILITY_REVISION: &str = "windows-uia-interactive-user-v1";
+    const SELECTION_ITEM_IS_SELECTED_ATTRIBUTE: &str = "windows_uia.selection_item.is_selected";
 
     enum WorkerCommand {
         Attach {
@@ -1007,6 +1008,31 @@ mod platform {
                 }
             };
             let action_capabilities = observe_action_capabilities(&element);
+            let selection_item_is_selected = if action_capabilities
+                .support_for(WindowsUiaPattern::SelectionItem)
+                == WindowsUiaPatternSupport::Supported
+            {
+                match unsafe { element.GetCurrentPropertyValue(UIA_SelectionItemIsSelectedPropertyId) }
+                {
+                    Ok(value) => match bool::try_from(&value) {
+                        Ok(selected) => Some(selected),
+                        Err(_) => {
+                            node_debt.push(
+                                "uia_property_selection_item_is_selected_unavailable".into(),
+                            );
+                            None
+                        }
+                    },
+                    Err(_) => {
+                        node_debt.push(
+                            "uia_property_selection_item_is_selected_unavailable".into(),
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             let runtime_id = unsafe { runtime_id_hint(&element) }.unwrap_or_default();
             let mut element_ref = provider_element_ref_from_runtime_id(
@@ -1043,6 +1069,12 @@ mod platform {
                 attributes.insert("runtime_id_observed".into(), "true".into());
             }
             action_capabilities.write_attributes(&mut attributes);
+            if let Some(selected) = selection_item_is_selected {
+                attributes.insert(
+                    SELECTION_ITEM_IS_SELECTED_ATTRIBUTE.into(),
+                    selected.to_string(),
+                );
+            }
             retained_elements.push(RetainedElementLease {
                 element_ref: element_ref.clone(),
                 element: element.clone(),
