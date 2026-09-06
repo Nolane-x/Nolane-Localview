@@ -53,6 +53,8 @@ pub enum WindowsUiaActionPreflightError {
     Authority(ActionEnvelopeBindingError),
     #[error("Windows UIA action preflight provider continuity is unreconciled: {continuity:?}")]
     ContinuityUnreconciled { continuity: EventContinuityState },
+    #[error("Windows UIA observation authority changed while semantic preflight was reading")]
+    ObservationChangedDuringPreflight,
     #[error("Windows UIA action preflight precondition cut does not match the current snapshot")]
     PreconditionSnapshotCutMismatch { expected: String, actual: String },
     #[error("Windows UIA action preflight current snapshot is incomplete")]
@@ -114,26 +116,21 @@ where
     ///
     /// Existing continuity debt must already have an Established reconciliation
     /// receipt before cached semantic evidence is eligible for action planning.
-    /// This keeps provider-event gaps orthogonal to snapshot completeness: an old
-    /// complete snapshot cannot launder a newer gap/reset/reconnect into action
-    /// authority. Normal runtime drains serialize reconciliation with semantic
-    /// reads; the later dispatch revalidation repeats this gate again.
+    /// The observation status is sampled on both sides of the serialized semantic
+    /// read and must remain exactly stable across that window. A gap/reset,
+    /// reincarnation, reconciliation, detach, or even a newly accepted provider
+    /// event therefore cannot race the cached read and be laundered into action
+    /// evidence. The later dispatch revalidation repeats this gate again.
     pub async fn preflight_uia_action(
         &self,
         session_id: SessionId,
         request: WindowsUiaActionPreflightRequest,
     ) -> Result<WindowsUiaActionPreflightReceipt, WindowsUiaActionPreflightError> {
-        let status = self
+        let status_before = self
             .status(session_id)
             .await
             .ok_or(WindowsUiaActionPreflightError::NotAttached { session_id })?;
-        if continuity_requires_reconciliation(status.event_continuity)
-            && status.current_snapshot_completeness != Some(ReconciliationCompleteness::Established)
-        {
-            return Err(WindowsUiaActionPreflightError::ContinuityUnreconciled {
-                continuity: status.event_continuity,
-            });
-        }
+        require_reconciled_continuity(&status_before)?;
 
         let mut read_authority = request.authority.clone();
         read_authority.risk_class = ActionRiskClass::ObserveOnly;
@@ -149,6 +146,15 @@ where
             )
             .await
             .map_err(map_read_error)?;
+
+        let status_after = self
+            .status(session_id)
+            .await
+            .ok_or(WindowsUiaActionPreflightError::NotAttached { session_id })?;
+        if status_after != status_before {
+            return Err(WindowsUiaActionPreflightError::ObservationChangedDuringPreflight);
+        }
+        require_reconciled_continuity(&status_after)?;
 
         let realization = read.node.element_ref.realization;
         if realization != ProviderElementRealization::RealizedCurrent {
@@ -241,6 +247,19 @@ where
             element_lease,
         })
     }
+}
+
+fn require_reconciled_continuity(
+    status: &localview_live_bridge::ObservationStatus,
+) -> Result<(), WindowsUiaActionPreflightError> {
+    if continuity_requires_reconciliation(status.event_continuity)
+        && status.current_snapshot_completeness != Some(ReconciliationCompleteness::Established)
+    {
+        return Err(WindowsUiaActionPreflightError::ContinuityUnreconciled {
+            continuity: status.event_continuity,
+        });
+    }
+    Ok(())
 }
 
 fn continuity_requires_reconciliation(continuity: EventContinuityState) -> bool {
