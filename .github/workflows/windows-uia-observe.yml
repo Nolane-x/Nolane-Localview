@@ -99,6 +99,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-control --test windows_consequential_toggle_windows_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real HTTP Expand then Collapse with verified durable commits
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-control --test windows_consequential_expand_collapse_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real bounded Win32 UIA event subscription
         env:
           LOCALVIEW_UIA_SMOKE: "1"
