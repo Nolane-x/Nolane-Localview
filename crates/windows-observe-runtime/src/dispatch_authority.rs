@@ -210,6 +210,10 @@ fn canonical_operation_matches_uia_pattern(
     matches!(
         (canonical, requested_pattern),
         (CanonicalActionOperation::Activate, WindowsUiaPattern::Invoke)
+            | (
+                CanonicalActionOperation::Select,
+                WindowsUiaPattern::SelectionItem
+            )
     )
 }
 
