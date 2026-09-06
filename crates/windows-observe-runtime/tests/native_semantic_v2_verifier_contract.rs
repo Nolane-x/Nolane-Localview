@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use localview_live_bridge::ConsequentialPostconditionStatus;
 use localview_native_provider::{
     NativeSemanticNodeObservation, NativeSemanticSnapshotDraft, SemanticSnapshotCache,
-    SnapshotResourceUsage,
+    SnapshotBudgetLimit, SnapshotResourceUsage,
 };
 use localview_postcondition_contracts::{
     NativeSemanticCountComparisonV2, NativeSemanticNodeMatcherV2,
@@ -49,6 +49,7 @@ fn snapshot(
             attributes: BTreeMap::from([("state".into(), "ready".into())]),
         })
         .collect::<Vec<_>>();
+    let incomplete = completeness != ReconciliationCompleteness::Established;
     let mut cache = SemanticSnapshotCache::for_lineage(provider.clone(), target.clone());
     cache
         .publish(NativeSemanticSnapshotDraft {
@@ -64,14 +65,18 @@ fn snapshot(
                 nodes_observed: 2,
                 properties_read: 16,
                 max_depth_observed: 0,
-                exhausted: vec![],
-                incomplete: completeness != ReconciliationCompleteness::Established,
+                exhausted: if incomplete {
+                    vec![SnapshotBudgetLimit::Nodes]
+                } else {
+                    vec![]
+                },
+                incomplete,
             },
             completeness,
-            incompleteness_debt: if completeness == ReconciliationCompleteness::Established {
-                vec![]
+            incompleteness_debt: if incomplete {
+                vec!["enumeration:node-budget-exhausted".into()]
             } else {
-                vec!["enumeration:incomplete".into()]
+                vec![]
             },
         })
         .unwrap()
