@@ -15,6 +15,7 @@ localview-core = { path = "../../crates/core" }
 localview-discovery = { path = "../../crates/discovery" }
 localview-evidence = { path = "../../crates/evidence" }
 localview-live-bridge = { path = "../../crates/live-bridge" }
+localview-native-provider = { path = "../../crates/native-provider" }
 localview-observation = { path = "../../crates/observation" }
 localview-protocol = { path = "../../crates/protocol" }
 localview-resource-governor = { path = "../../crates/resource-governor" }
@@ -26,7 +27,4 @@ sysinfo = { version = "0.36.1", default-features = false, features = ["system"] 
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-
-[dev-dependencies]
-localview-native-provider = { path = "../../crates/native-provider" }
 uuid.workspace = true
