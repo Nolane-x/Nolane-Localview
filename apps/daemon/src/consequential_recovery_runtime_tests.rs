@@ -7,7 +7,7 @@ use std::{
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
-    ConsequentialJournal, DispatchPreparationReceipt, LiveBridge,
+    ConsequentialJournal, ConsequentialPostconditionStatus, DispatchPreparationReceipt, LiveBridge,
 };
 use localview_native_provider::{
     NativeSemanticNodeObservation, NativeSemanticSnapshotDraft, NativeSemanticSnapshotRevision,
@@ -236,16 +236,24 @@ fn daemon_postcondition_verifier_fails_closed_without_inventing_evidence() {
     let provider = FakeProvider::new();
     let snapshot = provider.build_snapshot("cut:verifier".into());
     let verifier = super::FailClosedWindowsPostconditionVerifier;
+    let contract_ref = "postcondition:opaque:v1".to_owned();
 
     let evidence = verifier
         .verify(
             Uuid::from_u128(0x8404),
-            &["postcondition:opaque:v1".into()],
+            std::slice::from_ref(&contract_ref),
             snapshot.as_ref(),
         )
         .unwrap();
 
-    assert!(evidence.is_empty());
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].contract_ref, contract_ref);
+    assert_eq!(
+        evidence[0].status,
+        ConsequentialPostconditionStatus::Unknown,
+        "legacy/opaque contract must remain unresolved"
+    );
+    assert!(!evidence[0].receipt_ref.trim().is_empty());
 }
 
 #[tokio::test]
