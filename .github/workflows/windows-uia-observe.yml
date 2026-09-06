@@ -31,6 +31,8 @@ jobs:
         run: cargo test -p localview-windows-uia-provider --test dispatch_context_contract -- --nocapture
       - name: Compile observe runtime manager
         run: cargo check -p localview-windows-observe-runtime --all-targets
+      - name: V4.3 fresh action planning evidence contract
+        run: cargo test -p localview-windows-observe-runtime --test fresh_action_evidence_contract -- --nocapture
       - name: V4.3 direct canonical action isolation
         run: cargo test -p localview-live-bridge --test v43_direct_canonical_action -- --nocapture
       - name: V4.3 durable pre-dispatch WAL crash boundary
