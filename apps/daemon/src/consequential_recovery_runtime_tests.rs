@@ -296,7 +296,7 @@ async fn boot_debt_recovery_runs_once_per_exact_attachment_and_leaves_opaque_con
                 world_outcome: WorldOutcome::ReconciliationRequired,
                 ..
             }
-        ) if action_id == action.transport_action_id
+        ) if *action_id == action.transport_action_id
     ));
     assert_eq!(provider.snapshot_calls(), 2);
 
