@@ -154,6 +154,31 @@ async fn existing_session_fails_closed_when_windows_runtime_is_unavailable() {
 }
 
 #[tokio::test]
+async fn selection_plan_is_a_server_owned_semantic_operation_and_reaches_runtime_boundary() {
+    let (app, session_id) = fixture().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/sessions/{session_id}/windows-observe/consequential/select/plan"
+                ))
+                .header(AUTHORIZATION, "Bearer test-token")
+                .header("content-type", "application/json")
+                .body(Body::from(plan_body(valid_contract())))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_IMPLEMENTED,
+        "the semantic select route must exist and fail closed at the unavailable runtime boundary"
+    );
+}
+
+#[tokio::test]
 async fn client_cannot_supply_risk_pattern_or_principal_authority() {
     let (app, session_id) = fixture().await;
     let body = serde_json::json!({
@@ -170,6 +195,34 @@ async fn client_cannot_supply_risk_pattern_or_principal_authority() {
                 .method("POST")
                 .uri(format!(
                     "/v1/sessions/{session_id}/windows-observe/consequential/invoke/plan"
+                ))
+                .header(AUTHORIZATION, "Bearer test-token")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn client_cannot_forge_selection_pattern_or_risk_class() {
+    let (app, session_id) = fixture().await;
+    let body = serde_json::json!({
+        "element_ref": element_ref_json(),
+        "expected_postcondition_contract_refs": [valid_contract()],
+        "risk_class": "s4_destructive_or_irreversible",
+        "required_pattern": "invoke"
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/sessions/{session_id}/windows-observe/consequential/select/plan"
                 ))
                 .header(AUTHORIZATION, "Bearer test-token")
                 .header("content-type", "application/json")
