@@ -145,12 +145,13 @@ mod platform {
         UI::{
             Accessibility::{
                 CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
-                IUIAutomationTreeWalker, UIA_InvokePatternId,
+                IUIAutomationSelectionItemPattern, IUIAutomationTreeWalker, UIA_InvokePatternId,
                 UIA_IsExpandCollapsePatternAvailablePropertyId,
                 UIA_IsInvokePatternAvailablePropertyId, UIA_IsScrollItemPatternAvailablePropertyId,
                 UIA_IsSelectionItemPatternAvailablePropertyId,
                 UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
-                UIA_IsVirtualizedItemPatternAvailablePropertyId, UIA_PROPERTY_ID,
+                UIA_IsVirtualizedItemPatternAvailablePropertyId, UIA_SelectionItemPatternId,
+                UIA_PROPERTY_ID,
             },
             WindowsAndMessaging::{
                 GetForegroundWindow, GetLastActivePopup, GetWindowThreadProcessId, IsWindowVisible,
@@ -758,13 +759,34 @@ mod platform {
                             .element
                             .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
                     }
-                    .map_err(|_| {
-                        WindowsUiaWorkerError::PatternUnavailable {
-                            pattern: WindowsUiaPattern::Invoke,
-                        }
+                    .map_err(|_| WindowsUiaWorkerError::PatternUnavailable {
+                        pattern: WindowsUiaPattern::Invoke,
                     })?;
                     unsafe { invoke.Invoke() }
-                        .map_err(|e| WindowsUiaWorkerError::ProviderFailure(e.to_string()))?;
+                        .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+                }
+                WindowsUiaPattern::SelectionItem => {
+                    if read_pattern_support(
+                        &retained.element,
+                        UIA_IsSelectionItemPatternAvailablePropertyId,
+                    ) != WindowsUiaPatternSupport::Supported
+                    {
+                        return Err(WindowsUiaWorkerError::PatternUnavailable {
+                            pattern: WindowsUiaPattern::SelectionItem,
+                        });
+                    }
+                    let selection_item = unsafe {
+                        retained
+                            .element
+                            .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
+                                UIA_SelectionItemPatternId,
+                            )
+                    }
+                    .map_err(|_| WindowsUiaWorkerError::PatternUnavailable {
+                        pattern: WindowsUiaPattern::SelectionItem,
+                    })?;
+                    unsafe { selection_item.Select() }
+                        .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
                 pattern => {
                     return Err(WindowsUiaWorkerError::PatternDispatchUnsupported { pattern });
