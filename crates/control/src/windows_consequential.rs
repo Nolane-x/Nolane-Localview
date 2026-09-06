@@ -102,6 +102,18 @@ const WINDOWS_TOGGLE_ACTION: WindowsConsequentialSemanticAction = WindowsConsequ
     response_operation: "toggle",
 };
 
+const WINDOWS_EXPAND_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
+    operation: CanonicalActionOperation::Expand,
+    required_pattern: WindowsUiaPattern::ExpandCollapse,
+    response_operation: "expand",
+};
+
+const WINDOWS_COLLAPSE_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
+    operation: CanonicalActionOperation::Collapse,
+    required_pattern: WindowsUiaPattern::ExpandCollapse,
+    response_operation: "collapse",
+};
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WindowsConsequentialConfirmRequest {
@@ -182,6 +194,14 @@ pub(crate) fn router(state: ControlState) -> Router {
         .route(
             "/v1/sessions/{id}/windows-observe/consequential/toggle/plan",
             post(plan_windows_consequential_toggle),
+        )
+        .route(
+            "/v1/sessions/{id}/windows-observe/consequential/expand/plan",
+            post(plan_windows_consequential_expand),
+        )
+        .route(
+            "/v1/sessions/{id}/windows-observe/consequential/collapse/plan",
+            post(plan_windows_consequential_collapse),
         )
         .route(
             "/v1/sessions/{id}/windows-observe/consequential/{action_id}/confirm",
@@ -296,6 +316,38 @@ async fn plan_windows_consequential_toggle(
         session_id,
         request,
         WINDOWS_TOGGLE_ACTION,
+    )
+    .await
+}
+
+async fn plan_windows_consequential_expand(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(session_id): Path<SessionId>,
+    Json(request): Json<WindowsConsequentialPlanRequest>,
+) -> axum::response::Response {
+    plan_windows_consequential_action(
+        state,
+        headers,
+        session_id,
+        request,
+        WINDOWS_EXPAND_ACTION,
+    )
+    .await
+}
+
+async fn plan_windows_consequential_collapse(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(session_id): Path<SessionId>,
+    Json(request): Json<WindowsConsequentialPlanRequest>,
+) -> axum::response::Response {
+    plan_windows_consequential_action(
+        state,
+        headers,
+        session_id,
+        request,
+        WINDOWS_COLLAPSE_ACTION,
     )
     .await
 }
@@ -924,6 +976,21 @@ mod tests {
         assert_eq!(WINDOWS_TOGGLE_ACTION.operation, CanonicalActionOperation::Toggle);
         assert_eq!(WINDOWS_TOGGLE_ACTION.required_pattern, WindowsUiaPattern::Toggle);
         assert_eq!(WINDOWS_TOGGLE_ACTION.response_operation, "toggle");
+        assert_eq!(WINDOWS_EXPAND_ACTION.operation, CanonicalActionOperation::Expand);
+        assert_eq!(
+            WINDOWS_EXPAND_ACTION.required_pattern,
+            WindowsUiaPattern::ExpandCollapse
+        );
+        assert_eq!(WINDOWS_EXPAND_ACTION.response_operation, "expand");
+        assert_eq!(
+            WINDOWS_COLLAPSE_ACTION.operation,
+            CanonicalActionOperation::Collapse
+        );
+        assert_eq!(
+            WINDOWS_COLLAPSE_ACTION.required_pattern,
+            WindowsUiaPattern::ExpandCollapse
+        );
+        assert_eq!(WINDOWS_COLLAPSE_ACTION.response_operation, "collapse");
     }
 
     #[test]
