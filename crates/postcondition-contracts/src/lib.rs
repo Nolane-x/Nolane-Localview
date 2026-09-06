@@ -625,6 +625,7 @@ fn snapshot_is_complete(snapshot: &NativeSemanticSnapshotRevision) -> bool {
         && !snapshot.resource_usage().incomplete
 }
 
+#[allow(clippy::too_many_arguments)]
 fn matcher_is_empty(
     role: Option<&String>,
     name: Option<&String>,
@@ -669,6 +670,7 @@ fn matcher_matches(
             .all(|(key, value)| node.attributes.get(key) == Some(value))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn matcher_to_json(
     role: Option<&String>,
     name: Option<&String>,
