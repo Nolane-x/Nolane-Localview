@@ -21,11 +21,9 @@ mod windows_runtime_dispatch_smoke {
     use localview_windows_observe_runtime::{
         NativeSemanticNodeMatcherV1, NativeSemanticPostconditionContractV1,
         NativeSemanticPostconditionExpectation, WindowsObserveRuntimeConfig,
-        WindowsUiaActionPreflightRequest, WindowsUiaAuthorizationRevalidationReceipt,
-        WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchSealRequest,
-        WindowsUiaPreparedDispatchRequest, WindowsUiaSemanticPostconditionVerifier,
-        WindowsUiaVerifiedExecutionOutcome, arm_uia_dispatch_execution,
-        execute_armed_uia_dispatch_verified, prepare_uia_dispatch,
+        WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
+        WindowsUiaSemanticPostconditionVerifier, WindowsUiaVerifiedActionTarget,
+        WindowsUiaVerifiedExecutionOutcome, execute_verified_canonical_uia_action,
         spawn_windows_uia_runtime_manager,
     };
     use localview_windows_uia_provider::{
@@ -239,9 +237,10 @@ mod windows_runtime_dispatch_smoke {
             expected_postcondition_contract_refs: vec![postcondition_ref.clone()],
         };
         let queued = bridge
-            .enqueue_canonical_action(session_id, None, BridgeActionKind::Click, authority.clone())
+            .enqueue_canonical_action(session_id, None, BridgeActionKind::Click, authority)
             .await
             .expect("enqueue canonical consequential action");
+        let action_id = queued.action.id;
 
         let journal_path = std::env::temp_dir().join(format!(
             "localview-windows-runtime-postcondition-{}.jsonl",
@@ -259,58 +258,30 @@ mod windows_runtime_dispatch_smoke {
             .await
             .expect("durably bind canonical Activate operation before authority revalidation");
 
-        let preflight = manager
-            .preflight_uia_action(
-                session_id,
-                WindowsUiaActionPreflightRequest {
-                    authority: authority.clone(),
-                    element_ref: node.element_ref.clone(),
-                    required_pattern: WindowsUiaPattern::Invoke,
-                },
-            )
-            .await
-            .expect("preflight exact current Invoke node");
-        let prepared = prepare_uia_dispatch(
-            &bridge,
-            &journal,
-            &manager,
-            session_id,
-            WindowsUiaPreparedDispatchRequest {
-                seal: WindowsUiaDispatchSealRequest {
-                    action_id: queued.action.id,
-                    authority,
-                    preflight,
-                    context_requirements: WindowsUiaDispatchContextRequirements {
-                        require_foreground_target: false,
-                        require_exact_element_focus: false,
-                        require_no_modal_blocker: true,
-                    },
-                },
-            },
-            &SmokeAuthorizationRevalidator,
-        )
-        .await
-        .expect("durably prepare real Windows UIA dispatch");
-        let armed = arm_uia_dispatch_execution(&bridge, &journal, &manager, session_id, prepared)
-            .await
-            .expect("arm exactly one provider execution request");
-        let action_id = armed.action_id();
         let executor = manager
             .uia_dispatch_executor(session_id)
             .await
             .expect("resolve exact attached runtime dispatch executor");
-
-        let outcome = execute_armed_uia_dispatch_verified(
+        let outcome = execute_verified_canonical_uia_action(
             &bridge,
             &journal,
             &manager,
-            session_id,
-            armed,
+            &queued,
+            WindowsUiaVerifiedActionTarget {
+                element_ref: node.element_ref.clone(),
+                required_pattern: WindowsUiaPattern::Invoke,
+                context_requirements: WindowsUiaDispatchContextRequirements {
+                    require_foreground_target: false,
+                    require_exact_element_focus: false,
+                    require_no_modal_blocker: true,
+                },
+            },
+            &SmokeAuthorizationRevalidator,
             &executor,
             &WindowsUiaSemanticPostconditionVerifier,
         )
         .await
-        .expect("production typed verifier must close real Invoke through postcondition commit");
+        .expect("canonical coordinator must close real Invoke through typed postcondition commit");
 
         assert!(matches!(
             outcome,
@@ -381,6 +352,11 @@ mod windows_runtime_dispatch_smoke {
         ui_thread
             .join()
             .expect("join runtime postcondition fixture UI thread");
+        let _ = std::fs::remove_file(format!(
+            "{}.operation-{}.json",
+            journal_path.display(),
+            action_id
+        ));
         let _ = std::fs::remove_file(journal_path);
     }
 }
