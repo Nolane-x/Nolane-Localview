@@ -6,7 +6,7 @@ use std::{
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
-    ConsequentialJournal, LiveBridge,
+    CanonicalActionOperation, ConsequentialJournal, LiveBridge,
 };
 use localview_native_provider::{
     NativeSemanticNodeObservation, NativeSemanticSnapshotDraft, NativeSemanticSnapshotRevision,
@@ -92,7 +92,7 @@ impl FakeProvider {
     fn build_snapshot(&self, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
         let mut capabilities = WindowsUiaActionCapabilities::default();
         capabilities.record(
-            WindowsUiaPattern::Toggle,
+            WindowsUiaPattern::Invoke,
             WindowsUiaPatternSupport::Supported,
         );
         let mut attributes = BTreeMap::from([("provider".into(), "windows_uia".into())]);
@@ -370,7 +370,7 @@ async fn fixture(
     let snapshot = provider.snapshot();
     let metadata = authority(&provider, &snapshot);
     let queued = bridge
-        .enqueue_canonical_action(session(), None, BridgeActionKind::Focus, metadata.clone())
+        .enqueue_canonical_action(session(), None, BridgeActionKind::Click, metadata.clone())
         .await
         .unwrap();
 
@@ -378,6 +378,10 @@ async fn fixture(
     let journal = ConsequentialJournal::open(&path).await.unwrap();
     journal
         .record_intent_admitted(queued.envelope.clone())
+        .await
+        .unwrap();
+    journal
+        .record_intent_operation_bound(queued.action.id, CanonicalActionOperation::Activate)
         .await
         .unwrap();
 
@@ -390,7 +394,7 @@ async fn fixture(
         WindowsUiaActionPreflightRequest {
             authority: metadata,
             element_ref: snapshot.nodes()[0].element_ref.clone(),
-            required_pattern: WindowsUiaPattern::Toggle,
+            required_pattern: WindowsUiaPattern::Invoke,
         },
         queued.action.id,
     )
