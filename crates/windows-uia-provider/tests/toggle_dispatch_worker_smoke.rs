@@ -14,8 +14,9 @@ mod windows_smoke {
     use localview_protocol::{DispatchResult, TransportResult};
     use localview_windows_uia_provider::{
         WindowsUiaActionCapabilities, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
-        WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport, WindowsUiaSnapshotRequest,
-        WindowsUiaWorker, WindowsUiaWorkerConfig,
+        WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchRequest,
+        WindowsUiaPatternSupport, WindowsUiaSnapshotRequest, WindowsUiaWorker,
+        WindowsUiaWorkerConfig,
     };
     use uuid::Uuid;
     use windows::{
@@ -156,6 +157,7 @@ mod windows_smoke {
             target_incarnation_ref: attachment.target_incarnation_ref().clone(),
             element_ref: checkbox.element_ref.clone(),
             required_pattern: WindowsUiaPattern::Toggle,
+            dispatch_operation: WindowsUiaPatternDispatchOperation::Toggle,
             context_requirements: WindowsUiaDispatchContextRequirements {
                 require_foreground_target: false,
                 require_exact_element_focus: false,
@@ -170,6 +172,10 @@ mod windows_smoke {
         assert_eq!(receipt.dispatch_attempt_ref, dispatch_attempt_ref);
         assert_eq!(receipt.action_id, action_id);
         assert_eq!(receipt.required_pattern, WindowsUiaPattern::Toggle);
+        assert_eq!(
+            receipt.dispatch_operation,
+            WindowsUiaPatternDispatchOperation::Toggle
+        );
         assert_eq!(receipt.element_ref, checkbox.element_ref);
         assert_eq!(
             receipt.transport_result,
