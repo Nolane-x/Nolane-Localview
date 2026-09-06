@@ -4,7 +4,7 @@ use localview_protocol::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::BridgeAction;
+use crate::{BridgeAction, BridgeActionKind};
 
 /// Minimum side-effect/risk floor for a canonical action.
 ///
@@ -44,6 +44,36 @@ pub enum ActionIdempotencyClass {
     Irreversible,
     #[serde(rename = "idempotency_unknown")]
     Unknown,
+}
+
+/// Payload-free operation identity for canonical actions.
+///
+/// This records only what operation class was authorized. Typed text, key
+/// payloads, coordinates and other transport data are deliberately excluded
+/// from the correctness/authority layer.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum CanonicalActionOperation {
+    Activate,
+    InputText,
+    KeyInput,
+    Scroll,
+    Focus,
+    Snapshot,
+}
+
+impl CanonicalActionOperation {
+    pub fn from_bridge_action_kind(action: &BridgeActionKind) -> Option<Self> {
+        match action {
+            BridgeActionKind::Click => Some(Self::Activate),
+            BridgeActionKind::TypeText { .. } => Some(Self::InputText),
+            BridgeActionKind::Key { .. } => Some(Self::KeyInput),
+            BridgeActionKind::Scroll { .. } => Some(Self::Scroll),
+            BridgeActionKind::Focus => Some(Self::Focus),
+            BridgeActionKind::Snapshot => Some(Self::Snapshot),
+            BridgeActionKind::FreezeVisuals | BridgeActionKind::RestoreVisuals { .. } => None,
+        }
+    }
 }
 
 /// Canonical authority metadata that lives above the compact BridgeAction wire
