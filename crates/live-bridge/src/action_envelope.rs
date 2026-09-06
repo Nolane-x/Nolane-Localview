@@ -56,6 +56,7 @@ pub enum ActionIdempotencyClass {
 #[serde(rename_all = "snake_case")]
 pub enum CanonicalActionOperation {
     Activate,
+    Select,
     InputText,
     KeyInput,
     Scroll,
