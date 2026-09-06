@@ -48,6 +48,15 @@ pub enum WindowsUiaVerifiedActionCoordinatorError {
 /// semantic preflight, authority/context seal, durable PREPARED, second volatile
 /// context arm, one-shot provider execution, fresh post-dispatch observation,
 /// typed verification, reconciliation, and durable commit when proven.
+///
+/// The eight inputs are intentionally not collapsed into an authority-bearing
+/// service bag: bridge state, durable journal, provider runtime, canonical
+/// intent, exact target, independent authorization, executor, and verifier are
+/// separate trust boundaries and remain explicit at this consequential call.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "keep eight consequential-action trust boundaries explicit instead of hiding them in a service bag"
+)]
 pub async fn execute_verified_canonical_uia_action<P, R, E, V>(
     bridge: &LiveBridge,
     journal: &ConsequentialJournal,
