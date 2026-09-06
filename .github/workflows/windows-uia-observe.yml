@@ -87,6 +87,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-control --test windows_consequential_control_windows_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real HTTP plan + confirm to verified durable SelectionItem commit
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-control --test windows_consequential_selection_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real bounded Win32 UIA event subscription
         env:
           LOCALVIEW_UIA_SMOKE: "1"
