@@ -34,8 +34,8 @@ impl WindowsUiaPatternDispatchOperation {
 
 /// One exact provider-side dispatch attempt. These fields deliberately repeat
 /// the runtime authority binding so the MTA worker can reject cross-cut,
-/// cross-incarnation, cross-element, or replayed execution attempts before it
-/// touches a live UIA pattern.
+/// cross-incarnation, cross-element, cross-operation, or replayed execution
+/// attempts before it touches a live UIA pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsUiaPatternDispatchRequest {
     pub dispatch_attempt_ref: Uuid,
@@ -47,6 +47,7 @@ pub struct WindowsUiaPatternDispatchRequest {
     pub target_incarnation_ref: TargetIncarnationRef,
     pub element_ref: ProviderElementRef,
     pub required_pattern: WindowsUiaPattern,
+    pub dispatch_operation: WindowsUiaPatternDispatchOperation,
     pub context_requirements: WindowsUiaDispatchContextRequirements,
 }
 
@@ -64,6 +65,7 @@ pub struct WindowsUiaPatternDispatchReceipt {
     pub target_incarnation_ref: TargetIncarnationRef,
     pub element_ref: ProviderElementRef,
     pub required_pattern: WindowsUiaPattern,
+    pub dispatch_operation: WindowsUiaPatternDispatchOperation,
     pub context_requirements: WindowsUiaDispatchContextRequirements,
     pub final_context: WindowsUiaDispatchContextObservation,
     pub transport_result: TransportResult,
