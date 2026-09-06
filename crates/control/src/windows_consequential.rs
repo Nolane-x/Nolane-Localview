@@ -96,6 +96,12 @@ const WINDOWS_SELECT_ACTION: WindowsConsequentialSemanticAction = WindowsConsequ
     response_operation: "select",
 };
 
+const WINDOWS_TOGGLE_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
+    operation: CanonicalActionOperation::Toggle,
+    required_pattern: WindowsUiaPattern::Toggle,
+    response_operation: "toggle",
+};
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WindowsConsequentialConfirmRequest {
@@ -172,6 +178,10 @@ pub(crate) fn router(state: ControlState) -> Router {
         .route(
             "/v1/sessions/{id}/windows-observe/consequential/select/plan",
             post(plan_windows_consequential_select),
+        )
+        .route(
+            "/v1/sessions/{id}/windows-observe/consequential/toggle/plan",
+            post(plan_windows_consequential_toggle),
         )
         .route(
             "/v1/sessions/{id}/windows-observe/consequential/{action_id}/confirm",
@@ -274,6 +284,22 @@ async fn plan_windows_consequential_select(
     .await
 }
 
+async fn plan_windows_consequential_toggle(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(session_id): Path<SessionId>,
+    Json(request): Json<WindowsConsequentialPlanRequest>,
+) -> axum::response::Response {
+    plan_windows_consequential_action(
+        state,
+        headers,
+        session_id,
+        request,
+        WINDOWS_TOGGLE_ACTION,
+    )
+    .await
+}
+
 async fn plan_windows_consequential_action(
     state: ControlState,
     headers: HeaderMap,
@@ -350,8 +376,9 @@ async fn plan_windows_consequential_action(
     // Confirmation and durable authorization revision are deliberately distinct
     // random values. Only the confirmation_ref is returned to the bearer holder
     // and retained process-locally; it is never written to the durable journal.
-    // Selection intentionally retains the conservative S4/irreversible floor:
-    // generic UIA capability evidence does not prove application-level semantics.
+    // Generic UIA action capability evidence cannot prove application-level
+    // consequences, so all current semantic writes retain the conservative
+    // S4/irreversible floor until stronger application semantics exist.
     let confirmation_ref = Uuid::new_v4();
     let authorization_revision_ref = Uuid::new_v4();
     let authority = ActionEnvelopeMetadata {
@@ -894,6 +921,9 @@ mod tests {
             WindowsUiaPattern::SelectionItem
         );
         assert_eq!(WINDOWS_SELECT_ACTION.response_operation, "select");
+        assert_eq!(WINDOWS_TOGGLE_ACTION.operation, CanonicalActionOperation::Toggle);
+        assert_eq!(WINDOWS_TOGGLE_ACTION.required_pattern, WindowsUiaPattern::Toggle);
+        assert_eq!(WINDOWS_TOGGLE_ACTION.response_operation, "toggle");
     }
 
     #[test]
