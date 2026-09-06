@@ -17,8 +17,10 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use localview_chromium::discover_chromium_executable;
 use localview_control::{
-    configure_chromium_executor_for_sessions, configure_windows_observe_runtime_for_sessions,
-    runtime_resource_governor_for_sessions, ControlState,
+    configure_chromium_executor_for_sessions, configure_windows_consequential_control_for_sessions,
+    configure_windows_observe_runtime_for_sessions,
+    release_windows_consequential_control_session_for_sessions, runtime_resource_governor_for_sessions,
+    ControlState,
 };
 use localview_core::RuntimeConfig;
 use localview_discovery::{CommandListenerSource, DiscoveryEngine};
@@ -115,8 +117,12 @@ async fn main() -> Result<()> {
     let windows_observe: Option<Arc<WindowsUiaObserveRuntimeManager>> = None;
 
     configure_windows_observe_runtime_for_sessions(&sessions, windows_observe.clone());
+    configure_windows_consequential_control_for_sessions(
+        &sessions,
+        Some(consequential_journal.clone()),
+    );
     if let Some(runtime) = windows_observe.clone() {
-        spawn_windows_observe_drain_loop(runtime.clone());
+        spawn_windows_observe_drain_loop(runtime.clone(), sessions.clone());
         if has_consequential_boot_history {
             spawn_windows_consequential_recovery_loop(
                 runtime,
@@ -190,6 +196,7 @@ async fn main() -> Result<()> {
                                     }
                                 }
                             }
+                            release_windows_consequential_control_session_for_sessions(&sessions, id).await;
                             live.release_session(id).await;
                             evidence.release_session(id).await;
                             resources.release_session(&id.to_string());
@@ -206,18 +213,24 @@ async fn main() -> Result<()> {
             if let Err(error) = runtime.release(id).await {
                 warn!(session_id = %id, %error, "Windows observe provider cleanup failed after shutdown detach");
             }
+            release_windows_consequential_control_session_for_sessions(&sessions, id).await;
         }
     }
     configure_windows_observe_runtime_for_sessions(&sessions, None);
+    configure_windows_consequential_control_for_sessions(&sessions, None);
     // The durable journal remains alive for the full daemon lifetime. Recovery
     // may observe/reconcile only after normal attachment authority is restored;
-    // restart never recreates a dispatch permit or executor capability.
+    // restart never recreates a dispatch permit, confirmation capability, or
+    // executor authority.
     drop(consequential_journal);
     drop(consequential_recovery);
     Ok(())
 }
 
-fn spawn_windows_observe_drain_loop(runtime: Arc<WindowsUiaObserveRuntimeManager>) {
+fn spawn_windows_observe_drain_loop(
+    runtime: Arc<WindowsUiaObserveRuntimeManager>,
+    sessions: Arc<SessionManager>,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -237,6 +250,11 @@ fn spawn_windows_observe_drain_loop(runtime: Arc<WindowsUiaObserveRuntimeManager
                         if let Err(cleanup_error) = runtime.release(session_id).await {
                             warn!(%session_id, %cleanup_error, "Windows observe provider cleanup failed after drain-error detach");
                         }
+                        release_windows_consequential_control_session_for_sessions(
+                            &sessions,
+                            session_id,
+                        )
+                        .await;
                     }
                 }
             }

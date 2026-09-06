@@ -21,7 +21,10 @@ use localview_windows_observe_runtime::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::ControlState;
+use crate::{
+    windows_consequential::release_windows_consequential_control_session_for_sessions,
+    ControlState,
+};
 
 #[derive(Debug)]
 struct RuntimeEntry {
@@ -155,7 +158,12 @@ async fn detach_windows_observe(
         return unavailable();
     };
 
-    match runtime.release(id).await {
+    // Runtime release detaches LocalView authority before provider cleanup. Even
+    // when provider unsubscribe later fails, confirmations from the dead
+    // attachment lifetime must never survive for a future reattachment.
+    let release = runtime.release(id).await;
+    release_windows_consequential_control_session_for_sessions(&state.sessions, id).await;
+    match release {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => runtime_error_response(error),
     }

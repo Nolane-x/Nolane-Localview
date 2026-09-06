@@ -1,10 +1,11 @@
+use chrono::Utc;
 use localview_protocol::{
-    PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
+    ElementRef, PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{BridgeAction, BridgeActionKind};
+use crate::{BridgeAction, BridgeActionKind, LiveBridge};
 
 /// Minimum side-effect/risk floor for a canonical action.
 ///
@@ -124,4 +125,85 @@ pub enum ActionEnvelopeBindingError {
     MissingPreconditionSnapshotCut,
     MissingExpectedPostcondition,
     InternalCaptureActionUnsupported,
+}
+
+impl LiveBridge {
+    /// Bind a canonical V4.3 action for direct verified execution without ever
+    /// exposing it to the legacy V1-V3 public action queue.
+    ///
+    /// This method mints no dispatch authority. It performs only the same
+    /// admission-time envelope validation and current provider/target lineage
+    /// binding as the queued canonical path. The caller must still durably admit
+    /// the intent, bind its canonical operation, obtain independent current
+    /// authorization, and execute through the verified-action coordinator.
+    pub async fn bind_direct_canonical_action(
+        &self,
+        session_id: SessionId,
+        reference: Option<ElementRef>,
+        action: BridgeActionKind,
+        metadata: ActionEnvelopeMetadata,
+    ) -> Result<CanonicalQueuedAction, ActionEnvelopeBindingError> {
+        if action.is_internal_capture_action() {
+            return Err(ActionEnvelopeBindingError::InternalCaptureActionUnsupported);
+        }
+        if metadata.decision_principal_ref.as_str().trim().is_empty() {
+            return Err(ActionEnvelopeBindingError::MissingDecisionPrincipal);
+        }
+        if metadata.acting_principal_ref.as_str().trim().is_empty() {
+            return Err(ActionEnvelopeBindingError::MissingActingPrincipal);
+        }
+        if metadata.authorization_revision.trim().is_empty() {
+            return Err(ActionEnvelopeBindingError::MissingAuthorizationRevision);
+        }
+        if metadata.precondition_snapshot_cut_ref.trim().is_empty() {
+            return Err(ActionEnvelopeBindingError::MissingPreconditionSnapshotCut);
+        }
+        if metadata.risk_class != ActionRiskClass::ObserveOnly
+            && metadata.expected_postcondition_contract_refs.is_empty()
+        {
+            return Err(ActionEnvelopeBindingError::MissingExpectedPostcondition);
+        }
+
+        // Serialize direct binding against provider detach/release and all other
+        // canonical action admissions. The legacy queue is intentionally never
+        // touched while this gate is held.
+        let _gate = self.action_gate.lock().await;
+        let current_incarnations = {
+            let continuity = self.continuity.read().await;
+            let Some(state) = continuity.get(&session_id) else {
+                return Err(ActionEnvelopeBindingError::MissingProviderObservation);
+            };
+            (
+                state.provider_incarnation_ref.clone(),
+                state.target_incarnation_ref.clone(),
+            )
+        };
+
+        if metadata.provider_incarnation_ref != current_incarnations.0 {
+            return Err(ActionEnvelopeBindingError::ProviderIncarnationMismatch);
+        }
+        if metadata.target_incarnation_ref != current_incarnations.1 {
+            return Err(ActionEnvelopeBindingError::TargetIncarnationMismatch);
+        }
+
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id,
+            reference,
+            action,
+            created_at: Utc::now(),
+        };
+        let envelope = CanonicalActionEnvelope {
+            envelope_id: Uuid::new_v4(),
+            transport_action_id: action.id,
+            session_id,
+            metadata,
+        };
+        self.action_envelopes
+            .write()
+            .await
+            .insert(action.id, envelope.clone());
+
+        Ok(CanonicalQueuedAction { action, envelope })
+    }
 }

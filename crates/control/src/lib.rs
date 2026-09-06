@@ -15,6 +15,7 @@ mod runtime;
 mod visual_diff;
 mod visual_region;
 mod visual_verify;
+mod windows_consequential;
 mod windows_observe;
 
 use std::net::SocketAddr;
@@ -33,6 +34,10 @@ pub use resource_runtime::runtime_resource_governor_for_sessions;
 #[doc(hidden)]
 pub use runtime::serve as legacy_serve;
 pub use runtime::{ControlState, EventEnvelope};
+pub use windows_consequential::{
+    configure_windows_consequential_control_for_sessions,
+    release_windows_consequential_control_session_for_sessions,
+};
 pub use windows_observe::{
     configure_windows_observe_runtime_for_sessions, windows_observe_runtime_for_sessions,
 };
@@ -51,6 +56,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(visual_diff::router(state.clone()))
         .merge(visual_verify::router(state.clone()))
         .merge(windows_observe::router(state.clone()))
+        .merge(windows_consequential::router(state.clone()))
         .merge(visual_region::router(state))
 }
 
