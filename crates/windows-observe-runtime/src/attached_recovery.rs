@@ -1,6 +1,6 @@
 use localview_live_bridge::{
-    ConsequentialJournal, ConsequentialRecoveryDebtDisposition, ConsequentialRecoveryState,
-    LiveBridge,
+    ConsequentialJournal, ConsequentialRecoveryActionScope, ConsequentialRecoveryDebtDisposition,
+    ConsequentialRecoveryState, LiveBridge,
 };
 use localview_protocol::{ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use thiserror::Error;
@@ -88,6 +88,37 @@ pub async fn plan_attached_consequential_recovery<P: WindowsObserveProvider>(
     runtime: &WindowsObserveRuntimeManager<P>,
     session_id: SessionId,
 ) -> Result<WindowsUiaAttachedRecoveryPlan, WindowsUiaAttachedRecoveryPlanError> {
+    plan_attached_consequential_recovery_filtered(journal, runtime, session_id, |_| true).await
+}
+
+/// Build the same exact attachment-bound plan, but admit only action identities
+/// captured by a caller-owned immutable recovery scope (for example the set
+/// replayed at daemon boot).
+///
+/// Scope membership is data filtering only. The scope does not mint observation
+/// or execution authority and cannot cause a post-boot action to enter recovery.
+pub async fn plan_attached_consequential_recovery_scoped<P: WindowsObserveProvider>(
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    session_id: SessionId,
+    scope: &ConsequentialRecoveryActionScope,
+) -> Result<WindowsUiaAttachedRecoveryPlan, WindowsUiaAttachedRecoveryPlanError> {
+    plan_attached_consequential_recovery_filtered(journal, runtime, session_id, |action_id| {
+        scope.contains(action_id)
+    })
+    .await
+}
+
+async fn plan_attached_consequential_recovery_filtered<P, F>(
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    session_id: SessionId,
+    include_action: F,
+) -> Result<WindowsUiaAttachedRecoveryPlan, WindowsUiaAttachedRecoveryPlanError>
+where
+    P: WindowsObserveProvider,
+    F: Fn(Uuid) -> bool,
+{
     let snapshot = runtime
         .current_semantic_snapshot(session_id)
         .await
@@ -103,6 +134,7 @@ pub async fn plan_attached_consequential_recovery<P: WindowsObserveProvider>(
         )
         .await
         .into_iter()
+        .filter(|binding| include_action(binding.action_id))
         .map(|binding| {
             let disposition = binding.recovery_state.recovery_debt_disposition();
             WindowsUiaAttachedRecoveryPlanEntry {
@@ -142,6 +174,41 @@ where
     V: WindowsUiaPostconditionVerifier,
 {
     let plan = plan_attached_consequential_recovery(journal, runtime, session_id).await?;
+    drain_attached_recovery_plan(bridge, journal, runtime, plan, verifier).await
+}
+
+/// Drain only consequential actions that were admitted to an immutable recovery
+/// epoch. This is the boot-watcher path: later actions in the same journal remain
+/// outside the recovery scope even if their session/provider/target lineage is
+/// identical to the current attachment.
+pub async fn recover_attached_consequential_debt_scoped<P, V>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    session_id: SessionId,
+    verifier: &V,
+    scope: &ConsequentialRecoveryActionScope,
+) -> Result<WindowsUiaAttachedRecoveryDrain, WindowsUiaAttachedRecoveryDrainError>
+where
+    P: WindowsObserveProvider,
+    V: WindowsUiaPostconditionVerifier,
+{
+    let plan =
+        plan_attached_consequential_recovery_scoped(journal, runtime, session_id, scope).await?;
+    drain_attached_recovery_plan(bridge, journal, runtime, plan, verifier).await
+}
+
+async fn drain_attached_recovery_plan<P, V>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    plan: WindowsUiaAttachedRecoveryPlan,
+    verifier: &V,
+) -> Result<WindowsUiaAttachedRecoveryDrain, WindowsUiaAttachedRecoveryDrainError>
+where
+    P: WindowsObserveProvider,
+    V: WindowsUiaPostconditionVerifier,
+{
     let mut outcomes = Vec::with_capacity(plan.entries.len());
 
     for entry in &plan.entries {
