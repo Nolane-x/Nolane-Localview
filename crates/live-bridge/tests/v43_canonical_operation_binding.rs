@@ -2,8 +2,7 @@ use std::path::PathBuf;
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
-    CanonicalActionOperation, ConsequentialJournal, ConsequentialJournalTransition, LiveBridge,
-    ProviderObservationBinding,
+    CanonicalActionOperation, ConsequentialJournal, LiveBridge, ProviderObservationBinding,
 };
 use localview_protocol::{
     EventContinuityState, PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
@@ -84,7 +83,7 @@ async fn canonical_action_retains_only_payload_free_operation_identity() {
 }
 
 #[tokio::test]
-async fn canonical_operation_binding_is_durable_and_one_shot_before_authorization() {
+async fn canonical_operation_binding_is_durable_one_shot_and_bound_to_exact_intent_sequence() {
     let (bridge, session_id, provider, target) = bridge_with_binding().await;
     let queued = bridge
         .enqueue_canonical_action(
@@ -102,7 +101,7 @@ async fn canonical_operation_binding_is_durable_and_one_shot_before_authorizatio
 
     let path = journal_path("canonical-operation-binding");
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    journal
+    let admitted = journal
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
@@ -110,14 +109,11 @@ async fn canonical_operation_binding_is_durable_and_one_shot_before_authorizatio
         .record_intent_operation_bound(queued.action.id, CanonicalActionOperation::Activate)
         .await
         .unwrap();
-    assert!(matches!(
-        bound.transition,
-        ConsequentialJournalTransition::IntentOperationBound {
-            operation: CanonicalActionOperation::Activate
-        }
-    ));
+    assert_eq!(bound.action_id, queued.action.id);
+    assert_eq!(bound.intent_journal_sequence, admitted.journal_sequence);
+    assert_eq!(bound.operation, CanonicalActionOperation::Activate);
     assert_eq!(
-        journal.admitted_operation(queued.action.id).await,
+        journal.admitted_operation(queued.action.id).await.unwrap(),
         Some(CanonicalActionOperation::Activate)
     );
     assert!(
@@ -131,10 +127,11 @@ async fn canonical_operation_binding_is_durable_and_one_shot_before_authorizatio
 
     let reopened = ConsequentialJournal::open(&path).await.unwrap();
     assert_eq!(
-        reopened.admitted_operation(queued.action.id).await,
+        reopened.admitted_operation(queued.action.id).await.unwrap(),
         Some(CanonicalActionOperation::Activate),
         "operation identity must survive restart without reconstructing raw action payload"
     );
 
     let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{}.operation-{}.json", path.display(), queued.action.id));
 }
