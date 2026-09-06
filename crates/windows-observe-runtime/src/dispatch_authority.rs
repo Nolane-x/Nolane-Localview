@@ -1,10 +1,11 @@
 use std::error::Error as StdError;
 
 use localview_live_bridge::{
-    ActionEnvelopeMetadata, ConsequentialJournal, ConsequentialJournalTransition,
-    ConsequentialRecoveryState, LiveBridge,
+    ActionEnvelopeMetadata, CanonicalActionOperation, ConsequentialJournal,
+    ConsequentialJournalTransition, ConsequentialRecoveryState, LiveBridge,
 };
 use localview_protocol::{PrincipalRef, SessionId};
+use localview_windows_uia_provider::WindowsUiaPattern;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -70,6 +71,17 @@ pub enum WindowsUiaDispatchAuthorityError {
     JournalStateNotDispatchable {
         state: Option<ConsequentialRecoveryState>,
     },
+    #[error("Windows UIA canonical operation binding is missing")]
+    CanonicalOperationMissing,
+    #[error("Windows UIA canonical operation binding is invalid: {message}")]
+    CanonicalOperationBindingInvalid { message: String },
+    #[error(
+        "Windows UIA canonical operation {canonical:?} cannot authorize pattern {requested_pattern:?}"
+    )]
+    CanonicalOperationMismatch {
+        canonical: CanonicalActionOperation,
+        requested_pattern: WindowsUiaPattern,
+    },
     #[error("Windows UIA authorization revalidation failed: {message}")]
     AuthorizationRevalidationFailed { message: String },
     #[error("Windows UIA authorization revalidation receipt does not match canonical authority")]
@@ -86,9 +98,11 @@ pub enum WindowsUiaDispatchAuthorityError {
 /// 2. prove the supplied semantic/live-element receipt is self-consistent;
 /// 3. prove the journal has the exact admitted envelope and has not crossed a
 ///    dispatch/world-outcome boundary;
-/// 4. ask the independent authorization authority to revalidate principals and
+/// 4. prove the payload-free operation bound to that exact durable intent is the
+///    operation represented by the requested UIA pattern;
+/// 5. ask the independent authorization authority to revalidate principals and
 ///    authorization revision;
-/// 5. only then durably record `revalidated = true` and return eligibility.
+/// 6. only then durably record `revalidated = true` and return eligibility.
 ///
 /// No provider side effect is performed here. A later provider-context fence
 /// must still revalidate foreground/focus/modal state immediately before any
@@ -142,6 +156,21 @@ where
         return Err(WindowsUiaDispatchAuthorityError::JournalStateNotDispatchable { state });
     }
 
+    let canonical_operation = journal
+        .admitted_operation(action_id)
+        .await
+        .map_err(|error| WindowsUiaDispatchAuthorityError::CanonicalOperationBindingInvalid {
+            message: error.to_string(),
+        })?
+        .ok_or(WindowsUiaDispatchAuthorityError::CanonicalOperationMissing)?;
+    let requested_pattern = dispatch_revalidation.preflight.required_pattern;
+    if !canonical_operation_matches_uia_pattern(canonical_operation, requested_pattern) {
+        return Err(WindowsUiaDispatchAuthorityError::CanonicalOperationMismatch {
+            canonical: canonical_operation,
+            requested_pattern,
+        });
+    }
+
     let authorization = revalidator
         .revalidate(action_id, &envelope.metadata)
         .map_err(|error| WindowsUiaDispatchAuthorityError::AuthorizationRevalidationFailed {
@@ -172,6 +201,16 @@ where
         dispatch_revalidation,
         authorization_journal_sequence: authorization_entry.journal_sequence,
     })
+}
+
+fn canonical_operation_matches_uia_pattern(
+    canonical: CanonicalActionOperation,
+    requested_pattern: WindowsUiaPattern,
+) -> bool {
+    matches!(
+        (canonical, requested_pattern),
+        (CanonicalActionOperation::Activate, WindowsUiaPattern::Invoke)
+    )
 }
 
 fn dispatch_revalidation_is_self_consistent(
