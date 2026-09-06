@@ -26,7 +26,7 @@ Fresh semantic snapshots publish `windows_uia.expand_collapse.state` only when `
 - `0` -> `collapsed`
 - `1` -> `expanded`
 - `2` -> `partially_expanded`
-- `3` -> `leaf`
+- `3` -> `leaf_node`
 
 If the pattern is supported but state cannot be read, converted, or falls outside that domain, the provider records `uia_property_expand_collapse_state_unavailable`, omits the state attribute, and the snapshot is incomplete. Consequential postcondition verification therefore fails closed.
 
