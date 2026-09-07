@@ -50,6 +50,40 @@ fn assert_activation_close_is_fail_closed(section: &str, close_call: &str, owner
     );
 }
 
+fn assert_record_created_close_is_fail_closed(section: &str, close_call: &str, owner_name: &str) {
+    let section = compact(section);
+    let record_created = section
+        .find("registry.record_created(")
+        .map(|index| &section[index..])
+        .expect("surface owner record_created call");
+    let activation = record_created
+        .find("activate_surface(")
+        .expect("surface activation after owner record");
+    let rollback = &record_created[..activation];
+
+    let ignored_close = format!("let_={close_call};");
+    assert!(
+        !rollback.contains(&ignored_close),
+        "{owner_name} record_created rollback must not ignore platform close failure"
+    );
+    let propagated_close = format!("{close_call}.map_err");
+    let explicit_close_error = format!("ifletErr(close_error)={close_call}");
+    assert!(
+        rollback.contains(&propagated_close) || rollback.contains(&explicit_close_error),
+        "{owner_name} record_created rollback must preserve pending authority when the physical surface cannot close"
+    );
+    let close = rollback
+        .find(close_call)
+        .expect("platform close in record_created rollback");
+    let pending_cleanup = rollback
+        .find("cancel_surface_reservation(")
+        .expect("pending authority cleanup in record_created rollback");
+    assert!(
+        close < pending_cleanup,
+        "{owner_name} pending central authority may only be cancelled after physical close succeeds"
+    );
+}
+
 #[test]
 fn preview_activation_rollback_preserves_owner_truth_when_platform_close_fails() {
     let lib = source("lib.rs");
@@ -70,6 +104,28 @@ fn workspace_activation_rollback_preserves_owner_truth_when_platform_close_fails
         "fn set_native_bounds(",
     );
     assert_activation_close_is_fail_closed(open, "webview.close()", "workspace child");
+}
+
+#[test]
+fn preview_record_created_rollback_preserves_pending_authority_when_platform_close_fails() {
+    let lib = source("lib.rs");
+    let open = between(
+        &lib,
+        "async fn open_preview(",
+        "fn install_preview_surface_destroyed_reconciler(",
+    );
+    assert_record_created_close_is_fail_closed(open, "window.close()", "preview window");
+}
+
+#[test]
+fn workspace_record_created_rollback_preserves_pending_authority_when_platform_close_fails() {
+    let workspace = source("workspace_surface.rs");
+    let open = between(
+        &workspace,
+        "async fn open_native(",
+        "fn set_native_bounds(",
+    );
+    assert_record_created_close_is_fail_closed(open, "webview.close()", "workspace child");
 }
 
 #[test]
