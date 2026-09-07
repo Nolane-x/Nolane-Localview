@@ -18,6 +18,7 @@ pub struct ResourceBudget {
     pub network_kb_per_minute: u64,
     pub chromium_instances: usize,
     pub concurrent_captures: usize,
+    pub hidden_surfaces: usize,
 }
 
 impl Default for ResourceBudget {
@@ -29,6 +30,7 @@ impl Default for ResourceBudget {
             network_kb_per_minute: 1024,
             chromium_instances: 1,
             concurrent_captures: 2,
+            hidden_surfaces: 4,
         }
     }
 }
@@ -41,6 +43,7 @@ pub struct ResourceSample {
     pub network_kb_per_minute: u64,
     pub chromium_instances: usize,
     pub concurrent_captures: usize,
+    pub hidden_surfaces: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -115,6 +118,7 @@ pub enum DegradationAction {
     SuspendBackgroundResponsiveSweeps,
     BlockChromiumEscalation,
     SerializeCaptures,
+    SuspendInactiveRenderSurfaces,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -143,6 +147,10 @@ pub fn evaluate(sample: &ResourceSample, budget: &ResourceBudget) -> GovernorDec
         ratio(
             sample.concurrent_captures as f32,
             budget.concurrent_captures.max(1) as f32,
+        ),
+        ratio(
+            sample.hidden_surfaces as f32,
+            budget.hidden_surfaces.max(1) as f32,
         ),
     ];
     let peak = ratios.into_iter().fold(0.0_f32, f32::max);
@@ -176,6 +184,10 @@ pub fn evaluate(sample: &ResourceSample, budget: &ResourceBudget) -> GovernorDec
     if sample.chromium_instances >= budget.chromium_instances.max(1) {
         actions.push(DegradationAction::BlockChromiumEscalation);
         reasons.push("Chromium instance budget reached".into());
+    }
+    if sample.hidden_surfaces >= budget.hidden_surfaces.max(1) {
+        actions.push(DegradationAction::SuspendInactiveRenderSurfaces);
+        reasons.push("hidden surface budget reached".into());
     }
     if pressure >= PressureLevel::High {
         actions.push(DegradationAction::SuspendBackgroundResponsiveSweeps);
@@ -256,17 +268,49 @@ pub enum ResourceWorkKind {
     Chromium,
     NativeSemanticObservation,
     NativeSemanticReconciliation,
+    NativeSurface,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LiveResourceKind {
     ChromiumProcess,
+    NativeSurface,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct LiveSurfaceIdentity {
+    pub surface_kind: String,
+    pub label: String,
+    pub incarnation: u64,
+}
+
+impl LiveSurfaceIdentity {
+    pub fn new(
+        surface_kind: impl Into<String>,
+        label: impl Into<String>,
+        incarnation: u64,
+    ) -> Self {
+        Self {
+            surface_kind: surface_kind.into(),
+            label: label.into(),
+            incarnation,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceVisibility {
+    Visible,
+    Hidden,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceActivationError {
     ReservationMissing,
     KindMismatch,
+    SurfaceIdentityMismatch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -277,10 +321,19 @@ pub struct ResourceAdmissionDenial {
 
 type ReservationKey = (String, String);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LiveResourceState {
+    ChromiumProcess,
+    NativeSurface {
+        identity: LiveSurfaceIdentity,
+        visibility: SurfaceVisibility,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ReservationState {
     Pending(ResourceWorkKind),
-    Live(LiveResourceKind),
+    Live(LiveResourceState),
 }
 
 #[derive(Debug)]
@@ -390,7 +443,7 @@ impl RuntimeResourceGovernor {
         let mut state = lock(&self.inner);
         let before = state.reservations.len();
         state.reservations.retain(|(reserved_session, _), reservation| {
-            matches!(*reservation, ReservationState::Live(_)) || reserved_session != session_id
+            matches!(reservation, ReservationState::Live(_)) || reserved_session != session_id
         });
         before.saturating_sub(state.reservations.len())
     }
@@ -404,12 +457,12 @@ impl RuntimeResourceGovernor {
         let Some(reservation) = state.reservations.get_mut(key) else {
             return Err(ResourceActivationError::ReservationMissing);
         };
-        match (*reservation, kind) {
+        match (reservation, kind) {
             (
                 ReservationState::Pending(ResourceWorkKind::Chromium),
                 LiveResourceKind::ChromiumProcess,
             ) => {
-                *reservation = ReservationState::Live(kind);
+                *reservation = ReservationState::Live(LiveResourceState::ChromiumProcess);
                 Ok(())
             }
             (ReservationState::Pending(_), _) => Err(ResourceActivationError::KindMismatch),
@@ -417,14 +470,78 @@ impl RuntimeResourceGovernor {
         }
     }
 
+    fn activate_surface_key(
+        &self,
+        key: &ReservationKey,
+        identity: LiveSurfaceIdentity,
+        visibility: SurfaceVisibility,
+    ) -> Result<(), ResourceActivationError> {
+        let mut state = lock(&self.inner);
+        let Some(reservation) = state.reservations.get_mut(key) else {
+            return Err(ResourceActivationError::ReservationMissing);
+        };
+        match reservation {
+            ReservationState::Pending(ResourceWorkKind::NativeSurface) => {
+                *reservation = ReservationState::Live(LiveResourceState::NativeSurface {
+                    identity,
+                    visibility,
+                });
+                Ok(())
+            }
+            ReservationState::Pending(_) => Err(ResourceActivationError::KindMismatch),
+            ReservationState::Live(_) => Err(ResourceActivationError::ReservationMissing),
+        }
+    }
+
+    fn set_surface_visibility_key(
+        &self,
+        key: &ReservationKey,
+        identity: &LiveSurfaceIdentity,
+        visibility: SurfaceVisibility,
+    ) -> Result<(), ResourceActivationError> {
+        let mut state = lock(&self.inner);
+        let Some(reservation) = state.reservations.get_mut(key) else {
+            return Err(ResourceActivationError::ReservationMissing);
+        };
+        match reservation {
+            ReservationState::Live(LiveResourceState::NativeSurface {
+                identity: current,
+                visibility: current_visibility,
+            }) if current == identity => {
+                *current_visibility = visibility;
+                Ok(())
+            }
+            ReservationState::Live(LiveResourceState::NativeSurface { .. }) => {
+                Err(ResourceActivationError::SurfaceIdentityMismatch)
+            }
+            _ => Err(ResourceActivationError::KindMismatch),
+        }
+    }
+
     fn release_key(&self, key: &ReservationKey) {
         lock(&self.inner).reservations.remove(key);
     }
 
-    fn release_live_key(&self, key: &ReservationKey, kind: LiveResourceKind) {
+    fn release_live_key(
+        &self,
+        key: &ReservationKey,
+        kind: LiveResourceKind,
+        surface_identity: Option<&LiveSurfaceIdentity>,
+    ) {
         let mut state = lock(&self.inner);
-        if matches!(state.reservations.get(key), Some(ReservationState::Live(current)) if *current == kind)
-        {
+        let should_remove = match state.reservations.get(key) {
+            Some(ReservationState::Live(LiveResourceState::ChromiumProcess)) => {
+                kind == LiveResourceKind::ChromiumProcess && surface_identity.is_none()
+            }
+            Some(ReservationState::Live(LiveResourceState::NativeSurface {
+                identity: current,
+                ..
+            })) => {
+                kind == LiveResourceKind::NativeSurface && surface_identity == Some(current)
+            }
+            _ => false,
+        };
+        if should_remove {
             state.reservations.remove(key);
         }
     }
@@ -459,6 +576,28 @@ impl ResourceReservation {
             governor: self.governor.clone(),
             key: Some(key),
             kind,
+            surface_identity: None,
+        })
+    }
+
+    pub fn activate_surface(
+        mut self,
+        identity: LiveSurfaceIdentity,
+        visibility: SurfaceVisibility,
+    ) -> Result<LiveResourceLease, ResourceActivationError> {
+        let key = self
+            .key
+            .as_ref()
+            .cloned()
+            .ok_or(ResourceActivationError::ReservationMissing)?;
+        self.governor
+            .activate_surface_key(&key, identity.clone(), visibility)?;
+        self.key.take();
+        Ok(LiveResourceLease {
+            governor: self.governor.clone(),
+            key: Some(key),
+            kind: LiveResourceKind::NativeSurface,
+            surface_identity: Some(identity),
         })
     }
 }
@@ -477,20 +616,39 @@ pub struct LiveResourceLease {
     governor: RuntimeResourceGovernor,
     key: Option<ReservationKey>,
     kind: LiveResourceKind,
+    surface_identity: Option<LiveSurfaceIdentity>,
 }
 
 impl LiveResourceLease {
     pub fn release(mut self) {
         if let Some(key) = self.key.take() {
-            self.governor.release_live_key(&key, self.kind);
+            self.governor
+                .release_live_key(&key, self.kind, self.surface_identity.as_ref());
         }
+    }
+
+    pub fn set_surface_visibility(
+        &self,
+        identity: LiveSurfaceIdentity,
+        visibility: SurfaceVisibility,
+    ) -> Result<(), ResourceActivationError> {
+        if self.kind != LiveResourceKind::NativeSurface {
+            return Err(ResourceActivationError::KindMismatch);
+        }
+        let key = self
+            .key
+            .as_ref()
+            .ok_or(ResourceActivationError::ReservationMissing)?;
+        self.governor
+            .set_surface_visibility_key(key, &identity, visibility)
     }
 }
 
 impl Drop for LiveResourceLease {
     fn drop(&mut self) {
         if let Some(key) = self.key.take() {
-            self.governor.release_live_key(&key, self.kind);
+            self.governor
+                .release_live_key(&key, self.kind, self.surface_identity.as_ref());
         }
     }
 }
@@ -504,15 +662,27 @@ fn lock(inner: &Mutex<RuntimeGovernorState>) -> MutexGuard<'_, RuntimeGovernorSt
 fn decision_for_state(state: &RuntimeGovernorState) -> GovernorDecision {
     let mut chromium_instances = 0usize;
     let mut concurrent_captures = 0usize;
+    let mut hidden_surfaces = 0usize;
     for reservation in state.reservations.values() {
         match reservation {
             ReservationState::Pending(ResourceWorkKind::NativeVisualCapture) => {
                 concurrent_captures = concurrent_captures.saturating_add(1)
             }
             ReservationState::Pending(ResourceWorkKind::Chromium)
-            | ReservationState::Live(LiveResourceKind::ChromiumProcess) => {
+            | ReservationState::Live(LiveResourceState::ChromiumProcess) => {
                 chromium_instances = chromium_instances.saturating_add(1)
             }
+            ReservationState::Pending(ResourceWorkKind::NativeSurface) => {
+                hidden_surfaces = hidden_surfaces.saturating_add(1)
+            }
+            ReservationState::Live(LiveResourceState::NativeSurface {
+                visibility: SurfaceVisibility::Hidden,
+                ..
+            }) => hidden_surfaces = hidden_surfaces.saturating_add(1),
+            ReservationState::Live(LiveResourceState::NativeSurface {
+                visibility: SurfaceVisibility::Visible,
+                ..
+            }) => {}
             ReservationState::Pending(ResourceWorkKind::NativeSemanticObservation)
             | ReservationState::Pending(ResourceWorkKind::NativeSemanticReconciliation) => {}
         }
@@ -527,6 +697,7 @@ fn decision_for_state(state: &RuntimeGovernorState) -> GovernorDecision {
             network_kb_per_minute: state.sample.network_kb_per_minute,
             chromium_instances,
             concurrent_captures,
+            hidden_surfaces,
         },
         &state.budget,
     )
@@ -549,6 +720,12 @@ fn denied_by_decision(work_kind: ResourceWorkKind, decision: &GovernorDecision) 
                     .actions
                     .contains(&DegradationAction::BlockChromiumEscalation)
         }
+        ResourceWorkKind::NativeSurface => {
+            decision.pressure >= PressureLevel::High
+                || decision
+                    .actions
+                    .contains(&DegradationAction::SuspendInactiveRenderSurfaces)
+        }
         ResourceWorkKind::NativeSemanticObservation
         | ResourceWorkKind::NativeSemanticReconciliation => {
             decision.pressure == PressureLevel::Critical
@@ -570,6 +747,7 @@ mod tests {
             network_kb_per_minute: 100,
             chromium_instances: 1,
             concurrent_captures: 3,
+            hidden_surfaces: 0,
         };
         let decision = evaluate(&sample, &budget);
         assert_eq!(decision.pressure, PressureLevel::Critical);
