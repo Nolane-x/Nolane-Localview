@@ -222,11 +222,11 @@ async fn open_native(
             .map_err(|error| error.to_string())?;
         webview.navigate(url).map_err(|error| error.to_string())?;
         webview.show().map_err(|error| error.to_string())?;
-        registry.set_visibility(
+        let visibility_update = registry.set_visibility(
             &current.identity,
             surface_registry::DesktopSurfaceVisibility::Visible,
-        )
-        .map_err(registry_error)?;
+        );
+        visibility_update.map_err(registry_error)?;
         if let Err(error) = surface_resource::update_surface_visibility(
             &current.identity,
             surface_registry::DesktopSurfaceVisibility::Visible,
@@ -365,7 +365,8 @@ async fn close_native(
     if let Some(webview) = webview {
         webview.close().map_err(|error| error.to_string())?;
     }
-    registry.record_closed(&current.identity).map_err(registry_error)?;
+    let owner_close = registry.record_closed(&current.identity);
+    owner_close.map_err(registry_error)?;
     surface_resource::release_surface(&current.identity).await
 }
 
