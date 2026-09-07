@@ -295,7 +295,11 @@ async fn open_native(
     )
     .await
     {
-        let _ = webview.close();
+        if let Err(close_error) = webview.close() {
+            return Err(format!(
+                "{error}; failed to close native workspace surface after activation failure: {close_error}"
+            ));
+        }
         let _ = registry.record_closed(&identity);
         let _ = surface_resource::cancel_surface_reservation(&reservation).await;
         let _ = surface_resource::release_surface(&identity).await;
