@@ -91,6 +91,10 @@ pub(crate) fn router(state: ControlState) -> Router {
             post(reserve_surface_resource),
         )
         .route(
+            "/v1/runtime/resources/surfaces/cancel",
+            post(cancel_surface_reservation),
+        )
+        .route(
             "/v1/runtime/resources/surfaces/activate",
             post(activate_surface_resource),
         )
@@ -192,6 +196,36 @@ async fn reserve_surface_resource(
         Err(denial) => return denial_response(denial),
     };
     entry.pending.insert(key, reservation);
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn cancel_surface_reservation(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Json(request): Json<SurfaceReserveRequest>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if state.sessions.get(request.session_id).await.is_none() {
+        return surface_not_found("surface_session_not_found");
+    }
+    if !valid_request_id(&request.request_id) {
+        return surface_bad_request("invalid_surface_request_id");
+    }
+
+    let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = lock_surface_registry(registry);
+    let Some(entry) = existing_surface_entry_mut(&mut entries, &state.sessions) else {
+        return surface_conflict("surface_reservation_missing");
+    };
+    if entry
+        .pending
+        .remove(&(request.session_id, request.request_id))
+        .is_none()
+    {
+        return surface_conflict("surface_reservation_missing");
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 
