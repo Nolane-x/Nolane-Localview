@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[path = "surface_registry.rs"]
+pub mod surface_registry;
+
 use localview_protocol::SessionId;
 use serde::{Deserialize, Serialize};
 
