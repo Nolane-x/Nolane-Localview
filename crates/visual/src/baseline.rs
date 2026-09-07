@@ -197,6 +197,64 @@ impl VisualBaselineCache {
         Ok(self.entries.contains_key(&session_id))
     }
 
+    pub fn projected_used_bytes_after_insert(
+        &self,
+        session_id: SessionId,
+        image_bytes: usize,
+    ) -> Result<Option<usize>, VisualError> {
+        if image_bytes == 0 {
+            return Err(VisualError::InvalidBuffer);
+        }
+        if image_bytes > self.byte_budget {
+            return Ok(None);
+        }
+
+        let existing_bytes = self
+            .entries
+            .get(&session_id)
+            .map_or(0, |entry| entry.bytes);
+        let mut projected_bytes = self
+            .used_bytes
+            .checked_sub(existing_bytes)
+            .and_then(|bytes| bytes.checked_add(image_bytes))
+            .ok_or(VisualError::InvalidBuffer)?;
+        let mut projected_entries = self
+            .entries
+            .len()
+            .checked_sub(usize::from(self.entries.contains_key(&session_id)))
+            .and_then(|entries| entries.checked_add(1))
+            .ok_or(VisualError::InvalidBuffer)?;
+
+        let mut eviction_candidates: Vec<(u64, SessionId, usize)> = self
+            .entries
+            .iter()
+            .filter(|(candidate_session, _)| **candidate_session != session_id)
+            .map(|(candidate_session, entry)| {
+                (entry.touched_at, *candidate_session, entry.bytes)
+            })
+            .collect();
+        eviction_candidates.sort_by_key(|(touched_at, candidate_session, _)| {
+            (*touched_at, *candidate_session)
+        });
+
+        for (_, _, bytes) in eviction_candidates {
+            if projected_bytes <= self.byte_budget && projected_entries <= self.max_entries {
+                break;
+            }
+            projected_bytes = projected_bytes
+                .checked_sub(bytes)
+                .ok_or(VisualError::InvalidBuffer)?;
+            projected_entries = projected_entries
+                .checked_sub(1)
+                .ok_or(VisualError::InvalidBuffer)?;
+        }
+
+        if projected_bytes > self.byte_budget || projected_entries > self.max_entries {
+            return Err(VisualError::InvalidBaselinePolicy);
+        }
+        Ok(Some(projected_bytes))
+    }
+
     pub fn remove(&mut self, session_id: SessionId) -> bool {
         let Some(entry) = self.entries.remove(&session_id) else {
             return false;
