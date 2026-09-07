@@ -204,8 +204,14 @@ mod windows_smoke {
         assert_eq!(receipt.dispatch_attempt_ref, dispatch_attempt_ref);
         assert_eq!(receipt.action_id, action_id);
         assert_eq!(receipt.required_pattern, WindowsUiaPattern::ExpandCollapse);
-        assert_eq!(receipt.dispatch_operation, WindowsUiaPatternDispatchOperation::Expand);
-        assert_eq!(receipt.transport_result, TransportResult::DeliveredToExecutor);
+        assert_eq!(
+            receipt.dispatch_operation,
+            WindowsUiaPatternDispatchOperation::Expand
+        );
+        assert_eq!(
+            receipt.transport_result,
+            TransportResult::DeliveredToExecutor
+        );
         assert_eq!(receipt.dispatch_result, DispatchResult::DispatchedFull);
 
         let postdispatch = worker
@@ -238,13 +244,62 @@ mod windows_smoke {
             postdispatch.resource_usage()
         );
         assert!(
-            postdispatch.incompleteness_debt().is_empty() && !postdispatch.resource_usage().incomplete,
+            postdispatch.incompleteness_debt().is_empty()
+                && !postdispatch.resource_usage().incomplete,
             "expanded fresh snapshot must carry no hidden incompleteness; debt={:?}, usage={:?}",
             postdispatch.incompleteness_debt(),
             postdispatch.resource_usage()
         );
 
+        // Mirror the second consequential plan: the next fresh provider cut must
+        // be able to rebind the exact ComboBox identity from the post-dispatch cut.
+        let expanded_identity = expanded_combo
+            .element_ref
+            .opaque_provider_element_id
+            .clone();
+        let planning = worker
+            .snapshot(
+                &attachment,
+                WindowsUiaSnapshotRequest {
+                    snapshot_cut_ref: "cut:windows-uia-expand-collapse-smoke:3".into(),
+                    surface_scope: "fixture:win32-combobox".into(),
+                },
+            )
+            .expect("publish a second fresh semantic snapshot while ComboBox remains expanded");
+        assert_eq!(
+            planning.completeness(),
+            ReconciliationCompleteness::Established,
+            "second expanded snapshot must remain complete; debt={:?}, usage={:?}",
+            planning.incompleteness_debt(),
+            planning.resource_usage()
+        );
+        let collisions = planning
+            .nodes()
+            .iter()
+            .filter(|node| node.element_ref.opaque_provider_element_id == expanded_identity)
+            .map(|node| {
+                format!(
+                    "depth={} parent={:?} class={:?} role={:?} control_type={:?} automation_id={:?} name={:?} state={:?}",
+                    node.depth,
+                    node.parent_index,
+                    node.class_name,
+                    node.role,
+                    node.control_type,
+                    node.automation_id,
+                    node.name,
+                    node.attributes.get(EXPAND_COLLAPSE_STATE_ATTRIBUTE)
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            collisions.len(),
+            1,
+            "the exact expanded ComboBox RuntimeId must identify one semantic node in the next fresh cut; opaque_id={expanded_identity}; collisions={collisions:?}"
+        );
+
         stop.store(true, Ordering::Release);
-        ui_thread.join().expect("join ExpandCollapse fixture UI thread");
+        ui_thread
+            .join()
+            .expect("join ExpandCollapse fixture UI thread");
     }
 }
