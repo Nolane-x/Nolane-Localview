@@ -190,6 +190,8 @@ jobs:
         run: cargo test -p localview-desktop --test capability_isolation
       - name: Workspace surface policy contract
         run: cargo test -p localview-desktop --test workspace_surface_policy
+      - name: Desktop surface owner registry contract
+        run: cargo test -p localview-desktop --test surface_registry_contract
       - name: Live semantic bridge contract
         run: cargo test -p localview-desktop --test live_semantic_bridge_contract
       - name: Bridge action cancellation worker contract
