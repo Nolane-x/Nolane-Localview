@@ -203,6 +203,9 @@ async fn activate_surface_resource(
     if !authorized(&headers, &state) {
         return denied();
     }
+    if request.incarnation == 0 {
+        return surface_bad_request("invalid_surface_identity");
+    }
     let Some(identity) = surface_identity(
         request.surface_kind,
         request.label,
@@ -311,7 +314,6 @@ fn surface_identity(
         || label.is_empty()
         || label.len() > 160
         || label.chars().any(char::is_control)
-        || incarnation == 0
     {
         return None;
     }
