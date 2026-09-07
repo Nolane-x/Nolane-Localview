@@ -163,9 +163,12 @@ async fn open_preview(
     let session = session_id.parse::<SessionId>().map_err(err)?;
     let label = preview_label(session);
     if let Some(window) = app.get_webview_window(&label) {
-        let current = registry
-            .current(session, DesktopSurfaceKind::PreviewWindow, &label)
-            .ok_or_else(|| "preview platform window exists without desktop owner truth".to_string())?;
+        let current = registry.current(
+            session,
+            DesktopSurfaceKind::PreviewWindow,
+            &label,
+        )
+        .ok_or_else(|| "preview platform window exists without desktop owner truth".to_string())?;
         window.show().map_err(err)?;
         registry
             .set_visibility(&current.identity, DesktopSurfaceVisibility::Visible)
@@ -234,13 +237,13 @@ async fn open_preview(
         return Err(preview_registry_error(error));
     }
 
-    if let Err(error) = workspace_surface::surface_resource::activate_surface(
+    let activation_result = workspace_surface::surface_resource::activate_surface(
         &reservation,
         &identity,
         DesktopSurfaceVisibility::Visible,
     )
-    .await
-    {
+    .await;
+    if let Err(error) = activation_result {
         let _ = window.close();
         let _ = registry.record_closed(&identity);
         let _ = workspace_surface::surface_resource::cancel_surface_reservation(&reservation).await;
