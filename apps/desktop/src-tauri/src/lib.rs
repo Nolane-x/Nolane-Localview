@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod native_executor_worker;
+pub mod surface_registry;
 pub mod visual_capture;
 pub mod workspace_surface;
 
@@ -178,182 +179,82 @@ async fn open_preview(
 
     WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed))
         .title(format!("{title} — LocalView"))
-        .inner_size(1280.0, 820.0)
-        .min_inner_size(640.0, 480.0)
-        .initialization_script(initialization_script)
-        .on_navigation(preview_navigation_allowed)
+        .inner_size(1180.0, 760.0)
+        .initialization_script(&initialization_script)
         .build()
         .map_err(err)?;
     Ok(())
 }
 
 #[tauri::command]
-async fn preview_ingest(
-    webview_window: tauri::WebviewWindow,
-    batch: ObserverBatch,
-) -> Result<IngestReport, String> {
-    ensure_preview_caller(&webview_window, batch.session_id)?;
-    let token = read_token().await?;
-    control_client()?
-        .post(format!(
-            "http://127.0.0.1:45454/v1/sessions/{}/observer",
-            batch.session_id
-        ))
-        .bearer_auth(token)
-        .json(&batch)
-        .send()
-        .await
-        .map_err(err)?
-        .error_for_status()
-        .map_err(err)?
-        .json::<IngestReport>()
-        .await
-        .map_err(err)
+async fn ingest_observer(batch: ObserverBatch) -> Result<IngestReport, String> {
+    post_control_json("/v1/observer/ingest", &batch).await
 }
 
 #[tauri::command]
-async fn preview_take_actions(
-    webview_window: tauri::WebviewWindow,
-    session_id: SessionId,
-) -> Result<Vec<serde_json::Value>, String> {
-    ensure_preview_caller(&webview_window, session_id)?;
-    let token = read_token().await?;
-    let client = control_client()?;
-
-    let internal_actions = client
-        .get(format!(
-            "http://127.0.0.1:45454/v1/sessions/{session_id}/capture-actions"
-        ))
-        .bearer_auth(&token)
-        .send()
+async fn request_bridge_action(action: BridgeAction) -> Result<(), String> {
+    post_control_json::<_, serde_json::Value>("/v1/actions/request", &action)
         .await
-        .map_err(err)?
-        .error_for_status()
-        .map_err(err)?
-        .json::<Vec<PrivateBridgeAction>>()
-        .await
-        .map_err(err)?;
-    let public_actions = client
-        .get(format!(
-            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions"
-        ))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(err)?
-        .error_for_status()
-        .map_err(err)?
-        .json::<Vec<BridgeAction>>()
-        .await
-        .map_err(err)?;
-
-    let mut actions = Vec::with_capacity(internal_actions.len() + public_actions.len());
-    for action in internal_actions {
-        actions.push(serde_json::to_value(action).map_err(err)?);
-    }
-    for action in public_actions {
-        actions.push(serde_json::to_value(action).map_err(err)?);
-    }
-    Ok(actions)
+        .map(|_| ())
 }
 
 #[tauri::command]
-async fn preview_action_cancellation(
-    webview_window: tauri::WebviewWindow,
-    session_id: SessionId,
-    action_id: uuid::Uuid,
-) -> Result<bool, String> {
-    ensure_preview_caller(&webview_window, session_id)?;
-    let token = read_token().await?;
-    let response = control_client()?
-        .get(format!(
-            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/cancellations/{action_id}"
-        ))
-        .bearer_auth(token)
-        .send()
+async fn request_private_bridge_action(action: PrivateBridgeAction) -> Result<(), String> {
+    post_control_json::<_, serde_json::Value>("/v1/actions/private/request", &action)
         .await
-        .map_err(err)?;
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-        return Ok(false);
-    }
-    let signal = response
-        .error_for_status()
-        .map_err(err)?
-        .json::<ActionCancellationSignal>()
-        .await
-        .map_err(err)?;
-    if signal.action_id != action_id {
-        return Err("action cancellation signal/action mismatch".into());
-    }
-    Ok(true)
+        .map(|_| ())
 }
 
 #[tauri::command]
-async fn preview_ack_action_cancellation(
-    webview_window: tauri::WebviewWindow,
-    session_id: SessionId,
-    action_id: uuid::Uuid,
-) -> Result<(), String> {
-    ensure_preview_caller(&webview_window, session_id)?;
-    let token = read_token().await?;
-    control_client()?
-        .post(format!(
-            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/cancellations/{action_id}/ack"
-        ))
-        .bearer_auth(token)
-        .send()
+async fn cancel_bridge_action(signal: ActionCancellationSignal) -> Result<(), String> {
+    post_control_json::<_, serde_json::Value>("/v1/actions/cancel", &signal)
         .await
-        .map_err(err)?
-        .error_for_status()
-        .map_err(err)?;
-    Ok(())
+        .map(|_| ())
 }
 
-#[tauri::command]
-async fn preview_complete_action(
-    webview_window: tauri::WebviewWindow,
-    session_id: SessionId,
-    result: BridgeActionResult,
-) -> Result<(), String> {
-    ensure_preview_caller(&webview_window, session_id)?;
-    let token = read_token().await?;
-    let response = control_client()?
-        .post(format!(
-            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/results"
-        ))
-        .bearer_auth(token)
-        .json(&result)
-        .send()
-        .await
-        .map_err(err)?;
-    if response.status() == reqwest::StatusCode::CONFLICT {
-        return Ok(());
-    }
-    response.error_for_status().map_err(err)?;
-    Ok(())
-}
-
-fn ensure_preview_caller(
-    webview_window: &tauri::WebviewWindow,
-    session_id: SessionId,
-) -> Result<(), String> {
-    if !workspace_surface::bridge_surface_label_allowed(webview_window.label(), session_id) {
-        return Err("preview bridge session/window mismatch".into());
-    }
-    Ok(())
-}
-
-fn preview_label(session_id: SessionId) -> String {
-    workspace_surface::preview_surface_label(session_id)
+fn preview_label(session: SessionId) -> String {
+    format!("preview-{}", session.to_string().replace('-', "")[..17].to_string())
 }
 
 fn preview_navigation_allowed(url: &url::Url) -> bool {
-    workspace_surface::workspace_navigation_allowed(url)
+    matches!(url.scheme(), "http" | "https")
+        && url
+            .host_str()
+            .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+            .is_some_and(|ip| ip.is_loopback())
+}
+
+fn preview_bridge_script(session: SessionId) -> String {
+    format!(
+        r#"
+(() => {{
+  const sessionId = {session:?};
+  const emit = (kind, payload) => {{
+    window.__TAURI__?.core?.invoke?.("ingest_observer", {{
+      batch: {{ session_id: sessionId, generation: 1, events: [{{
+        seq: Date.now(), captured_at: new Date().toISOString(), kind,
+        reference: null, route: location.href, payload
+      }}] }}
+    }}).catch(() => {{}});
+  }};
+  addEventListener("error", (event) => emit("Console", {{level:"error", message:String(event.message || event.error || "error")}}));
+  addEventListener("unhandledrejection", (event) => emit("Console", {{level:"error", message:String(event.reason || "unhandled rejection")}}));
+}})();
+"#
+    )
+}
+
+fn control_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(err)
 }
 
 async fn post_control(path: &str) -> Result<(), String> {
+    let client = control_client()?;
     let token = read_token().await?;
-    control_client()?
+    client
         .post(format!("http://127.0.0.1:45454{path}"))
         .bearer_auth(token)
         .send()
@@ -364,446 +265,91 @@ async fn post_control(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn control_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
+async fn post_control_json<T: Serialize + ?Sized, R: serde::de::DeserializeOwned>(
+    path: &str,
+    body: &T,
+) -> Result<R, String> {
+    let client = control_client()?;
+    let token = read_token().await?;
+    client
+        .post(format!("http://127.0.0.1:45454{path}"))
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json::<R>()
+        .await
         .map_err(err)
 }
 
 async fn read_token() -> Result<String, String> {
-    tokio::fs::read_to_string(state_dir()?.join("control.token"))
+    let path = token_path()?;
+    tokio::fs::read_to_string(path)
         .await
-        .map(|value| value.trim().to_owned())
+        .map(|token| token.trim().to_string())
         .map_err(err)
 }
 
-fn state_dir() -> Result<PathBuf, String> {
-    dirs::data_local_dir()
-        .map(|path| path.join("LocalView"))
-        .ok_or_else(|| "no local data directory".into())
-}
-
-fn err<E: std::fmt::Display>(error: E) -> String {
-    error.to_string()
+fn token_path() -> Result<PathBuf, String> {
+    let root = dirs::data_local_dir().ok_or_else(|| "LocalView data directory is unavailable".to_string())?;
+    Ok(root.join("LocalView").join("control.token"))
 }
 
 fn native_engine() -> &'static str {
     #[cfg(target_os = "windows")]
     {
-        "WebView2 via Tauri/WRY"
+        "WebView2 + Chromium HDC"
     }
     #[cfg(target_os = "macos")]
     {
-        "WKWebView via Tauri/WRY"
+        "WKWebView + Accessibility"
     }
     #[cfg(target_os = "linux")]
     {
-        "WebKitGTK via Tauri/WRY"
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        "Tauri/WRY"
+        "WebKitGTK + Chromium HDC fallback"
     }
 }
 
-fn preview_bridge_script(session_id: SessionId) -> String {
-    let session = serde_json::to_string(&session_id.to_string())
-        .expect("session UUID serializes to JSON string");
-    PREVIEW_BRIDGE_SCRIPT.replace("__LOCALVIEW_SESSION_ID__", &session)
+fn err(error: impl std::fmt::Display) -> String {
+    error.to_string()
 }
-
-const PREVIEW_BRIDGE_SCRIPT: &str = r#"
-(() => {
-  if (window.__LOCALVIEW_NATIVE_BRIDGE__) return;
-  const sessionId = __LOCALVIEW_SESSION_ID__;
-  const generation = Date.now();
-  let running = true;
-  let busy = false;
-  const pendingActions = new Map();
-
-  const MAX_PRIVATE_MASK_SELECTORS = 16;
-  const MAX_PRIVATE_MASK_SELECTOR_BYTES = 256;
-  const MAX_PRIVATE_MASK_ELEMENTS = 4096;
-  const MAX_PRIVATE_MASK_RECTS = 256;
-  const MAX_PRIVATE_MASK_VIEWPORT = 100000;
-
-  const eventKind = (type) => ({
-    dom_changed: 'dom_mutation',
-    geometry_changed: 'layout',
-    semantic_snapshot: 'semantic_snapshot',
-    route_changed: 'route',
-    focus_changed: 'focus',
-    scroll_changed: 'scroll',
-    console: 'console',
-    network: 'network',
-    exception: 'runtime_error',
-    unhandled_rejection: 'runtime_error',
-    long_task: 'performance',
-    layout_shift: 'performance',
-  })[type] || null;
-
-  const eventTime = (raw) => {
-    const offset = Number(raw.at);
-    const millis = Number.isFinite(offset) ? performance.timeOrigin + offset : Date.now();
-    return new Date(millis).toISOString();
-  };
-
-  const normalizeEvents = (events) => events.flatMap((raw) => {
-    const kind = eventKind(raw.type);
-    if (!kind) return [];
-    return [{
-      seq: Number(raw.seq) || 0,
-      captured_at: eventTime(raw),
-      kind,
-      reference: raw.ref || raw.refs?.[0] || null,
-      route: raw.route || null,
-      payload: raw,
-    }];
-  });
-
-  const resolveRef = (reference) => {
-    if (!reference) return null;
-    const api = window.__LOCALVIEW__;
-    if (!api?.refFor) return null;
-    const active = document.activeElement;
-    if (active && api.refFor(active) === reference) return active;
-    const preferred = document.querySelectorAll('a[href],button,input,select,textarea,summary,[role],[tabindex]');
-    for (const element of preferred) {
-      if (api.refFor(element) === reference) return element;
-    }
-    for (const element of document.querySelectorAll('*')) {
-      if (api.refFor(element) === reference) return element;
-    }
-    return null;
-  };
-
-  const setElementValue = (element, text, clearFirst) => {
-    const next = clearFirst ? text : `${element.value ?? element.textContent ?? ''}${text}`;
-    if (element instanceof HTMLInputElement) {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-      setter?.call(element, next);
-    } else if (element instanceof HTMLTextAreaElement) {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-      setter?.call(element, next);
-    } else if (element.isContentEditable) {
-      element.textContent = next;
-    } else {
-      throw new Error('target does not accept text input');
-    }
-    element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-    return next;
-  };
-
-  const keyboardOptions = (action) => {
-    const modifiers = new Set((action.modifiers || []).map((value) => String(value).toLowerCase()));
-    return {
-      key: action.key,
-      bubbles: true,
-      composed: true,
-      cancelable: true,
-      altKey: modifiers.has('alt'),
-      ctrlKey: modifiers.has('ctrl') || modifiers.has('control'),
-      metaKey: modifiers.has('meta') || modifiers.has('cmd') || modifiers.has('command'),
-      shiftKey: modifiers.has('shift'),
-    };
-  };
-
-  const privateMaskGeometry = (rawSelectors) => {
-    const viewportWidth = Number(window.innerWidth);
-    const viewportHeight = Number(window.innerHeight);
-    if (!Number.isFinite(viewportWidth)
-      || !Number.isFinite(viewportHeight)
-      || viewportWidth <= 0
-      || viewportHeight <= 0
-      || viewportWidth > MAX_PRIVATE_MASK_VIEWPORT
-      || viewportHeight > MAX_PRIVATE_MASK_VIEWPORT) {
-      throw new Error('visual_mask_viewport_invalid');
-    }
-
-    const selectors = Array.isArray(rawSelectors) ? rawSelectors : [];
-    if (selectors.length > MAX_PRIVATE_MASK_SELECTORS) {
-      throw new Error('visual_mask_selector_budget_exceeded');
-    }
-
-    const seen = new Set();
-    const maskRects = [];
-    let maskedElements = 0;
-    for (const rawSelector of selectors) {
-      const selector = String(rawSelector || '');
-      if (!selector || new TextEncoder().encode(selector).length > MAX_PRIVATE_MASK_SELECTOR_BYTES) {
-        throw new Error('visual_mask_selector_invalid');
-      }
-
-      let matches;
-      try {
-        matches = document.querySelectorAll(selector);
-      } catch (_) {
-        throw new Error('visual_mask_selector_invalid');
-      }
-
-      for (const element of matches) {
-        if (seen.has(element)) continue;
-        seen.add(element);
-        maskedElements += 1;
-        if (maskedElements > MAX_PRIVATE_MASK_ELEMENTS) {
-          throw new Error('visual_mask_geometry_budget_exceeded');
-        }
-
-        for (const rawRect of Array.from(element.getClientRects())) {
-          const x = Number(rawRect.x);
-          const y = Number(rawRect.y);
-          const width = Number(rawRect.width);
-          const height = Number(rawRect.height);
-          if (![x, y, width, height].every(Number.isFinite)
-            || width < 0
-            || height < 0
-            || !Number.isFinite(x + width)
-            || !Number.isFinite(y + height)) {
-            throw new Error('visual_mask_geometry_invalid');
-          }
-
-          const left = Math.max(0, Math.min(viewportWidth, x));
-          const top = Math.max(0, Math.min(viewportHeight, y));
-          const right = Math.max(0, Math.min(viewportWidth, x + width));
-          const bottom = Math.max(0, Math.min(viewportHeight, y + height));
-          if (right <= left || bottom <= top) continue;
-          if (maskRects.length >= MAX_PRIVATE_MASK_RECTS) {
-            throw new Error('visual_mask_geometry_budget_exceeded');
-          }
-          maskRects.push({
-            x: left,
-            y: top,
-            width: right - left,
-            height: bottom - top,
-          });
-        }
-      }
-    }
-
-    return {
-      viewport_css_width: viewportWidth,
-      viewport_css_height: viewportHeight,
-      masked_elements: maskedElements,
-      mask_rects: maskRects,
-    };
-  };
-
-  const execute = async (queued) => {
-    const action = queued.action || {};
-    const target = queued.reference ? resolveRef(queued.reference) : null;
-    switch (action.type) {
-      case 'click':
-        if (!target) throw new Error(`element reference not found: ${queued.reference}`);
-        target.click();
-        return { reference: queued.reference };
-      case 'type_text':
-        if (!target) throw new Error(`element reference not found: ${queued.reference}`);
-        target.focus?.();
-        return { reference: queued.reference, value: setElementValue(target, String(action.text ?? ''), !!action.clear_first) };
-      case 'key': {
-        const receiver = target || document.activeElement || document.body;
-        const options = keyboardOptions(action);
-        receiver.dispatchEvent(new KeyboardEvent('keydown', options));
-        receiver.dispatchEvent(new KeyboardEvent('keyup', options));
-        return { reference: queued.reference || null, key: action.key };
-      }
-      case 'scroll':
-        window.scrollBy({ left: Number(action.x) || 0, top: Number(action.y) || 0, behavior: 'auto' });
-        return { x: scrollX, y: scrollY };
-      case 'focus':
-        if (!target) throw new Error(`element reference not found: ${queued.reference}`);
-        target.focus?.({ preventScroll: true });
-        return { reference: queued.reference };
-      case 'snapshot':
-        return window.__LOCALVIEW__?.snapshot?.() ?? null;
-      case 'freeze_visuals': {
-        const frozen = await window.__LOCALVIEW__?.freezeVisuals?.(queued.id) ?? null;
-        if (!frozen) throw new Error('visual_freeze_ack_missing');
-        try {
-          const geometry = privateMaskGeometry(queued.private_capture?.mask_selectors || []);
-          return { ...frozen, ...geometry };
-        } catch (error) {
-          try { window.__LOCALVIEW__?.restoreVisuals?.(queued.id); } catch (_) {}
-          throw error;
-        }
-      }
-      case 'restore_visuals':
-        return window.__LOCALVIEW__?.restoreVisuals?.(String(action.token || '')) ?? null;
-      case 'inspect': {
-        if (!queued.reference) throw new Error('inspect requires an element reference');
-        const api = window.__LOCALVIEW__;
-        return api?.inspect?.(queued.reference) ?? null;
-      }
-      default:
-        throw new Error(`unsupported LocalView action: ${action.type}`);
-    }
-  };
-
-  const complete = async (invoke, action, ok, payload, error) => {
-    await invoke('preview_complete_action', {
-      sessionId,
-      result: {
-        action_id: action.id,
-        ok,
-        error: error || null,
-        payload: payload ?? null,
-        completed_at: new Date().toISOString(),
-      },
-    });
-  };
-
-  const isInternalCaptureAction = (queued) => {
-    const action = queued?.action || {};
-    return action.type === 'freeze_visuals' || action.type === 'restore_visuals';
-  };
-
-  const cancellationRequested = async (invoke, action) => {
-    if (isInternalCaptureAction(action)) return false;
-    return !!(await invoke('preview_action_cancellation', {
-      sessionId,
-      actionId: action.id,
-    }));
-  };
-
-  const acknowledgeCancellation = async (invoke, action) => {
-    await invoke('preview_ack_action_cancellation', {
-      sessionId,
-      actionId: action.id,
-    });
-  };
-
-  const rememberTakenActions = (actions) => {
-    const batch = Array.isArray(actions) ? actions : [];
-    for (const action of batch) {
-      if (!action?.id || pendingActions.has(action.id)) continue;
-      pendingActions.set(action.id, {
-        action,
-        executed: false,
-        cancellationSeen: false,
-        ok: true,
-        payload: null,
-        actionError: null,
-      });
-    }
-  };
-
-  const processPendingAction = async (invoke, entry) => {
-    const cancellationDefaults = { cancellationSeen: false };
-    if (entry.cancellationSeen === undefined) {
-      Object.assign(entry, cancellationDefaults);
-    }
-    const action = entry.action;
-
-    if (entry.cancellationSeen) {
-      await acknowledgeCancellation(invoke, action);
-      pendingActions.delete(action.id);
-      return;
-    }
-
-    if (!entry.executed) {
-      if (await cancellationRequested(invoke, action)) {
-        entry.cancellationSeen = true;
-        await acknowledgeCancellation(invoke, action);
-        pendingActions.delete(action.id);
-        return;
-      }
-
-      try {
-        entry.payload = await execute(action);
-        entry.ok = true;
-        entry.actionError = null;
-      } catch (error) {
-        entry.ok = false;
-        entry.payload = null;
-        entry.actionError = String(error?.message || error);
-      } finally {
-        entry.executed = true;
-      }
-    }
-
-    if (await cancellationRequested(invoke, action)) {
-      entry.cancellationSeen = true;
-      await acknowledgeCancellation(invoke, action);
-      pendingActions.delete(action.id);
-      return;
-    }
-
-    await complete(invoke, action, entry.ok, entry.payload, entry.actionError);
-    pendingActions.delete(action.id);
-  };
-
-  const tick = async () => {
-    if (!running || busy) return;
-    const invoke = window.__TAURI__?.core?.invoke;
-    if (!invoke) {
-      setTimeout(tick, 250);
-      return;
-    }
-    busy = true;
-    try {
-      const api = window.__LOCALVIEW__;
-      const normalized = normalizeEvents(api?.drain?.(256) || []);
-      if (normalized.length) {
-        await invoke('preview_ingest', {
-          batch: { session_id: sessionId, generation, events: normalized },
-        });
-      }
-
-      if (pendingActions.size === 0) {
-        const actions = await invoke('preview_take_actions', { sessionId });
-        rememberTakenActions(actions);
-      }
-
-      for (const entry of pendingActions.values()) {
-        try {
-          await processPendingAction(invoke, entry);
-        } catch (_) {
-          break;
-        }
-      }
-    } catch (_) {
-      // Best effort by design: LocalView observation must never break the target application.
-    } finally {
-      busy = false;
-      if (running) setTimeout(tick, 140);
-    }
-  };
-
-  window.__LOCALVIEW_NATIVE_BRIDGE__ = Object.freeze({
-    sessionId,
-    generation,
-    stop() { running = false; },
-  });
-  setTimeout(tick, 80);
-})();
-"#;
 
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    builder = builder.manage(visual_capture::VisualCaptureState::default());
+    builder
         .setup(|app| {
-            let _ = app.manage(visual_capture::VisualCaptureState::default());
-            native_executor_worker::spawn(app.handle().clone());
+            let show = tauri::menu::MenuItemBuilder::with_id("show", "Show LocalView").build(app)?;
+            let pause = tauri::menu::MenuItemBuilder::with_id("pause", "Pause Runtime").build(app)?;
+            let resume = tauri::menu::MenuItemBuilder::with_id("resume", "Resume Runtime").build(app)?;
+            let quit = tauri::menu::MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let menu = MenuBuilder::new(app)
-                .text("show", "Open LocalView")
-                .separator()
-                .text("quit", "Quit LocalView")
+                .items(&[&show, &pause, &resume, &quit])
                 .build()?;
             TrayIconBuilder::new()
-                .tooltip("LocalView — AI-native localhost runtime")
                 .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    if event.id() == "quit" {
-                        app.exit(0);
-                    }
-                    if event.id() == "show" {
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
                     }
+                    "pause" => {
+                        tauri::async_runtime::spawn(async {
+                            let _ = pause_runtime().await;
+                        });
+                    }
+                    "resume" => {
+                        tauri::async_runtime::spawn(async {
+                            let _ = resume_runtime().await;
+                        });
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
                 })
                 .build(app)?;
             Ok(())
@@ -822,21 +368,19 @@ pub fn run() {
             pause_runtime,
             resume_runtime,
             open_preview,
-            preview_ingest,
-            preview_take_actions,
-            preview_action_cancellation,
-            preview_ack_action_cancellation,
-            preview_complete_action,
-            visual_capture::capture_viewport,
-            visual_capture::capture_region,
-            visual_capture::capture_changed_regions,
-            visual_capture::capture_progressive_target,
-            visual_capture::capture_visual_packet,
+            ingest_observer,
+            request_bridge_action,
+            request_private_bridge_action,
+            cancel_bridge_action,
             workspace_surface::workspace_surface_open,
             workspace_surface::workspace_surface_set_bounds,
             workspace_surface::workspace_surface_navigate,
-            workspace_surface::workspace_surface_close
+            workspace_surface::workspace_surface_close,
+            visual_capture::capture_visual_evidence,
+            visual_capture::capture_changed_visual_diff,
+            native_executor_worker::execute_native_visual_request,
+            native_executor_worker::cancel_native_visual_request,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running LocalView desktop");
+        .expect("LocalView desktop runtime failed");
 }
