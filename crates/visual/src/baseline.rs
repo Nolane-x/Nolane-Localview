@@ -236,3 +236,134 @@ impl VisualBaselineCache {
         }
     }
 }
+
+#[cfg(test)]
+mod retained_projection_tests {
+    use super::*;
+
+    fn context(width: u32, height: u32) -> VisualBaselineContext {
+        VisualBaselineContext {
+            route: "http://127.0.0.1:5173/".to_owned(),
+            css_width: width,
+            css_height: height,
+            device_scale_factor: 1.0,
+            pixel_width: width,
+            pixel_height: height,
+        }
+    }
+
+    fn image(width: u32, height: u32, seed: u8) -> Arc<RgbaImage> {
+        Arc::new(RgbaImage {
+            width,
+            height,
+            data: vec![seed; (width * height * 4) as usize],
+        })
+    }
+
+    #[test]
+    fn empty_cache_projection_reports_incoming_retained_bytes() {
+        let cache = VisualBaselineCache::new(16, 2).unwrap();
+        let session = SessionId::from_u128(100);
+        assert_eq!(
+            cache
+                .projected_used_bytes_after_insert(session, 4)
+                .unwrap(),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn oversized_projection_is_a_bounded_cache_miss() {
+        let cache = VisualBaselineCache::new(4, 2).unwrap();
+        let session = SessionId::from_u128(101);
+        assert_eq!(
+            cache
+                .projected_used_bytes_after_insert(session, 8)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn replacement_projection_subtracts_existing_session_bytes() {
+        let mut cache = VisualBaselineCache::new(16, 2).unwrap();
+        let session = SessionId::from_u128(102);
+        cache
+            .insert(session, context(1, 1), image(1, 1, 1))
+            .unwrap();
+        assert_eq!(cache.used_bytes(), 4);
+        assert_eq!(
+            cache
+                .projected_used_bytes_after_insert(session, 8)
+                .unwrap(),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn max_entry_projection_matches_next_real_lru_insertion() {
+        let first = SessionId::from_u128(103);
+        let second = SessionId::from_u128(104);
+        let third = SessionId::from_u128(105);
+        let ctx = context(1, 1);
+        let mut cache = VisualBaselineCache::new(64, 2).unwrap();
+        cache.insert(first, ctx.clone(), image(1, 1, 1)).unwrap();
+        cache.insert(second, ctx.clone(), image(1, 1, 2)).unwrap();
+        assert!(cache.get_compatible(first, &ctx).is_some());
+
+        let projected = cache
+            .projected_used_bytes_after_insert(third, 4)
+            .unwrap()
+            .unwrap();
+        cache.insert(third, ctx, image(1, 1, 3)).unwrap();
+
+        assert_eq!(projected, cache.used_bytes());
+        assert_eq!(cache.used_bytes(), 8);
+        assert!(cache.entries.contains_key(&first));
+        assert!(!cache.entries.contains_key(&second));
+        assert!(cache.entries.contains_key(&third));
+    }
+
+    #[test]
+    fn projection_is_side_effect_free_and_preserves_the_next_lru_victim() {
+        let first = SessionId::from_u128(106);
+        let second = SessionId::from_u128(107);
+        let third = SessionId::from_u128(108);
+        let ctx = context(1, 1);
+        let mut cache = VisualBaselineCache::new(64, 2).unwrap();
+        cache.insert(first, ctx.clone(), image(1, 1, 1)).unwrap();
+        cache.insert(second, ctx.clone(), image(1, 1, 2)).unwrap();
+        assert!(cache.get_compatible(first, &ctx).is_some());
+
+        let before_len = cache.len();
+        let before_used = cache.used_bytes();
+        let before_clock = cache.clock;
+        let before_touches: BTreeMap<_, _> = cache
+            .entries
+            .iter()
+            .map(|(session, entry)| (*session, entry.touched_at))
+            .collect();
+
+        assert_eq!(
+            cache
+                .projected_used_bytes_after_insert(third, 4)
+                .unwrap(),
+            Some(8)
+        );
+
+        assert_eq!(cache.len(), before_len);
+        assert_eq!(cache.used_bytes(), before_used);
+        assert_eq!(cache.clock, before_clock);
+        let after_touches: BTreeMap<_, _> = cache
+            .entries
+            .iter()
+            .map(|(session, entry)| (*session, entry.touched_at))
+            .collect();
+        assert_eq!(after_touches, before_touches);
+
+        cache.insert(third, ctx, image(1, 1, 3)).unwrap();
+        assert!(cache.entries.contains_key(&first));
+        assert!(!cache.entries.contains_key(&second));
+        assert!(cache.entries.contains_key(&third));
+    }
+}
