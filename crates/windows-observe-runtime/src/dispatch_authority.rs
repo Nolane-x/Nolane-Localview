@@ -218,6 +218,14 @@ fn canonical_operation_matches_uia_pattern(
                 CanonicalActionOperation::Toggle,
                 WindowsUiaPattern::Toggle
             )
+            | (
+                CanonicalActionOperation::Expand,
+                WindowsUiaPattern::ExpandCollapse
+            )
+            | (
+                CanonicalActionOperation::Collapse,
+                WindowsUiaPattern::ExpandCollapse
+            )
     )
 }
 

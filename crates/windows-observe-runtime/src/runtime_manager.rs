@@ -317,6 +317,7 @@ impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
         &self,
         request: &crate::WindowsUiaProviderExecutionRequest,
     ) -> Result<crate::WindowsUiaProviderExecutionReceipt, Self::Error> {
+        let dispatch_operation = request.dispatch_operation();
         let provider_request = WindowsUiaPatternDispatchRequest {
             dispatch_attempt_ref: request.dispatch_attempt_ref(),
             action_id: request.action_id(),
@@ -327,6 +328,7 @@ impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
             target_incarnation_ref: request.target_incarnation_ref().clone(),
             element_ref: request.element_ref().clone(),
             required_pattern: request.required_pattern(),
+            dispatch_operation,
             context_requirements: request.context_requirements(),
         };
 
@@ -361,6 +363,14 @@ impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
                 .dispatch_pattern(&dispatch_attachment, provider_request)
         })
         .await?;
+
+        if receipt.dispatch_operation != dispatch_operation {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "dispatch_pattern_operation_receipt_validation",
+                message: "provider dispatch receipt changed the exact durable-derived semantic verb"
+                    .into(),
+            });
+        }
 
         Ok(crate::WindowsUiaProviderExecutionReceipt {
             dispatch_attempt_ref: receipt.dispatch_attempt_ref,

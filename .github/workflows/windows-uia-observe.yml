@@ -63,6 +63,8 @@ jobs:
         run: cargo test -p localview-windows-observe-runtime --test postcondition_capture_contract -- --nocapture
       - name: V4.3 consequential HTTP boundary contract
         run: cargo test -p localview-control --test windows_consequential_control -- --nocapture
+      - name: V4.3 ExpandCollapse server-owned HTTP routes
+        run: cargo test -p localview-control --test windows_consequential_expand_collapse_control -- --nocapture
       - name: Real Win32 UIA snapshot + exact element lease lifetime
         env:
           LOCALVIEW_UIA_SMOKE: "1"
@@ -83,6 +85,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test toggle_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real retained Win32 UIA Expand state observation
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-uia-provider --test expand_collapse_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Invoke to verified post-dispatch commit
         env:
           LOCALVIEW_UIA_SMOKE: "1"
@@ -99,6 +105,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-control --test windows_consequential_toggle_windows_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real HTTP Expand then Collapse with verified durable commits
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-control --test windows_consequential_expand_collapse_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real bounded Win32 UIA event subscription
         env:
           LOCALVIEW_UIA_SMOKE: "1"

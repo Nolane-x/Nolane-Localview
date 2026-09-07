@@ -144,9 +144,10 @@ mod platform {
         },
         UI::{
             Accessibility::{
-                CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+                CUIAutomation, IUIAutomation, IUIAutomationElement,
+                IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
                 IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern,
-                IUIAutomationTreeWalker, UIA_InvokePatternId,
+                IUIAutomationTreeWalker, UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
                 UIA_IsExpandCollapsePatternAvailablePropertyId,
                 UIA_IsInvokePatternAvailablePropertyId, UIA_IsScrollItemPatternAvailablePropertyId,
                 UIA_IsSelectionItemPatternAvailablePropertyId,
@@ -165,15 +166,17 @@ mod platform {
     use crate::{
         WindowsUiaActionCapabilities, WindowsUiaDispatchContextObservation,
         WindowsUiaDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaPattern,
-        WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
-        WindowsUiaPatternSupport, evaluate_windows_uia_dispatch_context,
+        WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchReceipt,
+        WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport,
+        evaluate_windows_uia_dispatch_context,
     };
 
-    const PROPERTIES_PER_NODE: usize = 16;
+    const PROPERTIES_PER_NODE: usize = 17;
     const CACHE_PROFILE_REVISION: &str = "windows-uia-control-view-v1";
     const PERMISSION_VISIBILITY_REVISION: &str = "windows-uia-interactive-user-v1";
     const SELECTION_ITEM_IS_SELECTED_ATTRIBUTE: &str = "windows_uia.selection_item.is_selected";
     const TOGGLE_STATE_ATTRIBUTE: &str = "windows_uia.toggle.state";
+    const EXPAND_COLLAPSE_STATE_ATTRIBUTE: &str = "windows_uia.expand_collapse.state";
 
     enum WorkerCommand {
         Attach {
@@ -361,6 +364,7 @@ mod platform {
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
             recv_command(reply_rx, self.command_timeout)
         }
+
         pub fn dispatch_pattern(
             &self,
             attachment: &WindowsUiaAttachment,
@@ -374,6 +378,7 @@ mod platform {
                 || request.provider_incarnation_ref != self.provider_incarnation_ref
                 || request.provider_incarnation_ref != attachment.provider_incarnation_ref
                 || request.target_incarnation_ref != attachment.target_incarnation_ref
+                || request.dispatch_operation.required_pattern() != request.required_pattern
             {
                 return Err(WindowsUiaWorkerError::InvalidPatternDispatchRequest);
             }
@@ -575,6 +580,7 @@ mod platform {
                 .map_or(1, |revision| revision.capture_sequence().saturating_add(1));
 
             let (nodes, retained_elements, resource_usage, mut debt) = observe_bounded_tree(
+                &self.automation,
                 &self.walker,
                 root,
                 &self.provider_incarnation_ref,
@@ -731,8 +737,9 @@ mod platform {
             if request.provider_incarnation_ref != self.provider_incarnation_ref
                 || request.provider_incarnation_ref != attachment.provider_incarnation_ref
                 || request.target_incarnation_ref != attachment.target_incarnation_ref
+                || request.dispatch_operation.required_pattern() != request.required_pattern
             {
-                return Err(WindowsUiaWorkerError::TargetReincarnated);
+                return Err(WindowsUiaWorkerError::InvalidPatternDispatchRequest);
             }
             let context = self.revalidate_dispatch_context(
                 attachment,
@@ -747,8 +754,8 @@ mod platform {
                 &request.snapshot_cut_ref,
                 &request.element_ref,
             )?;
-            match request.required_pattern {
-                WindowsUiaPattern::Invoke => {
+            match request.dispatch_operation {
+                WindowsUiaPatternDispatchOperation::Invoke => {
                     if read_pattern_support(
                         &retained.element,
                         UIA_IsInvokePatternAvailablePropertyId,
@@ -769,7 +776,7 @@ mod platform {
                     unsafe { invoke.Invoke() }
                         .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
-                WindowsUiaPattern::SelectionItem => {
+                WindowsUiaPatternDispatchOperation::Select => {
                     if read_pattern_support(
                         &retained.element,
                         UIA_IsSelectionItemPatternAvailablePropertyId,
@@ -792,7 +799,7 @@ mod platform {
                     unsafe { selection_item.Select() }
                         .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
-                WindowsUiaPattern::Toggle => {
+                WindowsUiaPatternDispatchOperation::Toggle => {
                     if read_pattern_support(
                         &retained.element,
                         UIA_IsTogglePatternAvailablePropertyId,
@@ -813,8 +820,36 @@ mod platform {
                     unsafe { toggle.Toggle() }
                         .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
-                pattern => {
-                    return Err(WindowsUiaWorkerError::PatternDispatchUnsupported { pattern });
+                WindowsUiaPatternDispatchOperation::Expand
+                | WindowsUiaPatternDispatchOperation::Collapse => {
+                    if read_pattern_support(
+                        &retained.element,
+                        UIA_IsExpandCollapsePatternAvailablePropertyId,
+                    ) != WindowsUiaPatternSupport::Supported
+                    {
+                        return Err(WindowsUiaWorkerError::PatternUnavailable {
+                            pattern: WindowsUiaPattern::ExpandCollapse,
+                        });
+                    }
+                    let expand_collapse = unsafe {
+                        retained.element.GetCurrentPatternAs::<
+                            IUIAutomationExpandCollapsePattern,
+                        >(UIA_ExpandCollapsePatternId)
+                    }
+                    .map_err(|_| WindowsUiaWorkerError::PatternUnavailable {
+                        pattern: WindowsUiaPattern::ExpandCollapse,
+                    })?;
+                    let dispatch_result = unsafe {
+                        match request.dispatch_operation {
+                            WindowsUiaPatternDispatchOperation::Expand => expand_collapse.Expand(),
+                            WindowsUiaPatternDispatchOperation::Collapse => {
+                                expand_collapse.Collapse()
+                            }
+                            _ => unreachable!("ExpandCollapse dispatch arm is operation-exact"),
+                        }
+                    };
+                    dispatch_result
+                        .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
                 }
             }
             Ok(WindowsUiaPatternDispatchReceipt {
@@ -827,6 +862,7 @@ mod platform {
                 target_incarnation_ref: request.target_incarnation_ref,
                 element_ref: request.element_ref,
                 required_pattern: request.required_pattern,
+                dispatch_operation: request.dispatch_operation,
                 context_requirements: request.context_requirements,
                 final_context: context.observation,
                 transport_result: localview_protocol::TransportResult::DeliveredToExecutor,
@@ -957,12 +993,13 @@ mod platform {
         Ok(ticks)
     }
 
-    // These eight inputs are deliberately explicit correctness/authority facts:
-    // traversal object/root, provider+target lineage, observation cut/scope,
+    // These nine inputs are deliberately explicit correctness/authority facts:
+    // automation/traversal object/root, provider+target lineage, observation cut/scope,
     // capture sequence, and resource budget. Hiding them in mutable context would
     // make accidental cross-lineage reuse easier at this OS boundary.
     #[allow(clippy::too_many_arguments)]
     fn observe_bounded_tree(
+        automation: &IUIAutomation,
         walker: &IUIAutomationTreeWalker,
         root: IUIAutomationElement,
         provider_incarnation_ref: &ProviderIncarnationRef,
@@ -982,8 +1019,35 @@ mod platform {
         let mut retained_elements = Vec::new();
         let mut debt = Vec::new();
         let mut queue = VecDeque::from([(root, None, 0_usize)]);
+        let mut seen_runtime_ids = HashMap::<Vec<i32>, IUIAutomationElement>::new();
 
         while let Some((element, parent_index, depth)) = queue.pop_front() {
+            let runtime_id = unsafe { runtime_id_hint(&element) }.unwrap_or_default();
+            if !runtime_id.is_empty() {
+                if let Some(previous) = seen_runtime_ids.get(&runtime_id) {
+                    match unsafe {
+                        // SAFETY: both UIA elements and the automation interface are
+                        // owned by this dedicated MTA for the entire comparison.
+                        automation.CompareElements(previous, &element)
+                    } {
+                        Ok(same) if same.as_bool() => {
+                            // ControlView can surface the same exact element through
+                            // an alias/cycle (for example an expanded Win32 ComboBox).
+                            // Do not emit or traverse the duplicate appearance.
+                            continue;
+                        }
+                        Ok(_) => {
+                            debt.push("uia_runtime_id_collision_distinct_elements".into());
+                        }
+                        Err(_) => {
+                            debt.push("uia_runtime_id_collision_compare_unavailable".into());
+                        }
+                    }
+                } else {
+                    seen_runtime_ids.insert(runtime_id.clone(), element.clone());
+                }
+            }
+
             if !guard.admit_node(depth, PROPERTIES_PER_NODE) {
                 continue;
             }
@@ -1078,8 +1142,34 @@ mod platform {
             } else {
                 None
             };
+            let expand_collapse_state = if action_capabilities
+                .support_for(WindowsUiaPattern::ExpandCollapse)
+                == WindowsUiaPatternSupport::Supported
+            {
+                match unsafe {
+                    element.GetCurrentPropertyValue(
+                        windows::Win32::UI::Accessibility::UIA_ExpandCollapseExpandCollapseStatePropertyId,
+                    )
+                } {
+                    Ok(value) => match i32::try_from(&value) {
+                        Ok(0) => Some("collapsed"),
+                        Ok(1) => Some("expanded"),
+                        Ok(2) => Some("partially_expanded"),
+                        Ok(3) => Some("leaf_node"),
+                        Ok(_) | Err(_) => {
+                            node_debt.push("uia_property_expand_collapse_state_unavailable".into());
+                            None
+                        }
+                    },
+                    Err(_) => {
+                        node_debt.push("uia_property_expand_collapse_state_unavailable".into());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
-            let runtime_id = unsafe { runtime_id_hint(&element) }.unwrap_or_default();
             let mut element_ref = provider_element_ref_from_runtime_id(
                 provider_incarnation_ref.clone(),
                 target_incarnation_ref.clone(),
@@ -1122,6 +1212,9 @@ mod platform {
             }
             if let Some(state) = toggle_state {
                 attributes.insert(TOGGLE_STATE_ATTRIBUTE.into(), state.into());
+            }
+            if let Some(state) = expand_collapse_state {
+                attributes.insert(EXPAND_COLLAPSE_STATE_ATTRIBUTE.into(), state.into());
             }
             retained_elements.push(RetainedElementLease {
                 element_ref: element_ref.clone(),
@@ -1352,6 +1445,7 @@ impl WindowsUiaWorker {
     ) -> Result<crate::WindowsUiaDispatchContextReceipt, WindowsUiaWorkerError> {
         Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
+
     pub fn dispatch_pattern(
         &self,
         _attachment: &WindowsUiaAttachment,
