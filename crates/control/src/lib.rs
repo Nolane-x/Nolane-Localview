@@ -30,7 +30,9 @@ pub use native_executor::{
     wait_for_native_executor_result_with_timeout, NativeExecutorWaitError,
 };
 pub use localview_resource_governor::RuntimeResourceGovernor;
-pub use resource_runtime::runtime_resource_governor_for_sessions;
+pub use resource_runtime::{
+    release_surface_resource_session_for_sessions, runtime_resource_governor_for_sessions,
+};
 #[doc(hidden)]
 pub use runtime::serve as legacy_serve;
 pub use runtime::{ControlState, EventEnvelope};

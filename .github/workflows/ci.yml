@@ -102,6 +102,10 @@ jobs:
         run: cargo test -p localview-control --test live_visual_capture_resource_governor
       - name: Runtime resource governor authority contract
         run: cargo test -p localview-control --test runtime_resource_governor
+      - name: Hidden surface authority control contract
+        run: |
+          cargo test -p localview-control --test hidden_surface_authority
+          cargo test -p localview-control --test hidden_surface_cleanup_baseline
       - name: Chromium process authority control contract
         run: cargo test -p localview-control --test chromium_process_authority
       - name: Process resource telemetry contract
@@ -190,6 +194,16 @@ jobs:
         run: cargo test -p localview-desktop --test capability_isolation
       - name: Workspace surface policy contract
         run: cargo test -p localview-desktop --test workspace_surface_policy
+      - name: Desktop surface owner registry contract
+        run: cargo test -p localview-desktop --test surface_registry_contract
+      - name: Desktop surface resource transaction contract
+        run: cargo test -p localview-desktop --test surface_resource_contract
+      - name: Native workspace surface authority contract
+        run: cargo test -p localview-desktop --test workspace_surface_authority_contract
+      - name: Preview surface authority contract
+        run: cargo test -p localview-desktop --test preview_surface_authority_contract
+      - name: Desktop surface cleanup contract
+        run: cargo test -p localview-desktop --test surface_cleanup_contract
       - name: Live semantic bridge contract
         run: cargo test -p localview-desktop --test live_semantic_bridge_contract
       - name: Bridge action cancellation worker contract
