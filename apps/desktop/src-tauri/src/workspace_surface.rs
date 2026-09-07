@@ -2,6 +2,8 @@
 
 #[path = "surface_registry.rs"]
 pub mod surface_registry;
+#[path = "surface_resource.rs"]
+pub mod surface_resource;
 
 use localview_protocol::SessionId;
 use serde::{Deserialize, Serialize};
