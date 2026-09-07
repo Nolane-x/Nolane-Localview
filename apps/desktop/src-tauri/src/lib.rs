@@ -232,7 +232,12 @@ async fn open_preview(
         identity.clone(),
         DesktopSurfaceVisibility::Visible,
     ) {
-        let _ = window.close();
+        if let Err(close_error) = window.close() {
+            return Err(format!(
+                "{}; failed to close preview window after owner-record failure: {close_error}",
+                preview_registry_error(error)
+            ));
+        }
         let _ = workspace_surface::surface_resource::cancel_surface_reservation(&reservation).await;
         return Err(preview_registry_error(error));
     }
