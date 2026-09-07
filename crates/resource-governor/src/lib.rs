@@ -258,6 +258,17 @@ pub enum ResourceWorkKind {
     NativeSemanticReconciliation,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LiveResourceKind {
+    ChromiumProcess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceActivationError {
+    ReservationMissing,
+    KindMismatch,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceAdmissionDenial {
     pub work_kind: ResourceWorkKind,
@@ -266,13 +277,19 @@ pub struct ResourceAdmissionDenial {
 
 type ReservationKey = (String, String);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReservationState {
+    Pending(ResourceWorkKind),
+    Live(LiveResourceKind),
+}
+
 #[derive(Debug)]
 struct RuntimeGovernorState {
     budget: ResourceBudget,
     sample: RuntimeResourceSample,
     process_memory_mb: u64,
     process_cpu_percent: f32,
-    reservations: BTreeMap<ReservationKey, ResourceWorkKind>,
+    reservations: BTreeMap<ReservationKey, ReservationState>,
 }
 
 #[derive(Clone, Debug)]
@@ -359,7 +376,9 @@ impl RuntimeResourceGovernor {
                 decision: denial_decision,
             });
         }
-        state.reservations.insert(key.clone(), work_kind);
+        state
+            .reservations
+            .insert(key.clone(), ReservationState::Pending(work_kind));
         drop(state);
         Ok(ResourceReservation {
             governor: self.clone(),
@@ -370,14 +389,44 @@ impl RuntimeResourceGovernor {
     pub fn release_session(&self, session_id: &str) -> usize {
         let mut state = lock(&self.inner);
         let before = state.reservations.len();
-        state
-            .reservations
-            .retain(|(reserved_session, _), _| reserved_session != session_id);
+        state.reservations.retain(|(reserved_session, _), reservation| {
+            matches!(*reservation, ReservationState::Live(_)) || reserved_session != session_id
+        });
         before.saturating_sub(state.reservations.len())
+    }
+
+    fn activate_key(
+        &self,
+        key: &ReservationKey,
+        kind: LiveResourceKind,
+    ) -> Result<(), ResourceActivationError> {
+        let mut state = lock(&self.inner);
+        let Some(reservation) = state.reservations.get_mut(key) else {
+            return Err(ResourceActivationError::ReservationMissing);
+        };
+        match (*reservation, kind) {
+            (
+                ReservationState::Pending(ResourceWorkKind::Chromium),
+                LiveResourceKind::ChromiumProcess,
+            ) => {
+                *reservation = ReservationState::Live(kind);
+                Ok(())
+            }
+            (ReservationState::Pending(_), _) => Err(ResourceActivationError::KindMismatch),
+            (ReservationState::Live(_), _) => Err(ResourceActivationError::ReservationMissing),
+        }
     }
 
     fn release_key(&self, key: &ReservationKey) {
         lock(&self.inner).reservations.remove(key);
+    }
+
+    fn release_live_key(&self, key: &ReservationKey, kind: LiveResourceKind) {
+        let mut state = lock(&self.inner);
+        if matches!(state.reservations.get(key), Some(ReservationState::Live(current)) if *current == kind)
+        {
+            state.reservations.remove(key);
+        }
     }
 }
 
@@ -394,12 +443,54 @@ impl ResourceReservation {
             self.governor.release_key(&key);
         }
     }
+
+    pub fn activate_live(
+        mut self,
+        kind: LiveResourceKind,
+    ) -> Result<LiveResourceLease, ResourceActivationError> {
+        let key = self
+            .key
+            .as_ref()
+            .cloned()
+            .ok_or(ResourceActivationError::ReservationMissing)?;
+        self.governor.activate_key(&key, kind)?;
+        self.key.take();
+        Ok(LiveResourceLease {
+            governor: self.governor.clone(),
+            key: Some(key),
+            kind,
+        })
+    }
 }
 
 impl Drop for ResourceReservation {
     fn drop(&mut self) {
         if let Some(key) = self.key.take() {
             self.governor.release_key(&key);
+        }
+    }
+}
+
+#[must_use = "live resource leases must remain alive for the full owner lifecycle"]
+#[derive(Debug)]
+pub struct LiveResourceLease {
+    governor: RuntimeResourceGovernor,
+    key: Option<ReservationKey>,
+    kind: LiveResourceKind,
+}
+
+impl LiveResourceLease {
+    pub fn release(mut self) {
+        if let Some(key) = self.key.take() {
+            self.governor.release_live_key(&key, self.kind);
+        }
+    }
+}
+
+impl Drop for LiveResourceLease {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            self.governor.release_live_key(&key, self.kind);
         }
     }
 }
@@ -413,16 +504,17 @@ fn lock(inner: &Mutex<RuntimeGovernorState>) -> MutexGuard<'_, RuntimeGovernorSt
 fn decision_for_state(state: &RuntimeGovernorState) -> GovernorDecision {
     let mut chromium_instances = 0usize;
     let mut concurrent_captures = 0usize;
-    for kind in state.reservations.values() {
-        match kind {
-            ResourceWorkKind::NativeVisualCapture => {
+    for reservation in state.reservations.values() {
+        match reservation {
+            ReservationState::Pending(ResourceWorkKind::NativeVisualCapture) => {
                 concurrent_captures = concurrent_captures.saturating_add(1)
             }
-            ResourceWorkKind::Chromium => {
+            ReservationState::Pending(ResourceWorkKind::Chromium)
+            | ReservationState::Live(LiveResourceKind::ChromiumProcess) => {
                 chromium_instances = chromium_instances.saturating_add(1)
             }
-            ResourceWorkKind::NativeSemanticObservation
-            | ResourceWorkKind::NativeSemanticReconciliation => {}
+            ReservationState::Pending(ResourceWorkKind::NativeSemanticObservation)
+            | ReservationState::Pending(ResourceWorkKind::NativeSemanticReconciliation) => {}
         }
     }
     let cpu_percent = ((state.sample.cpu_percent as f64) + (state.process_cpu_percent as f64))
