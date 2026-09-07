@@ -380,10 +380,23 @@ async fn compatible_changed_baseline(
                 .map_err(|_| "visual baseline cache policy is invalid".to_string())?,
         );
     }
-    Ok(baselines
+    let baselines = baselines
         .as_mut()
-        .expect("visual baseline cache initialized above")
-        .get_compatible(session_id, context))
+        .expect("visual baseline cache initialized above");
+    let retained_resources = &state.retained_resources;
+
+    let current_bytes = u64::try_from(baselines.used_bytes())
+        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
+    retained_resources
+        .synchronize(RetainedResourceKind::Cache, current_bytes)
+        .map_err(retained_resource_error)?;
+    let compatible = baselines.get_compatible(session_id, context);
+    let actual_bytes = u64::try_from(baselines.used_bytes())
+        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
+    retained_resources
+        .synchronize(RetainedResourceKind::Cache, actual_bytes)
+        .map_err(retained_resource_error)?;
+    Ok(compatible)
 }
 
 async fn commit_changed_baseline(
@@ -410,6 +423,12 @@ async fn commit_changed_baseline(
         .synchronize(RetainedResourceKind::Cache, current_bytes)
         .map_err(retained_resource_error)?;
 
+    image
+        .validate()
+        .map_err(|_| "visual baseline cache rejected the captured frame".to_string())?;
+    if context.pixel_width != image.width || context.pixel_height != image.height {
+        return Err("visual baseline cache rejected the captured frame".to_string());
+    }
     let Some(projected_bytes) = baselines
         .projected_used_bytes_after_insert(session_id, image.data.len())
         .map_err(|_| "visual baseline cache rejected the captured frame".to_string())?
@@ -422,15 +441,14 @@ async fn commit_changed_baseline(
         .admit_projected(RetainedResourceKind::Cache, projected_bytes)
         .map_err(retained_resource_error)?;
 
-    let cached = baselines
-        .insert(session_id, context, image)
-        .map_err(|_| "visual baseline cache rejected the captured frame".to_string())?;
-
+    let insert_result = baselines.insert(session_id, context, image);
     let actual_bytes = u64::try_from(baselines.used_bytes())
         .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
-    retained_resources
-        .synchronize(RetainedResourceKind::Cache, actual_bytes)
-        .map_err(retained_resource_error)?;
+    let reconcile_result = retained_resources.synchronize(RetainedResourceKind::Cache, actual_bytes);
+
+    let cached = insert_result
+        .map_err(|_| "visual baseline cache rejected the captured frame".to_string())?;
+    reconcile_result.map_err(retained_resource_error)?;
     Ok(cached)
 }
 
@@ -999,13 +1017,14 @@ async fn persist_and_register(
         retained_resources
             .admit_projected(RetainedResourceKind::CaptureStorage, projected_bytes)
             .map_err(retained_resource_error)?;
-        let artifact = artifacts
-            .put("visual/png", &png)
-            .await
-            .map_err(err)?;
-        retained_resources
-            .synchronize(RetainedResourceKind::CaptureStorage, artifacts.used_bytes())
-            .map_err(retained_resource_error)?;
+
+        let put_result = artifacts.put("visual/png", &png).await;
+        let actual_bytes = artifacts.used_bytes();
+        let reconcile_result = retained_resources
+            .synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
+
+        let artifact = put_result.map_err(err)?;
+        reconcile_result.map_err(retained_resource_error)?;
         artifact.id
     };
     drop(png);
