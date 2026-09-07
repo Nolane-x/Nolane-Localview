@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod retained;
+pub use retained::*;
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, MutexGuard},
