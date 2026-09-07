@@ -45,6 +45,8 @@ Current in-process reconciliation already prefers:
 
 A second consequence is architectural: desktop preview/workspace bridge code can retain a `SessionId` across a daemon restart. If the daemon silently allocates a different UUID, the bridge and the new daemon disagree about the identity of the same target. D2 cannot safely reconcile live surfaces until this identity split is removed.
 
+There is also an in-process edge case D1 must close. If a dev server changes both command text and port inside one daemon lifetime, the legacy project-key match and endpoint fallback may both miss the old session. A durable resolver must not then discover that the same UUID is still active and create a second volatile session. Canonical lineage therefore participates in current-process reconciliation as well as restart recovery.
+
 ## Non-goal: durable runtime state
 
 D1 does **not** persist a serialized `Session` and does not restore these fields or authorities across restart:
@@ -114,7 +116,7 @@ D1 selects approach C.
 
 D1 adds three bounded concepts:
 
-1. `SessionLineage` — typed, versioned logical target identity used for durable matching;
+1. `SessionLineage` — typed, versioned logical target identity used for current-process and durable matching;
 2. `SessionIdentityRegistry` — durable lineage-to-UUID mapping with strict validation and atomic replacement;
 3. `SessionIdentityResolver` — the only component allowed to choose whether a newly discovered target reuses a durable UUID or receives a new UUID.
 
@@ -202,6 +204,38 @@ The current process-local project key includes command text. D1 deliberately doe
 
 Removing command text creates a possible ambiguity when two simultaneous servers of the same `ServerKind` run from one project root. D1 handles that with an explicit ambiguity fence instead of silently adding unstable command text back into the durable identity.
 
+## Batch lineage analysis
+
+Lineage is computed for the complete discovery batch before session-map mutation.
+
+For each scan:
+
+1. construct a canonical lineage for every discovered server;
+2. group discovered servers by lineage;
+3. mark lineage groups of size one as unambiguous;
+4. mark groups of size greater than one as ambiguous;
+5. reconcile active in-memory sessions using only identity evidence that is safe for that group;
+6. consult the durable registry only for targets still requiring a new in-memory session.
+
+This ordering prevents the first item in an ambiguous batch from consuming a durable UUID before LocalView notices the second item.
+
+## In-memory reconciliation
+
+Canonical lineage is not disk-only metadata. It is also the preferred continuity key for an existing in-memory session when the current discovery lineage is unambiguous.
+
+For an unambiguous project lineage, reconciliation should prefer:
+
+1. exact matching active/in-memory canonical lineage;
+2. compatibility matching needed for existing process-local behavior, such as current `ProjectIdentity.key + ServerKind`;
+3. exact endpoint fallback where appropriate;
+4. durable identity resolution only if no existing in-memory session matches.
+
+This closes the command+port-change edge case: the current session remains the current session instead of creating a second object that collides with its persisted UUID.
+
+For an ambiguous lineage group, canonical-lineage matching must not merge multiple active targets. Existing exact endpoint/process-local matches may keep already-distinct sessions stable, but unmatched ambiguous targets remain distinct and are not assigned one shared durable identity.
+
+D1 must not turn every 750 ms discovery scan into disk I/O. Healthy scans that continue existing in-memory sessions do not rewrite or reload the durable registry.
+
 ## Ambiguity fence
 
 A durable lineage may be reused only when that lineage resolves to exactly one discovered logical target in the current reconciliation batch.
@@ -210,7 +244,8 @@ If two or more simultaneously discovered servers produce the same project lineag
 
 - do not assign one persisted UUID to either arbitrarily;
 - do not merge them into one `Session`;
-- allocate distinct volatile/new session IDs for the active targets;
+- preserve already-distinct active sessions only through exact safe matches;
+- allocate distinct volatile/new session IDs for unmatched active targets;
 - do not overwrite the existing durable mapping while ambiguity exists;
 - emit a diagnostic that durable identity reuse was blocked by ambiguity.
 
@@ -297,7 +332,7 @@ D1 must not make the entire LocalView daemon unusable solely because identity pe
 
 ## Healthy creation flow
 
-For an unambiguous discovered target with a healthy registry:
+For an unambiguous discovered target with a healthy registry and no matching current in-memory session:
 
 ### Existing durable mapping
 
@@ -322,26 +357,16 @@ This ordering closes the crash window where a UUID could be exposed to desktop/b
 
 ## Volatile identity mode
 
-If persistence is unavailable, invalid, over capacity, or a new mapping cannot be committed, LocalView may still create an in-memory session so localhost discovery remains usable.
+If persistence is unavailable, invalid, over capacity, ambiguity blocks durable reuse, or a new mapping cannot be committed, LocalView may still create an in-memory session so localhost discovery remains usable.
 
 That session is **volatile**:
 
-- it receives a fresh UUID;
+- it receives a fresh UUID when no existing safe in-memory identity can be continued;
 - no restart-continuity guarantee is made;
 - D1 should expose an internal diagnostic/health signal that continuity is degraded;
 - D2 must not later pretend that this UUID is safely recoverable across daemon restart.
 
 D1 does not need to add a new public API field to every `Session` unless implementation proves it necessary. A focused internal resolver result or health diagnostic is sufficient.
-
-## In-process reconciliation remains first-class
-
-D1 must preserve existing behavior inside one daemon lifetime.
-
-If an active/in-memory session already matches the discovered target, `SessionManager` continues that live session instead of repeatedly consulting disk.
-
-The durable registry is consulted when a logical target would otherwise become a newly created in-memory session, especially after daemon restart.
-
-D1 must not turn every 750 ms discovery scan into disk I/O.
 
 ## Session removal semantics
 
@@ -452,17 +477,17 @@ On restart, either the old complete registry or the new complete registry is acc
 
 ```text
 DiscoveryEngine
-  -> discovered targets
-  -> canonical SessionLineage V1
+  -> discovered target batch
+  -> canonical SessionLineage V1 for every target
   -> batch ambiguity analysis
-  -> SessionManager live-match check
-      -> existing in-memory session: continue
-      -> no live match:
+  -> SessionManager current-process reconciliation
+      -> safe in-memory lineage/project/endpoint match: continue current SessionId
+      -> no safe current match:
            SessionIdentityResolver
-             -> durable mapping exists: reuse UUID
-             -> new lineage + persist succeeds: commit UUID, then publish
-             -> persistence unavailable/fails: volatile UUID + diagnostic
-  -> fresh in-memory Session
+             -> unambiguous durable mapping exists: reuse UUID
+             -> unambiguous new lineage + persist succeeds: commit UUID, then publish
+             -> ambiguity/persistence unavailable/failure: volatile UUID + diagnostic
+  -> fresh or continued in-memory Session
   -> ObservationEvent using resolved SessionId
 ```
 
@@ -489,31 +514,34 @@ Implementation must proceed RED before GREEN. Required contracts include at leas
 1. same project anchor + same `ServerKind` across two fresh `SessionManager`/resolver lifetimes reuses the exact UUID;
 2. same project anchor changing localhost port reuses the UUID;
 3. same project anchor changing endpoint scheme still reuses the UUID;
-4. different normalized project roots never share a UUID;
-5. same project root with different `ServerKind` values receives distinct durable lineages;
-6. projectless exact endpoint survives restart with the same UUID;
-7. projectless target changing port receives a new UUID;
-8. two simultaneous targets producing the same project lineage are fenced from durable aliasing and remain distinct;
-9. in-process reconnect behavior remains unchanged and does not perform repeated registry writes;
-10. in-memory session removal does not delete its durable identity mapping;
-11. a new UUID is not published as durable before the atomic registry commit succeeds;
-12. simulated persistence failure produces a volatile session and leaves the previous valid registry unchanged;
-13. corrupt registry does not get silently replaced with empty state;
-14. unknown schema version fails closed into degraded identity mode;
-15. duplicate lineage-to-different-UUID records are rejected;
-16. same UUID bound to unrelated lineages is rejected;
-17. bounded file/record limits are enforced without silent eviction;
-18. path normalization is deterministic across restart and tested for platform-specific rules;
-19. `ProjectIdentity.key` compatibility is not accidentally promoted as the durable identity source;
-20. reused UUID does not restore `preview_visible`, provider attachments, action authority, resource leases, or stale freshness state;
-21. first D1 run establishes continuity only after successful mapping persistence;
-22. a named CI gate runs durable session identity continuity contracts.
+4. same unambiguous project lineage changing both command text and port inside one daemon lifetime continues the same in-memory UUID;
+5. different normalized project roots never share a UUID;
+6. same project root with different `ServerKind` values receives distinct durable lineages;
+7. projectless exact endpoint survives restart with the same UUID;
+8. projectless target changing port receives a new UUID;
+9. two simultaneous targets producing the same project lineage are fenced from durable aliasing and remain distinct;
+10. already-distinct ambiguous targets may continue only through exact safe current-process matches;
+11. healthy in-process reconciliation does not perform repeated registry writes;
+12. in-memory session removal does not delete its durable identity mapping;
+13. a new UUID is not published as durable before the atomic registry commit succeeds;
+14. simulated persistence failure produces a volatile session and leaves the previous valid registry unchanged;
+15. corrupt registry does not get silently replaced with empty state;
+16. unknown schema version fails closed into degraded identity mode;
+17. duplicate lineage-to-different-UUID records are rejected;
+18. same UUID bound to unrelated lineages is rejected;
+19. bounded file/record limits are enforced without silent eviction;
+20. path normalization is deterministic across restart and tested for platform-specific rules;
+21. `ProjectIdentity.key` compatibility is not accidentally promoted as the durable identity source;
+22. reused UUID does not restore `preview_visible`, provider attachments, action authority, resource leases, or stale freshness state;
+23. first D1 run establishes continuity only after successful mapping persistence;
+24. a named CI gate runs durable session identity continuity contracts.
 
 ## Scope boundaries
 
 In scope:
 
 - versioned stable session lineage;
+- current-process canonical-lineage reconciliation;
 - durable lineage-to-UUID registry;
 - atomic registry persistence;
 - startup load/validation;
@@ -544,6 +572,7 @@ Out of scope:
 D1 is complete only when:
 
 - a healthy persisted lineage mapping causes the same unambiguous localhost target to receive the exact same `SessionId` after daemon restart;
+- canonical unambiguous lineage also prevents current-process duplicate identity when command and port change together;
 - port changes do not break identity for project-anchored targets;
 - projectless fallback remains exact and conservative;
 - ambiguous same-lineage targets never get silently merged;
@@ -553,7 +582,7 @@ D1 is complete only when:
 - persistence failure degrades explicitly to volatile identity rather than crashing the whole product or claiming continuity;
 - session removal does not erase durable identity;
 - restored UUID does not restore stale runtime authority;
-- existing in-process reconnect behavior remains correct;
+- healthy in-process reconnect behavior remains correct and disk-cold;
 - D1 introduces no second governor and no Perception Budget change;
 - exact-head CI passes the named durable session identity gate plus full existing regression suites;
 - post-merge verification is checked before D1 is declared closed.
