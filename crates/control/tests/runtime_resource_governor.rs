@@ -234,7 +234,7 @@ async fn resource_sample_ingress_is_authenticated_and_bounded_to_runtime_metrics
     forbidden["concurrent_captures"] = serde_json::json!(0);
     assert_eq!(
         send(
-            state,
+            state.clone(),
             Method::POST,
             "/v1/runtime/resources/sample".into(),
             Some(forbidden),
@@ -243,7 +243,23 @@ async fn resource_sample_ingress_is_authenticated_and_bounded_to_runtime_metrics
         .await
         .0,
         StatusCode::UNPROCESSABLE_ENTITY,
-        "callers must not be able to forge governor-owned reservation counters"
+        "callers must not be able to forge governor-owned capture reservation counters"
+    );
+
+    let mut forged_chromium = runtime_sample(96, 4.0);
+    forged_chromium["chromium_instances"] = serde_json::json!(0);
+    assert_eq!(
+        send(
+            state,
+            Method::POST,
+            "/v1/runtime/resources/sample".into(),
+            Some(forged_chromium),
+            true,
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "callers must not be able to forge process-owner Chromium truth"
     );
 }
 
