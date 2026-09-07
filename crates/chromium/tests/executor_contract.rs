@@ -5,11 +5,16 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use localview_chromium::{
-    execute_ephemeral, validate_loopback_url, ChromiumExecutionPolicy, ChromiumExecutorError,
+    execute_ephemeral, execute_ephemeral_with_lifecycle, validate_loopback_url,
+    ChromiumExecutionPolicy, ChromiumExecutorError,
 };
 use url::Url;
 
@@ -56,6 +61,15 @@ fn assert_empty_dir(path: &Path) {
         entries.next().is_none(),
         "ephemeral browser profiles must be removed after execution"
     );
+}
+
+#[derive(Debug)]
+struct DropCounter(Arc<AtomicUsize>);
+
+impl Drop for DropCounter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 #[test]
@@ -124,6 +138,83 @@ fn main() {
     assert!(
         !stderr.contains("--no-sandbox"),
         "executor must not weaken the browser sandbox"
+    );
+    assert_empty_dir(&profile_root);
+
+    let _ = fs::remove_dir_all(fixture_root);
+    let _ = fs::remove_dir_all(profile_root);
+}
+
+#[tokio::test]
+async fn lifecycle_hook_is_not_called_when_spawn_fails() {
+    let profile_root = test_dir("profiles-spawn-failure");
+    fs::create_dir_all(&profile_root).expect("profile root");
+    let target = Url::parse("http://127.0.0.1:5173/").expect("loopback target");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+
+    let error = execute_ephemeral_with_lifecycle(
+        Path::new("definitely-not-a-real-chromium-binary"),
+        &target,
+        &ChromiumExecutionPolicy {
+            timeout: Duration::from_secs(1),
+            max_stdout_bytes: 64,
+            max_stderr_bytes: 64,
+            temp_root: profile_root.clone(),
+        },
+        move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        },
+    )
+    .await
+    .expect_err("missing executable must fail before lifecycle activation");
+
+    assert_eq!(error, ChromiumExecutorError::Spawn);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_empty_dir(&profile_root);
+    let _ = fs::remove_dir_all(profile_root);
+}
+
+#[tokio::test]
+async fn lifecycle_guard_is_held_until_child_terminal_path() {
+    let source = r#"
+fn main() {
+    std::thread::sleep(std::time::Duration::from_millis(100));
+}
+"#;
+    let (fixture_root, executable) = compile_fixture("lifecycle-success", source);
+    let profile_root = test_dir("profiles-lifecycle-success");
+    fs::create_dir_all(&profile_root).expect("profile root");
+    let target = Url::parse("http://127.0.0.1:5173/").expect("loopback target");
+    let activations = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let observed_activations = activations.clone();
+    let observed_drops = drops.clone();
+
+    let receipt = execute_ephemeral_with_lifecycle(
+        &executable,
+        &target,
+        &ChromiumExecutionPolicy {
+            timeout: Duration::from_secs(3),
+            max_stdout_bytes: 64,
+            max_stderr_bytes: 64,
+            temp_root: profile_root.clone(),
+        },
+        move || {
+            observed_activations.fetch_add(1, Ordering::SeqCst);
+            Ok(DropCounter(observed_drops))
+        },
+    )
+    .await
+    .expect("lifecycle-aware execution");
+
+    assert_eq!(receipt.exit_code, Some(0));
+    assert_eq!(activations.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "spawn lifecycle guard must be dropped before execution returns"
     );
     assert_empty_dir(&profile_root);
 
