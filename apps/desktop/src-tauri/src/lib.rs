@@ -244,7 +244,11 @@ async fn open_preview(
     )
     .await;
     if let Err(error) = activation_result {
-        let _ = window.close();
+        if let Err(close_error) = window.close() {
+            return Err(format!(
+                "{error}; failed to close preview window after activation failure: {close_error}"
+            ));
+        }
         let _ = registry.record_closed(&identity);
         let _ = workspace_surface::surface_resource::cancel_surface_reservation(&reservation).await;
         let _ = workspace_surface::surface_resource::release_surface(&identity).await;
