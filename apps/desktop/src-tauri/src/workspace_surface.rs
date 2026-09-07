@@ -283,7 +283,12 @@ async fn open_native(
         identity.clone(),
         surface_registry::DesktopSurfaceVisibility::Visible,
     ) {
-        let _ = webview.close();
+        if let Err(close_error) = webview.close() {
+            return Err(format!(
+                "{}; failed to close native workspace surface after owner-record failure: {close_error}",
+                registry_error(error)
+            ));
+        }
         let _ = surface_resource::cancel_surface_reservation(&reservation).await;
         return Err(registry_error(error));
     }
