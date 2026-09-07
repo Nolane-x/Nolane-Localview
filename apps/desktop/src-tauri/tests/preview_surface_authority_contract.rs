@@ -12,11 +12,17 @@ fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     &tail[..end]
 }
 
+fn without_layout_whitespace(value: &str) -> String {
+    value.chars().filter(|character| !character.is_whitespace()).collect()
+}
+
 fn assert_in_order(haystack: &str, needles: &[&str]) {
+    let haystack = without_layout_whitespace(haystack);
     let mut cursor = 0;
     for needle in needles {
+        let needle = without_layout_whitespace(needle);
         let offset = haystack[cursor..]
-            .find(needle)
+            .find(&needle)
             .unwrap_or_else(|| panic!("missing ordered preview authority step {needle}"));
         cursor += offset + needle.len();
     }
