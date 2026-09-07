@@ -12,12 +12,18 @@ fn function_slice<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     &tail[..end_index]
 }
 
+fn compact(source: &str) -> String {
+    source.chars().filter(|ch| !ch.is_whitespace()).collect()
+}
+
 fn ordered_positions(source: &str, markers: &[&str]) -> Vec<usize> {
+    let source = compact(source);
     let mut positions = Vec::with_capacity(markers.len());
     let mut cursor = 0usize;
     for marker in markers {
+        let marker = compact(marker);
         let relative = source[cursor..]
-            .find(marker)
+            .find(&marker)
             .unwrap_or_else(|| panic!("missing authority marker: {marker}"));
         let absolute = cursor + relative;
         positions.push(absolute);
