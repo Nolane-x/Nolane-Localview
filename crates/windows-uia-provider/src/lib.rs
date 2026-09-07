@@ -580,6 +580,7 @@ mod platform {
                 .map_or(1, |revision| revision.capture_sequence().saturating_add(1));
 
             let (nodes, retained_elements, resource_usage, mut debt) = observe_bounded_tree(
+                &self.automation,
                 &self.walker,
                 root,
                 &self.provider_incarnation_ref,
@@ -992,12 +993,13 @@ mod platform {
         Ok(ticks)
     }
 
-    // These eight inputs are deliberately explicit correctness/authority facts:
-    // traversal object/root, provider+target lineage, observation cut/scope,
+    // These nine inputs are deliberately explicit correctness/authority facts:
+    // automation/traversal object/root, provider+target lineage, observation cut/scope,
     // capture sequence, and resource budget. Hiding them in mutable context would
     // make accidental cross-lineage reuse easier at this OS boundary.
     #[allow(clippy::too_many_arguments)]
     fn observe_bounded_tree(
+        automation: &IUIAutomation,
         walker: &IUIAutomationTreeWalker,
         root: IUIAutomationElement,
         provider_incarnation_ref: &ProviderIncarnationRef,
@@ -1017,8 +1019,35 @@ mod platform {
         let mut retained_elements = Vec::new();
         let mut debt = Vec::new();
         let mut queue = VecDeque::from([(root, None, 0_usize)]);
+        let mut seen_runtime_ids = HashMap::<Vec<i32>, IUIAutomationElement>::new();
 
         while let Some((element, parent_index, depth)) = queue.pop_front() {
+            let runtime_id = unsafe { runtime_id_hint(&element) }.unwrap_or_default();
+            if !runtime_id.is_empty() {
+                if let Some(previous) = seen_runtime_ids.get(&runtime_id) {
+                    match unsafe {
+                        // SAFETY: both UIA elements and the automation interface are
+                        // owned by this dedicated MTA for the entire comparison.
+                        automation.CompareElements(previous, &element)
+                    } {
+                        Ok(same) if same.as_bool() => {
+                            // ControlView can surface the same exact element through
+                            // an alias/cycle (for example an expanded Win32 ComboBox).
+                            // Do not emit or traverse the duplicate appearance.
+                            continue;
+                        }
+                        Ok(_) => {
+                            debt.push("uia_runtime_id_collision_distinct_elements".into());
+                        }
+                        Err(_) => {
+                            debt.push("uia_runtime_id_collision_compare_unavailable".into());
+                        }
+                    }
+                } else {
+                    seen_runtime_ids.insert(runtime_id.clone(), element.clone());
+                }
+            }
+
             if !guard.admit_node(depth, PROPERTIES_PER_NODE) {
                 continue;
             }
@@ -1141,7 +1170,6 @@ mod platform {
                 None
             };
 
-            let runtime_id = unsafe { runtime_id_hint(&element) }.unwrap_or_default();
             let mut element_ref = provider_element_ref_from_runtime_id(
                 provider_incarnation_ref.clone(),
                 target_incarnation_ref.clone(),
