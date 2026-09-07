@@ -42,7 +42,46 @@ impl ArtifactStore {
         Ok(store)
     }
 
+    pub fn used_bytes(&self) -> u64 {
+        self.used
+    }
+
+    pub fn projected_used_bytes_after_put(&self, bytes: &[u8]) -> Result<u64> {
+        let id = content_id(bytes);
+        if self.index.contains_key(&id) {
+            return Ok(self.used);
+        }
+
+        let incoming = bytes.len() as u64;
+        if incoming > self.max_bytes {
+            anyhow::bail!(
+                "artifact requires {incoming} retained bytes but store limit is {}",
+                self.max_bytes
+            );
+        }
+
+        let mut projected = self.used.saturating_add(incoming);
+        for id in &self.lru {
+            if projected <= self.max_bytes {
+                break;
+            }
+            if let Some(meta) = self.index.get(id) {
+                projected = projected.saturating_sub(meta.bytes);
+            }
+        }
+
+        if projected > self.max_bytes {
+            anyhow::bail!(
+                "artifact store cannot project usage within {} retained bytes",
+                self.max_bytes
+            );
+        }
+        Ok(projected)
+    }
+
     pub async fn put(&mut self, kind: &str, bytes: &[u8]) -> Result<ArtifactMeta> {
+        self.projected_used_bytes_after_put(bytes)?;
+
         let id = content_id(bytes);
         if let Some(existing) = self.index.get_mut(&id) {
             if existing.kind == "retained" {
@@ -105,13 +144,18 @@ impl ArtifactStore {
 
     async fn gc(&mut self) -> Result<()> {
         while self.used > self.max_bytes {
-            let Some(id) = self.lru.pop_front() else {
+            let Some(id) = self.lru.front().cloned() else {
                 break;
             };
-            if let Some(meta) = self.index.remove(&id) {
-                let _ = tokio::fs::remove_file(&meta.path).await;
-                self.used = self.used.saturating_sub(meta.bytes);
-            }
+            let Some(meta) = self.index.get(&id).cloned() else {
+                self.lru.pop_front();
+                continue;
+            };
+
+            tokio::fs::remove_file(&meta.path).await?;
+            self.lru.pop_front();
+            self.index.remove(&id);
+            self.used = self.used.saturating_sub(meta.bytes);
         }
         Ok(())
     }
