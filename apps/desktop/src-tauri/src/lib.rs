@@ -153,14 +153,35 @@ async fn resume_runtime() -> Result<(), String> {
 #[tauri::command]
 async fn open_preview(
     app: tauri::AppHandle,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
     session_id: String,
     url: String,
     title: String,
 ) -> Result<(), String> {
+    use workspace_surface::surface_registry::{DesktopSurfaceKind, DesktopSurfaceVisibility};
+
     let session = session_id.parse::<SessionId>().map_err(err)?;
     let label = preview_label(session);
     if let Some(window) = app.get_webview_window(&label) {
+        let current = registry
+            .current(session, DesktopSurfaceKind::PreviewWindow, &label)
+            .ok_or_else(|| "preview platform window exists without desktop owner truth".to_string())?;
         window.show().map_err(err)?;
+        registry
+            .set_visibility(&current.identity, DesktopSurfaceVisibility::Visible)
+            .map_err(preview_registry_error)?;
+        if let Err(error) = workspace_surface::surface_resource::update_surface_visibility(
+            &current.identity,
+            DesktopSurfaceVisibility::Visible,
+        )
+        .await
+        {
+            let _ = registry.set_visibility(&current.identity, current.visibility);
+            if current.visibility == DesktopSurfaceVisibility::Hidden {
+                let _ = window.hide();
+            }
+            return Err(error);
+        }
         window.set_focus().map_err(err)?;
         return Ok(());
     }
@@ -170,21 +191,94 @@ async fn open_preview(
         return Err("LocalView preview refuses non-loopback top-level navigation".into());
     }
 
+    let identity = registry.next_identity(
+        session,
+        DesktopSurfaceKind::PreviewWindow,
+        label.clone(),
+    );
+    let reservation = workspace_surface::surface_resource::reserve_surface(session).await?;
     let initialization_script = format!(
         "{}\n{}",
         bootstrap_script(&InstrumentationConfig::default()),
         preview_bridge_script(session)
     );
 
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed))
+    let window = match WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed))
         .title(format!("{title} — LocalView"))
         .inner_size(1280.0, 820.0)
         .min_inner_size(640.0, 480.0)
         .initialization_script(initialization_script)
         .on_navigation(preview_navigation_allowed)
         .build()
-        .map_err(err)?;
+    {
+        Ok(window) => window,
+        Err(error) => {
+            let create_error = err(error);
+            if let Err(cancel_error) =
+                workspace_surface::surface_resource::cancel_surface_reservation(&reservation).await
+            {
+                return Err(format!(
+                    "{create_error}; failed to cancel preview surface reservation: {cancel_error}"
+                ));
+            }
+            return Err(create_error);
+        }
+    };
+
+    if let Err(error) = registry.record_created(
+        identity.clone(),
+        DesktopSurfaceVisibility::Visible,
+    ) {
+        let _ = window.close();
+        let _ = workspace_surface::surface_resource::cancel_surface_reservation(&reservation).await;
+        return Err(preview_registry_error(error));
+    }
+
+    if let Err(error) = workspace_surface::surface_resource::activate_surface(
+        &reservation,
+        &identity,
+        DesktopSurfaceVisibility::Visible,
+    )
+    .await
+    {
+        let _ = window.close();
+        let _ = registry.record_closed(&identity);
+        let _ = workspace_surface::surface_resource::cancel_surface_reservation(&reservation).await;
+        let _ = workspace_surface::surface_resource::release_surface(&identity).await;
+        return Err(error);
+    }
+
+    install_preview_surface_destroyed_reconciler(app, &window, identity);
     Ok(())
+}
+
+fn install_preview_surface_destroyed_reconciler(
+    app: tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    identity: workspace_surface::surface_registry::DesktopSurfaceIdentity,
+) {
+    window.on_window_event(move |event| {
+        if !matches!(event, tauri::WindowEvent::Destroyed) {
+            return;
+        }
+        let registry = app
+            .state::<workspace_surface::surface_registry::DesktopSurfaceRegistry>();
+        if registry.record_closed(&identity).is_err() {
+            return;
+        }
+        let identity = identity.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = workspace_surface::surface_resource::release_surface(&identity).await {
+                eprintln!("LocalView preview surface release failed: {error}");
+            }
+        });
+    });
+}
+
+fn preview_registry_error(
+    error: workspace_surface::surface_registry::DesktopSurfaceRegistryError,
+) -> String {
+    format!("desktop preview surface owner registry rejected lifecycle transition: {error:?}")
 }
 
 #[tauri::command]
