@@ -407,8 +407,13 @@ mod windows_consequential_expand_collapse_windows_smoke {
             )
             .await
             .expect("run Collapse control-path plan request");
-        assert_eq!(collapse_plan_response.status(), StatusCode::CREATED);
+        let collapse_plan_status = collapse_plan_response.status();
         let collapse_plan = response_json(collapse_plan_response).await;
+        assert_eq!(
+            collapse_plan_status,
+            StatusCode::CREATED,
+            "Collapse planning rejected unexpectedly: {collapse_plan}"
+        );
         assert_eq!(collapse_plan["operation"], "collapse");
         assert_eq!(collapse_plan["risk_class"], "s4_destructive_or_irreversible");
         assert_eq!(collapse_plan["idempotency_class"], "irreversible");
