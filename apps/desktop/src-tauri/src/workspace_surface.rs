@@ -113,6 +113,7 @@ fn unsupported() -> String {
 #[tauri::command]
 pub async fn workspace_surface_open(
     app: tauri::AppHandle,
+    registry: tauri::State<'_, surface_registry::DesktopSurfaceRegistry>,
     session_id: SessionId,
     url: String,
     bounds: WorkspaceBounds,
@@ -122,12 +123,12 @@ pub async fn workspace_surface_open(
 
     #[cfg(feature = "native-workspace")]
     {
-        open_native(&app, session_id, parsed, bounds)
+        open_native(&app, registry.inner(), session_id, parsed, bounds).await
     }
 
     #[cfg(not(feature = "native-workspace"))]
     {
-        let _ = (app, session_id, parsed, bounds);
+        let _ = (app, registry, session_id, parsed, bounds);
         Err(unsupported())
     }
 }
@@ -175,23 +176,25 @@ pub async fn workspace_surface_navigate(
 #[tauri::command]
 pub async fn workspace_surface_close(
     app: tauri::AppHandle,
+    registry: tauri::State<'_, surface_registry::DesktopSurfaceRegistry>,
     session_id: SessionId,
 ) -> Result<(), String> {
     #[cfg(feature = "native-workspace")]
     {
-        close_native(&app, session_id)
+        close_native(&app, registry.inner(), session_id).await
     }
 
     #[cfg(not(feature = "native-workspace"))]
     {
-        let _ = (app, session_id);
+        let _ = (app, registry, session_id);
         Err(unsupported())
     }
 }
 
 #[cfg(feature = "native-workspace")]
-fn open_native(
+async fn open_native(
     app: &tauri::AppHandle,
+    registry: &surface_registry::DesktopSurfaceRegistry,
     session_id: SessionId,
     url: url::Url,
     bounds: WorkspaceBounds,
@@ -202,6 +205,15 @@ fn open_native(
 
     let label = workspace_label(session_id);
     if let Some(webview) = app.get_webview(&label) {
+        let current = registry
+            .current(
+                session_id,
+                surface_registry::DesktopSurfaceKind::WorkspaceChild,
+                &label,
+            )
+            .ok_or_else(|| {
+                "native workspace platform child exists without desktop owner truth".to_string()
+            })?;
         webview
             .set_position(LogicalPosition::new(bounds.x, bounds.y))
             .map_err(|error| error.to_string())?;
@@ -210,12 +222,35 @@ fn open_native(
             .map_err(|error| error.to_string())?;
         webview.navigate(url).map_err(|error| error.to_string())?;
         webview.show().map_err(|error| error.to_string())?;
+        registry.set_visibility(
+            &current.identity,
+            surface_registry::DesktopSurfaceVisibility::Visible,
+        )
+        .map_err(registry_error)?;
+        if let Err(error) = surface_resource::update_surface_visibility(
+            &current.identity,
+            surface_registry::DesktopSurfaceVisibility::Visible,
+        )
+        .await
+        {
+            let _ = registry.set_visibility(&current.identity, current.visibility);
+            if current.visibility == surface_registry::DesktopSurfaceVisibility::Hidden {
+                let _ = webview.hide();
+            }
+            return Err(error);
+        }
         return Ok(());
     }
 
     let parent = app
         .get_window("main")
         .ok_or_else(|| "LocalView main window is unavailable".to_string())?;
+    let identity = registry.next_identity(
+        session_id,
+        surface_registry::DesktopSurfaceKind::WorkspaceChild,
+        label.clone(),
+    );
+    let reservation = surface_resource::reserve_surface(session_id).await?;
     let initialization_script = format!(
         "{}\n{}",
         bootstrap_script(&InstrumentationConfig::default()),
@@ -225,13 +260,48 @@ fn open_native(
         .initialization_script(initialization_script)
         .on_navigation(workspace_navigation_allowed);
 
-    parent
-        .add_child(
-            builder,
-            LogicalPosition::new(bounds.x, bounds.y),
-            LogicalSize::new(bounds.width, bounds.height),
-        )
-        .map_err(|error| error.to_string())?;
+    let webview = match parent.add_child(
+        builder,
+        LogicalPosition::new(bounds.x, bounds.y),
+        LogicalSize::new(bounds.width, bounds.height),
+    ) {
+        Ok(webview) => webview,
+        Err(error) => {
+            let create_error = error.to_string();
+            if let Err(cancel_error) =
+                surface_resource::cancel_surface_reservation(&reservation).await
+            {
+                return Err(format!(
+                    "{create_error}; failed to cancel native surface reservation: {cancel_error}"
+                ));
+            }
+            return Err(create_error);
+        }
+    };
+
+    if let Err(error) = registry.record_created(
+        identity.clone(),
+        surface_registry::DesktopSurfaceVisibility::Visible,
+    ) {
+        let _ = webview.close();
+        let _ = surface_resource::cancel_surface_reservation(&reservation).await;
+        return Err(registry_error(error));
+    }
+
+    if let Err(error) = surface_resource::activate_surface(
+        &reservation,
+        &identity,
+        surface_registry::DesktopSurfaceVisibility::Visible,
+    )
+    .await
+    {
+        let _ = webview.close();
+        let _ = registry.record_closed(&identity);
+        let _ = surface_resource::cancel_surface_reservation(&reservation).await;
+        let _ = surface_resource::release_surface(&identity).await;
+        return Err(error);
+    }
+
     Ok(())
 }
 
@@ -269,13 +339,39 @@ fn navigate_native(
 }
 
 #[cfg(feature = "native-workspace")]
-fn close_native(app: &tauri::AppHandle, session_id: SessionId) -> Result<(), String> {
+async fn close_native(
+    app: &tauri::AppHandle,
+    registry: &surface_registry::DesktopSurfaceRegistry,
+    session_id: SessionId,
+) -> Result<(), String> {
     use tauri::Manager;
 
-    if let Some(webview) = app.get_webview(&workspace_label(session_id)) {
+    let label = workspace_label(session_id);
+    let current = registry.current(
+        session_id,
+        surface_registry::DesktopSurfaceKind::WorkspaceChild,
+        &label,
+    );
+    let webview = app.get_webview(&label);
+
+    if current.is_none() {
+        if webview.is_some() {
+            return Err("native workspace platform child exists without desktop owner truth".into());
+        }
+        return Ok(());
+    }
+    let current = current.expect("checked above");
+
+    if let Some(webview) = webview {
         webview.close().map_err(|error| error.to_string())?;
     }
-    Ok(())
+    registry.record_closed(&current.identity).map_err(registry_error)?;
+    surface_resource::release_surface(&current.identity).await
+}
+
+#[cfg(feature = "native-workspace")]
+fn registry_error(error: surface_registry::DesktopSurfaceRegistryError) -> String {
+    format!("desktop surface owner registry rejected lifecycle transition: {error:?}")
 }
 
 #[cfg(test)]
