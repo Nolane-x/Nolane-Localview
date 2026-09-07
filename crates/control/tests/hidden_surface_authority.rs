@@ -268,6 +268,127 @@ async fn activation_requires_the_exact_pending_request() {
 }
 
 #[tokio::test]
+async fn exact_pending_surface_reservation_can_be_cancelled_without_touching_live_owner() {
+    let (state, session_id) = test_state().await;
+
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/runtime/resources/surfaces/reserve",
+            reserve_body(session_id, "live-owner"),
+            true,
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/runtime/resources/surfaces/activate",
+            activate_body(session_id, "live-owner", 9),
+            true,
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/runtime/resources/surfaces/reserve",
+            reserve_body(session_id, "create-failed"),
+            true,
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/runtime/resources/surfaces/cancel",
+            reserve_body(session_id, "create-failed"),
+            false,
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED,
+        "pending reservation cancellation must require the control token"
+    );
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/runtime/resources/surfaces/cancel",
+            reserve_body(session_id, "create-failed"),
+            true,
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT,
+        "failed platform creation must be able to cancel its exact pending reservation"
+    );
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/runtime/resources/surfaces/reserve",
+            reserve_body(session_id, "create-failed"),
+            true,
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT,
+        "exact cancellation must drop the reservation and free the request id for retry"
+    );
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/runtime/resources/surfaces/cancel",
+            reserve_body(session_id, "create-failed"),
+            true,
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/runtime/resources/surfaces/cancel",
+            reserve_body(session_id, "live-owner"),
+            true,
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT,
+        "cancellation may not forge release of an already activated live owner"
+    );
+    assert_eq!(
+        send(
+            state,
+            Method::POST,
+            "/v1/runtime/resources/surfaces/release",
+            release_body(session_id, 9),
+            true,
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT,
+        "live owner authority must remain intact after stale pending cancellation"
+    );
+}
+
+#[tokio::test]
 async fn session_cleanup_releases_pending_but_not_live_surface_owner_truth() {
     let (state, session_id) = test_state().await;
 
