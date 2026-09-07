@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use localview_desktop::surface_registry::{
+use localview_desktop::workspace_surface::surface_registry::{
     DesktopSurfaceKind, DesktopSurfaceRegistry, DesktopSurfaceRegistryError,
     DesktopSurfaceVisibility,
 };
