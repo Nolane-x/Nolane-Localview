@@ -784,6 +784,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let _ = app.manage(visual_capture::VisualCaptureState::default());
+            let _ = app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
             native_executor_worker::spawn(app.handle().clone());
             let menu = MenuBuilder::new(app)
                 .text("show", "Open LocalView")
