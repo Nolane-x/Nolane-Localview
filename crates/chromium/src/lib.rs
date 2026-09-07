@@ -86,6 +86,8 @@ pub enum ChromiumExecutorError {
     Profile,
     #[error("failed to spawn Chromium")]
     Spawn,
+    #[error("failed to activate Chromium lifecycle authority")]
+    Lifecycle,
     #[error("Chromium process I/O failed")]
     Io,
     #[error("Chromium process timed out")]
@@ -293,6 +295,19 @@ pub async fn execute_ephemeral(
     target: &Url,
     policy: &ChromiumExecutionPolicy,
 ) -> Result<ChromiumExecutionReceipt, ChromiumExecutorError> {
+    execute_ephemeral_with_lifecycle(executable, target, policy, || Ok(())).await
+}
+
+pub async fn execute_ephemeral_with_lifecycle<G, F>(
+    executable: &Path,
+    target: &Url,
+    policy: &ChromiumExecutionPolicy,
+    on_spawned: F,
+) -> Result<ChromiumExecutionReceipt, ChromiumExecutorError>
+where
+    F: FnOnce() -> Result<G, ChromiumExecutorError>,
+    G: Send,
+{
     if !validate_loopback_url(target) {
         return Err(ChromiumExecutorError::InvalidTarget);
     }
@@ -325,11 +340,22 @@ pub async fn execute_ephemeral(
         }
     };
 
+    let lifecycle_guard = match on_spawned() {
+        Ok(guard) => guard,
+        Err(error) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            cleanup_profile(&profile_dir).await?;
+            return Err(error);
+        }
+    };
+
     let (stdout, stderr) = match (child.stdout.take(), child.stderr.take()) {
         (Some(stdout), Some(stderr)) => (stdout, stderr),
         _ => {
             let _ = child.kill().await;
             let _ = child.wait().await;
+            drop(lifecycle_guard);
             cleanup_profile(&profile_dir).await?;
             return Err(ChromiumExecutorError::Io);
         }
@@ -351,6 +377,7 @@ pub async fn execute_ephemeral(
             Err(ChromiumExecutorError::Timeout)
         }
     };
+    drop(lifecycle_guard);
 
     let stdout = join_output(stdout_task).await;
     let stderr = join_output(stderr_task).await;
@@ -374,6 +401,20 @@ pub async fn execute_rendered_screenshot(
     policy: &ChromiumExecutionPolicy,
     request: &ChromiumScreenshotRequest,
 ) -> Result<ChromiumRenderedScreenshotReceipt, ChromiumExecutorError> {
+    execute_rendered_screenshot_with_lifecycle(executable, target, policy, request, || Ok(())).await
+}
+
+pub async fn execute_rendered_screenshot_with_lifecycle<G, F>(
+    executable: &Path,
+    target: &Url,
+    policy: &ChromiumExecutionPolicy,
+    request: &ChromiumScreenshotRequest,
+    on_spawned: F,
+) -> Result<ChromiumRenderedScreenshotReceipt, ChromiumExecutorError>
+where
+    F: FnOnce() -> Result<G, ChromiumExecutorError>,
+    G: Send,
+{
     if !validate_loopback_url(target) {
         return Err(ChromiumExecutorError::InvalidTarget);
     }
@@ -412,11 +453,22 @@ pub async fn execute_rendered_screenshot(
         }
     };
 
+    let lifecycle_guard = match on_spawned() {
+        Ok(guard) => guard,
+        Err(error) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            cleanup_profile(&profile_dir).await?;
+            return Err(error);
+        }
+    };
+
     let (stdout, stderr) = match (child.stdout.take(), child.stderr.take()) {
         (Some(stdout), Some(stderr)) => (stdout, stderr),
         _ => {
             let _ = child.kill().await;
             let _ = child.wait().await;
+            drop(lifecycle_guard);
             cleanup_profile(&profile_dir).await?;
             return Err(ChromiumExecutorError::Io);
         }
@@ -438,6 +490,7 @@ pub async fn execute_rendered_screenshot(
             Err(ChromiumExecutorError::Timeout)
         }
     };
+    drop(lifecycle_guard);
 
     let stdout_result = join_output(stdout_task).await;
     let stderr_result = join_output(stderr_task).await;

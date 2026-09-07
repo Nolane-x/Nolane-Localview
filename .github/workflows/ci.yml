@@ -102,6 +102,8 @@ jobs:
         run: cargo test -p localview-control --test live_visual_capture_resource_governor
       - name: Runtime resource governor authority contract
         run: cargo test -p localview-control --test runtime_resource_governor
+      - name: Chromium process authority control contract
+        run: cargo test -p localview-control --test chromium_process_authority
       - name: Process resource telemetry contract
         run: cargo test -p localview-resource-governor --test process_metrics
       - name: Tier-3 Chromium executable discovery contract

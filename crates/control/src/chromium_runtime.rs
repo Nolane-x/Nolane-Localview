@@ -9,11 +9,14 @@ use std::{
 
 use chrono::Utc;
 use localview_chromium::{
-    execute_ephemeral, validate_loopback_url, ChromiumExecutionPolicy, ChromiumExecutorError,
+    execute_ephemeral_with_lifecycle, validate_loopback_url, ChromiumExecutionPolicy,
+    ChromiumExecutorError,
 };
 use localview_evidence::{EvidenceDraft, EvidenceKind, Provenance, UncertaintyClass};
 use localview_protocol::SessionId;
-use localview_resource_governor::{ResourceAdmissionDenial, ResourceWorkKind};
+use localview_resource_governor::{
+    LiveResourceKind, ResourceAdmissionDenial, ResourceWorkKind,
+};
 use localview_sessions::SessionManager;
 use url::Url;
 use uuid::Uuid;
@@ -103,7 +106,7 @@ pub(crate) async fn execute_compatibility_probe(
     let target = resolve_target(state, id).await?;
     let public_target = private_safe_route_identity(&target);
     let reservation_id = Uuid::new_v4();
-    let _reservation = resource_governor(state)
+    let reservation = resource_governor(state)
         .reserve(
             id.to_string(),
             reservation_id.to_string(),
@@ -115,9 +118,18 @@ pub(crate) async fn execute_compatibility_probe(
     if let Some(timeout_cap) = timeout_cap {
         policy.timeout = policy.timeout.min(timeout_cap.max(Duration::from_millis(1)));
     }
-    let execution = execute_ephemeral(&config.executable, &target, &policy)
-        .await
-        .map_err(ChromiumRuntimeError::Executor)?;
+    let execution = execute_ephemeral_with_lifecycle(
+        &config.executable,
+        &target,
+        &policy,
+        move || {
+            reservation
+                .activate_live(LiveResourceKind::ChromiumProcess)
+                .map_err(|_| ChromiumExecutorError::Lifecycle)
+        },
+    )
+    .await
+    .map_err(ChromiumRuntimeError::Executor)?;
     let Some(exit_code) = execution.exit_code.filter(|code| *code == 0) else {
         return Err(ChromiumRuntimeError::NonZeroExit(execution.exit_code));
     };
