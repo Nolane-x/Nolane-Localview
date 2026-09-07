@@ -196,6 +196,8 @@ jobs:
         run: cargo test -p localview-desktop --test surface_resource_contract
       - name: Native workspace surface authority contract
         run: cargo test -p localview-desktop --test workspace_surface_authority_contract
+      - name: Preview surface authority contract
+        run: cargo test -p localview-desktop --test preview_surface_authority_contract
       - name: Live semantic bridge contract
         run: cargo test -p localview-desktop --test live_semantic_bridge_contract
       - name: Bridge action cancellation worker contract
