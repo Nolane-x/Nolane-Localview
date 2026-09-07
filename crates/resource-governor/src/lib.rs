@@ -453,20 +453,20 @@ impl RuntimeResourceGovernor {
         key: &ReservationKey,
         kind: LiveResourceKind,
     ) -> Result<(), ResourceActivationError> {
+        if kind != LiveResourceKind::ChromiumProcess {
+            return Err(ResourceActivationError::KindMismatch);
+        }
         let mut state = lock(&self.inner);
         let Some(reservation) = state.reservations.get_mut(key) else {
             return Err(ResourceActivationError::ReservationMissing);
         };
-        match (reservation, kind) {
-            (
-                ReservationState::Pending(ResourceWorkKind::Chromium),
-                LiveResourceKind::ChromiumProcess,
-            ) => {
+        match reservation {
+            ReservationState::Pending(ResourceWorkKind::Chromium) => {
                 *reservation = ReservationState::Live(LiveResourceState::ChromiumProcess);
                 Ok(())
             }
-            (ReservationState::Pending(_), _) => Err(ResourceActivationError::KindMismatch),
-            (ReservationState::Live(_), _) => Err(ResourceActivationError::ReservationMissing),
+            ReservationState::Pending(_) => Err(ResourceActivationError::KindMismatch),
+            ReservationState::Live(_) => Err(ResourceActivationError::ReservationMissing),
         }
     }
 
