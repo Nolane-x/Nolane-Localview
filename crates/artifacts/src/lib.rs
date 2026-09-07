@@ -152,7 +152,11 @@ impl ArtifactStore {
                 continue;
             };
 
-            tokio::fs::remove_file(&meta.path).await?;
+            match tokio::fs::remove_file(&meta.path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
             self.lru.pop_front();
             self.index.remove(&id);
             self.used = self.used.saturating_sub(meta.bytes);
