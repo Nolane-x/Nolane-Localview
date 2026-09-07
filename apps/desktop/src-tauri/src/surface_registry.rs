@@ -21,7 +21,7 @@ impl DesktopSurfaceKind {
         }
     }
 
-    pub const fn from_runtime_kind(value: &str) -> Option<Self> {
+    pub fn from_runtime_kind(value: &str) -> Option<Self> {
         match value {
             "preview_window" => Some(Self::PreviewWindow),
             "workspace_child" => Some(Self::WorkspaceChild),
