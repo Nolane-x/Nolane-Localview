@@ -4,9 +4,10 @@ use localview_resource_governor::{
 };
 
 fn budget_with_one_hidden_surface() -> ResourceBudget {
-    let mut budget = ResourceBudget::default();
-    budget.hidden_surfaces = 1;
-    budget
+    ResourceBudget {
+        hidden_surfaces: 1,
+        ..ResourceBudget::default()
+    }
 }
 
 #[test]
