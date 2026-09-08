@@ -43,8 +43,8 @@ static GOVERNORS: OnceLock<Mutex<GovernorRegistry>> = OnceLock::new();
 #[derive(Debug)]
 struct SurfaceResourceEntry {
     owner: Weak<SessionManager>,
-    pending: BTreeMap<(SessionId, String), ResourceReservation>,
-    live: BTreeMap<(SessionId, LiveSurfaceIdentity), LiveResourceLease>,
+    pending: BTreeMap<(Uuid, SessionId, String), ResourceReservation>,
+    live: BTreeMap<(Uuid, SessionId, LiveSurfaceIdentity), LiveResourceLease>,
 }
 
 type SurfaceResourceRegistry = HashMap<usize, SurfaceResourceEntry>;
@@ -86,6 +86,19 @@ struct SurfaceActivateRequest {
     label: String,
     incarnation: u64,
     visibility: SurfaceVisibility,
+    owner_instance_id: Uuid,
+    boot_epoch: Uuid,
+    owner_lease_id: Uuid,
+}
+
+impl SurfaceActivateRequest {
+    fn owner_proof(&self) -> SurfaceOwnerProof {
+        SurfaceOwnerProof {
+            owner_instance_id: self.owner_instance_id,
+            boot_epoch: self.boot_epoch,
+            owner_lease_id: self.owner_lease_id,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +109,19 @@ struct SurfaceVisibilityRequest {
     label: String,
     incarnation: u64,
     visibility: SurfaceVisibility,
+    owner_instance_id: Uuid,
+    boot_epoch: Uuid,
+    owner_lease_id: Uuid,
+}
+
+impl SurfaceVisibilityRequest {
+    fn owner_proof(&self) -> SurfaceOwnerProof {
+        SurfaceOwnerProof {
+            owner_instance_id: self.owner_instance_id,
+            boot_epoch: self.boot_epoch,
+            owner_lease_id: self.owner_lease_id,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,6 +131,19 @@ struct SurfaceReleaseRequest {
     surface_kind: String,
     label: String,
     incarnation: u64,
+    owner_instance_id: Uuid,
+    boot_epoch: Uuid,
+    owner_lease_id: Uuid,
+}
+
+impl SurfaceReleaseRequest {
+    fn owner_proof(&self) -> SurfaceOwnerProof {
+        SurfaceOwnerProof {
+            owner_instance_id: self.owner_instance_id,
+            boot_epoch: self.boot_epoch,
+            owner_lease_id: self.owner_lease_id,
+        }
+    }
 }
 
 pub(crate) fn router(state: ControlState) -> Router {
@@ -166,7 +205,7 @@ pub fn release_surface_resource_session_for_sessions(
     let before = entry.pending.len();
     entry
         .pending
-        .retain(|(pending_session, _), _| *pending_session != session_id);
+        .retain(|(_, pending_session, _), _| *pending_session != session_id);
     before.saturating_sub(entry.pending.len())
 }
 
@@ -218,9 +257,8 @@ async fn reserve_surface_resource(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(error) =
-        validate_surface_owner_for_sessions(&state.sessions, request.owner_proof())
-    {
+    let proof = request.owner_proof();
+    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
         return surface_owner_conflict(error);
     }
     if state.sessions.get(request.session_id).await.is_none() {
@@ -233,7 +271,11 @@ async fn reserve_surface_resource(
     let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut entries = lock_surface_registry(registry);
     let entry = surface_entry_mut(&mut entries, &state.sessions);
-    let key = (request.session_id, request.request_id.clone());
+    let key = (
+        proof.owner_instance_id,
+        request.session_id,
+        request.request_id.clone(),
+    );
     if entry.pending.contains_key(&key) {
         return surface_conflict("surface_reservation_already_exists");
     }
@@ -258,9 +300,8 @@ async fn cancel_surface_reservation(
     if !authorized(&headers, &state) {
         return denied();
     }
-    if let Err(error) =
-        validate_surface_owner_for_sessions(&state.sessions, request.owner_proof())
-    {
+    let proof = request.owner_proof();
+    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
         return surface_owner_conflict(error);
     }
     if state.sessions.get(request.session_id).await.is_none() {
@@ -277,7 +318,11 @@ async fn cancel_surface_reservation(
     };
     if entry
         .pending
-        .remove(&(request.session_id, request.request_id))
+        .remove(&(
+            proof.owner_instance_id,
+            request.session_id,
+            request.request_id,
+        ))
         .is_none()
     {
         return surface_conflict("surface_reservation_missing");
@@ -293,6 +338,10 @@ async fn activate_surface_resource(
     if !authorized(&headers, &state) {
         return denied();
     }
+    let proof = request.owner_proof();
+    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
+        return surface_owner_conflict(error);
+    }
     if request.incarnation == 0 {
         return surface_bad_request("invalid_surface_identity");
     }
@@ -307,15 +356,23 @@ async fn activate_surface_resource(
     let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut entries = lock_surface_registry(registry);
     let entry = surface_entry_mut(&mut entries, &state.sessions);
-    if entry.live.keys().any(|(session_id, current)| {
-        *session_id == request.session_id
-            && current.surface_kind == identity.surface_kind
-            && current.label == identity.label
-    }) {
+    if entry
+        .live
+        .keys()
+        .any(|(_, session_id, current)| {
+            *session_id == request.session_id
+                && current.surface_kind == identity.surface_kind
+                && current.label == identity.label
+        })
+    {
         return surface_conflict("surface_owner_already_live");
     }
 
-    let pending_key = (request.session_id, request.request_id);
+    let pending_key = (
+        proof.owner_instance_id,
+        request.session_id,
+        request.request_id,
+    );
     let Some(reservation) = entry.pending.remove(&pending_key) else {
         return surface_conflict("surface_reservation_missing");
     };
@@ -323,7 +380,9 @@ async fn activate_surface_resource(
         Ok(lease) => lease,
         Err(_) => return surface_conflict("surface_activation_rejected"),
     };
-    entry.live.insert((request.session_id, identity), lease);
+    entry
+        .live
+        .insert((proof.owner_instance_id, request.session_id, identity), lease);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -334,6 +393,10 @@ async fn update_surface_visibility(
 ) -> axum::response::Response {
     if !authorized(&headers, &state) {
         return denied();
+    }
+    let proof = request.owner_proof();
+    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
+        return surface_owner_conflict(error);
     }
     let Some(identity) = surface_identity(
         request.surface_kind,
@@ -348,8 +411,18 @@ async fn update_surface_visibility(
     let Some(entry) = existing_surface_entry_mut(&mut entries, &state.sessions) else {
         return surface_conflict("surface_owner_missing");
     };
-    let Some(lease) = entry.live.get(&(request.session_id, identity.clone())) else {
-        return surface_conflict("surface_owner_incarnation_mismatch");
+    let key = (proof.owner_instance_id, request.session_id, identity.clone());
+    let Some(lease) = entry.live.get(&key) else {
+        return if surface_owned_by_other_owner(
+            entry,
+            proof.owner_instance_id,
+            request.session_id,
+            &identity,
+        ) {
+            surface_conflict("surface_owner_fence_mismatch")
+        } else {
+            surface_conflict("surface_owner_incarnation_mismatch")
+        };
     };
     if lease
         .set_surface_visibility(identity, request.visibility)
@@ -368,6 +441,10 @@ async fn release_surface_resource(
     if !authorized(&headers, &state) {
         return denied();
     }
+    let proof = request.owner_proof();
+    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
+        return surface_owner_conflict(error);
+    }
     let Some(identity) = surface_identity(
         request.surface_kind,
         request.label,
@@ -381,14 +458,35 @@ async fn release_surface_resource(
     let Some(entry) = existing_surface_entry_mut(&mut entries, &state.sessions) else {
         return surface_conflict("surface_owner_missing");
     };
-    if entry
-        .live
-        .remove(&(request.session_id, identity))
-        .is_none()
-    {
-        return surface_conflict("surface_owner_incarnation_mismatch");
+    let key = (proof.owner_instance_id, request.session_id, identity.clone());
+    if !entry.live.contains_key(&key) {
+        return if surface_owned_by_other_owner(
+            entry,
+            proof.owner_instance_id,
+            request.session_id,
+            &identity,
+        ) {
+            surface_conflict("surface_owner_fence_mismatch")
+        } else {
+            surface_conflict("surface_owner_incarnation_mismatch")
+        };
     }
+    entry.live.remove(&key);
     StatusCode::NO_CONTENT.into_response()
+}
+
+fn surface_owned_by_other_owner(
+    entry: &SurfaceResourceEntry,
+    owner_instance_id: Uuid,
+    session_id: SessionId,
+    identity: &LiveSurfaceIdentity,
+) -> bool {
+    entry.live.keys().any(|(current_owner, current_session, current)| {
+        *current_owner != owner_instance_id
+            && *current_session == session_id
+            && current.surface_kind == identity.surface_kind
+            && current.label == identity.label
+    })
 }
 
 fn valid_request_id(value: &str) -> bool {

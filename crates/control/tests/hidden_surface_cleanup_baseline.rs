@@ -126,33 +126,52 @@ fn reserve_body(session_id: Uuid, request_id: &str, owner: OwnerRegistration) ->
     })
 }
 
-fn activate_body(session_id: Uuid, request_id: &str, incarnation: u64) -> Value {
+fn activate_body(
+    session_id: Uuid,
+    request_id: &str,
+    incarnation: u64,
+    owner: OwnerRegistration,
+) -> Value {
     serde_json::json!({
         "session_id": session_id,
         "request_id": request_id,
         "surface_kind": "preview_window",
         "label": "preview-cleanup-baseline",
         "incarnation": incarnation,
-        "visibility": "hidden"
+        "visibility": "hidden",
+        "owner_instance_id": owner.owner_instance_id,
+        "boot_epoch": owner.boot_epoch,
+        "owner_lease_id": owner.owner_lease_id
     })
 }
 
-fn visibility_body(session_id: Uuid, incarnation: u64, visibility: &str) -> Value {
+fn visibility_body(
+    session_id: Uuid,
+    incarnation: u64,
+    visibility: &str,
+    owner: OwnerRegistration,
+) -> Value {
     serde_json::json!({
         "session_id": session_id,
         "surface_kind": "preview_window",
         "label": "preview-cleanup-baseline",
         "incarnation": incarnation,
-        "visibility": visibility
+        "visibility": visibility,
+        "owner_instance_id": owner.owner_instance_id,
+        "boot_epoch": owner.boot_epoch,
+        "owner_lease_id": owner.owner_lease_id
     })
 }
 
-fn release_body(session_id: Uuid, incarnation: u64) -> Value {
+fn release_body(session_id: Uuid, incarnation: u64, owner: OwnerRegistration) -> Value {
     serde_json::json!({
         "session_id": session_id,
         "surface_kind": "preview_window",
         "label": "preview-cleanup-baseline",
-        "incarnation": incarnation
+        "incarnation": incarnation,
+        "owner_instance_id": owner.owner_instance_id,
+        "boot_epoch": owner.boot_epoch,
+        "owner_lease_id": owner.owner_lease_id
     })
 }
 
@@ -177,7 +196,7 @@ async fn repeated_exact_surface_lifecycles_return_control_and_governor_to_baseli
             send(
                 state.clone(),
                 "/v1/runtime/resources/surfaces/activate",
-                activate_body(session_id, &request_id, incarnation),
+                activate_body(session_id, &request_id, incarnation, owner),
             )
             .await,
             StatusCode::NO_CONTENT,
@@ -187,7 +206,7 @@ async fn repeated_exact_surface_lifecycles_return_control_and_governor_to_baseli
             send(
                 state.clone(),
                 "/v1/runtime/resources/surfaces/visibility",
-                visibility_body(session_id, incarnation, "visible"),
+                visibility_body(session_id, incarnation, "visible", owner),
             )
             .await,
             StatusCode::NO_CONTENT
@@ -196,7 +215,7 @@ async fn repeated_exact_surface_lifecycles_return_control_and_governor_to_baseli
             send(
                 state.clone(),
                 "/v1/runtime/resources/surfaces/visibility",
-                visibility_body(session_id, incarnation, "hidden"),
+                visibility_body(session_id, incarnation, "hidden", owner),
             )
             .await,
             StatusCode::NO_CONTENT
@@ -205,7 +224,7 @@ async fn repeated_exact_surface_lifecycles_return_control_and_governor_to_baseli
             send(
                 state.clone(),
                 "/v1/runtime/resources/surfaces/release",
-                release_body(session_id, incarnation),
+                release_body(session_id, incarnation, owner),
             )
             .await,
             StatusCode::NO_CONTENT,

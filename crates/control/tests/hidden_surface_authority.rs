@@ -118,33 +118,52 @@ fn reserve_body(session_id: Uuid, request_id: &str, owner: OwnerRegistration) ->
     })
 }
 
-fn activate_body(session_id: Uuid, request_id: &str, incarnation: u64) -> Value {
+fn activate_body(
+    session_id: Uuid,
+    request_id: &str,
+    incarnation: u64,
+    owner: OwnerRegistration,
+) -> Value {
     serde_json::json!({
         "session_id": session_id,
         "request_id": request_id,
         "surface_kind": "preview_window",
         "label": "preview-contract",
         "incarnation": incarnation,
-        "visibility": "hidden"
+        "visibility": "hidden",
+        "owner_instance_id": owner.owner_instance_id,
+        "boot_epoch": owner.boot_epoch,
+        "owner_lease_id": owner.owner_lease_id
     })
 }
 
-fn visibility_body(session_id: Uuid, incarnation: u64, visibility: &str) -> Value {
+fn visibility_body(
+    session_id: Uuid,
+    incarnation: u64,
+    visibility: &str,
+    owner: OwnerRegistration,
+) -> Value {
     serde_json::json!({
         "session_id": session_id,
         "surface_kind": "preview_window",
         "label": "preview-contract",
         "incarnation": incarnation,
-        "visibility": visibility
+        "visibility": visibility,
+        "owner_instance_id": owner.owner_instance_id,
+        "boot_epoch": owner.boot_epoch,
+        "owner_lease_id": owner.owner_lease_id
     })
 }
 
-fn release_body(session_id: Uuid, incarnation: u64) -> Value {
+fn release_body(session_id: Uuid, incarnation: u64, owner: OwnerRegistration) -> Value {
     serde_json::json!({
         "session_id": session_id,
         "surface_kind": "preview_window",
         "label": "preview-contract",
-        "incarnation": incarnation
+        "incarnation": incarnation,
+        "owner_instance_id": owner.owner_instance_id,
+        "boot_epoch": owner.boot_epoch,
+        "owner_lease_id": owner.owner_lease_id
     })
 }
 
@@ -197,7 +216,7 @@ async fn exact_surface_lifecycle_is_authenticated_and_incarnation_safe() {
             state.clone(),
             Method::POST,
             "/v1/runtime/resources/surfaces/activate",
-            activate_body(session_id, "open-1", 1),
+            activate_body(session_id, "open-1", 1, owner),
             true,
         )
         .await
@@ -210,7 +229,7 @@ async fn exact_surface_lifecycle_is_authenticated_and_incarnation_safe() {
             state.clone(),
             Method::POST,
             "/v1/runtime/resources/surfaces/visibility",
-            visibility_body(session_id, 0, "visible"),
+            visibility_body(session_id, 0, "visible", owner),
             true,
         )
         .await
@@ -223,7 +242,7 @@ async fn exact_surface_lifecycle_is_authenticated_and_incarnation_safe() {
             state.clone(),
             Method::POST,
             "/v1/runtime/resources/surfaces/visibility",
-            visibility_body(session_id, 1, "visible"),
+            visibility_body(session_id, 1, "visible", owner),
             true,
         )
         .await
@@ -236,7 +255,7 @@ async fn exact_surface_lifecycle_is_authenticated_and_incarnation_safe() {
             state.clone(),
             Method::POST,
             "/v1/runtime/resources/surfaces/release",
-            release_body(session_id, 0),
+            release_body(session_id, 0, owner),
             true,
         )
         .await
@@ -249,7 +268,7 @@ async fn exact_surface_lifecycle_is_authenticated_and_incarnation_safe() {
             state.clone(),
             Method::POST,
             "/v1/runtime/resources/surfaces/release",
-            release_body(session_id, 1),
+            release_body(session_id, 1, owner),
             true,
         )
         .await
@@ -261,7 +280,7 @@ async fn exact_surface_lifecycle_is_authenticated_and_incarnation_safe() {
             state,
             Method::POST,
             "/v1/runtime/resources/surfaces/release",
-            release_body(session_id, 1),
+            release_body(session_id, 1, owner),
             true,
         )
         .await
@@ -273,14 +292,14 @@ async fn exact_surface_lifecycle_is_authenticated_and_incarnation_safe() {
 
 #[tokio::test]
 async fn activation_requires_the_exact_pending_request() {
-    let (state, session_id, _) = test_state().await;
+    let (state, session_id, owner) = test_state().await;
 
     assert_eq!(
         send(
             state,
             Method::POST,
             "/v1/runtime/resources/surfaces/activate",
-            activate_body(session_id, "missing", 1),
+            activate_body(session_id, "missing", 1, owner),
             true,
         )
         .await
@@ -311,7 +330,7 @@ async fn exact_pending_surface_reservation_can_be_cancelled_without_touching_liv
             state.clone(),
             Method::POST,
             "/v1/runtime/resources/surfaces/activate",
-            activate_body(session_id, "live-owner", 9),
+            activate_body(session_id, "live-owner", 9, owner),
             true,
         )
         .await
@@ -401,7 +420,7 @@ async fn exact_pending_surface_reservation_can_be_cancelled_without_touching_liv
             state,
             Method::POST,
             "/v1/runtime/resources/surfaces/release",
-            release_body(session_id, 9),
+            release_body(session_id, 9, owner),
             true,
         )
         .await
@@ -449,7 +468,7 @@ async fn session_cleanup_releases_pending_but_not_live_surface_owner_truth() {
             state.clone(),
             Method::POST,
             "/v1/runtime/resources/surfaces/activate",
-            activate_body(session_id, "live", 3),
+            activate_body(session_id, "live", 3, owner),
             true,
         )
         .await
@@ -473,7 +492,7 @@ async fn session_cleanup_releases_pending_but_not_live_surface_owner_truth() {
             state,
             Method::POST,
             "/v1/runtime/resources/surfaces/release",
-            release_body(session_id, 3),
+            release_body(session_id, 3, owner),
             true,
         )
         .await
