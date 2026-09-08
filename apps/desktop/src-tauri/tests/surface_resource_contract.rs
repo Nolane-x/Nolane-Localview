@@ -75,3 +75,37 @@ fn surface_resource_client_does_not_create_parallel_authority_or_aggregate_count
         "surface resource client must not invent a second credential discovery path"
     );
 }
+
+#[test]
+fn desktop_owner_registration_threads_current_boot_proof_through_surface_protocol() {
+    let resource = source("src/surface_resource.rs");
+    let desktop = source("src/lib.rs");
+
+    assert!(
+        resource.contains("/v1/runtime/resources/surfaces/owners/register"),
+        "desktop must explicitly register its process-lifetime surface owner with the daemon"
+    );
+    assert!(
+        resource.contains("/v1/runtime/resources/surfaces/reattach"),
+        "desktop must expose the exact reattach path for a platform surface surviving daemon restart"
+    );
+    assert!(
+        resource.contains("DesktopSurfaceOwner"),
+        "surface protocol needs one process-lifetime owner state instead of caller-supplied capabilities"
+    );
+    for proof_field in ["owner_instance_id", "boot_epoch", "owner_lease_id"] {
+        assert!(
+            resource.contains(proof_field),
+            "every mutating surface request must be able to prove current owner field {proof_field}"
+        );
+    }
+    assert!(
+        desktop.contains("owner_instance_id()")
+            && desktop.contains("DesktopSurfaceOwner::new(owner_instance_id)"),
+        "Tauri startup must bind network owner state to the exact UUID owned by the shared desktop surface registry"
+    );
+    assert!(
+        !resource.contains("control.token") && !resource.contains("dirs::"),
+        "owner registration must keep using the existing control credential path"
+    );
+}
