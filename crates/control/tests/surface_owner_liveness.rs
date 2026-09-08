@@ -78,7 +78,7 @@ fn proof(registration: Registration) -> Value {
 #[test]
 fn owner_liveness_policy_is_bounded_and_has_a_deterministic_reaper_seam() {
     let owner = include_str!("../src/surface_owner.rs");
-    let runtime = include_str!("../src/resource_runtime.rs");
+    let control = include_str!("../src/lib.rs");
 
     assert!(
         owner.contains("SURFACE_OWNER_TTL") && owner.contains("Duration::from_secs(15)"),
@@ -89,8 +89,8 @@ fn owner_liveness_policy_is_bounded_and_has_a_deterministic_reaper_seam() {
         "owner expiry needs an explicit deterministic-time reaper seam"
     );
     assert!(
-        runtime.contains("/v1/runtime/resources/surfaces/owners/heartbeat"),
-        "the control plane must expose the exact owner heartbeat route"
+        control.contains("surface_liveness") && control.contains("surface_liveness::router"),
+        "owner heartbeat must be integrated as a dedicated control-plane liveness router"
     );
 }
 
