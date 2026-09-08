@@ -13,6 +13,7 @@ mod resource_runtime;
 #[path = "runtime.rs"]
 mod runtime;
 mod surface_owner;
+mod surface_recovery;
 mod visual_diff;
 mod visual_region;
 mod visual_verify;
@@ -37,6 +38,10 @@ pub use resource_runtime::{
 #[doc(hidden)]
 pub use runtime::serve as legacy_serve;
 pub use runtime::{ControlState, EventEnvelope};
+pub use surface_recovery::{
+    SurfaceRecoveryError, SurfaceRecoveryJournal, SurfaceRecoveryKey,
+    SURFACE_RECOVERY_JOURNAL_FILE,
+};
 pub use windows_consequential::{
     configure_windows_consequential_control_for_sessions,
     release_windows_consequential_control_session_for_sessions,
