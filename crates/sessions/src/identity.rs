@@ -1,25 +1,37 @@
-use localview_protocol::{Endpoint, ProjectIdentity, ServerKind};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard},
+};
+
+use localview_protocol::{Endpoint, ProjectIdentity, ServerKind, SessionId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
+pub const SESSION_IDENTITY_REGISTRY_FILE: &str = "session-identities-v1.json";
+pub const MAX_SESSION_IDENTITY_REGISTRY_BYTES: usize = 1_048_576;
+pub const MAX_SESSION_IDENTITY_RECORDS: usize = 4_096;
 pub const MAX_NORMALIZED_PROJECT_PATH_BYTES: usize = 4_096;
 pub const MAX_ENDPOINT_HOST_BYTES: usize = 255;
 pub const MAX_ENDPOINT_SCHEME_BYTES: usize = 32;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(tag = "lineage_version", content = "value")]
 pub enum SessionLineage {
     #[serde(rename = "localview_session_lineage_v1")]
     V1(SessionLineageV1),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionLineageV1 {
     pub anchor: SessionLineageAnchorV1,
     pub server_kind: SessionServerKind,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(tag = "anchor_type", rename_all = "snake_case")]
 pub enum SessionLineageAnchorV1 {
     Project {
@@ -32,7 +44,9 @@ pub enum SessionLineageAnchorV1 {
     },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionServerKind {
     FrontendDevServer,
@@ -66,6 +80,107 @@ pub enum SessionIdentityError {
     InvalidEndpointHost,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionIdentityHealth {
+    Healthy,
+    VolatileDegraded,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionIdentityResolver {
+    inner: Arc<Mutex<SessionIdentityResolverState>>,
+}
+
+#[derive(Debug)]
+struct SessionIdentityResolverState {
+    health: SessionIdentityHealth,
+    diagnostic: Option<String>,
+    records: BTreeMap<SessionLineage, SessionId>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SessionIdentityRegistryFile {
+    schema_version: u32,
+    records: Vec<SessionIdentityRecord>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SessionIdentityRecord {
+    lineage: SessionLineage,
+    session_id: SessionId,
+}
+
+#[derive(Debug, Error)]
+enum RegistryLoadError {
+    #[error("session identity registry I/O failed: {0}")]
+    Io(String),
+    #[error("session identity registry exceeds {MAX_SESSION_IDENTITY_REGISTRY_BYTES} bytes")]
+    TooLarge,
+    #[error("session identity registry is not valid JSON: {0}")]
+    InvalidJson(String),
+    #[error("session identity registry schema version is missing or invalid")]
+    InvalidSchemaVersion,
+    #[error("session identity registry schema version {0} is unsupported")]
+    UnsupportedSchemaVersion(u64),
+    #[error("session identity registry contains too many records")]
+    TooManyRecords,
+    #[error("session identity registry contains a noncanonical lineage")]
+    NonCanonicalLineage,
+    #[error("session identity registry contains a nil session UUID")]
+    NilSessionId,
+    #[error("session identity registry maps one lineage more than once")]
+    DuplicateLineage,
+    #[error("session identity registry maps one session UUID to multiple lineages")]
+    DuplicateSessionId,
+}
+
+impl SessionIdentityResolver {
+    pub async fn open_file(path: PathBuf) -> Self {
+        let loaded = tokio::task::spawn_blocking(move || load_registry(&path)).await;
+        match loaded {
+            Ok(Ok(records)) => Self {
+                inner: Arc::new(Mutex::new(SessionIdentityResolverState {
+                    health: SessionIdentityHealth::Healthy,
+                    diagnostic: None,
+                    records,
+                })),
+            },
+            Ok(Err(error)) => Self::degraded(error.to_string()),
+            Err(error) => Self::degraded(format!(
+                "session identity registry loader task failed: {error}"
+            )),
+        }
+    }
+
+    pub fn health(&self) -> SessionIdentityHealth {
+        self.lock().health
+    }
+
+    pub fn diagnostic(&self) -> Option<String> {
+        self.lock().diagnostic.clone()
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.lock().records.len()
+    }
+
+    fn degraded(diagnostic: String) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(SessionIdentityResolverState {
+                health: SessionIdentityHealth::VolatileDegraded,
+                diagnostic: Some(diagnostic),
+                records: BTreeMap::new(),
+            })),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, SessionIdentityResolverState> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 pub fn session_lineage(
     project: &ProjectIdentity,
     endpoint: &Endpoint,
@@ -94,6 +209,116 @@ pub fn session_lineage(
         anchor,
         server_kind: kind.into(),
     }))
+}
+
+fn load_registry(
+    path: &Path,
+) -> Result<BTreeMap<SessionLineage, SessionId>, RegistryLoadError> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BTreeMap::new());
+        }
+        Err(error) => return Err(RegistryLoadError::Io(error.to_string())),
+    };
+
+    let mut bytes = Vec::new();
+    file.take((MAX_SESSION_IDENTITY_REGISTRY_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| RegistryLoadError::Io(error.to_string()))?;
+    if bytes.len() > MAX_SESSION_IDENTITY_REGISTRY_BYTES {
+        return Err(RegistryLoadError::TooLarge);
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| RegistryLoadError::InvalidJson(error.to_string()))?;
+    let version = value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or(RegistryLoadError::InvalidSchemaVersion)?;
+    if version != 1 {
+        return Err(RegistryLoadError::UnsupportedSchemaVersion(version));
+    }
+    let record_count = value
+        .get("records")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .ok_or_else(|| RegistryLoadError::InvalidJson("records must be an array".into()))?;
+    if record_count > MAX_SESSION_IDENTITY_RECORDS {
+        return Err(RegistryLoadError::TooManyRecords);
+    }
+
+    let registry: SessionIdentityRegistryFile = serde_json::from_value(value)
+        .map_err(|error| RegistryLoadError::InvalidJson(error.to_string()))?;
+    if registry.schema_version != 1 {
+        return Err(RegistryLoadError::UnsupportedSchemaVersion(
+            u64::from(registry.schema_version),
+        ));
+    }
+
+    validate_records(registry.records)
+}
+
+fn validate_records(
+    records: Vec<SessionIdentityRecord>,
+) -> Result<BTreeMap<SessionLineage, SessionId>, RegistryLoadError> {
+    if records.len() > MAX_SESSION_IDENTITY_RECORDS {
+        return Err(RegistryLoadError::TooManyRecords);
+    }
+
+    let mut by_lineage = BTreeMap::new();
+    let mut session_ids = HashSet::new();
+    for record in records {
+        validate_canonical_lineage(&record.lineage)?;
+        if record.session_id == Uuid::nil() {
+            return Err(RegistryLoadError::NilSessionId);
+        }
+        if !session_ids.insert(record.session_id) {
+            return Err(RegistryLoadError::DuplicateSessionId);
+        }
+        if by_lineage
+            .insert(record.lineage, record.session_id)
+            .is_some()
+        {
+            return Err(RegistryLoadError::DuplicateLineage);
+        }
+    }
+    Ok(by_lineage)
+}
+
+fn validate_canonical_lineage(lineage: &SessionLineage) -> Result<(), RegistryLoadError> {
+    match lineage {
+        SessionLineage::V1(value) => match &value.anchor {
+            SessionLineageAnchorV1::Project {
+                normalized_project_path,
+            } => {
+                let normalized = normalize_project_path(normalized_project_path)
+                    .map_err(|_| RegistryLoadError::NonCanonicalLineage)?;
+                if normalized != *normalized_project_path {
+                    return Err(RegistryLoadError::NonCanonicalLineage);
+                }
+            }
+            SessionLineageAnchorV1::Endpoint {
+                scheme,
+                host,
+                port: _,
+            } => {
+                validate_endpoint_part(
+                    scheme,
+                    MAX_ENDPOINT_SCHEME_BYTES,
+                    SessionIdentityError::InvalidEndpointScheme,
+                )
+                .map_err(|_| RegistryLoadError::NonCanonicalLineage)?;
+                validate_endpoint_part(
+                    host,
+                    MAX_ENDPOINT_HOST_BYTES,
+                    SessionIdentityError::InvalidEndpointHost,
+                )
+                .map_err(|_| RegistryLoadError::NonCanonicalLineage)?;
+            }
+        },
+    }
+    Ok(())
 }
 
 fn validate_endpoint_part(
@@ -234,11 +459,8 @@ mod tests {
             PathFlavor::Windows,
         )
         .unwrap();
-        let slash = normalize_project_path_for_flavor(
-            "c:/users/dev/app",
-            PathFlavor::Windows,
-        )
-        .unwrap();
+        let slash = normalize_project_path_for_flavor("c:/users/dev/app", PathFlavor::Windows)
+            .unwrap();
         assert_eq!(backslash, "c:/users/dev/app");
         assert_eq!(backslash, slash);
     }
