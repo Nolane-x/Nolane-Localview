@@ -2,11 +2,17 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use localview_protocol::SessionId;
 use uuid::Uuid;
+
+static PRIMARY_OWNER_INSTANCE_ID: OnceLock<Uuid> = OnceLock::new();
+
+pub fn primary_owner_instance_id() -> Option<Uuid> {
+    PRIMARY_OWNER_INSTANCE_ID.get().copied()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DesktopSurfaceKind {
@@ -94,8 +100,10 @@ pub struct DesktopSurfaceRegistry {
 
 impl Default for DesktopSurfaceRegistry {
     fn default() -> Self {
+        let owner_instance_id = Uuid::new_v4();
+        let _ = PRIMARY_OWNER_INSTANCE_ID.set(owner_instance_id);
         Self {
-            owner_instance_id: Uuid::new_v4(),
+            owner_instance_id,
             inner: Mutex::new(RegistryState::default()),
         }
     }
