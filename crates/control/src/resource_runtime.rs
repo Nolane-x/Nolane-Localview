@@ -478,16 +478,6 @@ async fn release_surface_resource(
         return surface_bad_request("invalid_surface_identity");
     };
     let recovery = surface_recovery_journal_for_sessions(&state.sessions);
-    let recovery_key = match SurfaceRecoveryKey::new(
-        request.session_id,
-        identity.surface_kind.clone(),
-        identity.label.clone(),
-        identity.incarnation,
-        proof.owner_instance_id,
-    ) {
-        Ok(key) => key,
-        Err(_) => return surface_bad_request("invalid_surface_identity"),
-    };
 
     let lease = {
         let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -512,6 +502,16 @@ async fn release_surface_resource(
     };
     drop(lease);
 
+    let recovery_key = match SurfaceRecoveryKey::new(
+        request.session_id,
+        identity.surface_kind.clone(),
+        identity.label.clone(),
+        identity.incarnation,
+        proof.owner_instance_id,
+    ) {
+        Ok(key) => key,
+        Err(_) => return surface_bad_request("invalid_surface_identity"),
+    };
     let Some(recovery) = recovery else {
         return surface_recovery_unavailable();
     };
