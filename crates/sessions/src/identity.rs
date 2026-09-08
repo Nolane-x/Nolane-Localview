@@ -208,12 +208,7 @@ fn normalize_windows_path(raw: &str) -> Result<String, SessionIdentityError> {
         };
     }
 
-    let joined = components.join("/");
-    if prefix.is_empty() || prefix.ends_with('/') {
-        Ok(format!("{prefix}{joined}"))
-    } else {
-        Ok(format!("{prefix}{joined}"))
-    }
+    Ok(format!("{prefix}{}", components.join("/")))
 }
 
 #[cfg(test)]
