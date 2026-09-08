@@ -10,7 +10,9 @@ use axum::{
     http::{header, Method, Request, StatusCode},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{
+    configure_surface_recovery_journal_for_sessions, router, ControlState, SurfaceRecoveryJournal,
+};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
@@ -65,6 +67,16 @@ async fn test_state() -> (ControlState, Uuid) {
         evidence: EvidenceStore::new(128),
         paused: Arc::new(AtomicBool::new(false)),
     };
+    let journal_path = std::env::temp_dir().join(format!(
+        "localview-surface-owner-fence-recovery-{}.jsonl",
+        Uuid::new_v4()
+    ));
+    let journal = Arc::new(
+        SurfaceRecoveryJournal::open(journal_path)
+            .await
+            .expect("open test surface recovery journal"),
+    );
+    configure_surface_recovery_journal_for_sessions(&state.sessions, Some(journal));
     (state, session_id)
 }
 

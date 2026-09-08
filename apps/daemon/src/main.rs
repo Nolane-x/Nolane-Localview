@@ -17,10 +17,11 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use localview_chromium::discover_chromium_executable;
 use localview_control::{
-    configure_chromium_executor_for_sessions, configure_windows_consequential_control_for_sessions,
+    configure_chromium_executor_for_sessions, configure_surface_recovery_journal_for_sessions,
+    configure_windows_consequential_control_for_sessions,
     configure_windows_observe_runtime_for_sessions,
     release_windows_consequential_control_session_for_sessions, runtime_resource_governor_for_sessions,
-    ControlState,
+    ControlState, SurfaceRecoveryJournal, SURFACE_RECOVERY_JOURNAL_FILE,
 };
 use localview_core::RuntimeConfig;
 use localview_discovery::{CommandListenerSource, DiscoveryEngine};
@@ -71,6 +72,28 @@ async fn main() -> Result<()> {
         config.disconnect_grace,
         identity_resolver,
     ));
+
+    let surface_recovery_journal = Arc::new(
+        SurfaceRecoveryJournal::open(state_root.join(SURFACE_RECOVERY_JOURNAL_FILE))
+            .await
+            .context("open durable native surface recovery journal")?,
+    );
+    if surface_recovery_journal.outstanding_len() == 0 {
+        info!(
+            journal = %surface_recovery_journal.path().display(),
+            "durable native surface recovery journal replayed with no outstanding debt"
+        );
+    } else {
+        warn!(
+            outstanding = surface_recovery_journal.outstanding_len(),
+            journal = %surface_recovery_journal.path().display(),
+            "durable native surface recovery debt replayed; no live lease, visibility, provider, action, or evidence authority was restored"
+        );
+    }
+    configure_surface_recovery_journal_for_sessions(
+        &sessions,
+        Some(surface_recovery_journal.clone()),
+    );
 
     let consequential_recovery =
         consequential_recovery::open_boot_consequential_recovery(&state_root).await?;
@@ -237,10 +260,12 @@ async fn main() -> Result<()> {
     }
     configure_windows_observe_runtime_for_sessions(&sessions, None);
     configure_windows_consequential_control_for_sessions(&sessions, None);
-    // The durable journal remains alive for the full daemon lifetime. Recovery
-    // may observe/reconcile only after normal attachment authority is restored;
-    // restart never recreates a dispatch permit, confirmation capability, or
-    // executor authority.
+    configure_surface_recovery_journal_for_sessions(&sessions, None);
+    // Durable recovery journals remain alive for the full daemon lifetime.
+    // Replay may restore only recovery debt/history; restart never recreates a
+    // live surface lease, visibility truth, dispatch permit, confirmation
+    // capability, provider, action, executor, or evidence authority.
+    drop(surface_recovery_journal);
     drop(consequential_journal);
     drop(consequential_recovery);
     Ok(())

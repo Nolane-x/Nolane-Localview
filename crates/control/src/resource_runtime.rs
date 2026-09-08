@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
 };
 
@@ -27,6 +27,7 @@ use crate::{
         register_surface_owner_for_sessions, validate_surface_owner_for_sessions,
         SurfaceOwnerError, SurfaceOwnerProof,
     },
+    surface_recovery::{surface_recovery_journal_for_sessions, SurfaceRecoveryKey},
     ControlState,
 };
 
@@ -44,6 +45,7 @@ static GOVERNORS: OnceLock<Mutex<GovernorRegistry>> = OnceLock::new();
 struct SurfaceResourceEntry {
     owner: Weak<SessionManager>,
     pending: BTreeMap<(Uuid, SessionId, String), ResourceReservation>,
+    activating: BTreeSet<(Uuid, SessionId, LiveSurfaceIdentity)>,
     live: BTreeMap<(Uuid, SessionId, LiveSurfaceIdentity), LiveResourceLease>,
 }
 
@@ -352,37 +354,60 @@ async fn activate_surface_resource(
     ) else {
         return surface_bad_request("invalid_surface_identity");
     };
+    let Some(recovery) = surface_recovery_journal_for_sessions(&state.sessions) else {
+        return surface_recovery_unavailable();
+    };
+    let recovery_key = match SurfaceRecoveryKey::new(
+        request.session_id,
+        identity.surface_kind.clone(),
+        identity.label.clone(),
+        identity.incarnation,
+        proof.owner_instance_id,
+    ) {
+        Ok(key) => key,
+        Err(_) => return surface_bad_request("invalid_surface_identity"),
+    };
+    let claim = (proof.owner_instance_id, request.session_id, identity.clone());
+
+    let reservation = {
+        let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut entries = lock_surface_registry(registry);
+        let entry = surface_entry_mut(&mut entries, &state.sessions);
+        if surface_logically_claimed(entry, request.session_id, &identity) {
+            return surface_conflict("surface_owner_already_live");
+        }
+
+        let pending_key = (
+            proof.owner_instance_id,
+            request.session_id,
+            request.request_id,
+        );
+        let Some(reservation) = entry.pending.remove(&pending_key) else {
+            return surface_conflict("surface_reservation_missing");
+        };
+        entry.activating.insert(claim.clone());
+        reservation
+    };
+
+    let lease = match reservation.activate_surface(identity.clone(), request.visibility) {
+        Ok(lease) => lease,
+        Err(_) => {
+            clear_activating_claim(&state.sessions, &claim);
+            return surface_conflict("surface_activation_rejected");
+        }
+    };
+
+    if recovery.record_activated(recovery_key).await.is_err() {
+        clear_activating_claim(&state.sessions, &claim);
+        drop(lease);
+        return surface_recovery_unavailable();
+    }
 
     let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut entries = lock_surface_registry(registry);
     let entry = surface_entry_mut(&mut entries, &state.sessions);
-    if entry
-        .live
-        .keys()
-        .any(|(_, session_id, current)| {
-            *session_id == request.session_id
-                && current.surface_kind == identity.surface_kind
-                && current.label == identity.label
-        })
-    {
-        return surface_conflict("surface_owner_already_live");
-    }
-
-    let pending_key = (
-        proof.owner_instance_id,
-        request.session_id,
-        request.request_id,
-    );
-    let Some(reservation) = entry.pending.remove(&pending_key) else {
-        return surface_conflict("surface_reservation_missing");
-    };
-    let lease = match reservation.activate_surface(identity.clone(), request.visibility) {
-        Ok(lease) => lease,
-        Err(_) => return surface_conflict("surface_activation_rejected"),
-    };
-    entry
-        .live
-        .insert((proof.owner_instance_id, request.session_id, identity), lease);
+    entry.activating.remove(&claim);
+    entry.live.insert(claim, lease);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -452,27 +477,64 @@ async fn release_surface_resource(
     ) else {
         return surface_bad_request("invalid_surface_identity");
     };
-
-    let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut entries = lock_surface_registry(registry);
-    let Some(entry) = existing_surface_entry_mut(&mut entries, &state.sessions) else {
-        return surface_conflict("surface_owner_missing");
+    let recovery = surface_recovery_journal_for_sessions(&state.sessions);
+    let recovery_key = match SurfaceRecoveryKey::new(
+        request.session_id,
+        identity.surface_kind.clone(),
+        identity.label.clone(),
+        identity.incarnation,
+        proof.owner_instance_id,
+    ) {
+        Ok(key) => key,
+        Err(_) => return surface_bad_request("invalid_surface_identity"),
     };
-    let key = (proof.owner_instance_id, request.session_id, identity.clone());
-    if !entry.live.contains_key(&key) {
-        return if surface_owned_by_other_owner(
-            entry,
-            proof.owner_instance_id,
-            request.session_id,
-            &identity,
-        ) {
-            surface_conflict("surface_owner_fence_mismatch")
-        } else {
-            surface_conflict("surface_owner_incarnation_mismatch")
+
+    let lease = {
+        let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut entries = lock_surface_registry(registry);
+        let Some(entry) = existing_surface_entry_mut(&mut entries, &state.sessions) else {
+            return surface_conflict("surface_owner_missing");
         };
+        let key = (proof.owner_instance_id, request.session_id, identity.clone());
+        if !entry.live.contains_key(&key) {
+            return if surface_owned_by_other_owner(
+                entry,
+                proof.owner_instance_id,
+                request.session_id,
+                &identity,
+            ) {
+                surface_conflict("surface_owner_fence_mismatch")
+            } else {
+                surface_conflict("surface_owner_incarnation_mismatch")
+            };
+        }
+        entry.live.remove(&key).expect("checked exact live surface")
+    };
+    drop(lease);
+
+    let Some(recovery) = recovery else {
+        return surface_recovery_unavailable();
+    };
+    if recovery.record_released(recovery_key).await.is_err() {
+        return surface_recovery_unavailable();
     }
-    entry.live.remove(&key);
     StatusCode::NO_CONTENT.into_response()
+}
+
+fn surface_logically_claimed(
+    entry: &SurfaceResourceEntry,
+    session_id: SessionId,
+    identity: &LiveSurfaceIdentity,
+) -> bool {
+    entry
+        .live
+        .keys()
+        .chain(entry.activating.iter())
+        .any(|(_, current_session, current)| {
+            *current_session == session_id
+                && current.surface_kind == identity.surface_kind
+                && current.label == identity.label
+        })
 }
 
 fn surface_owned_by_other_owner(
@@ -487,6 +549,17 @@ fn surface_owned_by_other_owner(
             && current.surface_kind == identity.surface_kind
             && current.label == identity.label
     })
+}
+
+fn clear_activating_claim(
+    sessions: &Arc<SessionManager>,
+    claim: &(Uuid, SessionId, LiveSurfaceIdentity),
+) {
+    let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = lock_surface_registry(registry);
+    if let Some(entry) = existing_surface_entry_mut(&mut entries, sessions) {
+        entry.activating.remove(claim);
+    }
 }
 
 fn valid_request_id(value: &str) -> bool {
@@ -517,6 +590,7 @@ fn surface_entry_mut<'a>(
     entries.entry(key).or_insert_with(|| SurfaceResourceEntry {
         owner: Arc::downgrade(sessions),
         pending: BTreeMap::new(),
+        activating: BTreeSet::new(),
         live: BTreeMap::new(),
     })
 }
@@ -541,6 +615,16 @@ fn surface_conflict(error: &'static str) -> axum::response::Response {
     (
         StatusCode::CONFLICT,
         Json(serde_json::json!({"error": error})),
+    )
+        .into_response()
+}
+
+fn surface_recovery_unavailable() -> axum::response::Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "surface_recovery_journal_unavailable"
+        })),
     )
         .into_response()
 }

@@ -9,6 +9,8 @@ use localview_sessions::SessionManager;
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::surface_recovery::surface_recovery_journal_for_sessions;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SurfaceOwnerProof {
     pub owner_instance_id: Uuid,
@@ -46,6 +48,9 @@ pub(crate) fn register_surface_owner_for_sessions(
     sessions: &Arc<SessionManager>,
     owner_instance_id: Uuid,
 ) -> SurfaceOwnerRegistration {
+    let recovery_required = surface_recovery_journal_for_sessions(sessions)
+        .is_some_and(|journal| journal.has_outstanding_for_owner(owner_instance_id));
+
     let registry = SURFACE_OWNERS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut entries = lock_registry(registry);
     entries.retain(|_, entry| entry.owner.strong_count() > 0);
@@ -63,7 +68,7 @@ pub(crate) fn register_surface_owner_for_sessions(
         owner_instance_id,
         boot_epoch: entry.boot_epoch,
         owner_lease_id,
-        recovery_required: false,
+        recovery_required,
     }
 }
 

@@ -11,8 +11,9 @@ use axum::{
 };
 use chrono::Utc;
 use localview_control::{
+    configure_surface_recovery_journal_for_sessions,
     release_surface_resource_session_for_sessions, router,
-    runtime_resource_governor_for_sessions, ControlState,
+    runtime_resource_governor_for_sessions, ControlState, SurfaceRecoveryJournal,
 };
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
@@ -68,6 +69,16 @@ async fn test_state() -> (ControlState, Uuid, OwnerRegistration) {
         evidence: EvidenceStore::new(128),
         paused: Arc::new(AtomicBool::new(false)),
     };
+    let journal_path = std::env::temp_dir().join(format!(
+        "localview-hidden-surface-authority-recovery-{}.jsonl",
+        Uuid::new_v4()
+    ));
+    let journal = Arc::new(
+        SurfaceRecoveryJournal::open(journal_path)
+            .await
+            .expect("open test surface recovery journal"),
+    );
+    configure_surface_recovery_journal_for_sessions(&state.sessions, Some(journal));
     let (status, value) = send(
         state.clone(),
         Method::POST,

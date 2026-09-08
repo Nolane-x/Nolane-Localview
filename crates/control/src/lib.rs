@@ -39,8 +39,8 @@ pub use resource_runtime::{
 pub use runtime::serve as legacy_serve;
 pub use runtime::{ControlState, EventEnvelope};
 pub use surface_recovery::{
-    SurfaceRecoveryError, SurfaceRecoveryJournal, SurfaceRecoveryKey,
-    SURFACE_RECOVERY_JOURNAL_FILE,
+    configure_surface_recovery_journal_for_sessions, SurfaceRecoveryError, SurfaceRecoveryJournal,
+    SurfaceRecoveryKey, SURFACE_RECOVERY_JOURNAL_FILE,
 };
 pub use windows_consequential::{
     configure_windows_consequential_control_for_sessions,

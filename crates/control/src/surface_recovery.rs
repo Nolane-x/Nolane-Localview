@@ -1,14 +1,15 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     error::Error,
     fmt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
 };
 
 use localview_protocol::SessionId;
+use localview_sessions::SessionManager;
 use serde::{Deserialize, Serialize};
 use tokio::{
     fs::{self, OpenOptions},
@@ -276,8 +277,61 @@ impl SurfaceRecoveryJournal {
     }
 }
 
+#[derive(Debug)]
+struct SurfaceRecoveryRegistryEntry {
+    owner: Weak<SessionManager>,
+    journal: Arc<SurfaceRecoveryJournal>,
+}
+
+type SurfaceRecoveryRegistry = HashMap<usize, SurfaceRecoveryRegistryEntry>;
+
+static SURFACE_RECOVERY_JOURNALS: OnceLock<Mutex<SurfaceRecoveryRegistry>> = OnceLock::new();
+
+pub fn configure_surface_recovery_journal_for_sessions(
+    sessions: &Arc<SessionManager>,
+    journal: Option<Arc<SurfaceRecoveryJournal>>,
+) {
+    let registry = SURFACE_RECOVERY_JOURNALS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = lock_registry(registry);
+    entries.retain(|_, entry| entry.owner.strong_count() > 0);
+    let key = Arc::as_ptr(sessions) as usize;
+    match journal {
+        Some(journal) => {
+            entries.insert(
+                key,
+                SurfaceRecoveryRegistryEntry {
+                    owner: Arc::downgrade(sessions),
+                    journal,
+                },
+            );
+        }
+        None => {
+            entries.remove(&key);
+        }
+    }
+}
+
+pub(crate) fn surface_recovery_journal_for_sessions(
+    sessions: &Arc<SessionManager>,
+) -> Option<Arc<SurfaceRecoveryJournal>> {
+    let registry = SURFACE_RECOVERY_JOURNALS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = lock_registry(registry);
+    entries.retain(|_, entry| entry.owner.strong_count() > 0);
+    entries
+        .get(&(Arc::as_ptr(sessions) as usize))
+        .map(|entry| entry.journal.clone())
+}
+
 fn lock_state(state: &Mutex<SurfaceRecoveryState>) -> MutexGuard<'_, SurfaceRecoveryState> {
     state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn lock_registry(
+    registry: &Mutex<SurfaceRecoveryRegistry>,
+) -> MutexGuard<'_, SurfaceRecoveryRegistry> {
+    registry
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
