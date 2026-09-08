@@ -113,3 +113,48 @@ fn desktop_owner_registration_threads_current_boot_proof_through_surface_protoco
         "owner registration must keep using the existing control credential path"
     );
 }
+
+#[test]
+fn daemon_restart_recovery_is_whitelisted_exact_and_one_shot() {
+    let resource = source("src/surface_resource.rs");
+
+    for recoverable in [
+        "surface_owner_not_registered",
+        "surface_owner_boot_epoch_mismatch",
+        "surface_owner_lease_mismatch",
+    ] {
+        assert!(
+            resource.contains(recoverable),
+            "daemon-restart recovery must explicitly whitelist {recoverable}"
+        );
+    }
+
+    assert!(
+        resource.contains("fn is_recoverable_owner_error"),
+        "owner recovery must be gated by one explicit error-code whitelist"
+    );
+    assert!(
+        resource.contains("refresh_registration"),
+        "a recoverable stale-owner response must rotate the cached daemon registration"
+    );
+    assert!(
+        resource.contains("reattach_surface_once"),
+        "surviving platform surfaces must use exact current-owner reattach before mutation retry"
+    );
+    assert!(
+        resource.contains("retry_visibility_once"),
+        "visibility recovery must have a named one-shot retry seam rather than an unbounded loop"
+    );
+
+    for forbidden in [
+        "surface_owner_fence_mismatch",
+        "surface_owner_incarnation_mismatch",
+        "surface_recovery_debt_missing",
+        "resource_governor_denied",
+    ] {
+        assert!(
+            !resource.contains(&format!("{forbidden} => true")),
+            "non-owner-staleness error {forbidden} must never grant automatic re-registration/reattach"
+        );
+    }
+}
