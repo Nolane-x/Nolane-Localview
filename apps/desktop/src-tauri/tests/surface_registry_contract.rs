@@ -130,3 +130,37 @@ fn registry_only_exposes_target_surface_kinds_not_the_main_shell() {
     assert_eq!(DesktopSurfaceKind::from_runtime_kind("main"), None);
     assert_eq!(DesktopSurfaceKind::from_runtime_kind("iframe"), None);
 }
+
+#[test]
+fn fresh_desktop_process_cannot_aba_reuse_the_same_surface_incarnation() {
+    let session_id = session("550e8400-e29b-41d4-a716-446655440000");
+    let label = "preview-550e8400e29b41d4a7";
+    let first_process = DesktopSurfaceRegistry::default();
+    let second_process = DesktopSurfaceRegistry::default();
+
+    let first = first_process.next_identity(session_id, DesktopSurfaceKind::PreviewWindow, label);
+    first_process
+        .record_created(first.clone(), DesktopSurfaceVisibility::Visible)
+        .expect("first desktop owns the physical surface");
+
+    let replacement =
+        second_process.next_identity(session_id, DesktopSurfaceKind::PreviewWindow, label);
+    assert_eq!(first.incarnation, 1);
+    assert_eq!(replacement.incarnation, 1);
+    assert_ne!(
+        first, replacement,
+        "a fresh desktop process must fence incarnation=1 with process-lifetime owner identity"
+    );
+    assert_eq!(
+        first_process.record_closed(&replacement),
+        Err(DesktopSurfaceRegistryError::IncarnationMismatch),
+        "replacement desktop incarnation=1 must not close predecessor owner truth"
+    );
+    assert_eq!(
+        first_process
+            .current(session_id, DesktopSurfaceKind::PreviewWindow, label)
+            .expect("predecessor remains authoritative")
+            .identity,
+        first
+    );
+}
