@@ -194,3 +194,47 @@ fn lock_registry(registry: &Mutex<SurfaceOwnerRegistry>) -> MutexGuard<'_, Surfa
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_flight_operation_delays_reap_without_authorizing_new_expired_requests() {
+        let sessions = Arc::new(SessionManager::new(Duration::from_secs(2)));
+        let owner_instance_id = Uuid::new_v4();
+        let start = Instant::now();
+        let registration =
+            register_surface_owner_for_sessions_at(&sessions, owner_instance_id, start);
+        let proof = SurfaceOwnerProof {
+            owner_instance_id,
+            boot_epoch: registration.boot_epoch,
+            owner_lease_id: registration.owner_lease_id,
+        };
+
+        let guard = pin_surface_owner_for_sessions_at(
+            &sessions,
+            proof,
+            start + Duration::from_secs(1),
+        )
+        .expect("current owner operation must acquire a liveness pin");
+        let expired_at = start + Duration::from_secs(16);
+
+        assert_eq!(
+            validate_surface_owner_for_sessions_at(&sessions, proof, expired_at),
+            Err(SurfaceOwnerError::NotRegistered),
+            "an in-flight pin must never authorize a new request after TTL expiry"
+        );
+        assert!(
+            reap_expired_surface_owners_for_sessions_at(&sessions, expired_at).is_empty(),
+            "reaper must not revoke an owner while a previously-authorized operation is committing"
+        );
+
+        drop(guard);
+        assert_eq!(
+            reap_expired_surface_owners_for_sessions_at(&sessions, expired_at),
+            vec![owner_instance_id],
+            "owner must become reapable immediately after the in-flight operation finishes"
+        );
+    }
+}
