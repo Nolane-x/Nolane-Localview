@@ -21,7 +21,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 struct Registration {
     owner_instance_id: Uuid,
     boot_epoch: Uuid,
@@ -100,20 +100,75 @@ async fn register_owner(state: ControlState, owner_instance_id: Uuid) -> (Status
     (status, registration)
 }
 
-fn reserve_body(
-    session_id: Uuid,
-    request_id: &str,
-    owner_instance_id: Uuid,
-    boot_epoch: Uuid,
-    owner_lease_id: Uuid,
-) -> Value {
+fn owner_fields(registration: Registration) -> Value {
     serde_json::json!({
+        "owner_instance_id": registration.owner_instance_id,
+        "boot_epoch": registration.boot_epoch,
+        "owner_lease_id": registration.owner_lease_id,
+    })
+}
+
+fn reserve_body(session_id: Uuid, request_id: &str, registration: Registration) -> Value {
+    let mut body = serde_json::json!({
         "session_id": session_id,
         "request_id": request_id,
-        "owner_instance_id": owner_instance_id,
-        "boot_epoch": boot_epoch,
-        "owner_lease_id": owner_lease_id,
-    })
+    });
+    body.as_object_mut()
+        .expect("reserve body object")
+        .extend(owner_fields(registration).as_object().expect("owner fields").clone());
+    body
+}
+
+fn activate_body(
+    session_id: Uuid,
+    request_id: &str,
+    incarnation: u64,
+    registration: Registration,
+) -> Value {
+    let mut body = serde_json::json!({
+        "session_id": session_id,
+        "request_id": request_id,
+        "surface_kind": "preview_window",
+        "label": "preview-owner-fence",
+        "incarnation": incarnation,
+        "visibility": "hidden",
+    });
+    body.as_object_mut()
+        .expect("activate body object")
+        .extend(owner_fields(registration).as_object().expect("owner fields").clone());
+    body
+}
+
+fn visibility_body(
+    session_id: Uuid,
+    incarnation: u64,
+    visibility: &str,
+    registration: Registration,
+) -> Value {
+    let mut body = serde_json::json!({
+        "session_id": session_id,
+        "surface_kind": "preview_window",
+        "label": "preview-owner-fence",
+        "incarnation": incarnation,
+        "visibility": visibility,
+    });
+    body.as_object_mut()
+        .expect("visibility body object")
+        .extend(owner_fields(registration).as_object().expect("owner fields").clone());
+    body
+}
+
+fn release_body(session_id: Uuid, incarnation: u64, registration: Registration) -> Value {
+    let mut body = serde_json::json!({
+        "session_id": session_id,
+        "surface_kind": "preview_window",
+        "label": "preview-owner-fence",
+        "incarnation": incarnation,
+    });
+    body.as_object_mut()
+        .expect("release body object")
+        .extend(owner_fields(registration).as_object().expect("owner fields").clone());
+    body
 }
 
 #[tokio::test]
@@ -128,31 +183,27 @@ async fn current_boot_registration_fences_surface_reservations() {
     assert!(!registration.owner_lease_id.is_nil());
     assert!(!registration.recovery_required);
 
+    let wrong_epoch = Registration {
+        boot_epoch: Uuid::new_v4(),
+        ..registration
+    };
     let (status, body) = send(
         state.clone(),
         "/v1/runtime/resources/surfaces/reserve",
-        reserve_body(
-            session_id,
-            "wrong-epoch",
-            owner,
-            Uuid::new_v4(),
-            registration.owner_lease_id,
-        ),
+        reserve_body(session_id, "wrong-epoch", wrong_epoch),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "surface_owner_boot_epoch_mismatch");
 
+    let wrong_lease = Registration {
+        owner_lease_id: Uuid::new_v4(),
+        ..registration
+    };
     let (status, body) = send(
         state.clone(),
         "/v1/runtime/resources/surfaces/reserve",
-        reserve_body(
-            session_id,
-            "wrong-lease",
-            owner,
-            registration.boot_epoch,
-            Uuid::new_v4(),
-        ),
+        reserve_body(session_id, "wrong-lease", wrong_lease),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
@@ -161,14 +212,104 @@ async fn current_boot_registration_fences_surface_reservations() {
     let (status, _) = send(
         state,
         "/v1/runtime/resources/surfaces/reserve",
-        reserve_body(
-            session_id,
-            "valid-owner",
-            owner,
-            registration.boot_epoch,
-            registration.owner_lease_id,
-        ),
+        reserve_body(session_id, "valid-owner", registration),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn live_surface_mutations_are_fenced_by_exact_owner_instance_and_current_lease() {
+    let (state, session_id) = test_state().await;
+    let owner_a = Uuid::new_v4();
+    let owner_b = Uuid::new_v4();
+    let (_, registration_a) = register_owner(state.clone(), owner_a).await;
+    let (_, registration_b) = register_owner(state.clone(), owner_b).await;
+
+    assert_eq!(
+        send(
+            state.clone(),
+            "/v1/runtime/resources/surfaces/reserve",
+            reserve_body(session_id, "owner-a-open", registration_a),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(
+            state.clone(),
+            "/v1/runtime/resources/surfaces/activate",
+            activate_body(session_id, "owner-a-open", 1, registration_a),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT,
+        "activation must consume the exact owner's pending reservation"
+    );
+
+    let (status, body) = send(
+        state.clone(),
+        "/v1/runtime/resources/surfaces/visibility",
+        visibility_body(session_id, 1, "visible", registration_b),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "surface_owner_fence_mismatch");
+
+    let (status, body) = send(
+        state.clone(),
+        "/v1/runtime/resources/surfaces/release",
+        release_body(session_id, 1, registration_b),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "surface_owner_fence_mismatch");
+
+    assert_eq!(
+        send(
+            state.clone(),
+            "/v1/runtime/resources/surfaces/visibility",
+            visibility_body(session_id, 1, "visible", registration_a),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+
+    let (_, rotated_a) = register_owner(state.clone(), owner_a).await;
+    assert_eq!(rotated_a.owner_instance_id, owner_a);
+    assert_eq!(rotated_a.boot_epoch, registration_a.boot_epoch);
+    assert_ne!(rotated_a.owner_lease_id, registration_a.owner_lease_id);
+
+    let (status, body) = send(
+        state.clone(),
+        "/v1/runtime/resources/surfaces/visibility",
+        visibility_body(session_id, 1, "hidden", registration_a),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "surface_owner_lease_mismatch");
+
+    assert_eq!(
+        send(
+            state.clone(),
+            "/v1/runtime/resources/surfaces/visibility",
+            visibility_body(session_id, 1, "hidden", rotated_a),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT,
+        "lease rotation must preserve the same process owner identity while revoking the old capability"
+    );
+    assert_eq!(
+        send(
+            state,
+            "/v1/runtime/resources/surfaces/release",
+            release_body(session_id, 1, rotated_a),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
 }
