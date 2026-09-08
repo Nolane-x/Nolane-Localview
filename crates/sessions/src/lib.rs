@@ -127,11 +127,23 @@ impl SessionManager {
         prepared: &[PreparedDiscovery],
         snapshot: &SessionState,
     ) -> Vec<SessionId> {
+        let mut current_lineage_counts = BTreeMap::<SessionLineage, usize>::new();
+        for lineage in snapshot.lineages.values() {
+            *current_lineage_counts.entry(lineage.clone()).or_default() += 1;
+        }
+
         let mut assigned = HashSet::new();
         let mut assignments = Vec::with_capacity(prepared.len());
 
         for item in prepared {
-            let current = if item.ambiguous {
+            let current_lineage_ambiguous = item
+                .lineage
+                .as_ref()
+                .and_then(|lineage| current_lineage_counts.get(lineage))
+                .is_some_and(|count| *count > 1);
+            let ambiguous = item.ambiguous || current_lineage_ambiguous;
+
+            let current = if ambiguous {
                 find_exact_endpoint_match(snapshot, &item.server.candidate.endpoint, &assigned)
             } else {
                 item.lineage
@@ -149,7 +161,7 @@ impl SessionManager {
 
             let session_id = if let Some(session_id) = current {
                 session_id
-            } else if item.ambiguous {
+            } else if ambiguous {
                 fresh_volatile_session_id(snapshot, &assigned)
             } else if let (Some(resolver), Some(lineage)) =
                 (self.identity_resolver.as_ref(), item.lineage.as_ref())
