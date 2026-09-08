@@ -20,6 +20,7 @@ use localview_control::{
     configure_chromium_executor_for_sessions, configure_surface_recovery_journal_for_sessions,
     configure_windows_consequential_control_for_sessions,
     configure_windows_observe_runtime_for_sessions,
+    reap_expired_surface_owner_resources_for_sessions,
     release_windows_consequential_control_session_for_sessions, runtime_resource_governor_for_sessions,
     ControlState, SurfaceRecoveryJournal, SURFACE_RECOVERY_JOURNAL_FILE,
 };
@@ -44,6 +45,8 @@ use localview_windows_observe_runtime::{
 use localview_windows_uia_provider::WindowsUiaWorkerConfig;
 use tokio::time::MissedTickBehavior;
 use tracing::{info, warn};
+
+const SURFACE_OWNER_REAP_INTERVAL: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -94,6 +97,7 @@ async fn main() -> Result<()> {
         &sessions,
         Some(surface_recovery_journal.clone()),
     );
+    spawn_surface_owner_reaper(sessions.clone());
 
     let consequential_recovery =
         consequential_recovery::open_boot_consequential_recovery(&state_root).await?;
@@ -269,6 +273,21 @@ async fn main() -> Result<()> {
     drop(consequential_journal);
     drop(consequential_recovery);
     Ok(())
+}
+
+fn spawn_surface_owner_reaper(sessions: Arc<SessionManager>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(SURFACE_OWNER_REAP_INTERVAL);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let removed = reap_expired_surface_owner_resources_for_sessions(&sessions);
+            if removed > 0 {
+                info!(removed, "expired native surface owner resources reaped");
+            }
+        }
+    });
 }
 
 fn spawn_windows_observe_drain_loop(

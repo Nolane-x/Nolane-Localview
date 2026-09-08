@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::sync::OnceLock;
+use std::{sync::OnceLock, time::Duration};
 
 use localview_protocol::SessionId;
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,10 @@ use super::surface_registry::{
 };
 
 const SURFACE_RESOURCE_BASE: &str = "http://127.0.0.1:45454";
+const SURFACE_OWNER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 static SURFACE_OWNER: OnceLock<DesktopSurfaceOwner> = OnceLock::new();
+static SURFACE_OWNER_HEARTBEAT_STARTED: OnceLock<()> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 struct SurfaceOwnerRegistration {
@@ -43,10 +45,12 @@ impl DesktopSurfaceOwner {
     async fn registration(&self) -> Result<SurfaceOwnerRegistration, String> {
         let mut current = self.registration.lock().await;
         if let Some(registration) = *current {
+            spawn_surface_owner_heartbeat();
             return Ok(registration);
         }
         let registration = register_surface_owner(self.owner_instance_id).await?;
         *current = Some(registration);
+        spawn_surface_owner_heartbeat();
         Ok(registration)
     }
 
@@ -76,6 +80,13 @@ pub struct SurfaceReservationToken {
 #[derive(Debug, Serialize)]
 struct SurfaceOwnerRegisterRequest {
     owner_instance_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+struct SurfaceOwnerHeartbeatRequest {
+    owner_instance_id: Uuid,
+    boot_epoch: Uuid,
+    owner_lease_id: Uuid,
 }
 
 #[derive(Debug, Serialize)]
@@ -361,6 +372,41 @@ fn surface_owner() -> Result<&'static DesktopSurfaceOwner, String> {
         return Err("desktop surface owner does not match primary registry".into());
     }
     Ok(owner)
+}
+
+fn spawn_surface_owner_heartbeat() {
+    if SURFACE_OWNER_HEARTBEAT_STARTED.set(()).is_err() {
+        return;
+    }
+    tauri::async_runtime::spawn(async {
+        let mut interval = tokio::time::interval(SURFACE_OWNER_HEARTBEAT_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let Some(owner) = SURFACE_OWNER.get() else {
+                continue;
+            };
+            let _ = heartbeat_surface_owner_once(owner).await;
+        }
+    });
+}
+
+async fn heartbeat_surface_owner_once(owner: &DesktopSurfaceOwner) -> Result<(), String> {
+    let proof = {
+        let current = owner.registration.lock().await;
+        (*current).ok_or_else(|| "surface owner registration unavailable".to_string())?
+    };
+    let request = SurfaceOwnerHeartbeatRequest {
+        owner_instance_id: proof.owner_instance_id,
+        boot_epoch: proof.boot_epoch,
+        owner_lease_id: proof.owner_lease_id,
+    };
+    post_surface(
+        "/v1/runtime/resources/surfaces/owners/heartbeat",
+        &request,
+    )
+    .await
 }
 
 async fn register_surface_owner(owner_instance_id: Uuid) -> Result<SurfaceOwnerRegistration, String> {
