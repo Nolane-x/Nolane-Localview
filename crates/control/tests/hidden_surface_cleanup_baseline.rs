@@ -19,9 +19,18 @@ use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
 use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
 use localview_sessions::SessionManager;
+use serde::Deserialize;
 use serde_json::Value;
 use tower::ServiceExt;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct OwnerRegistration {
+    owner_instance_id: Uuid,
+    boot_epoch: Uuid,
+    owner_lease_id: Uuid,
+    recovery_required: bool,
+}
 
 fn discovered() -> DiscoveredServer {
     DiscoveredServer {
@@ -47,7 +56,7 @@ fn discovered() -> DiscoveredServer {
     }
 }
 
-async fn test_state() -> (ControlState, Uuid) {
+async fn test_state() -> (ControlState, Uuid, OwnerRegistration) {
     let sessions = Arc::new(SessionManager::new(Duration::from_secs(2)));
     let reconcile = sessions.reconcile(vec![discovered()], Utc::now()).await;
     let session_id = reconcile.created[0];
@@ -59,7 +68,32 @@ async fn test_state() -> (ControlState, Uuid) {
         evidence: EvidenceStore::new(128),
         paused: Arc::new(AtomicBool::new(false)),
     };
-    (state, session_id)
+    let owner = register_owner(state.clone()).await;
+    (state, session_id, owner)
+}
+
+async fn register_owner(state: ControlState) -> OwnerRegistration {
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/runtime/resources/surfaces/owners/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer test-token")
+                .body(Body::from(
+                    serde_json::json!({ "owner_instance_id": Uuid::new_v4() }).to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 512 * 1024)
+        .await
+        .expect("bounded response");
+    let owner: OwnerRegistration = serde_json::from_slice(&bytes).expect("owner registration");
+    assert!(!owner.recovery_required);
+    owner
 }
 
 async fn send(state: ControlState, uri: &str, body: Value) -> StatusCode {
@@ -82,10 +116,13 @@ async fn send(state: ControlState, uri: &str, body: Value) -> StatusCode {
     status
 }
 
-fn reserve_body(session_id: Uuid, request_id: &str) -> Value {
+fn reserve_body(session_id: Uuid, request_id: &str, owner: OwnerRegistration) -> Value {
     serde_json::json!({
         "session_id": session_id,
-        "request_id": request_id
+        "request_id": request_id,
+        "owner_instance_id": owner.owner_instance_id,
+        "boot_epoch": owner.boot_epoch,
+        "owner_lease_id": owner.owner_lease_id
     })
 }
 
@@ -121,7 +158,7 @@ fn release_body(session_id: Uuid, incarnation: u64) -> Value {
 
 #[tokio::test]
 async fn repeated_exact_surface_lifecycles_return_control_and_governor_to_baseline() {
-    let (state, session_id) = test_state().await;
+    let (state, session_id, owner) = test_state().await;
     let governor = runtime_resource_governor_for_sessions(&state.sessions);
 
     for incarnation in 1..=32_u64 {
@@ -130,7 +167,7 @@ async fn repeated_exact_surface_lifecycles_return_control_and_governor_to_baseli
             send(
                 state.clone(),
                 "/v1/runtime/resources/surfaces/reserve",
-                reserve_body(session_id, &request_id),
+                reserve_body(session_id, &request_id, owner),
             )
             .await,
             StatusCode::NO_CONTENT,

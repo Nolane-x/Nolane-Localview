@@ -19,9 +19,14 @@ use localview_resource_governor::{
 };
 use localview_sessions::SessionManager;
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::{
     perception::{authorized, denied},
+    surface_owner::{
+        register_surface_owner_for_sessions, validate_surface_owner_for_sessions,
+        SurfaceOwnerError, SurfaceOwnerProof,
+    },
     ControlState,
 };
 
@@ -48,9 +53,28 @@ static SURFACE_RESOURCES: OnceLock<Mutex<SurfaceResourceRegistry>> = OnceLock::n
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SurfaceOwnerRegisterRequest {
+    owner_instance_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SurfaceReserveRequest {
     session_id: SessionId,
     request_id: String,
+    owner_instance_id: Uuid,
+    boot_epoch: Uuid,
+    owner_lease_id: Uuid,
+}
+
+impl SurfaceReserveRequest {
+    fn owner_proof(&self) -> SurfaceOwnerProof {
+        SurfaceOwnerProof {
+            owner_instance_id: self.owner_instance_id,
+            boot_epoch: self.boot_epoch,
+            owner_lease_id: self.owner_lease_id,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +110,10 @@ struct SurfaceReleaseRequest {
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
         .route("/v1/runtime/resources/sample", post(update_runtime_sample))
+        .route(
+            "/v1/runtime/resources/surfaces/owners/register",
+            post(register_surface_owner),
+        )
         .route(
             "/v1/runtime/resources/surfaces/reserve",
             post(reserve_surface_resource),
@@ -164,6 +192,24 @@ async fn update_runtime_sample(
     StatusCode::NO_CONTENT.into_response()
 }
 
+async fn register_surface_owner(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Json(request): Json<SurfaceOwnerRegisterRequest>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if request.owner_instance_id.is_nil() {
+        return surface_bad_request("invalid_surface_owner_instance");
+    }
+    Json(register_surface_owner_for_sessions(
+        &state.sessions,
+        request.owner_instance_id,
+    ))
+    .into_response()
+}
+
 async fn reserve_surface_resource(
     State(state): State<ControlState>,
     headers: HeaderMap,
@@ -171,6 +217,11 @@ async fn reserve_surface_resource(
 ) -> axum::response::Response {
     if !authorized(&headers, &state) {
         return denied();
+    }
+    if let Err(error) =
+        validate_surface_owner_for_sessions(&state.sessions, request.owner_proof())
+    {
+        return surface_owner_conflict(error);
     }
     if state.sessions.get(request.session_id).await.is_none() {
         return surface_not_found("surface_session_not_found");
@@ -206,6 +257,11 @@ async fn cancel_surface_reservation(
 ) -> axum::response::Response {
     if !authorized(&headers, &state) {
         return denied();
+    }
+    if let Err(error) =
+        validate_surface_owner_for_sessions(&state.sessions, request.owner_proof())
+    {
+        return surface_owner_conflict(error);
     }
     if state.sessions.get(request.session_id).await.is_none() {
         return surface_not_found("surface_session_not_found");
@@ -251,15 +307,11 @@ async fn activate_surface_resource(
     let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut entries = lock_surface_registry(registry);
     let entry = surface_entry_mut(&mut entries, &state.sessions);
-    if entry
-        .live
-        .keys()
-        .any(|(session_id, current)| {
-            *session_id == request.session_id
-                && current.surface_kind == identity.surface_kind
-                && current.label == identity.label
-        })
-    {
+    if entry.live.keys().any(|(session_id, current)| {
+        *session_id == request.session_id
+            && current.surface_kind == identity.surface_kind
+            && current.label == identity.label
+    }) {
         return surface_conflict("surface_owner_already_live");
     }
 
@@ -329,7 +381,11 @@ async fn release_surface_resource(
     let Some(entry) = existing_surface_entry_mut(&mut entries, &state.sessions) else {
         return surface_conflict("surface_owner_missing");
     };
-    if entry.live.remove(&(request.session_id, identity)).is_none() {
+    if entry
+        .live
+        .remove(&(request.session_id, identity))
+        .is_none()
+    {
         return surface_conflict("surface_owner_incarnation_mismatch");
     }
     StatusCode::NO_CONTENT.into_response()
@@ -389,6 +445,14 @@ fn surface_conflict(error: &'static str) -> axum::response::Response {
         Json(serde_json::json!({"error": error})),
     )
         .into_response()
+}
+
+fn surface_owner_conflict(error: SurfaceOwnerError) -> axum::response::Response {
+    surface_conflict(match error {
+        SurfaceOwnerError::NotRegistered => "surface_owner_not_registered",
+        SurfaceOwnerError::BootEpochMismatch => "surface_owner_boot_epoch_mismatch",
+        SurfaceOwnerError::LeaseMismatch => "surface_owner_lease_mismatch",
+    })
 }
 
 fn surface_not_found(error: &'static str) -> axum::response::Response {

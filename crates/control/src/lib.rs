@@ -12,6 +12,7 @@ mod perception_execution;
 mod resource_runtime;
 #[path = "runtime.rs"]
 mod runtime;
+mod surface_owner;
 mod visual_diff;
 mod visual_region;
 mod visual_verify;
