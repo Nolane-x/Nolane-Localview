@@ -36,10 +36,17 @@ pub(crate) enum SurfaceOwnerError {
     LeaseMismatch,
 }
 
+#[derive(Debug)]
+pub(crate) struct SurfaceOwnerOperationGuard {
+    sessions: Arc<SessionManager>,
+    owner_instance_id: Uuid,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct SurfaceOwnerLease {
     owner_lease_id: Uuid,
     last_seen: Instant,
+    in_flight: usize,
 }
 
 #[derive(Debug)]
@@ -79,11 +86,16 @@ fn register_surface_owner_for_sessions_at(
         leases: BTreeMap::new(),
     });
     let owner_lease_id = Uuid::new_v4();
+    let in_flight = entry
+        .leases
+        .get(&owner_instance_id)
+        .map_or(0, |lease| lease.in_flight);
     entry.leases.insert(
         owner_instance_id,
         SurfaceOwnerLease {
             owner_lease_id,
             last_seen: now,
+            in_flight,
         },
     );
 
@@ -130,6 +142,61 @@ fn validate_surface_owner_for_sessions_at(
     Ok(())
 }
 
+pub(crate) fn pin_surface_owner_for_sessions(
+    sessions: &Arc<SessionManager>,
+    proof: SurfaceOwnerProof,
+) -> Result<SurfaceOwnerOperationGuard, SurfaceOwnerError> {
+    pin_surface_owner_for_sessions_at(sessions, proof, Instant::now())
+}
+
+fn pin_surface_owner_for_sessions_at(
+    sessions: &Arc<SessionManager>,
+    proof: SurfaceOwnerProof,
+    now: Instant,
+) -> Result<SurfaceOwnerOperationGuard, SurfaceOwnerError> {
+    let registry = SURFACE_OWNERS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = lock_registry(registry);
+    entries.retain(|_, entry| entry.owner.strong_count() > 0);
+
+    let key = Arc::as_ptr(sessions) as usize;
+    let Some(entry) = entries.get_mut(&key) else {
+        return Err(SurfaceOwnerError::NotRegistered);
+    };
+    if proof.boot_epoch != entry.boot_epoch {
+        return Err(SurfaceOwnerError::BootEpochMismatch);
+    }
+    let Some(current) = entry.leases.get_mut(&proof.owner_instance_id) else {
+        return Err(SurfaceOwnerError::NotRegistered);
+    };
+    if proof.owner_lease_id != current.owner_lease_id {
+        return Err(SurfaceOwnerError::LeaseMismatch);
+    }
+    if owner_expired(current.last_seen, now) {
+        return Err(SurfaceOwnerError::NotRegistered);
+    }
+    current.in_flight = current.in_flight.saturating_add(1);
+
+    Ok(SurfaceOwnerOperationGuard {
+        sessions: sessions.clone(),
+        owner_instance_id: proof.owner_instance_id,
+    })
+}
+
+impl Drop for SurfaceOwnerOperationGuard {
+    fn drop(&mut self) {
+        let registry = SURFACE_OWNERS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut entries = lock_registry(registry);
+        entries.retain(|_, entry| entry.owner.strong_count() > 0);
+
+        let key = Arc::as_ptr(&self.sessions) as usize;
+        if let Some(entry) = entries.get_mut(&key) {
+            if let Some(current) = entry.leases.get_mut(&self.owner_instance_id) {
+                current.in_flight = current.in_flight.saturating_sub(1);
+            }
+        }
+    }
+}
+
 pub(crate) fn heartbeat_surface_owner_for_sessions_at(
     sessions: &Arc<SessionManager>,
     proof: SurfaceOwnerProof,
@@ -174,7 +241,7 @@ pub(crate) fn reap_expired_surface_owners_for_sessions_at(
 
     let mut expired = Vec::new();
     entry.leases.retain(|owner_instance_id, lease| {
-        if owner_expired(lease.last_seen, now) {
+        if owner_expired(lease.last_seen, now) && lease.in_flight == 0 {
             expired.push(*owner_instance_id);
             false
         } else {

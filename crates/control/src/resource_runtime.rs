@@ -25,8 +25,8 @@ use crate::{
     perception::{authorized, denied},
     surface_liveness::reap_expired_surface_owner_resources_for_sessions,
     surface_owner::{
-        register_surface_owner_for_sessions, validate_surface_owner_for_sessions,
-        SurfaceOwnerError, SurfaceOwnerProof,
+        pin_surface_owner_for_sessions, register_surface_owner_for_sessions, SurfaceOwnerError,
+        SurfaceOwnerProof,
     },
     surface_recovery::{surface_recovery_journal_for_sessions, SurfaceRecoveryKey},
     ControlState,
@@ -318,9 +318,10 @@ async fn reserve_surface_resource(
         return denied();
     }
     let proof = request.owner_proof();
-    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
-        return surface_owner_conflict(error);
-    }
+    let _owner_operation = match pin_surface_owner_for_sessions(&state.sessions, proof) {
+        Ok(guard) => guard,
+        Err(error) => return surface_owner_conflict(error),
+    };
     if state.sessions.get(request.session_id).await.is_none() {
         return surface_not_found("surface_session_not_found");
     }
@@ -361,9 +362,10 @@ async fn cancel_surface_reservation(
         return denied();
     }
     let proof = request.owner_proof();
-    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
-        return surface_owner_conflict(error);
-    }
+    let _owner_operation = match pin_surface_owner_for_sessions(&state.sessions, proof) {
+        Ok(guard) => guard,
+        Err(error) => return surface_owner_conflict(error),
+    };
     if state.sessions.get(request.session_id).await.is_none() {
         return surface_not_found("surface_session_not_found");
     }
@@ -399,9 +401,10 @@ async fn activate_surface_resource(
         return denied();
     }
     let proof = request.owner_proof();
-    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
-        return surface_owner_conflict(error);
-    }
+    let _owner_operation = match pin_surface_owner_for_sessions(&state.sessions, proof) {
+        Ok(guard) => guard,
+        Err(error) => return surface_owner_conflict(error),
+    };
     if request.incarnation == 0 {
         return surface_bad_request("invalid_surface_identity");
     }
@@ -478,9 +481,10 @@ async fn reattach_surface_resource(
         return denied();
     }
     let proof = request.owner_proof();
-    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
-        return surface_owner_conflict(error);
-    }
+    let _owner_operation = match pin_surface_owner_for_sessions(&state.sessions, proof) {
+        Ok(guard) => guard,
+        Err(error) => return surface_owner_conflict(error),
+    };
     if state.sessions.get(request.session_id).await.is_none() {
         return surface_not_found("surface_session_not_found");
     }
@@ -563,9 +567,10 @@ async fn update_surface_visibility(
         return denied();
     }
     let proof = request.owner_proof();
-    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
-        return surface_owner_conflict(error);
-    }
+    let _owner_operation = match pin_surface_owner_for_sessions(&state.sessions, proof) {
+        Ok(guard) => guard,
+        Err(error) => return surface_owner_conflict(error),
+    };
     let Some(identity) = surface_identity(
         request.surface_kind,
         request.label,
@@ -610,9 +615,10 @@ async fn release_surface_resource(
         return denied();
     }
     let proof = request.owner_proof();
-    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
-        return surface_owner_conflict(error);
-    }
+    let _owner_operation = match pin_surface_owner_for_sessions(&state.sessions, proof) {
+        Ok(guard) => guard,
+        Err(error) => return surface_owner_conflict(error),
+    };
     let Some(identity) = surface_identity(
         request.surface_kind,
         request.label,
