@@ -12,6 +12,9 @@ mod perception_execution;
 mod resource_runtime;
 #[path = "runtime.rs"]
 mod runtime;
+mod surface_liveness;
+mod surface_owner;
+mod surface_recovery;
 mod visual_diff;
 mod visual_region;
 mod visual_verify;
@@ -36,6 +39,15 @@ pub use resource_runtime::{
 #[doc(hidden)]
 pub use runtime::serve as legacy_serve;
 pub use runtime::{ControlState, EventEnvelope};
+#[doc(hidden)]
+pub use surface_liveness::{
+    reap_expired_surface_owner_resources_for_sessions,
+    reap_expired_surface_owner_resources_for_sessions_at,
+};
+pub use surface_recovery::{
+    configure_surface_recovery_journal_for_sessions, SurfaceRecoveryError, SurfaceRecoveryJournal,
+    SurfaceRecoveryKey, SURFACE_RECOVERY_JOURNAL_FILE,
+};
 pub use windows_consequential::{
     configure_windows_consequential_control_for_sessions,
     release_windows_consequential_control_session_for_sessions,
@@ -55,6 +67,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(perception_execution::router(state.clone()))
         .merge(perception_cycle::router(state.clone()))
         .merge(resource_runtime::router(state.clone()))
+        .merge(surface_liveness::router(state.clone()))
         .merge(visual_diff::router(state.clone()))
         .merge(visual_verify::router(state.clone()))
         .merge(windows_observe::router(state.clone()))

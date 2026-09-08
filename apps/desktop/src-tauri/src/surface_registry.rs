@@ -2,10 +2,17 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use localview_protocol::SessionId;
+use uuid::Uuid;
+
+static PRIMARY_OWNER_INSTANCE_ID: OnceLock<Uuid> = OnceLock::new();
+
+pub fn primary_owner_instance_id() -> Option<Uuid> {
+    PRIMARY_OWNER_INSTANCE_ID.get().copied()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DesktopSurfaceKind {
@@ -42,6 +49,7 @@ pub struct DesktopSurfaceIdentity {
     pub kind: DesktopSurfaceKind,
     pub label: String,
     pub incarnation: u64,
+    pub owner_instance_id: Uuid,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,12 +92,28 @@ struct RegistryState {
     live: BTreeMap<DesktopSurfaceKey, DesktopSurfaceSnapshot>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DesktopSurfaceRegistry {
+    owner_instance_id: Uuid,
     inner: Mutex<RegistryState>,
 }
 
+impl Default for DesktopSurfaceRegistry {
+    fn default() -> Self {
+        let owner_instance_id = Uuid::new_v4();
+        let _ = PRIMARY_OWNER_INSTANCE_ID.set(owner_instance_id);
+        Self {
+            owner_instance_id,
+            inner: Mutex::new(RegistryState::default()),
+        }
+    }
+}
+
 impl DesktopSurfaceRegistry {
+    pub fn owner_instance_id(&self) -> Uuid {
+        self.owner_instance_id
+    }
+
     pub fn next_identity(
         &self,
         session_id: SessionId,
@@ -114,6 +138,7 @@ impl DesktopSurfaceRegistry {
             kind,
             label,
             incarnation: *incarnation,
+            owner_instance_id: self.owner_instance_id,
         }
     }
 
@@ -122,6 +147,9 @@ impl DesktopSurfaceRegistry {
         identity: DesktopSurfaceIdentity,
         visibility: DesktopSurfaceVisibility,
     ) -> Result<(), DesktopSurfaceRegistryError> {
+        if identity.owner_instance_id != self.owner_instance_id {
+            return Err(DesktopSurfaceRegistryError::IncarnationMismatch);
+        }
         let key = DesktopSurfaceKey::from_identity(&identity);
         let mut state = self.lock();
 

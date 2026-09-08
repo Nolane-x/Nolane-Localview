@@ -75,3 +75,119 @@ fn surface_resource_client_does_not_create_parallel_authority_or_aggregate_count
         "surface resource client must not invent a second credential discovery path"
     );
 }
+
+#[test]
+fn desktop_owner_registration_threads_current_boot_proof_through_surface_protocol() {
+    let resource = source("src/surface_resource.rs");
+    let registry = source("src/surface_registry.rs");
+
+    assert!(
+        resource.contains("/v1/runtime/resources/surfaces/owners/register"),
+        "desktop must explicitly register its process-lifetime surface owner with the daemon"
+    );
+    assert!(
+        resource.contains("/v1/runtime/resources/surfaces/reattach"),
+        "desktop must expose the exact reattach path for a platform surface surviving daemon restart"
+    );
+    assert!(
+        resource.contains("DesktopSurfaceOwner"),
+        "surface protocol needs one process-lifetime owner state instead of caller-supplied capabilities"
+    );
+    for proof_field in ["owner_instance_id", "boot_epoch", "owner_lease_id"] {
+        assert!(
+            resource.contains(proof_field),
+            "every mutating surface request must be able to prove current owner field {proof_field}"
+        );
+    }
+    assert!(
+        registry.contains("primary_owner_instance_id")
+            && resource.contains("DesktopSurfaceOwner::new(owner_instance_id)"),
+        "network owner state must bind to the exact UUID published by the primary desktop surface registry"
+    );
+    assert!(
+        resource.contains("tokio::sync::Mutex"),
+        "registration refresh must serialize current-boot owner capability replacement"
+    );
+    assert!(
+        !resource.contains("control.token") && !resource.contains("dirs::"),
+        "owner registration must keep using the existing control credential path"
+    );
+}
+
+#[test]
+fn daemon_restart_recovery_is_whitelisted_exact_and_one_shot() {
+    let resource = source("src/surface_resource.rs");
+
+    for recoverable in [
+        "surface_owner_not_registered",
+        "surface_owner_boot_epoch_mismatch",
+        "surface_owner_lease_mismatch",
+    ] {
+        assert!(
+            resource.contains(recoverable),
+            "daemon-restart recovery must explicitly whitelist {recoverable}"
+        );
+    }
+
+    assert!(
+        resource.contains("fn is_recoverable_owner_error"),
+        "owner recovery must be gated by one explicit error-code whitelist"
+    );
+    assert!(
+        resource.contains("refresh_registration"),
+        "a recoverable stale-owner response must rotate the cached daemon registration"
+    );
+    assert!(
+        resource.contains("reattach_surface_once"),
+        "surviving platform surfaces must use exact current-owner reattach before mutation retry"
+    );
+    assert!(
+        resource.contains("retry_visibility_once"),
+        "visibility recovery must have a named one-shot retry seam rather than an unbounded loop"
+    );
+
+    for forbidden in [
+        "surface_owner_fence_mismatch",
+        "surface_owner_incarnation_mismatch",
+        "surface_recovery_debt_missing",
+        "resource_governor_denied",
+    ] {
+        assert!(
+            !resource.contains(&format!("{forbidden} => true")),
+            "non-owner-staleness error {forbidden} must never grant automatic re-registration/reattach"
+        );
+    }
+}
+
+#[test]
+fn desktop_heartbeat_is_five_seconds_and_never_refreshes_stale_owner_proof() {
+    let resource = source("src/surface_resource.rs");
+
+    assert!(
+        resource.contains("SURFACE_OWNER_HEARTBEAT_INTERVAL")
+            && resource.contains("Duration::from_secs(5)"),
+        "desktop heartbeat must use the approved five-second interval"
+    );
+    assert!(
+        resource.contains("/v1/runtime/resources/surfaces/owners/heartbeat"),
+        "desktop heartbeat must call the exact current-owner liveness route"
+    );
+    assert!(
+        resource.contains("spawn_surface_owner_heartbeat")
+            && resource.contains("heartbeat_surface_owner_once"),
+        "owner registration must start one process-lifetime heartbeat loop"
+    );
+
+    let heartbeat = resource
+        .split("async fn heartbeat_surface_owner_once")
+        .nth(1)
+        .expect("heartbeat implementation")
+        .split("\nasync fn ")
+        .next()
+        .expect("heartbeat body");
+    assert!(
+        !heartbeat.contains("refresh_registration")
+            && !heartbeat.contains("reattach_surface_once"),
+        "heartbeat failure must not preempt one-shot surface recovery by refreshing or reattaching authority"
+    );
+}
