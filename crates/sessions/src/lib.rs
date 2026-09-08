@@ -5,9 +5,9 @@ mod identity;
 pub use identity::{
     MAX_ENDPOINT_HOST_BYTES, MAX_ENDPOINT_SCHEME_BYTES, MAX_NORMALIZED_PROJECT_PATH_BYTES,
     MAX_SESSION_IDENTITY_RECORDS, MAX_SESSION_IDENTITY_REGISTRY_BYTES,
-    SESSION_IDENTITY_REGISTRY_FILE, SessionIdentityError, SessionIdentityHealth,
-    SessionIdentityResolver, SessionLineage, SessionLineageAnchorV1, SessionLineageV1,
-    SessionServerKind, session_lineage,
+    SESSION_IDENTITY_REGISTRY_FILE, ResolvedSessionIdentity, SessionIdentityDurability,
+    SessionIdentityError, SessionIdentityHealth, SessionIdentityResolver, SessionLineage,
+    SessionLineageAnchorV1, SessionLineageV1, SessionServerKind, session_lineage,
 };
 
 use std::{collections::{HashMap, HashSet}, time::Duration};
