@@ -297,3 +297,18 @@ async fn expired_owner_reaper_drops_pending_and_live_governor_state_without_tran
         );
     }
 }
+
+#[test]
+fn daemon_runs_surface_owner_reaper_on_five_second_interval() {
+    let daemon = include_str!("../../../apps/daemon/src/main.rs");
+
+    assert!(
+        daemon.contains("SURFACE_OWNER_REAP_INTERVAL")
+            && daemon.contains("Duration::from_secs(5)"),
+        "daemon must run the owner reaper on a bounded five-second interval"
+    );
+    assert!(
+        daemon.contains("reap_expired_surface_owner_resources_for_sessions"),
+        "daemon must actively revoke expired surface owner resources even when no new request arrives"
+    );
+}

@@ -158,3 +158,36 @@ fn daemon_restart_recovery_is_whitelisted_exact_and_one_shot() {
         );
     }
 }
+
+#[test]
+fn desktop_heartbeat_is_five_seconds_and_never_refreshes_stale_owner_proof() {
+    let resource = source("src/surface_resource.rs");
+
+    assert!(
+        resource.contains("SURFACE_OWNER_HEARTBEAT_INTERVAL")
+            && resource.contains("Duration::from_secs(5)"),
+        "desktop heartbeat must use the approved five-second interval"
+    );
+    assert!(
+        resource.contains("/v1/runtime/resources/surfaces/owners/heartbeat"),
+        "desktop heartbeat must call the exact current-owner liveness route"
+    );
+    assert!(
+        resource.contains("spawn_surface_owner_heartbeat")
+            && resource.contains("heartbeat_surface_owner_once"),
+        "owner registration must start one process-lifetime heartbeat loop"
+    );
+
+    let heartbeat = resource
+        .split("async fn heartbeat_surface_owner_once")
+        .nth(1)
+        .expect("heartbeat implementation")
+        .split("\nasync fn ")
+        .next()
+        .expect("heartbeat body");
+    assert!(
+        !heartbeat.contains("refresh_registration")
+            && !heartbeat.contains("reattach_surface_once"),
+        "heartbeat failure must not preempt one-shot surface recovery by refreshing or reattaching authority"
+    );
+}
