@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::{
     perception::{authorized, denied},
+    surface_liveness::reap_expired_surface_owner_resources_for_sessions,
     surface_owner::{
         register_surface_owner_for_sessions, validate_surface_owner_for_sessions,
         SurfaceOwnerError, SurfaceOwnerProof,
@@ -238,6 +239,35 @@ pub fn release_surface_resource_session_for_sessions(
     before.saturating_sub(entry.pending.len())
 }
 
+pub(crate) fn release_surface_resource_owner_for_sessions(
+    sessions: &Arc<SessionManager>,
+    owner_instance_id: Uuid,
+) -> usize {
+    let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = lock_surface_registry(registry);
+    let Some(entry) = existing_surface_entry_mut(&mut entries, sessions) else {
+        return 0;
+    };
+
+    let pending_before = entry.pending.len();
+    entry
+        .pending
+        .retain(|(owner, _, _), _| *owner != owner_instance_id);
+    let pending_removed = pending_before.saturating_sub(entry.pending.len());
+
+    entry
+        .activating
+        .retain(|(owner, _, _)| *owner != owner_instance_id);
+
+    let live_before = entry.live.len();
+    entry
+        .live
+        .retain(|(owner, _, _), _| *owner != owner_instance_id);
+    let live_removed = live_before.saturating_sub(entry.live.len());
+
+    pending_removed.saturating_add(live_removed)
+}
+
 pub(crate) fn governor(state: &ControlState) -> RuntimeResourceGovernor {
     runtime_resource_governor_for_sessions(&state.sessions)
 }
@@ -271,6 +301,7 @@ async fn register_surface_owner(
     if request.owner_instance_id.is_nil() {
         return surface_bad_request("invalid_surface_owner_instance");
     }
+    let _ = reap_expired_surface_owner_resources_for_sessions(&state.sessions);
     Json(register_surface_owner_for_sessions(
         &state.sessions,
         request.owner_instance_id,
