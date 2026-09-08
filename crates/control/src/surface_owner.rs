@@ -107,41 +107,6 @@ fn register_surface_owner_for_sessions_at(
     }
 }
 
-pub(crate) fn validate_surface_owner_for_sessions(
-    sessions: &Arc<SessionManager>,
-    proof: SurfaceOwnerProof,
-) -> Result<(), SurfaceOwnerError> {
-    validate_surface_owner_for_sessions_at(sessions, proof, Instant::now())
-}
-
-fn validate_surface_owner_for_sessions_at(
-    sessions: &Arc<SessionManager>,
-    proof: SurfaceOwnerProof,
-    now: Instant,
-) -> Result<(), SurfaceOwnerError> {
-    let registry = SURFACE_OWNERS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut entries = lock_registry(registry);
-    entries.retain(|_, entry| entry.owner.strong_count() > 0);
-
-    let key = Arc::as_ptr(sessions) as usize;
-    let Some(entry) = entries.get(&key) else {
-        return Err(SurfaceOwnerError::NotRegistered);
-    };
-    if proof.boot_epoch != entry.boot_epoch {
-        return Err(SurfaceOwnerError::BootEpochMismatch);
-    }
-    let Some(current) = entry.leases.get(&proof.owner_instance_id) else {
-        return Err(SurfaceOwnerError::NotRegistered);
-    };
-    if proof.owner_lease_id != current.owner_lease_id {
-        return Err(SurfaceOwnerError::LeaseMismatch);
-    }
-    if owner_expired(current.last_seen, now) {
-        return Err(SurfaceOwnerError::NotRegistered);
-    }
-    Ok(())
-}
-
 pub(crate) fn pin_surface_owner_for_sessions(
     sessions: &Arc<SessionManager>,
     proof: SurfaceOwnerProof,
@@ -287,9 +252,11 @@ mod tests {
         .expect("current owner operation must acquire a liveness pin");
         let expired_at = start + Duration::from_secs(16);
 
-        assert_eq!(
-            validate_surface_owner_for_sessions_at(&sessions, proof, expired_at),
-            Err(SurfaceOwnerError::NotRegistered),
+        assert!(
+            matches!(
+                pin_surface_owner_for_sessions_at(&sessions, proof, expired_at),
+                Err(SurfaceOwnerError::NotRegistered)
+            ),
             "an in-flight pin must never authorize a new request after TTL expiry"
         );
         assert!(
