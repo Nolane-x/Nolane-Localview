@@ -9,5 +9,7 @@ license.workspace = true
 chrono.workspace = true
 localview-core = { path = "../core" }
 localview-protocol = { path = "../protocol" }
+serde.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
