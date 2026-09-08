@@ -105,6 +105,29 @@ impl SurfaceActivateRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SurfaceReattachRequest {
+    session_id: SessionId,
+    surface_kind: String,
+    label: String,
+    incarnation: u64,
+    visibility: SurfaceVisibility,
+    owner_instance_id: Uuid,
+    boot_epoch: Uuid,
+    owner_lease_id: Uuid,
+}
+
+impl SurfaceReattachRequest {
+    fn owner_proof(&self) -> SurfaceOwnerProof {
+        SurfaceOwnerProof {
+            owner_instance_id: self.owner_instance_id,
+            boot_epoch: self.boot_epoch,
+            owner_lease_id: self.owner_lease_id,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SurfaceVisibilityRequest {
     session_id: SessionId,
     surface_kind: String,
@@ -166,6 +189,10 @@ pub(crate) fn router(state: ControlState) -> Router {
         .route(
             "/v1/runtime/resources/surfaces/activate",
             post(activate_surface_resource),
+        )
+        .route(
+            "/v1/runtime/resources/surfaces/reattach",
+            post(reattach_surface_resource),
         )
         .route(
             "/v1/runtime/resources/surfaces/visibility",
@@ -398,6 +425,91 @@ async fn activate_surface_resource(
     };
 
     if recovery.record_activated(recovery_key).await.is_err() {
+        clear_activating_claim(&state.sessions, &claim);
+        drop(lease);
+        return surface_recovery_unavailable();
+    }
+
+    let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = lock_surface_registry(registry);
+    let entry = surface_entry_mut(&mut entries, &state.sessions);
+    entry.activating.remove(&claim);
+    entry.live.insert(claim, lease);
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn reattach_surface_resource(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Json(request): Json<SurfaceReattachRequest>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    let proof = request.owner_proof();
+    if let Err(error) = validate_surface_owner_for_sessions(&state.sessions, proof) {
+        return surface_owner_conflict(error);
+    }
+    if state.sessions.get(request.session_id).await.is_none() {
+        return surface_not_found("surface_session_not_found");
+    }
+    if request.incarnation == 0 {
+        return surface_bad_request("invalid_surface_identity");
+    }
+    let Some(identity) = surface_identity(
+        request.surface_kind,
+        request.label,
+        request.incarnation,
+    ) else {
+        return surface_bad_request("invalid_surface_identity");
+    };
+    let Some(recovery) = surface_recovery_journal_for_sessions(&state.sessions) else {
+        return surface_recovery_unavailable();
+    };
+    let recovery_key = match SurfaceRecoveryKey::new(
+        request.session_id,
+        identity.surface_kind.clone(),
+        identity.label.clone(),
+        identity.incarnation,
+        proof.owner_instance_id,
+    ) {
+        Ok(key) => key,
+        Err(_) => return surface_bad_request("invalid_surface_identity"),
+    };
+    if !recovery.outstanding_exact(&recovery_key) {
+        return surface_conflict("surface_recovery_debt_missing");
+    }
+
+    let claim = (proof.owner_instance_id, request.session_id, identity.clone());
+    let reservation = {
+        let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut entries = lock_surface_registry(registry);
+        let entry = surface_entry_mut(&mut entries, &state.sessions);
+        if surface_logically_claimed(entry, request.session_id, &identity) {
+            return surface_conflict("surface_owner_already_live");
+        }
+
+        let reservation = match governor(&state).reserve(
+            request.session_id.to_string(),
+            format!("surface-reattach-{}", Uuid::new_v4()),
+            ResourceWorkKind::NativeSurface,
+        ) {
+            Ok(reservation) => reservation,
+            Err(denial) => return denial_response(denial),
+        };
+        entry.activating.insert(claim.clone());
+        reservation
+    };
+
+    let lease = match reservation.activate_surface(identity.clone(), request.visibility) {
+        Ok(lease) => lease,
+        Err(_) => {
+            clear_activating_claim(&state.sessions, &claim);
+            return surface_conflict("surface_activation_rejected");
+        }
+    };
+
+    if recovery.record_reattached(recovery_key).await.is_err() {
         clear_activating_claim(&state.sessions, &claim);
         drop(lease);
         return surface_recovery_unavailable();
