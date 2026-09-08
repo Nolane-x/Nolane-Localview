@@ -79,7 +79,7 @@ fn surface_resource_client_does_not_create_parallel_authority_or_aggregate_count
 #[test]
 fn desktop_owner_registration_threads_current_boot_proof_through_surface_protocol() {
     let resource = source("src/surface_resource.rs");
-    let desktop = source("src/lib.rs");
+    let registry = source("src/surface_registry.rs");
 
     assert!(
         resource.contains("/v1/runtime/resources/surfaces/owners/register"),
@@ -100,9 +100,13 @@ fn desktop_owner_registration_threads_current_boot_proof_through_surface_protoco
         );
     }
     assert!(
-        desktop.contains("owner_instance_id()")
-            && desktop.contains("DesktopSurfaceOwner::new(owner_instance_id)"),
-        "Tauri startup must bind network owner state to the exact UUID owned by the shared desktop surface registry"
+        registry.contains("primary_owner_instance_id")
+            && resource.contains("DesktopSurfaceOwner::new(owner_instance_id)"),
+        "network owner state must bind to the exact UUID published by the primary desktop surface registry"
+    );
+    assert!(
+        resource.contains("tokio::sync::Mutex"),
+        "registration refresh must serialize current-boot owner capability replacement"
     );
     assert!(
         !resource.contains("control.token") && !resource.contains("dirs::"),
