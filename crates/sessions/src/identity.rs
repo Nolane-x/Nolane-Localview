@@ -1,11 +1,12 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs::File,
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use atomic_write_file::AtomicWriteFile;
 use localview_protocol::{Endpoint, ProjectIdentity, ServerKind, SessionId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -86,9 +87,23 @@ pub enum SessionIdentityHealth {
     VolatileDegraded,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionIdentityDurability {
+    Durable,
+    Volatile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedSessionIdentity {
+    pub session_id: SessionId,
+    pub durability: SessionIdentityDurability,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionIdentityResolver {
     inner: Arc<Mutex<SessionIdentityResolverState>>,
+    registry_path: PathBuf,
+    commit_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug)]
@@ -134,9 +149,20 @@ enum RegistryLoadError {
     DuplicateSessionId,
 }
 
+#[derive(Debug, Error)]
+enum RegistryCommitError {
+    #[error("session identity registry serialization failed: {0}")]
+    Serialization(String),
+    #[error("session identity registry commit would exceed {MAX_SESSION_IDENTITY_REGISTRY_BYTES} bytes")]
+    TooLarge,
+    #[error("session identity registry commit I/O failed: {0}")]
+    Io(String),
+}
+
 impl SessionIdentityResolver {
     pub async fn open_file(path: PathBuf) -> Self {
-        let loaded = tokio::task::spawn_blocking(move || load_registry(&path)).await;
+        let load_path = path.clone();
+        let loaded = tokio::task::spawn_blocking(move || load_registry(&load_path)).await;
         match loaded {
             Ok(Ok(records)) => Self {
                 inner: Arc::new(Mutex::new(SessionIdentityResolverState {
@@ -144,11 +170,14 @@ impl SessionIdentityResolver {
                     diagnostic: None,
                     records,
                 })),
+                registry_path: path,
+                commit_gate: Arc::new(tokio::sync::Mutex::new(())),
             },
-            Ok(Err(error)) => Self::degraded(error.to_string()),
-            Err(error) => Self::degraded(format!(
-                "session identity registry loader task failed: {error}"
-            )),
+            Ok(Err(error)) => Self::degraded(path, error.to_string()),
+            Err(error) => Self::degraded(
+                path,
+                format!("session identity registry loader task failed: {error}"),
+            ),
         }
     }
 
@@ -164,14 +193,88 @@ impl SessionIdentityResolver {
         self.lock().records.len()
     }
 
-    fn degraded(diagnostic: String) -> Self {
+    pub async fn existing(&self, lineage: &SessionLineage) -> Option<SessionId> {
+        let _commit_guard = self.commit_gate.lock().await;
+        let state = self.lock();
+        if state.health != SessionIdentityHealth::Healthy {
+            return None;
+        }
+        state.records.get(lineage).copied()
+    }
+
+    pub async fn resolve_new(&self, lineage: &SessionLineage) -> ResolvedSessionIdentity {
+        let _commit_guard = self.commit_gate.lock().await;
+
+        let (candidate, next_records) = {
+            let state = self.lock();
+            if state.health != SessionIdentityHealth::Healthy {
+                return volatile_identity(&state.records);
+            }
+            if let Some(session_id) = state.records.get(lineage).copied() {
+                return ResolvedSessionIdentity {
+                    session_id,
+                    durability: SessionIdentityDurability::Durable,
+                };
+            }
+            if state.records.len() >= MAX_SESSION_IDENTITY_RECORDS
+                || validate_canonical_lineage(lineage).is_err()
+            {
+                return volatile_identity(&state.records);
+            }
+
+            let candidate = fresh_session_id(&state.records);
+            let mut next_records = state.records.clone();
+            next_records.insert(lineage.clone(), candidate);
+            (candidate, next_records)
+        };
+
+        let path = self.registry_path.clone();
+        let records_for_commit = next_records.clone();
+        let committed = tokio::task::spawn_blocking(move || {
+            commit_registry(&path, &records_for_commit)
+        })
+        .await;
+
+        match committed {
+            Ok(Ok(())) => {
+                let mut state = self.lock();
+                state.records = next_records;
+                ResolvedSessionIdentity {
+                    session_id: candidate,
+                    durability: SessionIdentityDurability::Durable,
+                }
+            }
+            Ok(Err(error)) => {
+                self.mark_degraded(error.to_string());
+                let state = self.lock();
+                volatile_identity(&state.records)
+            }
+            Err(error) => {
+                self.mark_degraded(format!(
+                    "session identity registry commit task failed: {error}"
+                ));
+                let state = self.lock();
+                volatile_identity(&state.records)
+            }
+        }
+    }
+
+    fn degraded(path: PathBuf, diagnostic: String) -> Self {
         Self {
             inner: Arc::new(Mutex::new(SessionIdentityResolverState {
                 health: SessionIdentityHealth::VolatileDegraded,
                 diagnostic: Some(diagnostic),
                 records: BTreeMap::new(),
             })),
+            registry_path: path,
+            commit_gate: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    fn mark_degraded(&self, diagnostic: String) {
+        let mut state = self.lock();
+        state.health = SessionIdentityHealth::VolatileDegraded;
+        state.diagnostic = Some(diagnostic);
     }
 
     fn lock(&self) -> MutexGuard<'_, SessionIdentityResolverState> {
@@ -259,6 +362,40 @@ fn load_registry(
     validate_records(registry.records)
 }
 
+fn commit_registry(
+    path: &Path,
+    records: &BTreeMap<SessionLineage, SessionId>,
+) -> Result<(), RegistryCommitError> {
+    let registry = SessionIdentityRegistryFile {
+        schema_version: 1,
+        records: records
+            .iter()
+            .map(|(lineage, session_id)| SessionIdentityRecord {
+                lineage: lineage.clone(),
+                session_id: *session_id,
+            })
+            .collect(),
+    };
+    let bytes = serde_json::to_vec(&registry)
+        .map_err(|error| RegistryCommitError::Serialization(error.to_string()))?;
+    if bytes.len() > MAX_SESSION_IDENTITY_REGISTRY_BYTES {
+        return Err(RegistryCommitError::TooLarge);
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| RegistryCommitError::Io(error.to_string()))?;
+    }
+    let mut file = AtomicWriteFile::open(path)
+        .map_err(|error| RegistryCommitError::Io(error.to_string()))?;
+    file.write_all(&bytes)
+        .map_err(|error| RegistryCommitError::Io(error.to_string()))?;
+    file.sync_all()
+        .map_err(|error| RegistryCommitError::Io(error.to_string()))?;
+    file.commit()
+        .map_err(|error| RegistryCommitError::Io(error.to_string()))
+}
+
 fn validate_records(
     records: Vec<SessionIdentityRecord>,
 ) -> Result<BTreeMap<SessionLineage, SessionId>, RegistryLoadError> {
@@ -319,6 +456,22 @@ fn validate_canonical_lineage(lineage: &SessionLineage) -> Result<(), RegistryLo
         },
     }
     Ok(())
+}
+
+fn fresh_session_id(records: &BTreeMap<SessionLineage, SessionId>) -> SessionId {
+    loop {
+        let candidate = Uuid::new_v4();
+        if candidate != Uuid::nil() && !records.values().any(|session_id| *session_id == candidate) {
+            return candidate;
+        }
+    }
+}
+
+fn volatile_identity(records: &BTreeMap<SessionLineage, SessionId>) -> ResolvedSessionIdentity {
+    ResolvedSessionIdentity {
+        session_id: fresh_session_id(records),
+        durability: SessionIdentityDurability::Volatile,
+    }
 }
 
 fn validate_endpoint_part(
