@@ -1,5 +1,13 @@
 #![forbid(unsafe_code)]
 
+mod identity;
+
+pub use identity::{
+    MAX_ENDPOINT_HOST_BYTES, MAX_ENDPOINT_SCHEME_BYTES, MAX_NORMALIZED_PROJECT_PATH_BYTES,
+    SessionIdentityError, SessionLineage, SessionLineageAnchorV1, SessionLineageV1,
+    SessionServerKind, session_lineage,
+};
+
 use std::{collections::{HashMap, HashSet}, time::Duration};
 use chrono::{DateTime, Utc};
 use localview_core::project_identity;
