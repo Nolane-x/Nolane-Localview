@@ -60,6 +60,13 @@ jobs:
         run: cargo test -p localview-live-bridge --test native_executor_exact_result_lookup_contract
       - name: Tests
         run: cargo test --workspace --exclude localview-desktop
+      - name: Durable session identity continuity contract
+        run: |
+          cargo test -p localview-sessions --test durable_identity_registry
+          cargo test -p localview-sessions --test session_identity_resolver
+          cargo test -p localview-sessions --test durable_identity_continuity
+          cargo test -p localview-sessions --test ambiguous_lineage_reentry
+          cargo test -p localview-daemon --test session_identity_startup
       - name: Native executor queue contract
         run: cargo test -p localview-live-bridge --test native_executor_queue
       - name: Native executor transport contract

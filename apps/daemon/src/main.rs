@@ -5,7 +5,7 @@ mod process_metrics;
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -29,7 +29,9 @@ use localview_live_bridge::{ConsequentialJournal, ConsequentialRecoveryActionSco
 use localview_observation::ObservationBus;
 use localview_protocol::ObservationEvent;
 use localview_security::generate_control_token;
-use localview_sessions::SessionManager;
+use localview_sessions::{
+    SessionIdentityHealth, SessionIdentityResolver, SessionManager, SESSION_IDENTITY_REGISTRY_FILE,
+};
 use localview_windows_observe_runtime::{
     WindowsObserveRuntimeError, WindowsUiaObserveRuntimeManager,
 };
@@ -52,8 +54,26 @@ async fn main() -> Result<()> {
         .init();
 
     let config = RuntimeConfig::default();
+    let state_root = state_dir()?;
+    tokio::fs::create_dir_all(&state_root)
+        .await
+        .context("create LocalView state directory")?;
+
+    let identity_resolver =
+        SessionIdentityResolver::open_file(state_root.join(SESSION_IDENTITY_REGISTRY_FILE)).await;
+    if identity_resolver.health() == SessionIdentityHealth::VolatileDegraded {
+        warn!(
+            diagnostic = ?identity_resolver.diagnostic(),
+            "session identity continuity degraded; using volatile session identity"
+        );
+    }
+    let sessions = Arc::new(SessionManager::with_identity_resolver(
+        config.disconnect_grace,
+        identity_resolver,
+    ));
+
     let consequential_recovery =
-        consequential_recovery::open_boot_consequential_recovery(&state_dir()?).await?;
+        consequential_recovery::open_boot_consequential_recovery(&state_root).await?;
     let consequential_journal = consequential_recovery.journal().clone();
     let consequential_boot_scope = consequential_recovery.scope().clone();
     let has_consequential_boot_history = !consequential_boot_scope.is_empty();
@@ -77,11 +97,10 @@ async fn main() -> Result<()> {
             );
         }
     }
-    let sessions = Arc::new(SessionManager::new(config.disconnect_grace));
     let resources = runtime_resource_governor_for_sessions(&sessions);
     process_metrics::spawn(resources.clone());
     if let Some(executable) = discover_chromium_executable() {
-        let temp_root = state_dir()?.join("chromium-runtime");
+        let temp_root = state_root.join("chromium-runtime");
         configure_chromium_executor_for_sessions(&sessions, executable.clone(), temp_root);
         info!(
             executable = %executable.display(),
@@ -137,7 +156,7 @@ async fn main() -> Result<()> {
         config.auto_open,
         localview_core::AutoOpenMode::Paused
     )));
-    let token = load_or_create_token().await?;
+    let token = load_or_create_token(&state_root).await?;
     let control_state = ControlState {
         token: Arc::from(token.clone()),
         sessions: sessions.clone(),
@@ -323,10 +342,9 @@ fn spawn_windows_consequential_recovery_loop(
     });
 }
 
-async fn load_or_create_token() -> Result<String> {
-    let dir = state_dir()?;
-    tokio::fs::create_dir_all(&dir).await?;
-    let path = dir.join("control.token");
+async fn load_or_create_token(state_root: &Path) -> Result<String> {
+    tokio::fs::create_dir_all(state_root).await?;
+    let path = state_root.join("control.token");
     if let Ok(existing) = tokio::fs::read_to_string(&path).await {
         let token = existing.trim();
         if !token.is_empty() {
