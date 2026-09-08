@@ -28,6 +28,7 @@ struct SurfaceOwnerRegistration {
 pub struct DesktopSurfaceOwner {
     owner_instance_id: Uuid,
     registration: Mutex<Option<SurfaceOwnerRegistration>>,
+    recovery: Mutex<()>,
 }
 
 impl DesktopSurfaceOwner {
@@ -35,6 +36,7 @@ impl DesktopSurfaceOwner {
         Self {
             owner_instance_id,
             registration: Mutex::new(None),
+            recovery: Mutex::new(()),
         }
     }
 
@@ -42,6 +44,21 @@ impl DesktopSurfaceOwner {
         let mut current = self.registration.lock().await;
         if let Some(registration) = *current {
             return Ok(registration);
+        }
+        let registration = register_surface_owner(self.owner_instance_id).await?;
+        *current = Some(registration);
+        Ok(registration)
+    }
+
+    async fn refresh_registration(
+        &self,
+        stale: SurfaceOwnerRegistration,
+    ) -> Result<SurfaceOwnerRegistration, String> {
+        let mut current = self.registration.lock().await;
+        if let Some(registration) = *current {
+            if registration != stale {
+                return Ok(registration);
+            }
         }
         let registration = register_surface_owner(self.owner_instance_id).await?;
         *current = Some(registration);
@@ -118,6 +135,38 @@ struct SurfaceReattachRequest<'a> {
     owner_lease_id: Uuid,
 }
 
+#[derive(Debug, Deserialize)]
+struct SurfaceErrorResponse {
+    error: String,
+}
+
+#[derive(Debug)]
+struct SurfaceControlError {
+    code: Option<String>,
+    message: String,
+}
+
+impl SurfaceControlError {
+    fn local(message: impl Into<String>) -> Self {
+        Self {
+            code: None,
+            message: message.into(),
+        }
+    }
+
+    fn response(status: reqwest::StatusCode, code: Option<String>) -> Self {
+        let message = match code.as_deref() {
+            Some(code) => format!("surface control request failed with {status}: {code}"),
+            None => format!("surface control request failed with {status}"),
+        };
+        Self { code, message }
+    }
+
+    fn into_string(self) -> String {
+        self.message
+    }
+}
+
 pub async fn reserve_surface(session_id: SessionId) -> Result<SurfaceReservationToken, String> {
     let proof = surface_owner()?.registration().await?;
     let token = SurfaceReservationToken {
@@ -182,17 +231,9 @@ pub async fn reattach_surface(
     visibility: DesktopSurfaceVisibility,
 ) -> Result<(), String> {
     let proof = exact_identity_owner(identity).await?;
-    let request = SurfaceReattachRequest {
-        session_id: identity.session_id,
-        surface_kind: identity.kind.as_runtime_kind(),
-        label: &identity.label,
-        incarnation: identity.incarnation,
-        visibility: runtime_visibility(visibility),
-        owner_instance_id: proof.owner_instance_id,
-        boot_epoch: proof.boot_epoch,
-        owner_lease_id: proof.owner_lease_id,
-    };
-    post_surface("/v1/runtime/resources/surfaces/reattach", &request).await
+    reattach_surface_once(identity, visibility, proof)
+        .await
+        .map_err(SurfaceControlError::into_string)
 }
 
 pub async fn update_surface_visibility(
@@ -200,17 +241,13 @@ pub async fn update_surface_visibility(
     visibility: DesktopSurfaceVisibility,
 ) -> Result<(), String> {
     let proof = exact_identity_owner(identity).await?;
-    let request = SurfaceVisibilityRequest {
-        session_id: identity.session_id,
-        surface_kind: identity.kind.as_runtime_kind(),
-        label: &identity.label,
-        incarnation: identity.incarnation,
-        visibility: runtime_visibility(visibility),
-        owner_instance_id: proof.owner_instance_id,
-        boot_epoch: proof.boot_epoch,
-        owner_lease_id: proof.owner_lease_id,
-    };
-    post_surface("/v1/runtime/resources/surfaces/visibility", &request).await
+    match update_surface_visibility_once(identity, visibility, proof).await {
+        Ok(()) => Ok(()),
+        Err(error) if is_recoverable_owner_error(&error) => {
+            retry_visibility_once(identity, visibility, proof).await
+        }
+        Err(error) => Err(error.into_string()),
+    }
 }
 
 pub async fn release_surface(identity: &DesktopSurfaceIdentity) -> Result<(), String> {
@@ -225,6 +262,85 @@ pub async fn release_surface(identity: &DesktopSurfaceIdentity) -> Result<(), St
         owner_lease_id: proof.owner_lease_id,
     };
     post_surface("/v1/runtime/resources/surfaces/release", &request).await
+}
+
+async fn retry_visibility_once(
+    identity: &DesktopSurfaceIdentity,
+    visibility: DesktopSurfaceVisibility,
+    stale: SurfaceOwnerRegistration,
+) -> Result<(), String> {
+    let owner = surface_owner()?;
+    let _recovery = owner.recovery.lock().await;
+    let current = owner.registration().await?;
+
+    if current != stale {
+        return update_surface_visibility_once(identity, visibility, current)
+            .await
+            .map_err(SurfaceControlError::into_string);
+    }
+
+    let proof = owner.refresh_registration(stale).await?;
+    if identity.owner_instance_id != proof.owner_instance_id {
+        return Err("surface identity/owner mismatch".into());
+    }
+
+    reattach_surface_once(identity, visibility, proof)
+        .await
+        .map_err(SurfaceControlError::into_string)?;
+    update_surface_visibility_once(identity, visibility, proof)
+        .await
+        .map_err(SurfaceControlError::into_string)
+}
+
+async fn update_surface_visibility_once(
+    identity: &DesktopSurfaceIdentity,
+    visibility: DesktopSurfaceVisibility,
+    proof: SurfaceOwnerRegistration,
+) -> Result<(), SurfaceControlError> {
+    if identity.owner_instance_id != proof.owner_instance_id {
+        return Err(SurfaceControlError::local("surface identity/owner mismatch"));
+    }
+    let request = SurfaceVisibilityRequest {
+        session_id: identity.session_id,
+        surface_kind: identity.kind.as_runtime_kind(),
+        label: &identity.label,
+        incarnation: identity.incarnation,
+        visibility: runtime_visibility(visibility),
+        owner_instance_id: proof.owner_instance_id,
+        boot_epoch: proof.boot_epoch,
+        owner_lease_id: proof.owner_lease_id,
+    };
+    post_surface_response("/v1/runtime/resources/surfaces/visibility", &request).await
+}
+
+async fn reattach_surface_once(
+    identity: &DesktopSurfaceIdentity,
+    visibility: DesktopSurfaceVisibility,
+    proof: SurfaceOwnerRegistration,
+) -> Result<(), SurfaceControlError> {
+    if identity.owner_instance_id != proof.owner_instance_id {
+        return Err(SurfaceControlError::local("surface identity/owner mismatch"));
+    }
+    let request = SurfaceReattachRequest {
+        session_id: identity.session_id,
+        surface_kind: identity.kind.as_runtime_kind(),
+        label: &identity.label,
+        incarnation: identity.incarnation,
+        visibility: runtime_visibility(visibility),
+        owner_instance_id: proof.owner_instance_id,
+        boot_epoch: proof.boot_epoch,
+        owner_lease_id: proof.owner_lease_id,
+    };
+    post_surface_response("/v1/runtime/resources/surfaces/reattach", &request).await
+}
+
+fn is_recoverable_owner_error(error: &SurfaceControlError) -> bool {
+    matches!(
+        error.code.as_deref(),
+        Some("surface_owner_not_registered")
+            | Some("surface_owner_boot_epoch_mismatch")
+            | Some("surface_owner_lease_mismatch")
+    )
 }
 
 async fn exact_identity_owner(
@@ -281,15 +397,34 @@ fn runtime_visibility(visibility: DesktopSurfaceVisibility) -> &'static str {
 }
 
 async fn post_surface<T: Serialize + ?Sized>(path: &str, body: &T) -> Result<(), String> {
-    let token = super::super::read_token().await?;
-    super::super::control_client()?
+    post_surface_response(path, body)
+        .await
+        .map_err(SurfaceControlError::into_string)
+}
+
+async fn post_surface_response<T: Serialize + ?Sized>(
+    path: &str,
+    body: &T,
+) -> Result<(), SurfaceControlError> {
+    let token = super::super::read_token()
+        .await
+        .map_err(SurfaceControlError::local)?;
+    let client = super::super::control_client().map_err(SurfaceControlError::local)?;
+    let response = client
         .post(format!("{SURFACE_RESOURCE_BASE}{path}"))
         .bearer_auth(token)
         .json(body)
         .send()
         .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    Ok(())
+        .map_err(|error| SurfaceControlError::local(error.to_string()))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let code = response
+        .json::<SurfaceErrorResponse>()
+        .await
+        .ok()
+        .map(|body| body.error);
+    Err(SurfaceControlError::response(status, code))
 }
