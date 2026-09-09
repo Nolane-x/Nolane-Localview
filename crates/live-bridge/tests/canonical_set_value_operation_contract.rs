@@ -11,6 +11,7 @@ fn set_value_is_a_distinct_payload_free_canonical_operation() {
     assert_eq!(
         CanonicalActionOperation::from_bridge_action_kind(&BridgeActionKind::TypeText {
             text: "caller-secret".into(),
+            clear_first: false,
         }),
         Some(CanonicalActionOperation::InputText),
         "legacy TypeText must remain InputText and must never synthesize SetValue authority",
@@ -40,6 +41,7 @@ async fn set_value_compatibility_carrier_can_remain_empty_and_private() {
             Some("windows-uia:exact-edit".into()),
             BridgeActionKind::TypeText {
                 text: String::new(),
+                clear_first: false,
             },
             ActionEnvelopeMetadata {
                 decision_principal_ref: PrincipalRef::from("principal:local-control:user"),
@@ -59,7 +61,7 @@ async fn set_value_compatibility_carrier_can_remain_empty_and_private() {
         .expect("direct payload-free compatibility carrier should bind");
 
     match &direct.action.action {
-        BridgeActionKind::TypeText { text } => assert!(text.is_empty()),
+        BridgeActionKind::TypeText { text, .. } => assert!(text.is_empty()),
         other => panic!("unexpected compatibility carrier: {other:?}"),
     }
     assert!(
