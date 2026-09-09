@@ -16,6 +16,29 @@ use crate::{
 
 pub const MAX_SET_VALUE_UTF8_BYTES: usize = 16 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsUiaSetValueEquality {
+    Match,
+    Mismatch,
+    Unknown,
+}
+
+/// Fresh SetValue world-state evidence projected from the trusted provider
+/// boundary. The receipt intentionally carries only equality + exact lineage and
+/// payload metadata. Neither the expected plaintext nor the observed current
+/// value may escape into this receipt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUiaSetValueVerificationReceipt {
+    pub action_id: Uuid,
+    pub payload_ref: SetValuePayloadRef,
+    pub mode: SetValueMode,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub element_ref: ProviderElementRef,
+    pub observation_cut_ref: String,
+    pub equality: WindowsUiaSetValueEquality,
+}
+
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum WindowsUiaSetValueDispatchRequestError {
     #[error("Windows UI Automation SetValue authority metadata is invalid")]
