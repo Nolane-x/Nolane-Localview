@@ -128,10 +128,10 @@ impl WindowsUiaWorker {
 
     pub fn verify_set_value(
         &self,
-        _attachment: &WindowsUiaAttachment,
-        _request: WindowsUiaSetValueVerificationRequest,
+        attachment: &WindowsUiaAttachment,
+        request: WindowsUiaSetValueVerificationRequest,
     ) -> Result<WindowsUiaSetValueVerificationReceipt, WindowsUiaWorkerError> {
-        Err(WindowsUiaWorkerError::UnsupportedPlatform)
+        self.inner.verify_set_value(attachment, request)
     }
 
     pub fn subscribe_events(
