@@ -16,7 +16,7 @@ Add a production-safe `set_value` action without weakening any existing V4.3 aut
 
 The result must guarantee that:
 
-- the value to write never becomes durable plaintext in the consequential journal, operation binding, postcondition contract ref, semantic snapshot, diagnostic response, or provider receipt;
+- the value to write never becomes durable plaintext in the consequential journal, operation binding, postcondition contract ref, semantic snapshot, diagnostic response, provider receipt, or workflow log;
 - the exact value authorized for one action cannot be substituted before dispatch;
 - a crash or daemon restart cannot reconstruct the value or dispatch authority from durable state;
 - `SetValue` is attempted exactly once after the existing fresh-evidence, exact-lineage, confirmation, PREPARED, execution-arm, and volatile-context fences pass;
@@ -70,7 +70,7 @@ The design introduces five narrowly separated concepts:
 
 These are intentionally distinct. Operation identity does not contain payload. Durable metadata does not recreate plaintext. Provider dispatch evidence does not imply verification.
 
-## Canonical operation
+## Canonical operation and compatibility carrier
 
 Add a new enum value:
 
@@ -80,7 +80,15 @@ CanonicalActionOperation::SetValue
 
 `InputText` remains reserved for later insert-text / keyboard-style semantics. `SetValue` means replacement through a semantic provider value capability.
 
-The direct canonical compatibility carrier remains payload-free. The product path must not put the requested value into a legacy public queue or any durable envelope field.
+The exact semantic authority is the durably explicit `SetValue` operation binding, not the legacy carrier. For compatibility with the existing `CanonicalQueuedAction` shape, the direct canonical binding uses an internal payload-free `BridgeActionKind::TypeText` placeholder with an empty text value. That placeholder:
+
+- is never inserted into the legacy public action queue;
+- is never used to derive the provider verb;
+- is never treated as the SetValue payload;
+- never decides whether the operation is replace or clear;
+- must be covered by a regression proving that the real caller value is absent from the compatibility carrier.
+
+The product path must call `record_intent_operation_bound_explicit(..., CanonicalActionOperation::SetValue)` and must never rely on `from_bridge_action_kind` to authorize SetValue.
 
 The durable existing operation sidecar remains unchanged in shape and records only `SetValue`.
 
@@ -93,11 +101,13 @@ ProcessLocalSetValuePayload {
   payload_ref: UUID,
   action_id: UUID,
   mode: Replace | Clear,
-  utf8_bytes: secret process-local buffer,
+  utf8_bytes: Zeroizing<Vec<u8>>,
   commitment: opaque keyed digest,
   consumed: bool
 }
 ```
+
+The implementation must use the Rust `zeroize` crate (or an already-present equivalent that provides the same guaranteed drop-time memory clearing) rather than a best-effort custom clear loop. This does not claim that HTTP parsing leaves zero copies in allocator history; it guarantees that LocalView-owned long-lived payload storage is explicitly zeroized on drop.
 
 Properties:
 
@@ -108,16 +118,16 @@ Properties:
 - not cloneable as authority;
 - consumed exactly once by the exact confirmation path;
 - never reinserted after confirmation consumption, provider error, unknown dispatch, or verification failure;
-- erased on normal drop using a zeroizing memory wrapper where supported by the Rust dependency surface;
+- zeroized on every normal drop path;
 - lost on process/daemon restart by design.
 
-HTTP JSON parsing necessarily materializes caller text briefly in memory. The implementation must minimize additional copies and move the parsed value into the zeroizing payload owner as early as practical.
+HTTP JSON parsing necessarily materializes caller text briefly in memory. The implementation must minimize additional copies and move the parsed value into the zeroizing payload owner as early as practical. No debug formatting of the payload type may expose contents.
 
 ## Payload limits and canonical bytes
 
 For the first slice:
 
-- `replace_value` accepts UTF-8 JSON text up to 16 KiB;
+- `replace_value` accepts UTF-8 JSON text up to 16 KiB measured in UTF-8 bytes;
 - `clear_value` accepts no value field;
 - embedded U+0000 is rejected because provider/string-boundary behavior is not part of this slice's conformance proof;
 - whitespace is significant;
@@ -125,21 +135,24 @@ For the first slice:
 - no Unicode normalization is performed;
 - the exact UTF-8 string supplied by the caller is the authorized payload.
 
-The commitment canonical encoding is domain-separated and includes at least:
+The commitment canonical encoding is domain-separated and contains exactly these fields in a deterministic order:
 
 ```text
-version
-+ action_id
-+ payload_ref
-+ mode
+"localview:set-value-payload:v1\0"
++ action_id bytes
++ payload_ref bytes
++ mode tag
++ payload_utf8_len as fixed-width integer
 + exact UTF-8 payload bytes
 ```
+
+No locale, display string, JSON serialization order, or platform line-ending behavior participates in the commitment.
 
 ## Opaque keyed commitment
 
 Each `WindowsConsequentialControlHandle` owns one random 256-bit payload commitment key for that process/control-handle lifetime.
 
-The durable binding stores an HMAC-SHA256 commitment produced with that process-local key. The key itself is never persisted.
+The durable binding stores an HMAC-SHA256 commitment produced with that process-local key. The key itself is never persisted, logged, returned over HTTP, or copied into a provider receipt.
 
 Conceptual durable record:
 
@@ -160,10 +173,13 @@ Security properties:
 - the durable record contains no plaintext;
 - after process death the commitment key is gone, so the record is not a reusable password/value oracle and cannot reconstruct dispatch authority;
 - before dispatch the same live process can recompute the commitment and reject payload substitution;
+- verification uses the HMAC implementation's constant-time verification primitive, not ordinary string/byte equality on secret-derived MAC values;
 - payload bindings are immutable `create_new` companions tied to the exact admitted intent sequence, following the existing durable operation-binding pattern;
 - an old/stale companion file cannot authorize another action because action id + intent sequence + payload ref must all match.
 
 A restarted process may read this record for diagnostics/recovery classification, but cannot resolve it into plaintext or a dispatch payload.
+
+The commitment digest is durable correctness metadata, not user-facing data. HTTP responses and normal logs must not expose it.
 
 ## Plan protocol
 
@@ -192,7 +208,9 @@ Request, clear mode:
 }
 ```
 
-Unknown fields are rejected. The client cannot provide:
+Unknown fields are rejected. `replace_value` requires exactly one `value` field. `clear_value` rejects any `value` field, even an empty one.
+
+The client cannot provide:
 
 - UIA pattern;
 - provider dispatch verb;
@@ -217,7 +235,7 @@ risk_class
 idempotency_class
 ```
 
-It never echoes the requested value or commitment key.
+It never echoes the requested value, commitment digest, or commitment key.
 
 ## Plan ordering
 
@@ -225,19 +243,20 @@ Planning is serialized by the existing plan gate and must proceed in this order:
 
 1. authenticate control bearer;
 2. require current `SessionId`;
-3. capture fresh Windows provider evidence and exact element rebind;
-4. require complete current observation;
-5. preflight exact `ValuePattern` capability;
-6. require `IsPassword == false` from fresh provider evidence;
-7. require `ValuePattern.IsReadOnly == false` from fresh provider evidence;
-8. allocate process-local confirmation and payload refs;
-9. bind direct canonical action with `CanonicalActionOperation::SetValue` semantics and no plaintext carrier authority;
-10. durably record `IntentAdmitted`;
-11. durably record payload-free canonical operation `SetValue`;
-12. compute process-local keyed payload commitment;
-13. fsync immutable `DurableSetValuePayloadBinding`;
-14. insert the process-local pending confirmation + payload capability;
-15. return the plan response.
+3. validate mode/value structural constraints and size before provider work;
+4. capture fresh Windows provider evidence and exact element rebind;
+5. require complete current observation;
+6. preflight exact `ValuePattern` capability;
+7. require `IsPassword == false` from fresh provider evidence;
+8. require `ValuePattern.IsReadOnly == false` from fresh provider evidence;
+9. allocate process-local confirmation and payload refs;
+10. bind direct canonical action using the payload-free internal compatibility carrier;
+11. durably record `IntentAdmitted`;
+12. durably record payload-free canonical operation `SetValue`;
+13. compute the process-local keyed payload commitment;
+14. fsync immutable `DurableSetValuePayloadBinding`;
+15. insert the process-local pending confirmation + payload capability;
+16. return the plan response.
 
 If any durable step fails, no process-local confirmation is published. A partially admitted durable action remains non-dispatchable and reconciliation/diagnostic only.
 
@@ -261,11 +280,14 @@ On exact confirmation:
 1. resolve exact pending action + confirmation;
 2. atomically remove the pending plan from process-local storage;
 3. move, not clone, the `ProcessLocalSetValuePayload` into the verified execution transaction;
-4. recompute and compare the HMAC commitment against the durable payload binding;
-5. require exact action id, intent sequence, payload ref, mode, and byte length;
-6. only then allow the existing authorization revalidation / PREPARED / arm sequence to continue.
+4. load the exact durable payload binding;
+5. recompute and constant-time verify the HMAC commitment;
+6. require exact action id, intent sequence, payload ref, mode, and byte length;
+7. only then allow the existing authorization revalidation / PREPARED / arm sequence to continue.
 
 A wrong confirmation ref does not consume the exact pending payload. An exact confirmation consumes both confirmation and payload authority before consequential execution begins, preserving the existing no-blind-retry rule.
+
+If payload verification fails after confirmation consumption, the payload is zeroized and no replacement confirmation or retry capability is minted.
 
 ## Pre-dispatch authority
 
@@ -277,6 +299,7 @@ fresh planning evidence
 → canonical intent
 → durable operation + payload binding
 → explicit confirmation
+→ exact payload commitment verification
 → independent authorization revalidation
 → exact retained element lease
 → volatile foreground/focus/modal seal
@@ -307,19 +330,19 @@ No semantic failure escalates automatically to keyboard input.
 SetValue {
   payload_ref,
   mode,
-  secret text buffer
+  secret_text: borrowed zeroizing bytes
 }
 ```
 
 Existing payload-free operations carry `None`.
 
-The request remains borrowed/move-constrained so external code cannot manufacture a replayable provider request.
+The request remains borrowed and non-cloneable so external code cannot manufacture or retain a replayable provider request. The provider must not retain the borrowed plaintext after the call returns.
 
-The provider performs exactly one UIA `ValuePattern.SetValue(...)` call for the exact consumed request.
+The provider performs exactly one UIA `ValuePattern.SetValue(...)` call for the exact consumed request. `clear_value` dispatches one `SetValue("")` call but remains semantically distinguished by its mode/ref binding.
 
 Provider receipts must not contain plaintext. As part of this slice, the runtime/provider receipt chain must explicitly bind the exact `dispatch_operation`; the receipt matcher must compare it. This closes any pattern-only ambiguity and keeps shared `Expand/Collapse` and the new `SetValue` verb exact.
 
-For SetValue, the receipt additionally binds `payload_ref` and the opaque commitment digest. It does not contain the value.
+For SetValue, the receipt additionally binds `payload_ref` and the opaque commitment digest. It does not contain the value. The provider does not compute authority from the digest; it only echoes the exact commitment metadata supplied by the already-authorized runtime request so the coordinator can reject receipt substitution.
 
 `DispatchResult::DispatchedFull` remains dispatch evidence only.
 
@@ -336,7 +359,7 @@ ValuePattern unsupported
 fresh exact element binding unavailable
 ```
 
-The semantic snapshot may expose non-sensitive capability state such as:
+The fresh Windows capability snapshot must expose non-sensitive capability state sufficient to make these decisions, for example:
 
 ```text
 windows_uia.is_password = false
@@ -344,6 +367,8 @@ windows_uia.value.is_read_only = false
 ```
 
 but must not expose the current text value merely to support this action.
+
+The MTA worker repeats `IsPassword` and `IsReadOnly` checks immediately before the side effect so a property change between planning and dispatch cannot silently widen authority.
 
 Password/credential mutation requires a later explicit secret-delivery policy. This slice does not claim it.
 
@@ -353,7 +378,7 @@ Provider dispatch success is not the postcondition.
 
 After a possibly-dispatched SetValue action, LocalView must obtain fresh observation authority through the existing consequential observation permit, then perform a fresh exact UIA value read on the same provider/target lineage and exact element.
 
-The comparison happens inside the trusted provider/runtime boundary against the still-live process-local payload. Raw observed text is not inserted into the general semantic snapshot, evidence store, journal, log, or HTTP response.
+The comparison happens inside the trusted provider/runtime boundary against the still-live consumed process-local payload. Raw observed text is not inserted into the general semantic snapshot, evidence store, journal, log, or HTTP response.
 
 The provider returns a typed receipt conceptually containing:
 
@@ -377,6 +402,8 @@ The equality comparison uses exact string semantics. No trim/case-fold/Unicode n
 
 Only `MATCH`, bound to the exact action/payload/lineage/element and a fresh post-dispatch observation cut, may contribute `VerifiedPass` for the mandatory SetValue payload postcondition.
 
+The receipt never includes the observed value. The commitment digest may be persisted as correctness metadata but is not emitted through normal product responses or logs.
+
 ## Postcondition contract representation
 
 The admitted envelope must contain a server-owned mandatory opaque payload-equality contract reference that contains no plaintext, for example:
@@ -387,17 +414,34 @@ lvpc:payload-equality:v1:{"mode":"replace_value","payload_ref":"<uuid>"}
 
 `clear_value` uses its own mode value.
 
-The shared postcondition registry owns parsing/versioning of this contract family. Generic native-semantic snapshot evaluation returns `Unknown` for it because a normal snapshot deliberately lacks raw value authority.
+The shared postcondition registry owns parsing/versioning of this contract family. The contract contains only an opaque payload ref and mode; it contains no digest/key/plaintext.
+
+Generic native-semantic snapshot evaluation returns `Unknown` for this contract because a normal snapshot deliberately lacks raw value authority.
 
 The SetValue verifier can resolve it only when it has:
 
 - the exact durable payload binding;
-- the matching live process-local payload capability/commitment context;
+- the matching live process-local payload/commitment context;
 - a fresh `WindowsUiaSetValueVerificationReceipt`.
 
 This preserves one shared correctness-schema registry while preventing normal semantic snapshots from becoming plaintext stores.
 
 Additional caller-selected arbitrary postcondition contracts are out of scope for the first SetValue route. The mandatory equality contract is server-created and sufficient for initial product correctness.
+
+## Recovery verifier behavior
+
+The existing generic recovery API may encounter a durable SetValue action after the process-local payload/key has disappeared.
+
+For a payload-equality contract whose live payload resolver is unavailable, the SetValue-aware verifier must return typed `Unknown` evidence for that contract. It must **not**:
+
+- return a verifier infrastructure error solely because the key/payload is gone;
+- infer pass from a provider dispatch receipt;
+- infer pass from the current element merely being present;
+- create a replacement payload;
+- request the value again from an unrelated caller;
+- redispatch.
+
+This ensures recovery proceeds through the existing `PostconditionNotVerified` / reconciliation-only outcome instead of converting process restart into failure text or new write authority.
 
 ## Crash and restart semantics
 
@@ -443,7 +487,7 @@ set_value_verification_mismatch
 set_value_verification_unknown
 ```
 
-Raw UIA/HRESULT diagnostics may be preserved separately, but human error text must not determine recovery behavior.
+Raw UIA/HRESULT diagnostics may be preserved separately, but human error text must not determine recovery behavior. Payload plaintext, commitment keys, and observed values must never be interpolated into these messages.
 
 ## Concurrency and one-shot rules
 
@@ -463,25 +507,31 @@ Implementation must proceed RED → GREEN in small causal slices.
 At minimum, permanent tests must prove:
 
 1. `CanonicalActionOperation::SetValue` exists and remains payload-free;
-2. durable payload binding contains no plaintext and is immutable/create-new;
-3. wrong action/intent sequence/payload ref/commitment fails closed;
-4. daemon restart cannot resolve a durable payload binding into dispatch authority;
-5. HTTP plan rejects client-forged pattern/verb/risk/commitment fields;
-6. HTTP plan never echoes plaintext;
-7. password target is rejected before intent/confirmation publication;
-8. read-only target is rejected before intent/confirmation publication;
-9. exact confirmation consumes payload exactly once;
-10. missing/substituted payload blocks before PREPARED/provider side effect;
-11. canonical SetValue + ValuePattern is the only mapping that mints provider `SetValue`;
-12. provider request/receipt bind exact dispatch operation and payload ref;
-13. real Win32 UIA SetValue changes a non-password editable fixture exactly once;
-14. provider dispatch acknowledgement alone cannot commit;
-15. fresh post-dispatch equality `MATCH` can produce VerifiedExpected + durable commit;
-16. fresh post-dispatch `MISMATCH`/`UNKNOWN` cannot commit;
-17. crash/reopen after PREPARED or PossiblyDispatched cannot redispatch without payload capability;
-18. VerifiedUncommitted commit-only recovery remains valid;
-19. cleanup removes/zeroizes pending payload state;
-20. existing Invoke/Select/Toggle/Expand/Collapse regressions remain green.
+2. the direct compatibility carrier contains no caller plaintext and never enters the public queue;
+3. durable payload binding contains no plaintext and is immutable/create-new;
+4. wrong action/intent sequence/payload ref/commitment fails closed;
+5. HMAC verification is exact and stale process keys cannot validate old payload bindings;
+6. daemon restart cannot resolve a durable payload binding into dispatch authority;
+7. HTTP plan rejects client-forged pattern/verb/risk/commitment fields;
+8. HTTP plan never echoes plaintext or commitment digest;
+9. `clear_value` rejects a caller-supplied `value` field;
+10. password target is rejected before intent/confirmation publication;
+11. unknown password state is rejected before intent/confirmation publication;
+12. read-only target is rejected before intent/confirmation publication;
+13. exact confirmation consumes payload exactly once;
+14. missing/substituted payload blocks before PREPARED/provider side effect;
+15. canonical SetValue + ValuePattern is the only mapping that mints provider `SetValue`;
+16. provider request/receipt bind exact dispatch operation and payload ref;
+17. real Win32 UIA SetValue changes a non-password editable fixture exactly once;
+18. provider dispatch acknowledgement alone cannot commit;
+19. fresh post-dispatch equality `MATCH` can produce VerifiedExpected + durable commit;
+20. fresh post-dispatch `MISMATCH`/`UNKNOWN` cannot commit;
+21. raw current/expected text is absent from durable journal, operation/payload companions, semantic snapshots, evidence receipts, HTTP responses, and test logs;
+22. crash/reopen after PREPARED or PossiblyDispatched cannot redispatch without payload capability;
+23. recovery without the process payload returns `Unknown` evidence rather than verifier failure;
+24. VerifiedUncommitted commit-only recovery remains valid;
+25. cleanup removes and zeroizes pending payload state;
+26. existing Invoke/Select/Toggle/Expand/Collapse regressions remain green.
 
 ## Windows workflow gate
 
@@ -508,6 +558,8 @@ Expected production touch points are limited to:
 - Windows workflow gates and focused tests.
 
 No Perception Budget, native-surface D2 ownership, Chromium governor, generic keyboard/pointer injection, macOS AX, or Linux AT-SPI authority is changed by this slice.
+
+The one deliberate shared hardening included in scope is adding exact `dispatch_operation` binding to the generic Windows provider execution receipt/matcher because SetValue must not extend a pattern-only receipt boundary. Existing payload-free operations must remain behaviorally unchanged.
 
 ## Definition of done
 
