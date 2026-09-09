@@ -382,6 +382,7 @@ impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
             target_incarnation_ref: receipt.target_incarnation_ref,
             element_ref: receipt.element_ref,
             required_pattern: receipt.required_pattern,
+            dispatch_operation: receipt.dispatch_operation,
             context_requirements: receipt.context_requirements,
             transport_result: receipt.transport_result,
             dispatch_result: receipt.dispatch_result,
