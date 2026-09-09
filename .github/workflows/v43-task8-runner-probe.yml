@@ -1,0 +1,12 @@
+name: Task 8 Runner Probe
+
+on:
+  push:
+    branches:
+      - feat/v43-windows-set-value-payload-authority
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo task8-runner-ok
