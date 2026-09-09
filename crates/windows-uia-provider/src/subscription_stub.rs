@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{
     WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
     WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
+    WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
     worker::{
         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
         WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
@@ -114,6 +115,14 @@ impl WindowsUiaWorker {
         request: WindowsUiaPatternDispatchRequest,
     ) -> Result<WindowsUiaPatternDispatchReceipt, WindowsUiaWorkerError> {
         self.inner.dispatch_pattern(attachment, request)
+    }
+
+    pub fn dispatch_set_value(
+        &self,
+        attachment: &WindowsUiaAttachment,
+        request: WindowsUiaSetValueDispatchRequest,
+    ) -> Result<WindowsUiaSetValueDispatchReceipt, WindowsUiaWorkerError> {
+        self.inner.dispatch_set_value(attachment, request)
     }
 
     pub fn subscribe_events(
