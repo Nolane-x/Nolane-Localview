@@ -1,0 +1,78 @@
+name: V4.3 Task 8 SetValue HTTP Stage1 GREEN
+
+on:
+  push:
+    branches: [feat/v43-windows-set-value-payload-authority]
+
+permissions:
+  contents: write
+
+jobs:
+  stage1-green:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-windows-set-value-payload-authority
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Wire SetValue route without touching generic authority
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/control/src/windows_consequential.rs')
+          text = path.read_text()
+          module_anchor = '#![forbid(unsafe_code)]\n\nuse std::{'
+          module_replacement = '#![forbid(unsafe_code)]\n\nmod set_value_http;\n\nuse std::{'
+          if module_anchor not in text:
+              raise SystemExit('module anchor not found')
+          text = text.replace(module_anchor, module_replacement, 1)
+          route_anchor = '''        .route(
+              "/v1/sessions/{id}/windows-observe/consequential/collapse/plan",
+              post(plan_windows_consequential_collapse),
+          )
+          .route(
+              "/v1/sessions/{id}/windows-observe/consequential/{action_id}/confirm",
+              post(confirm_windows_consequential_action),
+          )'''
+          route_replacement = '''        .route(
+              "/v1/sessions/{id}/windows-observe/consequential/collapse/plan",
+              post(plan_windows_consequential_collapse),
+          )
+          .route(
+              "/v1/sessions/{id}/windows-observe/consequential/set-value/plan",
+              post(set_value_http::plan_windows_consequential_set_value),
+          )
+          .route(
+              "/v1/sessions/{id}/windows-observe/consequential/{action_id}/confirm",
+              post(confirm_windows_consequential_action),
+          )'''
+          if route_anchor not in text:
+              raise SystemExit('router anchor not found')
+          text = text.replace(route_anchor, route_replacement, 1)
+          path.write_text(text)
+          PY
+      - name: Format
+        run: cargo fmt --all
+      - name: Check control
+        run: cargo check -p localview-control --all-targets
+      - name: SetValue HTTP GREEN contract
+        run: cargo test -p localview-control --test windows_consequential_set_value_control -- --nocapture
+      - name: Existing consequential control regression
+        run: cargo test -p localview-control --test windows_consequential_control -- --nocapture
+      - name: Expand-collapse server-owned regression
+        run: cargo test -p localview-control --test windows_consequential_expand_collapse_control -- --nocapture
+      - name: Commit verified production wiring
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/control/src/windows_consequential.rs crates/control/src/windows_consequential/set_value_http.rs
+          if git diff --cached --quiet; then
+            echo 'No production diff to commit'
+            exit 0
+          fi
+          git commit -m 'feat(v43): wire server-owned SetValue HTTP boundary'
+          git push origin HEAD:feat/v43-windows-set-value-payload-authority
