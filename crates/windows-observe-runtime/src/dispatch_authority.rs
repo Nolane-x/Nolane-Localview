@@ -226,6 +226,7 @@ fn canonical_operation_matches_uia_pattern(
                 CanonicalActionOperation::Collapse,
                 WindowsUiaPattern::ExpandCollapse
             )
+            | (CanonicalActionOperation::SetValue, WindowsUiaPattern::Value)
     )
 }
 
