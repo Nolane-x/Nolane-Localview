@@ -390,6 +390,111 @@ impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
     }
 }
 
+
+impl crate::WindowsUiaSetValueExecutor for WindowsUiaRuntimeDispatchExecutor {
+    type Error = WindowsObserveRuntimeError;
+
+    async fn dispatch_set_value(
+        &self,
+        request: localview_windows_uia_provider::WindowsUiaSetValueDispatchRequest,
+    ) -> Result<localview_windows_uia_provider::WindowsUiaSetValueDispatchReceipt, Self::Error> {
+        if request.provider_incarnation_ref != self.provider_incarnation_ref
+            || request.target_incarnation_ref != self.target_incarnation_ref
+        {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "dispatch_set_value_executor_lineage_validation",
+                message: "SetValue request lineage differs from the resolved runtime executor".into(),
+            });
+        }
+
+        let _gate = self.operation_gate.lock().await;
+        let attachment = self
+            .active
+            .lock()
+            .await
+            .get(&self.session_id)
+            .map(|observation| observation.attachment.clone())
+            .ok_or(WindowsObserveRuntimeError::NotAttached {
+                session_id: self.session_id,
+            })?;
+        if attachment.provider_incarnation_ref() != &self.provider_incarnation_ref
+            || attachment.target_incarnation_ref() != &self.target_incarnation_ref
+        {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "dispatch_set_value_session_revalidation",
+                message: "attached Windows UIA session lineage changed after SetValue executor resolution".into(),
+            });
+        }
+
+        let provider = self.provider.clone();
+        let dispatch_attachment = attachment.clone();
+        run_provider("dispatch_set_value", move || {
+            provider
+                .worker
+                .dispatch_set_value(&dispatch_attachment, request)
+        })
+        .await
+    }
+
+    async fn verify_set_value(
+        &self,
+        request: &crate::WindowsUiaSetValueVerificationRequest<'_>,
+    ) -> Result<localview_windows_uia_provider::WindowsUiaSetValueVerificationReceipt, Self::Error> {
+        if request.provider_incarnation_ref() != &self.provider_incarnation_ref
+            || request.target_incarnation_ref() != &self.target_incarnation_ref
+        {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "verify_set_value_executor_lineage_validation",
+                message: "SetValue verification lineage differs from the resolved runtime executor".into(),
+            });
+        }
+
+        let provider_request =
+            localview_windows_uia_provider::WindowsUiaSetValueVerificationRequest::new(
+                request.action_id(),
+                request.payload_ref(),
+                request.mode(),
+                request.provider_incarnation_ref().clone(),
+                request.target_incarnation_ref().clone(),
+                request.element_ref().clone(),
+                request.observation_cut_ref().to_owned(),
+                request.expected_utf8().to_vec(),
+            )
+            .map_err(|error| WindowsObserveRuntimeError::Provider {
+                operation: "verify_set_value_request_validation",
+                message: error.to_string(),
+            })?;
+
+        let _gate = self.operation_gate.lock().await;
+        let attachment = self
+            .active
+            .lock()
+            .await
+            .get(&self.session_id)
+            .map(|observation| observation.attachment.clone())
+            .ok_or(WindowsObserveRuntimeError::NotAttached {
+                session_id: self.session_id,
+            })?;
+        if attachment.provider_incarnation_ref() != &self.provider_incarnation_ref
+            || attachment.target_incarnation_ref() != &self.target_incarnation_ref
+        {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "verify_set_value_session_revalidation",
+                message: "attached Windows UIA session lineage changed before fresh equality read".into(),
+            });
+        }
+
+        let provider = self.provider.clone();
+        let verification_attachment = attachment.clone();
+        run_provider("verify_set_value", move || {
+            provider
+                .worker
+                .verify_set_value(&verification_attachment, provider_request)
+        })
+        .await
+    }
+}
+
 impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
     pub fn new(
         provider: Arc<P>,

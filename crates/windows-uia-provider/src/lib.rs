@@ -90,6 +90,10 @@ pub enum WindowsUiaWorkerError {
     InvalidPatternDispatchRequest,
     #[error("Windows UI Automation SetValue dispatch request is invalid")]
     InvalidSetValueDispatchRequest,
+    #[error("Windows UI Automation SetValue verification request is invalid")]
+    InvalidSetValueVerificationRequest,
+    #[error("Windows UI Automation fresh SetValue element identity is ambiguous")]
+    SetValueVerificationElementAmbiguous,
     #[error("Windows UI Automation SetValue password field is blocked")]
     SetValuePasswordFieldBlocked,
     #[error("Windows UI Automation SetValue password state is unavailable")]
@@ -181,7 +185,8 @@ mod platform {
         WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchReceipt,
         WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport,
         WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
-        evaluate_windows_uia_dispatch_context,
+        WindowsUiaSetValueEquality, WindowsUiaSetValueVerificationReceipt,
+        WindowsUiaSetValueVerificationRequest, evaluate_windows_uia_dispatch_context,
     };
 
     const PROPERTIES_PER_NODE: usize = 17;
@@ -220,6 +225,11 @@ mod platform {
             attachment: WindowsUiaAttachment,
             request: WindowsUiaSetValueDispatchRequest,
             reply: Sender<Result<WindowsUiaSetValueDispatchReceipt, WindowsUiaWorkerError>>,
+        },
+        VerifySetValue {
+            attachment: WindowsUiaAttachment,
+            request: WindowsUiaSetValueVerificationRequest,
+            reply: Sender<Result<WindowsUiaSetValueVerificationReceipt, WindowsUiaWorkerError>>,
         },
         Shutdown,
     }
@@ -440,6 +450,34 @@ mod platform {
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
             recv_command(reply_rx, self.command_timeout)
         }
+
+        pub fn verify_set_value(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaSetValueVerificationRequest,
+        ) -> Result<WindowsUiaSetValueVerificationReceipt, WindowsUiaWorkerError> {
+            if request.action_id.is_nil()
+                || request.payload_ref.0.is_nil()
+                || request.observation_cut_ref.trim().is_empty()
+                || request.provider_incarnation_ref != self.provider_incarnation_ref
+                || request.provider_incarnation_ref != attachment.provider_incarnation_ref
+                || request.target_incarnation_ref != attachment.target_incarnation_ref
+                || request.element_ref.provider_incarnation_ref != request.provider_incarnation_ref
+                || request.element_ref.target_incarnation_ref != request.target_incarnation_ref
+                || request.element_ref.acquisition_cut_ref == request.observation_cut_ref
+            {
+                return Err(WindowsUiaWorkerError::InvalidSetValueVerificationRequest);
+            }
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.sender
+                .send(WorkerCommand::VerifySetValue {
+                    attachment: attachment.clone(),
+                    request,
+                    reply: reply_tx,
+                })
+                .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
+            recv_command(reply_rx, self.command_timeout)
+        }
     }
 
     impl Drop for WindowsUiaWorker {
@@ -573,6 +611,13 @@ mod platform {
                     reply,
                 } => {
                     let _ = reply.send(state.dispatch_set_value(&attachment, request));
+                }
+                WorkerCommand::VerifySetValue {
+                    attachment,
+                    request,
+                    reply,
+                } => {
+                    let _ = reply.send(state.verify_set_value(&attachment, request));
                 }
                 WorkerCommand::Shutdown => break,
             }
@@ -1037,6 +1082,134 @@ mod platform {
                 transport_result: localview_protocol::TransportResult::DeliveredToExecutor,
                 dispatch_result: localview_protocol::DispatchResult::DispatchedFull,
             })
+        }
+
+        fn verify_set_value(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaSetValueVerificationRequest,
+        ) -> Result<WindowsUiaSetValueVerificationReceipt, WindowsUiaWorkerError> {
+            if request.provider_incarnation_ref != self.provider_incarnation_ref
+                || request.provider_incarnation_ref != attachment.provider_incarnation_ref
+                || request.target_incarnation_ref != attachment.target_incarnation_ref
+                || request.element_ref.provider_incarnation_ref != request.provider_incarnation_ref
+                || request.element_ref.target_incarnation_ref != request.target_incarnation_ref
+                || request.element_ref.acquisition_cut_ref == request.observation_cut_ref
+            {
+                return Err(WindowsUiaWorkerError::InvalidSetValueVerificationRequest);
+            }
+
+            let retained = self.fresh_retained_element_for_verification(
+                attachment,
+                &request.observation_cut_ref,
+                &request.element_ref,
+            )?;
+            if read_pattern_support(&retained.element, UIA_IsValuePatternAvailablePropertyId)
+                != WindowsUiaPatternSupport::Supported
+            {
+                return Err(WindowsUiaWorkerError::PatternUnavailable {
+                    pattern: WindowsUiaPattern::Value,
+                });
+            }
+
+            let is_password = unsafe {
+                // SAFETY: the fresh retained element remains on this worker's MTA.
+                retained.element.CurrentIsPassword()
+            }
+            .map_err(|_| WindowsUiaWorkerError::SetValuePasswordStateUnavailable)?
+            .as_bool();
+            if is_password {
+                return Err(WindowsUiaWorkerError::SetValuePasswordFieldBlocked);
+            }
+
+            let value_pattern = unsafe {
+                // SAFETY: the fresh exact retained element and ValuePattern stay on this MTA.
+                retained
+                    .element
+                    .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            }
+            .map_err(|_| WindowsUiaWorkerError::PatternUnavailable {
+                pattern: WindowsUiaPattern::Value,
+            })?;
+            let is_read_only = unsafe {
+                // SAFETY: value_pattern is live and owned by this exact MTA worker.
+                value_pattern.CurrentIsReadOnly()
+            }
+            .map_err(|_| WindowsUiaWorkerError::SetValueReadOnlyStateUnavailable)?
+            .as_bool();
+            if is_read_only {
+                return Err(WindowsUiaWorkerError::SetValueReadOnly);
+            }
+
+            let expected = request
+                .expected_utf8_str()
+                .map_err(|_| WindowsUiaWorkerError::InvalidSetValueVerificationRequest)?;
+            let equality = match unsafe {
+                // SAFETY: this is a single fresh read from an MTA-owned ValuePattern.
+                value_pattern.CurrentValue()
+            } {
+                Ok(current) => {
+                    if current == expected {
+                        WindowsUiaSetValueEquality::Match
+                    } else {
+                        WindowsUiaSetValueEquality::Mismatch
+                    }
+                }
+                Err(_) => WindowsUiaSetValueEquality::Unknown,
+            };
+
+            Ok(WindowsUiaSetValueVerificationReceipt {
+                action_id: request.action_id,
+                payload_ref: request.payload_ref,
+                mode: request.mode,
+                provider_incarnation_ref: request.provider_incarnation_ref,
+                target_incarnation_ref: request.target_incarnation_ref,
+                element_ref: request.element_ref,
+                observation_cut_ref: request.observation_cut_ref,
+                equality,
+            })
+        }
+
+        fn fresh_retained_element_for_verification<'a>(
+            &'a self,
+            attachment: &WindowsUiaAttachment,
+            observation_cut_ref: &str,
+            authoritative_element_ref: &ProviderElementRef,
+        ) -> Result<&'a RetainedElementLease, WindowsUiaWorkerError> {
+            if attachment.provider_incarnation_ref != self.provider_incarnation_ref {
+                return Err(WindowsUiaWorkerError::TargetReincarnated);
+            }
+            self.require_current_target(attachment)?;
+
+            let lease_set = self
+                .element_leases
+                .get(&attachment.target_incarnation_ref)
+                .ok_or(WindowsUiaWorkerError::ElementLeaseNotFound)?;
+            if lease_set.snapshot_cut_ref != observation_cut_ref {
+                return Err(WindowsUiaWorkerError::ElementLeaseSnapshotExpired {
+                    requested_cut: observation_cut_ref.to_owned(),
+                    current_cut: lease_set.snapshot_cut_ref.clone(),
+                });
+            }
+
+            let mut matches = lease_set.elements.iter().filter(|retained| {
+                retained.element_ref.provider_family == authoritative_element_ref.provider_family
+                    && retained.element_ref.provider_incarnation_ref
+                        == authoritative_element_ref.provider_incarnation_ref
+                    && retained.element_ref.target_incarnation_ref
+                        == authoritative_element_ref.target_incarnation_ref
+                    && retained.element_ref.opaque_provider_element_id
+                        == authoritative_element_ref.opaque_provider_element_id
+                    && retained.element_ref.lifetime_profile_revision
+                        == authoritative_element_ref.lifetime_profile_revision
+            });
+            let retained = matches
+                .next()
+                .ok_or(WindowsUiaWorkerError::ElementLeaseNotFound)?;
+            if matches.next().is_some() {
+                return Err(WindowsUiaWorkerError::SetValueVerificationElementAmbiguous);
+            }
+            Ok(retained)
         }
 
         fn exact_retained_element<'a>(
@@ -1627,6 +1800,14 @@ impl WindowsUiaWorker {
         _attachment: &WindowsUiaAttachment,
         _request: crate::WindowsUiaSetValueDispatchRequest,
     ) -> Result<crate::WindowsUiaSetValueDispatchReceipt, WindowsUiaWorkerError> {
+        Err(WindowsUiaWorkerError::UnsupportedPlatform)
+    }
+
+    pub fn verify_set_value(
+        &self,
+        _attachment: &WindowsUiaAttachment,
+        _request: crate::WindowsUiaSetValueVerificationRequest,
+    ) -> Result<crate::WindowsUiaSetValueVerificationReceipt, WindowsUiaWorkerError> {
         Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
 }

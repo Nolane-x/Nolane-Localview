@@ -11,6 +11,7 @@ use crate::{
     WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
     WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
     WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
+    WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,
     worker::{
         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
         WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
@@ -123,6 +124,14 @@ impl WindowsUiaWorker {
         request: WindowsUiaSetValueDispatchRequest,
     ) -> Result<WindowsUiaSetValueDispatchReceipt, WindowsUiaWorkerError> {
         self.inner.dispatch_set_value(attachment, request)
+    }
+
+    pub fn verify_set_value(
+        &self,
+        _attachment: &WindowsUiaAttachment,
+        _request: WindowsUiaSetValueVerificationRequest,
+    ) -> Result<WindowsUiaSetValueVerificationReceipt, WindowsUiaWorkerError> {
+        Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
 
     pub fn subscribe_events(

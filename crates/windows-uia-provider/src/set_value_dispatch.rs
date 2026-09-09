@@ -1,7 +1,7 @@
 use std::{fmt, str};
 
-pub use localview_live_bridge::{SetValueMode, SetValuePayloadRef};
 use localview_live_bridge::CanonicalActionOperation;
+pub use localview_live_bridge::{SetValueMode, SetValuePayloadRef};
 use localview_protocol::{
     DispatchResult, ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef,
     TransportResult,
@@ -37,6 +37,109 @@ pub struct WindowsUiaSetValueVerificationReceipt {
     pub element_ref: ProviderElementRef,
     pub observation_cut_ref: String,
     pub equality: WindowsUiaSetValueEquality,
+}
+
+/// Move-only fresh SetValue equality request crossing into the provider MTA.
+///
+/// Expected plaintext is process-local, zeroized on drop, never Clone/serde,
+/// and omitted from Debug. The authoritative element ref intentionally keeps
+/// its pre-dispatch acquisition cut while `observation_cut_ref` names the
+/// fresh post-dispatch snapshot used to re-resolve the same provider element.
+pub struct WindowsUiaSetValueVerificationRequest {
+    pub action_id: Uuid,
+    pub payload_ref: SetValuePayloadRef,
+    pub mode: SetValueMode,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub element_ref: ProviderElementRef,
+    pub observation_cut_ref: String,
+    expected_utf8: Zeroizing<Vec<u8>>,
+}
+
+impl WindowsUiaSetValueVerificationRequest {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        action_id: Uuid,
+        payload_ref: SetValuePayloadRef,
+        mode: SetValueMode,
+        provider_incarnation_ref: ProviderIncarnationRef,
+        target_incarnation_ref: TargetIncarnationRef,
+        element_ref: ProviderElementRef,
+        observation_cut_ref: String,
+        expected_utf8: Vec<u8>,
+    ) -> Result<Self, WindowsUiaSetValueDispatchRequestError> {
+        if action_id.is_nil()
+            || payload_ref.0.is_nil()
+            || provider_incarnation_ref.as_str().trim().is_empty()
+            || target_incarnation_ref.as_str().trim().is_empty()
+            || observation_cut_ref.trim().is_empty()
+            || observation_cut_ref == element_ref.acquisition_cut_ref
+        {
+            return Err(WindowsUiaSetValueDispatchRequestError::InvalidAuthorityMetadata);
+        }
+        if element_ref.provider_incarnation_ref != provider_incarnation_ref
+            || element_ref.target_incarnation_ref != target_incarnation_ref
+            || element_ref.opaque_provider_element_id.trim().is_empty()
+        {
+            return Err(WindowsUiaSetValueDispatchRequestError::ElementLineageMismatch);
+        }
+        if expected_utf8.len() > MAX_SET_VALUE_UTF8_BYTES {
+            return Err(WindowsUiaSetValueDispatchRequestError::PayloadTooLarge);
+        }
+        if str::from_utf8(&expected_utf8).is_err() {
+            return Err(WindowsUiaSetValueDispatchRequestError::PayloadNotUtf8);
+        }
+        match mode {
+            SetValueMode::ReplaceValue => {
+                if expected_utf8.contains(&0) {
+                    return Err(WindowsUiaSetValueDispatchRequestError::PayloadContainsNul);
+                }
+            }
+            SetValueMode::ClearValue => {
+                if !expected_utf8.is_empty() {
+                    return Err(
+                        WindowsUiaSetValueDispatchRequestError::ClearValuePayloadMustBeEmpty,
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            action_id,
+            payload_ref,
+            mode,
+            provider_incarnation_ref,
+            target_incarnation_ref,
+            element_ref,
+            observation_cut_ref,
+            expected_utf8: Zeroizing::new(expected_utf8),
+        })
+    }
+
+    pub fn expected_utf8_len(&self) -> usize {
+        self.expected_utf8.len()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn expected_utf8_str(&self) -> Result<&str, WindowsUiaSetValueDispatchRequestError> {
+        str::from_utf8(&self.expected_utf8)
+            .map_err(|_| WindowsUiaSetValueDispatchRequestError::PayloadNotUtf8)
+    }
+}
+
+impl fmt::Debug for WindowsUiaSetValueVerificationRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WindowsUiaSetValueVerificationRequest")
+            .field("action_id", &self.action_id)
+            .field("payload_ref", &self.payload_ref)
+            .field("mode", &self.mode)
+            .field("provider_incarnation_ref", &self.provider_incarnation_ref)
+            .field("target_incarnation_ref", &self.target_incarnation_ref)
+            .field("element_ref", &self.element_ref)
+            .field("observation_cut_ref", &self.observation_cut_ref)
+            .field("expected_utf8_len", &self.expected_utf8.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -153,9 +256,7 @@ impl WindowsUiaSetValueDispatchRequest {
     }
 
     #[cfg(windows)]
-    pub(crate) fn secret_utf8_str(
-        &self,
-    ) -> Result<&str, WindowsUiaSetValueDispatchRequestError> {
+    pub(crate) fn secret_utf8_str(&self) -> Result<&str, WindowsUiaSetValueDispatchRequestError> {
         str::from_utf8(&self.secret_utf8)
             .map_err(|_| WindowsUiaSetValueDispatchRequestError::PayloadNotUtf8)
     }

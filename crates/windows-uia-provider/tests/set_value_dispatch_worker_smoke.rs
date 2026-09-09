@@ -15,9 +15,10 @@ mod windows_smoke {
     use localview_protocol::{DispatchResult, TransportResult};
     use localview_windows_uia_provider::{
         SetValueMode, SetValuePayloadRef, WindowsUiaActionCapabilities,
-        WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
-        WindowsUiaPatternSupport, WindowsUiaSetValueDispatchRequest,
-        WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig,
+        WindowsUiaDispatchContextRequirements, WindowsUiaPattern, WindowsUiaPatternSupport,
+        WindowsUiaSetValueDispatchRequest, WindowsUiaSetValueEquality,
+        WindowsUiaSetValueVerificationRequest, WindowsUiaSnapshotRequest, WindowsUiaWorker,
+        WindowsUiaWorkerConfig,
     };
     use uuid::Uuid;
     use windows::{
@@ -121,23 +122,24 @@ mod windows_smoke {
             .nodes()
             .iter()
             .find(|node| {
-                WindowsUiaActionCapabilities::from_node(node)
-                    .support_for(WindowsUiaPattern::Value)
+                WindowsUiaActionCapabilities::from_node(node).support_for(WindowsUiaPattern::Value)
                     == WindowsUiaPatternSupport::Supported
             })
             .expect("editable Win32 fixture must publish live ValuePattern support");
 
         let payload_ref = SetValuePayloadRef(Uuid::new_v4());
+        let action_id = Uuid::new_v4();
+        let authoritative_element_ref = fixture_node.element_ref.clone();
         let replacement = "LocalView SetValue After";
         let request = WindowsUiaSetValueDispatchRequest::new(
             Uuid::new_v4(),
-            Uuid::new_v4(),
+            action_id,
             1,
             "prepare:windows-uia-set-value-smoke:1".into(),
             snapshot.snapshot_cut_ref().into(),
             attachment.provider_incarnation_ref().clone(),
             attachment.target_incarnation_ref().clone(),
-            fixture_node.element_ref.clone(),
+            authoritative_element_ref.clone(),
             WindowsUiaDispatchContextRequirements {
                 require_foreground_target: false,
                 require_exact_element_focus: false,
@@ -160,18 +162,83 @@ mod windows_smoke {
                 &mut buffer,
             )
         };
-        assert!(copied > 0, "fixture text must remain readable after SetValue");
+        assert!(
+            copied > 0,
+            "fixture text must remain readable after SetValue"
+        );
         let observed = String::from_utf16(&buffer[..copied as usize])
             .expect("Win32 fixture value is valid UTF-16");
         assert_eq!(observed, replacement);
 
         assert_eq!(receipt.required_pattern, WindowsUiaPattern::Value);
-        assert_eq!(receipt.dispatch_operation, CanonicalActionOperation::SetValue);
+        assert_eq!(
+            receipt.dispatch_operation,
+            CanonicalActionOperation::SetValue
+        );
         assert_eq!(receipt.payload_ref, payload_ref);
         assert_eq!(receipt.mode, SetValueMode::ReplaceValue);
-        assert_eq!(receipt.transport_result, TransportResult::DeliveredToExecutor);
+        assert_eq!(
+            receipt.transport_result,
+            TransportResult::DeliveredToExecutor
+        );
         assert_eq!(receipt.dispatch_result, DispatchResult::DispatchedFull);
         assert!(!format!("{receipt:?}").contains(replacement));
+
+        let fresh_snapshot = worker
+            .snapshot(
+                &attachment,
+                WindowsUiaSnapshotRequest {
+                    snapshot_cut_ref: "cut:windows-uia-set-value-smoke:2:fresh".into(),
+                    surface_scope: "fixture:win32-edit".into(),
+                },
+            )
+            .expect("publish fresh post-dispatch SetValue snapshot");
+        assert_ne!(
+            authoritative_element_ref.acquisition_cut_ref,
+            fresh_snapshot.snapshot_cut_ref()
+        );
+
+        let verification = worker
+            .verify_set_value(
+                &attachment,
+                WindowsUiaSetValueVerificationRequest::new(
+                    action_id,
+                    payload_ref,
+                    SetValueMode::ReplaceValue,
+                    attachment.provider_incarnation_ref().clone(),
+                    attachment.target_incarnation_ref().clone(),
+                    authoritative_element_ref.clone(),
+                    fresh_snapshot.snapshot_cut_ref().into(),
+                    replacement.as_bytes().to_vec(),
+                )
+                .expect("construct fresh provider equality request"),
+            )
+            .expect("fresh provider CurrentValue equality read succeeds");
+        assert_eq!(verification.equality, WindowsUiaSetValueEquality::Match);
+        assert_eq!(verification.element_ref, authoritative_element_ref);
+        assert_eq!(
+            verification.observation_cut_ref,
+            fresh_snapshot.snapshot_cut_ref()
+        );
+        assert!(!format!("{verification:?}").contains(replacement));
+
+        let mismatch = worker
+            .verify_set_value(
+                &attachment,
+                WindowsUiaSetValueVerificationRequest::new(
+                    action_id,
+                    payload_ref,
+                    SetValueMode::ReplaceValue,
+                    attachment.provider_incarnation_ref().clone(),
+                    attachment.target_incarnation_ref().clone(),
+                    verification.element_ref.clone(),
+                    fresh_snapshot.snapshot_cut_ref().into(),
+                    b"LocalView deliberately wrong expected value".to_vec(),
+                )
+                .expect("construct mismatch equality request"),
+            )
+            .expect("fresh mismatch is typed evidence, not infrastructure failure");
+        assert_eq!(mismatch.equality, WindowsUiaSetValueEquality::Mismatch);
 
         stop.store(true, Ordering::Release);
         ui_thread.join().expect("join SetValue smoke UI thread");
