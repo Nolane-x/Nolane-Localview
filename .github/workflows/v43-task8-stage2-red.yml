@@ -1,0 +1,18 @@
+name: V4.3 Task 8 SetValue Payload Stage2 RED
+
+on:
+  push:
+    branches: [feat/v43-windows-set-value-payload-authority]
+
+permissions:
+  contents: read
+
+jobs:
+  stage2-red:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run process-local SetValue payload RED contract
+        run: cargo test -p localview-control --lib windows_consequential::set_value_http::tests -- --nocapture
