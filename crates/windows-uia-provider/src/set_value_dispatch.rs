@@ -129,6 +129,7 @@ impl WindowsUiaSetValueDispatchRequest {
         self.secret_utf8.len()
     }
 
+    #[cfg(windows)]
     pub(crate) fn secret_utf8_str(
         &self,
     ) -> Result<&str, WindowsUiaSetValueDispatchRequestError> {
