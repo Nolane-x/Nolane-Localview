@@ -27,6 +27,8 @@ jobs:
         run: cargo check -p localview-windows-uia-provider --all-targets
       - name: V4.3 SetValue move-only request contract
         run: cargo test -p localview-windows-uia-provider --test set_value_dispatch_contract -- --nocapture
+      - name: V4.3 SetValue equality metadata contract
+        run: cargo test -p localview-windows-uia-provider --test set_value_equality_contract -- --nocapture
       - name: Phase 6 UIA action capability contract
         run: cargo test -p localview-windows-uia-provider --test action_capability_contract -- --nocapture
       - name: Phase 6 provider dispatch context fence contract
