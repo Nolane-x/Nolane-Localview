@@ -325,6 +325,7 @@ impl WindowsUiaDispatchExecutor for FakeExecutor {
             target_incarnation_ref: request.target_incarnation_ref().clone(),
             element_ref: request.element_ref().clone(),
             required_pattern: request.required_pattern(),
+            dispatch_operation: request.dispatch_operation(),
             context_requirements: request.context_requirements(),
             transport_result: TransportResult::DeliveredToExecutor,
             dispatch_result: DispatchResult::DispatchedFull,
