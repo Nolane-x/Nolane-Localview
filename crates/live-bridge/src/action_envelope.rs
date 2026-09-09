@@ -60,6 +60,7 @@ pub enum CanonicalActionOperation {
     Toggle,
     Expand,
     Collapse,
+    SetValue,
     InputText,
     KeyInput,
     Scroll,
