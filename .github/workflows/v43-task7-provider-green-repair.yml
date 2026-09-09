@@ -1,0 +1,81 @@
+name: V4.3 Task 7 provider GREEN repair
+
+on:
+  push:
+    branches: [feat/v43-windows-set-value-payload-authority]
+
+permissions:
+  contents: write
+
+jobs:
+  provider-green-repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-windows-set-value-payload-authority
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply verified Task 7 patch with zero-allocation equality
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/v43-task7-provider-green.yml').read_text(encoding='utf-8')
+          begin_marker = "          python - <<'PY'\n"
+          end_marker = "          PY\n"
+          begin = source.index(begin_marker) + len(begin_marker)
+          end = source.index(end_marker, begin)
+          block = source[begin:end]
+          script = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in block.splitlines()
+          )
+          old = 'if current.to_string() == expected {'
+          new = 'if current == expected {'
+          if script.count(old) != 1:
+              raise SystemExit(f'expected exactly one cmp_owned repair site, found {script.count(old)}')
+          script = script.replace(old, new)
+          exec(compile(script, '<v43-task7-provider-green>', 'exec'), {})
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Compile isolated provider
+        run: cargo check -p localview-windows-uia-provider --all-targets
+      - name: Provider fresh equality contract GREEN
+        run: cargo test -p localview-windows-uia-provider --test set_value_provider_verification_contract -- --nocapture
+      - name: Production runtime adapter contract GREEN
+        run: cargo test -p localview-windows-observe-runtime --test set_value_runtime_provider_adapter_contract -- --nocapture
+      - name: Runtime fresh equality execution contract GREEN
+        run: cargo test -p localview-windows-observe-runtime --test set_value_execution_contract -- --nocapture
+      - name: Provider + runtime Clippy
+        run: cargo clippy -p localview-windows-uia-provider -p localview-windows-observe-runtime --all-targets --all-features -- -D warnings
+      - name: Real fresh Win32 SetValue dispatch + equality verification
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-uia-provider --test set_value_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
+      - name: Existing runtime coordinator regressions
+        run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior -- --nocapture
+      - name: Existing postcondition capture regressions
+        run: cargo test -p localview-windows-observe-runtime --test postcondition_capture_contract -- --nocapture
+      - name: Commit verified Task 7 production GREEN
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            crates/windows-uia-provider/src/set_value_dispatch.rs \
+            crates/windows-uia-provider/src/lib.rs \
+            crates/windows-uia-provider/src/subscription.rs \
+            crates/windows-uia-provider/src/subscription_stub.rs \
+            crates/windows-uia-provider/tests/set_value_dispatch_worker_smoke.rs \
+            crates/windows-observe-runtime/src/runtime_manager.rs
+          test -n "$(git status --porcelain)"
+          git commit -m 'feat(windows-runtime): bind SetValue to fresh provider equality'
+          git push origin HEAD:feat/v43-windows-set-value-payload-authority
