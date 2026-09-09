@@ -1,21 +1,23 @@
 #![forbid(unsafe_code)]
 
+mod set_value_http;
+
 use std::{
     collections::{BTreeSet, HashMap},
     error::Error as StdError,
     fmt,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex as StdMutex, MutexGuard, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionOperation,
@@ -25,19 +27,17 @@ use localview_postcondition_contracts::PostconditionContractRegistry;
 use localview_protocol::{PrincipalRef, ProviderElementRef, SessionId};
 use localview_sessions::SessionManager;
 use localview_windows_observe_runtime::{
-    execute_verified_canonical_uia_action, WindowsUiaActionPreflightRequest,
-    WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
-    WindowsUiaSemanticPostconditionVerifier, WindowsUiaVerifiedActionTarget,
-    WindowsUiaVerifiedExecutionOutcome,
+    WindowsUiaActionPreflightRequest, WindowsUiaAuthorizationRevalidationReceipt,
+    WindowsUiaAuthorizationRevalidator, WindowsUiaSemanticPostconditionVerifier,
+    WindowsUiaVerifiedActionTarget, WindowsUiaVerifiedExecutionOutcome,
+    execute_verified_canonical_uia_action,
 };
-use localview_windows_uia_provider::{
-    WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
-};
+use localview_windows_uia_provider::{WindowsUiaDispatchContextRequirements, WindowsUiaPattern};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{windows_observe_runtime_for_sessions, ControlState};
+use crate::{ControlState, windows_observe_runtime_for_sessions};
 
 const MAX_PENDING_WINDOWS_CONSEQUENTIAL_PLANS: usize = 64;
 const MAX_POSTCONDITION_CONTRACTS: usize = 8;
@@ -84,35 +84,40 @@ struct WindowsConsequentialSemanticAction {
     response_operation: &'static str,
 }
 
-const WINDOWS_INVOKE_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
-    operation: CanonicalActionOperation::Activate,
-    required_pattern: WindowsUiaPattern::Invoke,
-    response_operation: "invoke",
-};
+const WINDOWS_INVOKE_ACTION: WindowsConsequentialSemanticAction =
+    WindowsConsequentialSemanticAction {
+        operation: CanonicalActionOperation::Activate,
+        required_pattern: WindowsUiaPattern::Invoke,
+        response_operation: "invoke",
+    };
 
-const WINDOWS_SELECT_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
-    operation: CanonicalActionOperation::Select,
-    required_pattern: WindowsUiaPattern::SelectionItem,
-    response_operation: "select",
-};
+const WINDOWS_SELECT_ACTION: WindowsConsequentialSemanticAction =
+    WindowsConsequentialSemanticAction {
+        operation: CanonicalActionOperation::Select,
+        required_pattern: WindowsUiaPattern::SelectionItem,
+        response_operation: "select",
+    };
 
-const WINDOWS_TOGGLE_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
-    operation: CanonicalActionOperation::Toggle,
-    required_pattern: WindowsUiaPattern::Toggle,
-    response_operation: "toggle",
-};
+const WINDOWS_TOGGLE_ACTION: WindowsConsequentialSemanticAction =
+    WindowsConsequentialSemanticAction {
+        operation: CanonicalActionOperation::Toggle,
+        required_pattern: WindowsUiaPattern::Toggle,
+        response_operation: "toggle",
+    };
 
-const WINDOWS_EXPAND_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
-    operation: CanonicalActionOperation::Expand,
-    required_pattern: WindowsUiaPattern::ExpandCollapse,
-    response_operation: "expand",
-};
+const WINDOWS_EXPAND_ACTION: WindowsConsequentialSemanticAction =
+    WindowsConsequentialSemanticAction {
+        operation: CanonicalActionOperation::Expand,
+        required_pattern: WindowsUiaPattern::ExpandCollapse,
+        response_operation: "expand",
+    };
 
-const WINDOWS_COLLAPSE_ACTION: WindowsConsequentialSemanticAction = WindowsConsequentialSemanticAction {
-    operation: CanonicalActionOperation::Collapse,
-    required_pattern: WindowsUiaPattern::ExpandCollapse,
-    response_operation: "collapse",
-};
+const WINDOWS_COLLAPSE_ACTION: WindowsConsequentialSemanticAction =
+    WindowsConsequentialSemanticAction {
+        operation: CanonicalActionOperation::Collapse,
+        required_pattern: WindowsUiaPattern::ExpandCollapse,
+        response_operation: "collapse",
+    };
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -204,6 +209,10 @@ pub(crate) fn router(state: ControlState) -> Router {
             post(plan_windows_consequential_collapse),
         )
         .route(
+            "/v1/sessions/{id}/windows-observe/consequential/set-value/plan",
+            post(set_value_http::plan_windows_consequential_set_value),
+        )
+        .route(
             "/v1/sessions/{id}/windows-observe/consequential/{action_id}/confirm",
             post(confirm_windows_consequential_action),
         )
@@ -278,14 +287,8 @@ async fn plan_windows_consequential_invoke(
     Path(session_id): Path<SessionId>,
     Json(request): Json<WindowsConsequentialPlanRequest>,
 ) -> axum::response::Response {
-    plan_windows_consequential_action(
-        state,
-        headers,
-        session_id,
-        request,
-        WINDOWS_INVOKE_ACTION,
-    )
-    .await
+    plan_windows_consequential_action(state, headers, session_id, request, WINDOWS_INVOKE_ACTION)
+        .await
 }
 
 async fn plan_windows_consequential_select(
@@ -294,14 +297,8 @@ async fn plan_windows_consequential_select(
     Path(session_id): Path<SessionId>,
     Json(request): Json<WindowsConsequentialPlanRequest>,
 ) -> axum::response::Response {
-    plan_windows_consequential_action(
-        state,
-        headers,
-        session_id,
-        request,
-        WINDOWS_SELECT_ACTION,
-    )
-    .await
+    plan_windows_consequential_action(state, headers, session_id, request, WINDOWS_SELECT_ACTION)
+        .await
 }
 
 async fn plan_windows_consequential_toggle(
@@ -310,14 +307,8 @@ async fn plan_windows_consequential_toggle(
     Path(session_id): Path<SessionId>,
     Json(request): Json<WindowsConsequentialPlanRequest>,
 ) -> axum::response::Response {
-    plan_windows_consequential_action(
-        state,
-        headers,
-        session_id,
-        request,
-        WINDOWS_TOGGLE_ACTION,
-    )
-    .await
+    plan_windows_consequential_action(state, headers, session_id, request, WINDOWS_TOGGLE_ACTION)
+        .await
 }
 
 async fn plan_windows_consequential_expand(
@@ -326,14 +317,8 @@ async fn plan_windows_consequential_expand(
     Path(session_id): Path<SessionId>,
     Json(request): Json<WindowsConsequentialPlanRequest>,
 ) -> axum::response::Response {
-    plan_windows_consequential_action(
-        state,
-        headers,
-        session_id,
-        request,
-        WINDOWS_EXPAND_ACTION,
-    )
-    .await
+    plan_windows_consequential_action(state, headers, session_id, request, WINDOWS_EXPAND_ACTION)
+        .await
 }
 
 async fn plan_windows_consequential_collapse(
@@ -342,14 +327,8 @@ async fn plan_windows_consequential_collapse(
     Path(session_id): Path<SessionId>,
     Json(request): Json<WindowsConsequentialPlanRequest>,
 ) -> axum::response::Response {
-    plan_windows_consequential_action(
-        state,
-        headers,
-        session_id,
-        request,
-        WINDOWS_COLLAPSE_ACTION,
-    )
-    .await
+    plan_windows_consequential_action(state, headers, session_id, request, WINDOWS_COLLAPSE_ACTION)
+        .await
 }
 
 async fn plan_windows_consequential_action(
@@ -365,9 +344,9 @@ async fn plan_windows_consequential_action(
     if state.sessions.get(session_id).await.is_none() {
         return session_not_found();
     }
-    if let Err(message) = validate_postcondition_contracts(
-        &request.expected_postcondition_contract_refs,
-    ) {
+    if let Err(message) =
+        validate_postcondition_contracts(&request.expected_postcondition_contract_refs)
+    {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({
@@ -444,9 +423,7 @@ async fn plan_windows_consequential_action(
         target_incarnation_ref: refreshed_element_ref.target_incarnation_ref.clone(),
         risk_class: ActionRiskClass::DestructiveOrIrreversible,
         idempotency_class: ActionIdempotencyClass::Irreversible,
-        expected_postcondition_contract_refs: request
-            .expected_postcondition_contract_refs
-            .clone(),
+        expected_postcondition_contract_refs: request.expected_postcondition_contract_refs.clone(),
     };
 
     // Plan-time preflight remains evidence-only. It evaluates the exact refreshed
@@ -590,13 +567,8 @@ async fn confirm_windows_consequential_action(
     // Peek without consuming so a purely read-only executor-resolution failure
     // cannot burn confirmation authority. Exact consumption happens immediately
     // before the verified coordinator call.
-    let Some(peeked) = peek_pending_plan(
-        &control,
-        session_id,
-        action_id,
-        request.confirmation_ref,
-    )
-    .await
+    let Some(peeked) =
+        peek_pending_plan(&control, session_id, action_id, request.confirmation_ref).await
     else {
         return confirmation_missing_or_consumed();
     };
@@ -617,13 +589,8 @@ async fn confirm_windows_consequential_action(
         }
     };
 
-    let Some(plan) = consume_pending_plan(
-        &control,
-        session_id,
-        action_id,
-        request.confirmation_ref,
-    )
-    .await
+    let Some(plan) =
+        consume_pending_plan(&control, session_id, action_id, request.confirmation_ref).await
     else {
         return confirmation_missing_or_consumed();
     };
@@ -679,8 +646,7 @@ async fn peek_pending_plan(
         .await
         .get(&action_id)
         .filter(|plan| {
-            plan.queued.action.session_id == session_id
-                && plan.confirmation_ref == confirmation_ref
+            plan.queued.action.session_id == session_id && plan.confirmation_ref == confirmation_ref
         })
         .cloned()
 }
@@ -872,9 +838,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use localview_live_bridge::{
-        ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
-    };
+    use localview_live_bridge::{ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope};
     use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
     fn authority() -> ActionEnvelopeMetadata {
@@ -943,7 +907,9 @@ mod tests {
         ))
     }
 
-    async fn control_handle(label: &str) -> (WindowsConsequentialControlHandle, std::path::PathBuf) {
+    async fn control_handle(
+        label: &str,
+    ) -> (WindowsConsequentialControlHandle, std::path::PathBuf) {
         let path = journal_path(label);
         let journal = Arc::new(ConsequentialJournal::open(&path).await.unwrap());
         (
@@ -964,19 +930,37 @@ mod tests {
 
     #[test]
     fn server_owned_semantic_profiles_bind_exact_operation_and_pattern() {
-        assert_eq!(WINDOWS_INVOKE_ACTION.operation, CanonicalActionOperation::Activate);
-        assert_eq!(WINDOWS_INVOKE_ACTION.required_pattern, WindowsUiaPattern::Invoke);
+        assert_eq!(
+            WINDOWS_INVOKE_ACTION.operation,
+            CanonicalActionOperation::Activate
+        );
+        assert_eq!(
+            WINDOWS_INVOKE_ACTION.required_pattern,
+            WindowsUiaPattern::Invoke
+        );
         assert_eq!(WINDOWS_INVOKE_ACTION.response_operation, "invoke");
-        assert_eq!(WINDOWS_SELECT_ACTION.operation, CanonicalActionOperation::Select);
+        assert_eq!(
+            WINDOWS_SELECT_ACTION.operation,
+            CanonicalActionOperation::Select
+        );
         assert_eq!(
             WINDOWS_SELECT_ACTION.required_pattern,
             WindowsUiaPattern::SelectionItem
         );
         assert_eq!(WINDOWS_SELECT_ACTION.response_operation, "select");
-        assert_eq!(WINDOWS_TOGGLE_ACTION.operation, CanonicalActionOperation::Toggle);
-        assert_eq!(WINDOWS_TOGGLE_ACTION.required_pattern, WindowsUiaPattern::Toggle);
+        assert_eq!(
+            WINDOWS_TOGGLE_ACTION.operation,
+            CanonicalActionOperation::Toggle
+        );
+        assert_eq!(
+            WINDOWS_TOGGLE_ACTION.required_pattern,
+            WindowsUiaPattern::Toggle
+        );
         assert_eq!(WINDOWS_TOGGLE_ACTION.response_operation, "toggle");
-        assert_eq!(WINDOWS_EXPAND_ACTION.operation, CanonicalActionOperation::Expand);
+        assert_eq!(
+            WINDOWS_EXPAND_ACTION.operation,
+            CanonicalActionOperation::Expand
+        );
         assert_eq!(
             WINDOWS_EXPAND_ACTION.required_pattern,
             WindowsUiaPattern::ExpandCollapse
@@ -1002,7 +986,10 @@ mod tests {
 
         let receipt = revalidator.revalidate(action_id, &authority).unwrap();
         assert_eq!(receipt.action_id, action_id);
-        assert_eq!(receipt.authorization_revision, authority.authorization_revision);
+        assert_eq!(
+            receipt.authorization_revision,
+            authority.authorization_revision
+        );
         assert!(revalidator.revalidate(action_id, &authority).is_err());
     }
 
@@ -1030,14 +1017,9 @@ mod tests {
         control.pending.lock().await.insert(action_id, plan);
 
         assert!(
-            consume_pending_plan(
-                &control,
-                session_id,
-                action_id,
-                Uuid::from_u128(0xdead),
-            )
-            .await
-            .is_none()
+            consume_pending_plan(&control, session_id, action_id, Uuid::from_u128(0xdead),)
+                .await
+                .is_none()
         );
         assert!(
             peek_pending_plan(&control, session_id, action_id, confirmation_ref)
@@ -1069,7 +1051,11 @@ mod tests {
         configure_windows_consequential_control_for_sessions(&sessions, Some(journal.clone()));
         let first = windows_consequential_control_for_sessions(&sessions).unwrap();
         let plan = pending_plan();
-        first.pending.lock().await.insert(plan.queued.action.id, plan);
+        first
+            .pending
+            .lock()
+            .await
+            .insert(plan.queued.action.id, plan);
         assert_eq!(first.pending.lock().await.len(), 1);
 
         configure_windows_consequential_control_for_sessions(&sessions, Some(journal));
@@ -1087,7 +1073,9 @@ mod tests {
 
     #[test]
     fn typed_postconditions_fail_closed_on_duplicates_or_unknown_version() {
-        let v1 = "lvpc:native-semantic:v1:{\"expectation\":\"present\",\"matcher\":{\"name\":\"Done\"}}".to_owned();
+        let v1 =
+            "lvpc:native-semantic:v1:{\"expectation\":\"present\",\"matcher\":{\"name\":\"Done\"}}"
+                .to_owned();
         assert!(validate_postcondition_contracts(std::slice::from_ref(&v1)).is_ok());
         assert!(validate_postcondition_contracts(&[v1.clone(), v1]).is_err());
         assert!(
