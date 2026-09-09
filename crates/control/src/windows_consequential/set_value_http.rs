@@ -16,12 +16,26 @@ use zeroize::Zeroizing;
 
 use super::*;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Task 8 Stage 2 payload authority is intentionally introduced before Stage 3 server-owned route wiring"
+    )
+)]
 struct ProcessLocalSetValuePayload {
     payload_ref: SetValuePayloadRef,
     mode: SetValueMode,
     utf8: Zeroizing<Vec<u8>>,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Task 8 Stage 2 payload authority is intentionally introduced before Stage 3 server-owned route wiring"
+    )
+)]
 impl ProcessLocalSetValuePayload {
     fn new(
         payload_ref: SetValuePayloadRef,
@@ -64,12 +78,26 @@ impl fmt::Debug for ProcessLocalSetValuePayload {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Task 8 Stage 2 pending payload authority is intentionally introduced before Stage 3 confirmation wiring"
+    )
+)]
 struct PendingWindowsSetValuePayload {
     session_id: SessionId,
     confirmation_ref: Uuid,
     payload: ProcessLocalSetValuePayload,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Task 8 Stage 2 exact-confirmation peek is intentionally introduced before Stage 3 confirmation wiring"
+    )
+)]
 fn peek_pending_set_value_payload(
     pending: &HashMap<Uuid, PendingWindowsSetValuePayload>,
     session_id: SessionId,
@@ -81,6 +109,13 @@ fn peek_pending_set_value_payload(
     })
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Task 8 Stage 2 one-shot consume is intentionally introduced before Stage 3 confirmation wiring"
+    )
+)]
 fn consume_pending_set_value_payload(
     pending: &mut HashMap<Uuid, PendingWindowsSetValuePayload>,
     session_id: SessionId,
