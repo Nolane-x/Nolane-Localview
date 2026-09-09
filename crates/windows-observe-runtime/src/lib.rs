@@ -11,6 +11,7 @@ mod runtime_manager {
     include!("fresh_action_evidence.rs");
 }
 mod semantic_postcondition;
+mod set_value_execution;
 mod verified_action_coordinator;
 mod verified_execution;
 pub use action_preflight::*;
@@ -21,6 +22,7 @@ pub use execution_arm::*;
 pub use prepared_dispatch::*;
 pub use runtime_manager::*;
 pub use semantic_postcondition::*;
+pub use set_value_execution::*;
 pub use verified_action_coordinator::*;
 pub use verified_execution::*;
 
