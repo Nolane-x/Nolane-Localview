@@ -106,3 +106,93 @@ fn invalid_set_value_request(message: &'static str) -> axum::response::Response 
     )
         .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use localview_live_bridge::{SetValueMode, SetValuePayloadRef};
+    use uuid::Uuid;
+
+    use super::*;
+
+    const SENTINEL: &str = "localview-task8-process-local-secret-9124f98d";
+
+    fn pending_payload(
+        session_id: SessionId,
+        confirmation_ref: Uuid,
+    ) -> PendingWindowsSetValuePayload {
+        PendingWindowsSetValuePayload {
+            session_id,
+            confirmation_ref,
+            payload: ProcessLocalSetValuePayload::new(
+                SetValuePayloadRef(Uuid::from_u128(0x8a01)),
+                SetValueMode::ReplaceValue,
+                SENTINEL.as_bytes().to_vec(),
+            )
+            .expect("valid bounded process-local payload"),
+        }
+    }
+
+    #[test]
+    fn process_local_payload_debug_is_metadata_only() {
+        let payload = ProcessLocalSetValuePayload::new(
+            SetValuePayloadRef(Uuid::from_u128(0x8a02)),
+            SetValueMode::ReplaceValue,
+            SENTINEL.as_bytes().to_vec(),
+        )
+        .expect("valid bounded process-local payload");
+
+        assert_eq!(payload.utf8_bytes(), SENTINEL.as_bytes());
+        assert_eq!(payload.utf8_len(), SENTINEL.len());
+        let debug = format!("{payload:?}");
+        assert!(!debug.contains(SENTINEL));
+        assert!(debug.contains("utf8_len"));
+    }
+
+    #[test]
+    fn wrong_confirmation_keeps_set_value_payload_and_exact_confirmation_moves_once() {
+        let session_id = Uuid::from_u128(0x8a10);
+        let action_id = Uuid::from_u128(0x8a11);
+        let confirmation_ref = Uuid::from_u128(0x8a12);
+        let wrong_confirmation = Uuid::from_u128(0xdead);
+        let mut pending = HashMap::new();
+        pending.insert(action_id, pending_payload(session_id, confirmation_ref));
+
+        assert!(
+            consume_pending_set_value_payload(
+                &mut pending,
+                session_id,
+                action_id,
+                wrong_confirmation,
+            )
+            .is_none(),
+            "wrong confirmation must not consume process-local payload authority"
+        );
+        assert!(peek_pending_set_value_payload(
+            &pending,
+            session_id,
+            action_id,
+            confirmation_ref,
+        ));
+
+        let consumed = consume_pending_set_value_payload(
+            &mut pending,
+            session_id,
+            action_id,
+            confirmation_ref,
+        )
+        .expect("exact confirmation moves payload authority");
+        assert_eq!(consumed.payload.utf8_bytes(), SENTINEL.as_bytes());
+        assert!(
+            consume_pending_set_value_payload(
+                &mut pending,
+                session_id,
+                action_id,
+                confirmation_ref,
+            )
+            .is_none(),
+            "exact confirmation is one-shot"
+        );
+    }
+}
