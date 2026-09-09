@@ -22,36 +22,34 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+
           path = Path('crates/control/src/windows_consequential.rs')
           text = path.read_text()
+
           module_anchor = '#![forbid(unsafe_code)]\n\nuse std::{'
-          module_replacement = '#![forbid(unsafe_code)]\n\nmod set_value_http;\n\nuse std::{'
           if module_anchor not in text:
               raise SystemExit('module anchor not found')
-          text = text.replace(module_anchor, module_replacement, 1)
-          route_anchor = '''        .route(
-              "/v1/sessions/{id}/windows-observe/consequential/collapse/plan",
-              post(plan_windows_consequential_collapse),
+          text = text.replace(
+              module_anchor,
+              '#![forbid(unsafe_code)]\n\nmod set_value_http;\n\nuse std::{',
+              1,
           )
-          .route(
-              "/v1/sessions/{id}/windows-observe/consequential/{action_id}/confirm",
-              post(confirm_windows_consequential_action),
-          )'''
-          route_replacement = '''        .route(
-              "/v1/sessions/{id}/windows-observe/consequential/collapse/plan",
-              post(plan_windows_consequential_collapse),
+
+          confirm_handler = '            post(confirm_windows_consequential_action),\n'
+          handler_index = text.find(confirm_handler)
+          if handler_index < 0:
+              raise SystemExit('confirm handler anchor not found')
+          route_start = text.rfind('        .route(\n', 0, handler_index)
+          if route_start < 0:
+              raise SystemExit('confirm route start not found')
+
+          set_value_route = (
+              '        .route(\n'
+              '            "/v1/sessions/{id}/windows-observe/consequential/set-value/plan",\n'
+              '            post(set_value_http::plan_windows_consequential_set_value),\n'
+              '        )\n'
           )
-          .route(
-              "/v1/sessions/{id}/windows-observe/consequential/set-value/plan",
-              post(set_value_http::plan_windows_consequential_set_value),
-          )
-          .route(
-              "/v1/sessions/{id}/windows-observe/consequential/{action_id}/confirm",
-              post(confirm_windows_consequential_action),
-          )'''
-          if route_anchor not in text:
-              raise SystemExit('router anchor not found')
-          text = text.replace(route_anchor, route_replacement, 1)
+          text = text[:route_start] + set_value_route + text[route_start:]
           path.write_text(text)
           PY
       - name: Format
