@@ -29,6 +29,8 @@ jobs:
         run: cargo test -p localview-windows-uia-provider --test set_value_dispatch_contract -- --nocapture
       - name: V4.3 SetValue equality metadata contract
         run: cargo test -p localview-windows-uia-provider --test set_value_equality_contract -- --nocapture
+      - name: V4.3 SetValue provider fresh equality contract
+        run: cargo test -p localview-windows-uia-provider --test set_value_provider_verification_contract -- --nocapture
       - name: Phase 6 UIA action capability contract
         run: cargo test -p localview-windows-uia-provider --test action_capability_contract -- --nocapture
       - name: Phase 6 provider dispatch context fence contract
@@ -59,6 +61,8 @@ jobs:
         run: cargo test -p localview-windows-observe-runtime --test prepared_dispatch_contract execution_arm -- --nocapture
       - name: Phase 6 one-shot provider dispatch outcome coordinator
         run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior -- --nocapture
+      - name: V4.3 SetValue production runtime adapter contract
+        run: cargo test -p localview-windows-observe-runtime --test set_value_runtime_provider_adapter_contract -- --nocapture
       - name: V4.3 SetValue fresh equality execution contract
         run: cargo test -p localview-windows-observe-runtime --test set_value_execution_contract -- --nocapture
       - name: Phase 5 resource accounting and governor contract
@@ -95,7 +99,7 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test expand_collapse_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
-      - name: Real retained Win32 UIA SetValue dispatch
+      - name: Real retained Win32 UIA SetValue + fresh CurrentValue equality
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test set_value_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
