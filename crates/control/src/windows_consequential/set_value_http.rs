@@ -1,3 +1,5 @@
+use std::{collections::HashMap, fmt};
+
 use axum::{
     Json,
     body::Bytes,
@@ -5,11 +7,91 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use localview_live_bridge::{SetValueMode, SetValuePayloadRef};
 use localview_protocol::{ProviderElementRef, SessionId};
 use localview_windows_uia_provider::MAX_SET_VALUE_UTF8_BYTES;
 use serde::Deserialize;
+use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use super::*;
+
+struct ProcessLocalSetValuePayload {
+    payload_ref: SetValuePayloadRef,
+    mode: SetValueMode,
+    utf8: Zeroizing<Vec<u8>>,
+}
+
+impl ProcessLocalSetValuePayload {
+    fn new(
+        payload_ref: SetValuePayloadRef,
+        mode: SetValueMode,
+        utf8: Vec<u8>,
+    ) -> Result<Self, &'static str> {
+        if utf8.len() > MAX_SET_VALUE_UTF8_BYTES {
+            return Err("SetValue payload exceeds 16 KiB UTF-8 limit");
+        }
+        if utf8.contains(&0) {
+            return Err("SetValue payload contains U+0000");
+        }
+        if matches!(mode, SetValueMode::ClearValue) && !utf8.is_empty() {
+            return Err("clear_value payload must be empty");
+        }
+
+        Ok(Self {
+            payload_ref,
+            mode,
+            utf8: Zeroizing::new(utf8),
+        })
+    }
+
+    fn utf8_bytes(&self) -> &[u8] {
+        self.utf8.as_slice()
+    }
+
+    fn utf8_len(&self) -> usize {
+        self.utf8.len()
+    }
+}
+
+impl fmt::Debug for ProcessLocalSetValuePayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProcessLocalSetValuePayload")
+            .field("payload_ref", &self.payload_ref)
+            .field("mode", &self.mode)
+            .field("utf8_len", &self.utf8_len())
+            .finish()
+    }
+}
+
+struct PendingWindowsSetValuePayload {
+    session_id: SessionId,
+    confirmation_ref: Uuid,
+    payload: ProcessLocalSetValuePayload,
+}
+
+fn peek_pending_set_value_payload(
+    pending: &HashMap<Uuid, PendingWindowsSetValuePayload>,
+    session_id: SessionId,
+    action_id: Uuid,
+    confirmation_ref: Uuid,
+) -> bool {
+    pending.get(&action_id).is_some_and(|candidate| {
+        candidate.session_id == session_id && candidate.confirmation_ref == confirmation_ref
+    })
+}
+
+fn consume_pending_set_value_payload(
+    pending: &mut HashMap<Uuid, PendingWindowsSetValuePayload>,
+    session_id: SessionId,
+    action_id: Uuid,
+    confirmation_ref: Uuid,
+) -> Option<PendingWindowsSetValuePayload> {
+    if !peek_pending_set_value_payload(pending, session_id, action_id, confirmation_ref) {
+        return None;
+    }
+    pending.remove(&action_id)
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
@@ -111,7 +193,6 @@ fn invalid_set_value_request(message: &'static str) -> axum::response::Response 
 mod tests {
     use std::collections::HashMap;
 
-    use localview_live_bridge::{SetValueMode, SetValuePayloadRef};
     use uuid::Uuid;
 
     use super::*;
