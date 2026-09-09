@@ -25,6 +25,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Compile isolated UIA provider
         run: cargo check -p localview-windows-uia-provider --all-targets
+      - name: V4.3 SetValue move-only request contract
+        run: cargo test -p localview-windows-uia-provider --test set_value_dispatch_contract -- --nocapture
       - name: Phase 6 UIA action capability contract
         run: cargo test -p localview-windows-uia-provider --test action_capability_contract -- --nocapture
       - name: Phase 6 provider dispatch context fence contract
@@ -89,6 +91,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test expand_collapse_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real retained Win32 UIA SetValue dispatch
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-uia-provider --test set_value_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Invoke to verified post-dispatch commit
         env:
           LOCALVIEW_UIA_SMOKE: "1"
