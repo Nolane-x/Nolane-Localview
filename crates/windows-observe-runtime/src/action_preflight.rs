@@ -6,8 +6,9 @@ use localview_protocol::{
     SessionId,
 };
 use localview_windows_uia_provider::{
-    WindowsUiaActionCapabilities, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
-    WindowsUiaPattern, WindowsUiaPatternSupport,
+    WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact, WindowsUiaElementLeaseReceipt,
+    WindowsUiaElementLeaseRequest, WindowsUiaPattern, WindowsUiaPatternSupport,
+    WindowsUiaValueCapabilityFacts,
 };
 use thiserror::Error;
 
@@ -71,6 +72,13 @@ pub enum WindowsUiaActionPreflightError {
     PatternUnsupported { pattern: WindowsUiaPattern },
     #[error("Windows UIA action preflight pattern support is unknown: {pattern:?}")]
     PatternSupportUnknown { pattern: WindowsUiaPattern },
+    #[error(
+        "Windows UIA SetValue preflight requires explicit non-password writable facts; password={is_password:?}, read_only={is_read_only:?}"
+    )]
+    SetValueUnsafeCapability {
+        is_password: WindowsUiaBooleanCapabilityFact,
+        is_read_only: WindowsUiaBooleanCapabilityFact,
+    },
     #[error("Windows UIA action preflight internal read gate invariant failed")]
     ReadGateInvariant,
 }
@@ -164,14 +172,25 @@ where
         match WindowsUiaActionCapabilities::from_node(&read.node)
             .support_for(request.required_pattern)
         {
-            WindowsUiaPatternSupport::Supported => Ok(WindowsUiaActionPreflightReceipt {
-                authority: request.authority,
-                snapshot_cut_ref: read.snapshot_cut_ref,
-                cache_revision_ref: read.cache_revision_ref,
-                observed_digest: read.observed_digest,
-                element_ref: read.node.element_ref,
-                required_pattern: request.required_pattern,
-            }),
+            WindowsUiaPatternSupport::Supported => {
+                if request.required_pattern == WindowsUiaPattern::Value {
+                    let facts = WindowsUiaValueCapabilityFacts::from_node(&read.node);
+                    if !facts.permits_set_value() {
+                        return Err(WindowsUiaActionPreflightError::SetValueUnsafeCapability {
+                            is_password: facts.is_password(),
+                            is_read_only: facts.is_read_only(),
+                        });
+                    }
+                }
+                Ok(WindowsUiaActionPreflightReceipt {
+                    authority: request.authority,
+                    snapshot_cut_ref: read.snapshot_cut_ref,
+                    cache_revision_ref: read.cache_revision_ref,
+                    observed_digest: read.observed_digest,
+                    element_ref: read.node.element_ref,
+                    required_pattern: request.required_pattern,
+                })
+            }
             WindowsUiaPatternSupport::Unsupported => {
                 Err(WindowsUiaActionPreflightError::PatternUnsupported {
                     pattern: request.required_pattern,
