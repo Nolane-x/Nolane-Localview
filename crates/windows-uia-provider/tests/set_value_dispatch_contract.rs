@@ -19,7 +19,7 @@ fn request_with(
         target.clone(),
         &[42, 7],
         "cut:set-value-contract:1",
-        ProviderElementRealization::Direct,
+        ProviderElementRealization::RealizedCurrent,
     );
 
     WindowsUiaSetValueDispatchRequest::new(
@@ -85,7 +85,7 @@ fn request_rejects_nil_payload_identity_before_worker_dispatch() {
         target.clone(),
         &[42, 8],
         "cut:set-value-contract:2",
-        ProviderElementRealization::Direct,
+        ProviderElementRealization::RealizedCurrent,
     );
 
     let error = WindowsUiaSetValueDispatchRequest::new(
