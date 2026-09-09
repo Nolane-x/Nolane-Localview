@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use localview_live_bridge::{SetValueMode, SetValuePayloadRef};
+use localview_live_bridge::{SetValueCommitmentKey, SetValueMode, SetValuePayloadRef};
 use localview_protocol::{ProviderElementRef, SessionId};
 use localview_windows_uia_provider::MAX_SET_VALUE_UTF8_BYTES;
 use serde::Deserialize;
@@ -15,6 +15,33 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::*;
+
+#[derive(Clone)]
+pub(super) struct WindowsSetValuePayloadAuthority {
+    #[expect(
+        dead_code,
+        reason = "Task 8 control-lifetime commitment key is armed before the server-owned planning slice consumes it"
+    )]
+    commitment_key: Arc<SetValueCommitmentKey>,
+    pending: Arc<Mutex<HashMap<Uuid, PendingWindowsSetValuePayload>>>,
+}
+
+impl WindowsSetValuePayloadAuthority {
+    pub(super) fn new() -> Result<Self, String> {
+        let commitment_key = SetValueCommitmentKey::generate().map_err(|error| error.to_string())?;
+        Ok(Self {
+            commitment_key: Arc::new(commitment_key),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    pub(super) async fn release_session(&self, session_id: SessionId) {
+        self.pending
+            .lock()
+            .await
+            .retain(|_, candidate| candidate.session_id != session_id);
+    }
+}
 
 #[cfg_attr(
     not(test),
