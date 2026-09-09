@@ -1,14 +1,17 @@
-use localview_native_provider::{
-    ProviderElementRealization, provider_element_ref_from_runtime_id,
+use localview_native_provider::provider_element_ref_from_runtime_id;
+use localview_protocol::{
+    ProviderElementRealization, ProviderIncarnationRef, TargetIncarnationRef,
 };
-use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 use localview_windows_uia_provider::{
     SetValueMode, SetValuePayloadRef, WindowsUiaDispatchContextRequirements,
     WindowsUiaSetValueDispatchRequest, WindowsUiaSetValueDispatchRequestError,
 };
 use uuid::Uuid;
 
-fn request_with(mode: SetValueMode, secret: Vec<u8>) -> Result<WindowsUiaSetValueDispatchRequest, WindowsUiaSetValueDispatchRequestError> {
+fn request_with(
+    mode: SetValueMode,
+    secret: Vec<u8>,
+) -> Result<WindowsUiaSetValueDispatchRequest, WindowsUiaSetValueDispatchRequestError> {
     let provider = ProviderIncarnationRef::from("provider:windows-uia:set-value-contract".to_string());
     let target = TargetIncarnationRef::from("target:windows-uia:set-value-contract".to_string());
     let element_ref = provider_element_ref_from_runtime_id(
