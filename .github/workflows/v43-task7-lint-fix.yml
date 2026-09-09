@@ -1,0 +1,43 @@
+name: V4.3 Task 7 lint repair
+
+on:
+  push:
+    branches: [feat/v43-windows-set-value-payload-authority]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-windows-set-value-payload-authority
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Remove proven unused import
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('crates/windows-observe-runtime/src/set_value_execution.rs')
+          s = p.read_text(encoding='utf-8')
+          old = '    DispatchResult, ProviderElementRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,\n'
+          new = '    ProviderElementRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,\n'
+          if s.count(old) != 1:
+              raise SystemExit('expected exact DispatchResult import anchor once')
+          p.write_text(s.replace(old, new), encoding='utf-8')
+      - name: Verify Task 7 runtime Clippy
+        run: cargo clippy -p localview-windows-observe-runtime --all-targets --all-features -- -D warnings
+      - name: Commit verified lint repair
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/windows-observe-runtime/src/set_value_execution.rs
+          test -n "$(git status --porcelain)"
+          git commit -m 'fix(windows-runtime): remove stale SetValue import'
+          git push origin HEAD:feat/v43-windows-set-value-payload-authority
