@@ -124,11 +124,13 @@ fn standard_registry_preserves_existing_native_semantic_v1_wire_bytes() {
 #[test]
 fn standard_registry_is_explicit_and_rejects_unregistered_family_or_version() {
     let registry = PostconditionContractRegistry::standard();
-    assert_eq!(registry.schemas().len(), 2);
+    assert_eq!(registry.schemas().len(), 3);
     assert_eq!(registry.schemas()[0].family, "native-semantic");
     assert_eq!(registry.schemas()[0].version, "1");
     assert_eq!(registry.schemas()[1].family, "native-semantic");
     assert_eq!(registry.schemas()[1].version, "2");
+    assert_eq!(registry.schemas()[2].family, "payload-equality");
+    assert_eq!(registry.schemas()[2].version, "1");
 
     assert!(matches!(
         registry.decode("lvpc:browser-dom:v1:{}"),
