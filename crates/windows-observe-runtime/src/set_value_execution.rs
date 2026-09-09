@@ -10,7 +10,7 @@ use localview_postcondition_contracts::{
     PayloadEqualityModeV1, PayloadEqualityPostconditionContractV1,
 };
 use localview_protocol::{
-    DispatchResult, ProviderElementRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
+    ProviderElementRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
     TransportResult, WorldOutcome,
 };
 use localview_windows_uia_provider::{
