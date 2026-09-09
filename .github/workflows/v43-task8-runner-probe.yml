@@ -1,4 +1,4 @@
-name: Task 8 Write Token Probe
+name: Task 8 Control State Wiring
 
 on:
   push:
@@ -9,7 +9,11 @@ permissions:
   contents: write
 
 jobs:
-  probe:
+  wire:
     runs-on: ubuntu-latest
     steps:
-      - run: echo task8-write-token-probe-ok
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-windows-set-value-payload-authority
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bash scripts/v43-task8-run-control-state.sh
