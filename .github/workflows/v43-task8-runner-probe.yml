@@ -1,4 +1,4 @@
-name: Task 8 Control State Wiring
+name: Task 8 Write Token Probe
 
 on:
   push:
@@ -9,31 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  wire:
+  probe:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feat/v43-windows-set-value-payload-authority
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Apply reviewed control-state patch
-        run: python scripts/v43-task8-wire-control-state.py
-      - name: Format
-        run: cargo fmt --all
-      - name: Focused control tests
-        run: cargo test -p localview-control --lib windows_consequential:: -- --nocapture
-      - name: Check control crate
-        run: cargo check -p localview-control
-      - name: Clippy control crate
-        run: cargo clippy -p localview-control --all-targets -- -D warnings
-      - name: Commit verified source and remove temporary runner
-        run: |
-          rm scripts/v43-task8-wire-control-state.py
-          rm .github/workflows/v43-task8-runner-probe.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/control/src/windows_consequential.rs scripts/v43-task8-wire-control-state.py .github/workflows/v43-task8-runner-probe.yml
-          git diff --cached --check
-          git commit -m "feat(v43): bind SetValue state to control lifetime"
-          git push origin HEAD:feat/v43-windows-set-value-payload-authority
+      - run: echo task8-write-token-probe-ok
