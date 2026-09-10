@@ -1,10 +1,11 @@
 use std::collections::BTreeSet;
 
 use localview_validation_lab::{
-    ActualExecutionAuthority, CampaignLayer, DowngradeReason, ExecutionMode, LabError, LabMetricKind,
-    LabPreregistration, LabRevisionContext, LabRunAdmission, LabRunBuilder, LabSeedIdentity,
-    PersistedPreregistrationReceipt, PreregistrationReceiptProjection, ResearchResultClass,
-    ResultEvidence, canonical_digest, validate_persisted_receipt,
+    ActualExecutionAuthority, CampaignLayer, DowngradeReason, ExecutionMode, LabError,
+    LabFailureFlag, LabMetricKind, LabObservation, LabPreregistration, LabRevisionContext,
+    LabRunAdmission, LabRunBuilder, LabSeedIdentity, MetricStatus, PersistedPreregistrationReceipt,
+    PreregistrationReceiptProjection, ResearchResultClass, ResultEvidence, canonical_digest,
+    validate_persisted_receipt,
 };
 use serde_json::json;
 
@@ -74,6 +75,32 @@ fn prospective_admission(
     }
 }
 
+fn typed_observation(
+    observation_id: &str,
+    eligible_metrics: BTreeSet<LabMetricKind>,
+    failure_flags: BTreeSet<LabFailureFlag>,
+    logical_sequence: u64,
+) -> LabObservation {
+    LabObservation {
+        observation_id: observation_id.into(),
+        seed_id: Some("LV-S041".into()),
+        expected_outcome: "CURRENT".into(),
+        observed_outcome: if failure_flags.is_empty() {
+            "CURRENT".into()
+        } else {
+            "UNSOUND".into()
+        },
+        principal_expected: Some("principal-a".into()),
+        principal_dispatched: Some("principal-a".into()),
+        eligible_metrics,
+        failure_flags,
+        evidence_refs: BTreeSet::from([format!("evidence:{observation_id}")]),
+        provider_backed: false,
+        comparison_profile_revision: "compare-r7".into(),
+        logical_sequence,
+    }
+}
+
 #[test]
 fn result_evidence_maps_to_a_closed_non_proved_taxonomy() {
     let cases = [
@@ -130,13 +157,22 @@ fn exact_validated_receipt_and_actual_authority_admit_prospective_seed_pass() {
         actual_authority(&prereg),
     )
     .unwrap();
-    run.append_observation_digest(canonical_digest(&json!({"observation": 1})).unwrap())
-        .unwrap();
+    run.append_observation(typed_observation(
+        "obs-1",
+        BTreeSet::from([LabMetricKind::Suar]),
+        BTreeSet::new(),
+        21,
+    ))
+    .unwrap();
 
     let completed = run.finalize(ResultEvidence::PreregisteredSeedPass, 30).unwrap();
     assert_eq!(completed.payload.result_class, ResearchResultClass::PreregisteredSeedPass);
     assert_eq!(completed.payload.preregistration_digest, Some(expected_digest.clone()));
     assert_eq!(completed.identity.result_artifact_digest, canonical_digest(&completed.payload).unwrap());
+
+    let suar = completed.payload.metric_snapshot.get(LabMetricKind::Suar).unwrap();
+    assert_eq!((suar.numerator, suar.denominator), (0, 1));
+    assert_eq!(suar.status, MetricStatus::Measured);
 
     match &completed.payload.execution_mode {
         ExecutionMode::Prospective { receipt } => {
@@ -146,6 +182,26 @@ fn exact_validated_receipt_and_actual_authority_admit_prospective_seed_pass() {
         }
         other => panic!("expected prospective result mode, got {other:?}"),
     }
+}
+
+#[test]
+fn typed_failure_observation_is_bound_into_result_metrics_and_digest() {
+    let prereg = preregistration();
+    let mut run = LabRunBuilder::start(prospective_admission(&prereg), actual_authority(&prereg))
+        .unwrap();
+    run.append_observation(typed_observation(
+        "wrong-principal",
+        BTreeSet::from([LabMetricKind::Wpdr]),
+        BTreeSet::from([LabFailureFlag::WrongPrincipalDispatch]),
+        21,
+    ))
+    .unwrap();
+
+    let completed = run.finalize(ResultEvidence::CounterexampleFound, 30).unwrap();
+    let wpdr = completed.payload.metric_snapshot.get(LabMetricKind::Wpdr).unwrap();
+    assert_eq!((wpdr.numerator, wpdr.denominator), (1, 1));
+    assert_eq!(completed.identity.result_artifact_digest, canonical_digest(&completed.payload).unwrap());
+    assert_eq!(completed.payload.observation_digests.len(), 1);
 }
 
 #[test]
@@ -263,7 +319,12 @@ fn finalized_run_rejects_second_finalize_and_late_observation() {
         Err(LabError::AlreadyFinalized)
     ));
     assert!(matches!(
-        run.append_observation_digest(canonical_digest(&"late observation").unwrap()),
+        run.append_observation(typed_observation(
+            "late-observation",
+            BTreeSet::from([LabMetricKind::Suar]),
+            BTreeSet::new(),
+            31,
+        )),
         Err(LabError::AlreadyFinalized)
     ));
 }
