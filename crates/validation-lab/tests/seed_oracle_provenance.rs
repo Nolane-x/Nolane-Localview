@@ -118,3 +118,22 @@ fn seed_and_catalog_authority_fields_cannot_be_empty() {
         Err(LabError::EmptyAuthorityField { .. })
     ));
 }
+
+#[test]
+fn spec_surface_refs_use_the_normative_u32_schema() {
+    fn require_u32_refs(_: &BTreeSet<u32>) {}
+
+    let seed = seed("oracle-r1", "STALE");
+    require_u32_refs(&seed.spec_surface_refs);
+}
+
+#[test]
+fn catalog_digest_binds_corpus_revision() {
+    let first = LabSeedCatalog::new("corpus-r1", vec![seed("oracle-r1", "STALE")]).unwrap();
+    let second = LabSeedCatalog::new("corpus-r2", vec![seed("oracle-r1", "STALE")]).unwrap();
+
+    assert_ne!(
+        first.canonical_digest().unwrap(),
+        second.canonical_digest().unwrap()
+    );
+}
