@@ -1,0 +1,39 @@
+name: V4.3 Format Missing Operation Cleanup
+
+on:
+  push:
+    branches:
+      - feat/v43-windows-set-value-payload-authority
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-windows-set-value-payload-authority
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Normalize Rust formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          changed="$(git diff --name-only)"
+          test "$changed" = "crates/control/src/windows_consequential.rs"
+      - name: Commit normalized source and remove one-shot helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/control/src/windows_consequential.rs
+          git rm .github/workflows/v43-format-missing-operation-cleanup.yml
+          git commit -m "style(v43): normalize missing-operation cleanup"
+          git push origin HEAD:feat/v43-windows-set-value-payload-authority
