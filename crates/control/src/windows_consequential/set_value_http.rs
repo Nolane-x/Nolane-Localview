@@ -266,15 +266,6 @@ enum SetValuePlanMode {
     ClearValue,
 }
 
-impl SetValuePlanMode {
-    fn payload_len(&self) -> usize {
-        match self {
-            Self::ReplaceValue(value) => value.len(),
-            Self::ClearValue => 0,
-        }
-    }
-}
-
 struct PreparedServerOwnedSetValuePayload {
     payload: ProcessLocalSetValuePayload,
     expected_postcondition_contract_ref: String,
@@ -340,7 +331,14 @@ pub(super) async fn plan_windows_consequential_set_value(
         return unavailable("durable consequential control journal is unavailable");
     };
 
-    let _payload_len = mode.payload_len();
+    let payload_ref = SetValuePayloadRef(Uuid::new_v4());
+    let prepared = match prepare_server_owned_set_value_payload(mode, payload_ref) {
+        Ok(prepared) => prepared,
+        Err(_) => return invalid_set_value_request("SetValue payload preparation failed"),
+    };
+    let _expected_postcondition_contract_ref = prepared.expected_postcondition_contract_ref;
+    let _payload = prepared.payload;
+
     unavailable("Windows UIA SetValue server-owned planning is not yet armed")
 }
 
