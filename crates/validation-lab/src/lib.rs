@@ -15,6 +15,7 @@ mod artifact;
 mod canonical;
 mod identity;
 mod metrics;
+mod mutation_adapter;
 mod preregistration;
 mod result;
 mod seeds;
@@ -25,6 +26,9 @@ pub use identity::{CompletedLabRunIdentity, LabRevisionContext};
 pub use metrics::{
     LabFailureFlag, LabMetricKind, LabMetricValue, LabObservation, MetricSnapshot, MetricStatus,
     SilentUnsoundnessGateStatus, evaluate_silent_unsoundness_gate, reduce_metric_observations,
+};
+pub use mutation_adapter::{
+    MutationLabRecord, MutationNotMeasuredReason, adapt_mutation_outcome,
 };
 pub use preregistration::{
     CampaignLayer, LabPreregistration, PersistedPreregistrationReceipt, PreparedPreregistration,
