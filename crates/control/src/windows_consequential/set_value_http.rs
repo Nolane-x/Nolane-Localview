@@ -35,13 +35,6 @@ impl WindowsSetValuePayloadAuthority {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Task 8 control-owned durable commitment bridge is armed before the server-owned planning route consumes it"
-        )
-    )]
     async fn persist_binding(
         &self,
         journal: &localview_live_bridge::ConsequentialJournal,
@@ -62,13 +55,6 @@ impl WindowsSetValuePayloadAuthority {
             .await
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Task 8 authority-owned staging is introduced before the server-owned route consumes it"
-        )
-    )]
     async fn stage(
         &self,
         action_id: Uuid,
@@ -133,13 +119,6 @@ struct ProcessLocalSetValuePayload {
     utf8: Zeroizing<Vec<u8>>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Task 8 Stage 2 payload authority is intentionally introduced before Stage 3 server-owned route wiring"
-    )
-)]
 impl ProcessLocalSetValuePayload {
     fn new(
         payload_ref: SetValuePayloadRef,
@@ -189,7 +168,7 @@ struct PendingWindowsSetValuePayload {
         not(test),
         expect(
             dead_code,
-            reason = "Task 8 payload remains process-local but is not read until Stage 3 exact-confirmation dispatch wiring"
+            reason = "Task 8 payload remains process-local but is not read until Stage 4 exact-confirmation dispatch wiring"
         )
     )]
     payload: ProcessLocalSetValuePayload,
@@ -199,7 +178,7 @@ struct PendingWindowsSetValuePayload {
     not(test),
     expect(
         dead_code,
-        reason = "Task 8 Stage 2 exact-confirmation peek is intentionally introduced before Stage 3 confirmation wiring"
+        reason = "Task 8 Stage 2 exact-confirmation peek is intentionally introduced before Stage 4 confirmation wiring"
     )
 )]
 fn peek_pending_set_value_payload(
@@ -217,7 +196,7 @@ fn peek_pending_set_value_payload(
     not(test),
     expect(
         dead_code,
-        reason = "Task 8 Stage 2 one-shot consume is intentionally introduced before Stage 3 confirmation wiring"
+        reason = "Task 8 Stage 2 one-shot consume is intentionally introduced before Stage 4 confirmation wiring"
     )
 )]
 fn consume_pending_set_value_payload(
@@ -319,27 +298,229 @@ pub(super) async fn plan_windows_consequential_set_value(
         Ok(request) => request,
         Err(_) => return invalid_set_value_request("SetValue plan request shape is invalid"),
     };
-    let (_element_ref, mode) = match request.validate() {
+    let (element_ref, mode) = match request.validate() {
         Ok(validated) => validated,
         Err(message) => return invalid_set_value_request(message),
     };
 
-    let Some(_runtime) = windows_observe_runtime_for_sessions(&state.sessions) else {
+    let Some(runtime) = windows_observe_runtime_for_sessions(&state.sessions) else {
         return unavailable("Windows UIA runtime is unavailable");
     };
-    let Some(_control) = windows_consequential_control_for_sessions(&state.sessions) else {
+    let Some(control) = windows_consequential_control_for_sessions(&state.sessions) else {
         return unavailable("durable consequential control journal is unavailable");
     };
 
+    // Serialize SetValue planning with every other consequential plan and with
+    // session release. No confirmation becomes visible until fresh evidence,
+    // canonical intent, operation identity, and the opaque HMAC payload binding
+    // are all durable.
+    let _plan_gate = control.plan_gate.lock().await;
+    if control.pending.lock().await.len() >= MAX_PENDING_WINDOWS_CONSEQUENTIAL_PLANS {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": "windows_consequential_plan_capacity_exhausted",
+                "max_pending_plans": MAX_PENDING_WINDOWS_CONSEQUENTIAL_PLANS,
+            })),
+        )
+            .into_response();
+    }
+
+    let fresh_evidence = match runtime
+        .refresh_uia_action_evidence(session_id, element_ref)
+        .await
+    {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "windows_consequential_fresh_evidence_rejected",
+                    "message": error.to_string(),
+                    "dispatch_performed": false,
+                    "confirmation_created": false,
+                })),
+            )
+                .into_response();
+        }
+    };
+    let refreshed_element_ref = fresh_evidence.refreshed_element_ref;
+
+    // The payload reference and payload-equality contract are server-owned. The
+    // plaintext remains only in the Zeroizing process-local payload object and
+    // is never copied into ActionEnvelopeMetadata or the generic action carrier.
     let payload_ref = SetValuePayloadRef(Uuid::new_v4());
     let prepared = match prepare_server_owned_set_value_payload(mode, payload_ref) {
         Ok(prepared) => prepared,
         Err(_) => return invalid_set_value_request("SetValue payload preparation failed"),
     };
-    let _expected_postcondition_contract_ref = prepared.expected_postcondition_contract_ref;
-    let _payload = prepared.payload;
+    let confirmation_ref = Uuid::new_v4();
+    let authorization_revision_ref = Uuid::new_v4();
+    let authority = ActionEnvelopeMetadata {
+        decision_principal_ref: PrincipalRef::from(DECISION_PRINCIPAL_REF),
+        acting_principal_ref: PrincipalRef::from(ACTING_PRINCIPAL_REF),
+        authorization_revision: format!(
+            "authorization:local-control:confirmation-v1:{authorization_revision_ref}"
+        ),
+        precondition_snapshot_cut_ref: fresh_evidence.snapshot_cut_ref.clone(),
+        provider_incarnation_ref: refreshed_element_ref.provider_incarnation_ref.clone(),
+        target_incarnation_ref: refreshed_element_ref.target_incarnation_ref.clone(),
+        risk_class: ActionRiskClass::DestructiveOrIrreversible,
+        idempotency_class: ActionIdempotencyClass::Irreversible,
+        expected_postcondition_contract_refs: vec![
+            prepared.expected_postcondition_contract_ref.clone(),
+        ],
+    };
 
-    unavailable("Windows UIA SetValue server-owned planning is not yet armed")
+    // Value support alone is insufficient. The existing Value preflight also
+    // requires explicit non-password and writable facts; unknown/unsafe states
+    // fail closed before any durable consequential intent is admitted.
+    let preflight = match runtime
+        .preflight_uia_action(
+            session_id,
+            WindowsUiaActionPreflightRequest {
+                authority: authority.clone(),
+                element_ref: refreshed_element_ref,
+                required_pattern: WindowsUiaPattern::Value,
+            },
+        )
+        .await
+    {
+        Ok(preflight) => preflight,
+        Err(error) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "windows_consequential_preflight_rejected",
+                    "message": error.to_string(),
+                    "dispatch_performed": false,
+                    "confirmation_created": false,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Preserve the V1-V3 public wire carrier without placing SetValue plaintext
+    // in it. Canonical SetValue identity is persisted separately below and is
+    // the authority-bearing operation used by the verified execution path.
+    let queued = match state
+        .live
+        .bind_direct_canonical_action(
+            session_id,
+            Some(preflight.element_ref.opaque_provider_element_id.clone()),
+            localview_live_bridge::BridgeActionKind::TypeText {
+                text: String::new(),
+                clear_first: false,
+            },
+            authority.clone(),
+        )
+        .await
+    {
+        Ok(queued) => queued,
+        Err(error) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "windows_consequential_canonical_binding_rejected",
+                    "binding_error": format!("{error:?}"),
+                    "dispatch_performed": false,
+                    "confirmation_created": false,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if let Err(error) = control
+        .journal
+        .record_intent_admitted(queued.envelope.clone())
+        .await
+    {
+        return durable_admission_failure(
+            queued.action.id,
+            "intent_admission_failed",
+            error.to_string(),
+        );
+    }
+    if let Err(error) = control
+        .journal
+        .record_intent_operation_bound_explicit(&queued, CanonicalActionOperation::SetValue)
+        .await
+    {
+        return durable_admission_failure(
+            queued.action.id,
+            "operation_binding_failed",
+            error.to_string(),
+        );
+    }
+    if let Err(error) = control
+        .set_value
+        .persist_binding(control.journal.as_ref(), &queued, &prepared.payload)
+        .await
+    {
+        return durable_admission_failure(
+            queued.action.id,
+            "set_value_payload_binding_failed",
+            error.to_string(),
+        );
+    }
+
+    let target = WindowsUiaVerifiedActionTarget {
+        element_ref: preflight.element_ref,
+        required_pattern: WindowsUiaPattern::Value,
+        context_requirements: WindowsUiaDispatchContextRequirements {
+            require_foreground_target: true,
+            require_exact_element_focus: false,
+            require_no_modal_blocker: true,
+        },
+    };
+    let action_id = queued.action.id;
+
+    // Publish payload authority first, then generic confirmation metadata while
+    // still holding the plan gate. A concurrent confirm can therefore never see
+    // a SetValue plan without its matching live payload capability.
+    if control
+        .set_value
+        .stage(
+            action_id,
+            PendingWindowsSetValuePayload {
+                session_id,
+                confirmation_ref,
+                payload: prepared.payload,
+            },
+        )
+        .await
+        .is_err()
+    {
+        return set_value_pending_stage_failure(action_id);
+    }
+    control.pending.lock().await.insert(
+        action_id,
+        PendingWindowsConsequentialPlan {
+            confirmation_ref,
+            queued,
+            target,
+        },
+    );
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "action_id": action_id,
+            "confirmation_ref": confirmation_ref,
+            "confirmation_required": true,
+            "confirmation_authority": "bearer_holder_explicit_confirmation",
+            "operation": "set_value",
+            "risk_class": "s4_destructive_or_irreversible",
+            "idempotency_class": "irreversible",
+            "precondition_snapshot_cut_ref": authority.precondition_snapshot_cut_ref,
+            "planning_reconciliation_receipt_ref": fresh_evidence.reconciliation_receipt_ref,
+            "expected_postcondition_contract_refs": authority.expected_postcondition_contract_refs,
+            "restart_restores_confirmation_authority": false,
+        })),
+    )
+        .into_response()
 }
 
 fn invalid_set_value_request(message: &'static str) -> axum::response::Response {
@@ -350,6 +531,21 @@ fn invalid_set_value_request(message: &'static str) -> axum::response::Response 
             "message": message,
             "dispatch_performed": false,
             "confirmation_created": false,
+        })),
+    )
+        .into_response()
+}
+
+fn set_value_pending_stage_failure(action_id: Uuid) -> axum::response::Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({
+            "error": "windows_set_value_process_local_authority_stage_failed",
+            "action_id": action_id,
+            "dispatch_performed": false,
+            "confirmation_created": false,
+            "retry_same_action_allowed": false,
+            "reconciliation_required": true,
         })),
     )
         .into_response()
