@@ -3,9 +3,10 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CanonicalDigest, CompletedLabRunIdentity, LabError, LabObservation, LabPreregistration,
-    LabRevisionContext, LabSeedIdentity, MetricSnapshot, PreregistrationReceiptProjection,
-    ValidatedPreregistrationReceipt, canonical_digest, reduce_metric_observations,
+    CanonicalDigest, CompletedLabRunIdentity, LabError, LabMetricKind, LabObservation,
+    LabPreregistration, LabRevisionContext, LabSeedIdentity, MetricSnapshot,
+    PreregistrationReceiptProjection, ValidatedPreregistrationReceipt, canonical_digest,
+    reduce_metric_observations,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -130,8 +131,10 @@ pub struct LabRunBuilder {
     revision_context: LabRevisionContext,
     execution_mode: ExecutionMode,
     seed_identities: Vec<LabSeedIdentity>,
+    declared_metrics: Option<BTreeSet<LabMetricKind>>,
     observations: Vec<LabObservation>,
     observation_digests: Vec<CanonicalDigest>,
+    last_observation_sequence: Option<u64>,
     actual_execution_authority: ActualExecutionAuthority,
     assumptions_used: BTreeSet<String>,
     bound_used: Option<u64>,
@@ -172,8 +175,10 @@ impl LabRunBuilder {
                         receipt: PreregistrationReceiptProjection::from(&receipt),
                     },
                     seed_identities: preregistration.seed_identities,
+                    declared_metrics: Some(preregistration.declared_metrics),
                     observations: Vec::new(),
                     observation_digests: Vec::new(),
+                    last_observation_sequence: None,
                     actual_execution_authority,
                     assumptions_used: preregistration.assumptions,
                     bound_used: preregistration.model_bound,
@@ -196,8 +201,10 @@ impl LabRunBuilder {
                     revision_context,
                     execution_mode: ExecutionMode::Exploratory { downgrade_reason },
                     seed_identities,
+                    declared_metrics: None,
                     observations: Vec::new(),
                     observation_digests: Vec::new(),
+                    last_observation_sequence: None,
                     actual_execution_authority,
                     assumptions_used: assumptions,
                     bound_used: None,
@@ -211,7 +218,48 @@ impl LabRunBuilder {
         if self.finalized {
             return Err(LabError::AlreadyFinalized);
         }
+
+        if observation.comparison_profile_revision
+            != self.actual_execution_authority.comparison_profile_revision
+        {
+            return Err(LabError::ObservationAuthorityDrift {
+                field: "comparison_profile_revision",
+            });
+        }
+
+        let start_sequence = self.revision_context.start_sequence;
+        if observation.logical_sequence <= start_sequence {
+            return Err(LabError::ObservationSequenceNotAfterStart {
+                logical_sequence: observation.logical_sequence,
+                start_sequence,
+            });
+        }
+        if let Some(previous_sequence) = self.last_observation_sequence {
+            if observation.logical_sequence <= previous_sequence {
+                return Err(LabError::ObservationSequenceNotMonotonic {
+                    previous_sequence,
+                    logical_sequence: observation.logical_sequence,
+                });
+            }
+        }
+
+        if let ExecutionMode::Prospective { .. } = self.execution_mode {
+            if observation.provider_backed && self.revision_context.platform_profile.is_none() {
+                return Err(LabError::ProviderBackedObservationRequiresPlatformProfile);
+            }
+            if let Some(declared_metrics) = &self.declared_metrics {
+                if let Some(metric) = observation
+                    .eligible_metrics
+                    .iter()
+                    .find(|metric| !declared_metrics.contains(metric))
+                {
+                    return Err(LabError::ObservationUsesUndeclaredMetric { metric: *metric });
+                }
+            }
+        }
+
         let digest = canonical_digest(&observation)?;
+        self.last_observation_sequence = Some(observation.logical_sequence);
         self.observations.push(observation);
         self.observation_digests.push(digest);
         Ok(())
