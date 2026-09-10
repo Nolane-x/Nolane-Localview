@@ -1,5 +1,6 @@
 use localview_validation_lab::{
     CanonicalArtifact, LabArtifactKind, LabArtifactState, ResearchResultClass,
+    canonical_json_bytes,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -13,18 +14,30 @@ fn first_slice_artifact_helpers_are_canonical_and_repeatable() {
     assert_eq!(first.kind, LabArtifactKind::Preregistration);
     assert_eq!(first, second);
     assert_eq!(first.canonical_bytes, br#"{"a":1,"z":2}"#.to_vec());
+    assert_eq!(
+        canonical_json_bytes(&first).unwrap(),
+        canonical_json_bytes(&second).unwrap()
+    );
 
     let seed_catalog = json!({"revision": "seed-v1", "seeds": ["s1"]});
     let seed_first = CanonicalArtifact::seed_catalog(&seed_catalog).unwrap();
     let seed_second = CanonicalArtifact::seed_catalog(&seed_catalog).unwrap();
     assert_eq!(seed_first.kind, LabArtifactKind::SeedCatalog);
     assert_eq!(seed_first, seed_second);
+    assert_eq!(
+        canonical_json_bytes(&seed_first).unwrap(),
+        canonical_json_bytes(&seed_second).unwrap()
+    );
 
     let results = json!({"result_class": "preregistered_seed_pass", "count": 1});
     let result_first = CanonicalArtifact::results(&results).unwrap();
     let result_second = CanonicalArtifact::results(&results).unwrap();
     assert_eq!(result_first.kind, LabArtifactKind::Results);
     assert_eq!(result_first, result_second);
+    assert_eq!(
+        canonical_json_bytes(&result_first).unwrap(),
+        canonical_json_bytes(&result_second).unwrap()
+    );
 }
 
 #[test]

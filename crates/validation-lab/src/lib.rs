@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+mod artifact;
 mod canonical;
 mod identity;
 mod metrics;
@@ -18,6 +19,7 @@ mod preregistration;
 mod result;
 mod seeds;
 
+pub use artifact::{CanonicalArtifact, LabArtifactKind, LabArtifactState};
 pub use canonical::{CanonicalDigest, canonical_digest, canonical_json_bytes};
 pub use identity::{CompletedLabRunIdentity, LabRevisionContext};
 pub use metrics::{
