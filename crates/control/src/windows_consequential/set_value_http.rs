@@ -304,8 +304,16 @@ fn invalid_set_value_request(message: &'static str) -> axum::response::Response 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, path::PathBuf};
 
+    use localview_live_bridge::{
+        verify_set_value_payload_binding, ActionEnvelopeMetadata, ActionIdempotencyClass,
+        ActionRiskClass, BridgeActionKind, CanonicalActionOperation, ConsequentialJournal,
+        LiveBridge, ProviderObservationBinding,
+    };
+    use localview_protocol::{
+        EventContinuityState, PrincipalRef, ProviderIncarnationRef, TargetIncarnationRef,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -326,6 +334,51 @@ mod tests {
             )
             .expect("valid bounded process-local payload"),
         }
+    }
+
+    fn journal_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("localview-{label}-{}.jsonl", Uuid::new_v4()))
+    }
+
+    async fn admitted_set_value_action() -> localview_live_bridge::CanonicalQueuedAction {
+        let bridge = LiveBridge::new(32, 8);
+        let session_id: SessionId = Uuid::from_u128(0x8a30);
+        let provider = ProviderIncarnationRef::from("provider:windows-uia:task8-control-binding");
+        let target = TargetIncarnationRef::from("target:windows:task8-control-binding");
+        bridge
+            .bind_provider_observation(ProviderObservationBinding {
+                session_id,
+                generation: 1,
+                provider_incarnation_ref: provider.clone(),
+                target_incarnation_ref: target.clone(),
+                initial_continuity: EventContinuityState::OrderingOpaque,
+                sequence_baseline: Some(0),
+            })
+            .await
+            .unwrap();
+
+        bridge
+            .bind_direct_canonical_action(
+                session_id,
+                None,
+                BridgeActionKind::TypeText {
+                    text: String::new(),
+                    clear_first: false,
+                },
+                ActionEnvelopeMetadata {
+                    decision_principal_ref: PrincipalRef::from("principal:task8:decision"),
+                    acting_principal_ref: PrincipalRef::from("principal:task8:acting"),
+                    authorization_revision: "authorization:task8:v1".into(),
+                    precondition_snapshot_cut_ref: "cut:task8:1".into(),
+                    provider_incarnation_ref: provider,
+                    target_incarnation_ref: target,
+                    risk_class: ActionRiskClass::DestructiveOrIrreversible,
+                    idempotency_class: ActionIdempotencyClass::Irreversible,
+                    expected_postcondition_contract_refs: Vec::new(),
+                },
+            )
+            .await
+            .unwrap()
     }
 
     #[test]
@@ -426,5 +479,47 @@ mod tests {
                 .is_none(),
             "SetValue payload authority must be one-shot"
         );
+    }
+
+    #[tokio::test]
+    async fn payload_authority_persists_exact_opaque_binding_with_process_key() {
+        let authority = WindowsSetValuePayloadAuthority::new().expect("process-local authority");
+        let queued = admitted_set_value_action().await;
+        let path = journal_path("task8-control-set-value-binding");
+        let journal = ConsequentialJournal::open(&path).await.unwrap();
+        journal
+            .record_intent_admitted(queued.envelope.clone())
+            .await
+            .unwrap();
+        journal
+            .record_intent_operation_bound_explicit(&queued, CanonicalActionOperation::SetValue)
+            .await
+            .unwrap();
+        let payload = ProcessLocalSetValuePayload::new(
+            SetValuePayloadRef(Uuid::from_u128(0x8a31)),
+            SetValueMode::ReplaceValue,
+            SENTINEL.as_bytes().to_vec(),
+        )
+        .unwrap();
+
+        let binding = authority
+            .persist_binding(&journal, &queued, &payload)
+            .await
+            .expect("control-owned authority must persist the exact opaque payload commitment");
+
+        assert_eq!(binding.action_id, queued.action.id);
+        assert_eq!(binding.payload_ref, payload.payload_ref);
+        assert_eq!(binding.mode, payload.mode);
+        assert_eq!(binding.payload_utf8_len, SENTINEL.len() as u64);
+        assert!(verify_set_value_payload_binding(
+            &authority.commitment_key,
+            &binding,
+            SENTINEL.as_bytes(),
+        )
+        .is_ok());
+        let encoded = serde_json::to_vec(&binding).unwrap();
+        assert!(!encoded.windows(SENTINEL.len()).any(|window| window == SENTINEL.as_bytes()));
+
+        let _ = std::fs::remove_file(path);
     }
 }
