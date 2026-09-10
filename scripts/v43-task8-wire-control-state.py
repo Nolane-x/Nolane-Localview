@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 path = Path("crates/control/src/windows_consequential.rs")
 source = path.read_text()
@@ -33,3 +34,25 @@ for old, new in replacements:
     source = source.replace(old, new, 1)
 
 path.write_text(source)
+
+set_value_path = Path("crates/control/src/windows_consequential/set_value_http.rs")
+set_value_source = set_value_path.read_text()
+stale_expectations = [
+    """#[cfg_attr(\n    not(test),\n    expect(\n        dead_code,\n        reason = \"Task 8 Stage 2 payload authority is intentionally introduced before Stage 3 server-owned route wiring\"\n    )\n)]\nstruct ProcessLocalSetValuePayload""",
+    """#[cfg_attr(\n    not(test),\n    expect(\n        dead_code,\n        reason = \"Task 8 Stage 2 pending payload authority is intentionally introduced before Stage 3 confirmation wiring\"\n    )\n)]\nstruct PendingWindowsSetValuePayload""",
+]
+for old in stale_expectations:
+    replacement = old.split(")]\n", 1)[1]
+    count = set_value_source.count(old)
+    if count != 1:
+        raise SystemExit(f"expected exactly one stale expectation, found {count}: {old[-80:]!r}")
+    set_value_source = set_value_source.replace(old, replacement, 1)
+set_value_path.write_text(set_value_source)
+
+# The runner's later path-limited git add intentionally omits this file. Stage it
+# here so the verified commit contains the annotation retirement atomically with
+# the control-lifetime wiring that makes those expectations stale.
+subprocess.run(
+    ["git", "add", "--", "crates/control/src/windows_consequential/set_value_http.rs"],
+    check=True,
+)
