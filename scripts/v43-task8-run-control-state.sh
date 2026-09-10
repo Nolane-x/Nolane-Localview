@@ -8,7 +8,15 @@ from pathlib import Path
 path = Path('crates/control/src/windows_consequential/set_value_http.rs')
 source = path.read_text()
 old = '    payload: ProcessLocalSetValuePayload,\n'
-new = '''    #[expect(\n        dead_code,\n        reason = "Task 8 payload remains process-local but is not read until Stage 3 exact-confirmation dispatch wiring"\n    )]\n    payload: ProcessLocalSetValuePayload,\n'''
+new = '''    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Task 8 payload remains process-local but is not read until Stage 3 exact-confirmation dispatch wiring"
+        )
+    )]
+    payload: ProcessLocalSetValuePayload,
+'''
 if source.count(old) != 1:
     raise SystemExit(f'expected exactly one pending payload field, found {source.count(old)}')
 path.write_text(source.replace(old, new, 1))
