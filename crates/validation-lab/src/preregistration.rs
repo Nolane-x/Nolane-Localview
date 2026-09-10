@@ -65,7 +65,7 @@ pub struct PersistedPreregistrationReceipt {
     pub persistence_ref: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ValidatedPreregistrationReceipt {
     digest: CanonicalDigest,
     logical_sequence: u64,
