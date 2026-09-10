@@ -50,7 +50,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt -- crates/control/tests/windows_consequential_expand_collapse_windows_smoke.rs
           git diff --check
           changed="$(git diff --name-only)"
           test "$changed" = "crates/control/tests/windows_consequential_expand_collapse_windows_smoke.rs"
