@@ -1,6 +1,6 @@
 use localview_live_bridge::{
-    ConsequentialJournal, ConsequentialRecoveryActionScope, ConsequentialRecoveryDebtDisposition,
-    ConsequentialRecoveryState, LiveBridge,
+    CanonicalActionOperation, ConsequentialJournal, ConsequentialRecoveryActionScope,
+    ConsequentialRecoveryDebtDisposition, ConsequentialRecoveryState, LiveBridge,
 };
 use localview_protocol::{ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use thiserror::Error;
@@ -126,26 +126,41 @@ where
     let provider_incarnation_ref = snapshot.provider_incarnation_ref().clone();
     let target_incarnation_ref = snapshot.target_incarnation_ref().clone();
 
-    let entries = journal
+    let bindings = journal
         .recovery_bindings_for_attachment(
             session_id,
             &provider_incarnation_ref,
             &target_incarnation_ref,
         )
-        .await
+        .await;
+    let mut entries = Vec::with_capacity(bindings.len());
+    for binding in bindings
         .into_iter()
         .filter(|binding| include_action(binding.action_id))
-        .map(|binding| {
-            let disposition = binding.recovery_state.recovery_debt_disposition();
-            WindowsUiaAttachedRecoveryPlanEntry {
-                action_id: binding.action_id,
-                recovery_state: binding.recovery_state,
-                latest_journal_sequence: binding.latest_journal_sequence,
-                expected_postcondition_contract_refs: binding.expected_postcondition_contract_refs,
-                disposition,
-            }
-        })
-        .collect();
+    {
+        let mut disposition = binding.recovery_state.recovery_debt_disposition();
+        if disposition == ConsequentialRecoveryDebtDisposition::ObservationRequired {
+            // SetValue verification depends on process-local plaintext/key authority
+            // that is deliberately not reconstructed by journal reopen. Once that
+            // authority is gone, generic observation cannot prove the expected
+            // payload equality and must fail closed to reconciliation. If even the
+            // durable operation companion cannot be read, reconciliation is the
+            // only safe recovery classification for uncertain debt.
+            disposition = match journal.admitted_operation(binding.action_id).await {
+                Ok(Some(CanonicalActionOperation::SetValue)) | Err(_) => {
+                    ConsequentialRecoveryDebtDisposition::ReconciliationRequired
+                }
+                Ok(_) => disposition,
+            };
+        }
+        entries.push(WindowsUiaAttachedRecoveryPlanEntry {
+            action_id: binding.action_id,
+            recovery_state: binding.recovery_state,
+            latest_journal_sequence: binding.latest_journal_sequence,
+            expected_postcondition_contract_refs: binding.expected_postcondition_contract_refs,
+            disposition,
+        });
+    }
 
     Ok(WindowsUiaAttachedRecoveryPlan {
         session_id,
