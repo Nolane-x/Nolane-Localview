@@ -51,6 +51,7 @@ members = [
   "crates/resource-governor",
   "crates/full-stack",
   "crates/mutation",
+  "crates/validation-lab",
   "crates/bisect",
   "crates/attestation",
   "crates/policy",
