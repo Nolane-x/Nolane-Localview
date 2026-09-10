@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CanonicalDigest, CompletedLabRunIdentity, LabError, LabPreregistration, LabRevisionContext,
-    LabSeedIdentity, PreregistrationReceiptProjection, ValidatedPreregistrationReceipt,
-    canonical_digest,
+    CanonicalDigest, CompletedLabRunIdentity, LabError, LabObservation, LabPreregistration,
+    LabRevisionContext, LabSeedIdentity, MetricSnapshot, PreregistrationReceiptProjection,
+    ValidatedPreregistrationReceipt, canonical_digest, reduce_metric_observations,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -110,6 +110,7 @@ pub struct LabResultPayload {
     pub submitted_evidence: ResultEvidence,
     pub seed_identities: Vec<LabSeedIdentity>,
     pub observation_digests: Vec<CanonicalDigest>,
+    pub metric_snapshot: MetricSnapshot,
     pub actual_execution_authority: ActualExecutionAuthority,
     pub assumptions_used: BTreeSet<String>,
     pub bound_used: Option<u64>,
@@ -129,6 +130,7 @@ pub struct LabRunBuilder {
     revision_context: LabRevisionContext,
     execution_mode: ExecutionMode,
     seed_identities: Vec<LabSeedIdentity>,
+    observations: Vec<LabObservation>,
     observation_digests: Vec<CanonicalDigest>,
     actual_execution_authority: ActualExecutionAuthority,
     assumptions_used: BTreeSet<String>,
@@ -170,6 +172,7 @@ impl LabRunBuilder {
                         receipt: PreregistrationReceiptProjection::from(&receipt),
                     },
                     seed_identities: preregistration.seed_identities,
+                    observations: Vec::new(),
                     observation_digests: Vec::new(),
                     actual_execution_authority,
                     assumptions_used: preregistration.assumptions,
@@ -193,6 +196,7 @@ impl LabRunBuilder {
                     revision_context,
                     execution_mode: ExecutionMode::Exploratory { downgrade_reason },
                     seed_identities,
+                    observations: Vec::new(),
                     observation_digests: Vec::new(),
                     actual_execution_authority,
                     assumptions_used: assumptions,
@@ -203,10 +207,12 @@ impl LabRunBuilder {
         }
     }
 
-    pub fn append_observation_digest(&mut self, digest: CanonicalDigest) -> Result<(), LabError> {
+    pub fn append_observation(&mut self, observation: LabObservation) -> Result<(), LabError> {
         if self.finalized {
             return Err(LabError::AlreadyFinalized);
         }
+        let digest = canonical_digest(&observation)?;
+        self.observations.push(observation);
         self.observation_digests.push(digest);
         Ok(())
     }
@@ -224,6 +230,7 @@ impl LabRunBuilder {
             ExecutionMode::Prospective { .. } => evidence.class(),
             ExecutionMode::Exploratory { .. } => ResearchResultClass::ExploratoryObservation,
         };
+        let metric_snapshot = reduce_metric_observations(&self.observations)?;
 
         let payload = LabResultPayload {
             preregistration_digest: self.preregistration_digest.clone(),
@@ -233,6 +240,7 @@ impl LabRunBuilder {
             submitted_evidence: evidence,
             seed_identities: self.seed_identities.clone(),
             observation_digests: self.observation_digests.clone(),
+            metric_snapshot,
             actual_execution_authority: self.actual_execution_authority.clone(),
             assumptions_used: self.assumptions_used.clone(),
             bound_used: self.bound_used,
