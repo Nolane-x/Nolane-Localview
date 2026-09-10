@@ -243,8 +243,12 @@ mod windows_consequential_set_value_windows_smoke {
             .await
             .expect("run SetValue plan request");
         let (status, body) = response_body(response).await;
-        assert_eq!(status, StatusCode::CREATED);
-        assert!(!body.contains(SENTINEL));
+        assert!(!body.contains(SENTINEL), "fail-closed response must remain private");
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "SetValue planning failed closed at: {body}"
+        );
         assert!(!body.contains("commitment_digest"));
 
         let plan: serde_json::Value = serde_json::from_str(&body).expect("decode SetValue plan metadata");
