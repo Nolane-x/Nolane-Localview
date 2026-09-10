@@ -7,7 +7,9 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use localview_live_bridge::{SetValueCommitmentKey, SetValueMode, SetValuePayloadRef};
+use localview_live_bridge::{
+    SetValueCommitmentKey, SetValueMode, SetValuePayloadRef, verify_set_value_payload_binding,
+};
 use localview_postcondition_contracts::{
     PayloadEqualityModeV1, PayloadEqualityPostconditionContractV1,
 };
@@ -71,14 +73,7 @@ impl WindowsSetValuePayloadAuthority {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Task 8 authority-owned peek is introduced before exact-confirmation route wiring"
-        )
-    )]
-    async fn peek(
+    pub(super) async fn peek(
         &self,
         session_id: SessionId,
         action_id: Uuid,
@@ -88,13 +83,6 @@ impl WindowsSetValuePayloadAuthority {
         peek_pending_set_value_payload(&pending, session_id, action_id, confirmation_ref)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Task 8 authority-owned consume is introduced before exact-confirmation route wiring"
-        )
-    )]
     async fn consume(
         &self,
         session_id: SessionId,
@@ -103,6 +91,44 @@ impl WindowsSetValuePayloadAuthority {
     ) -> Option<PendingWindowsSetValuePayload> {
         let mut pending = self.pending.lock().await;
         consume_pending_set_value_payload(&mut pending, session_id, action_id, confirmation_ref)
+    }
+
+    pub(super) async fn consume_verified(
+        &self,
+        journal: &localview_live_bridge::ConsequentialJournal,
+        session_id: SessionId,
+        action_id: Uuid,
+        confirmation_ref: Uuid,
+    ) -> Result<Option<ConfirmedWindowsSetValuePayload>, String> {
+        let Some(candidate) = self.consume(session_id, action_id, confirmation_ref).await else {
+            return Ok(None);
+        };
+        let payload = candidate.payload;
+        let binding = journal
+            .set_value_payload_binding(action_id)
+            .await
+            .map_err(|error| format!("SetValue payload binding could not be loaded: {error}"))?
+            .ok_or_else(|| "SetValue durable payload binding is missing".to_owned())?;
+        let payload_utf8_len = u64::try_from(payload.utf8_len())
+            .map_err(|_| "SetValue process-local payload length is not representable".to_owned())?;
+        if binding.action_id != action_id
+            || binding.payload_ref != payload.payload_ref
+            || binding.mode != payload.mode
+            || binding.payload_utf8_len != payload_utf8_len
+        {
+            return Err(
+                "SetValue durable payload binding metadata does not match process-local authority"
+                    .to_owned(),
+            );
+        }
+        verify_set_value_payload_binding(
+            self.commitment_key.as_ref(),
+            &binding,
+            payload.utf8_bytes(),
+        )
+        .map_err(|error| format!("SetValue payload commitment verification failed: {error}"))?;
+
+        Ok(Some(ConfirmedWindowsSetValuePayload { payload }))
     }
 
     pub(super) async fn release_session(&self, session_id: SessionId) {
@@ -164,23 +190,27 @@ impl fmt::Debug for ProcessLocalSetValuePayload {
 struct PendingWindowsSetValuePayload {
     session_id: SessionId,
     confirmation_ref: Uuid,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Task 8 payload remains process-local but is not read until Stage 4 exact-confirmation dispatch wiring"
-        )
-    )]
     payload: ProcessLocalSetValuePayload,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Task 8 Stage 2 exact-confirmation peek is intentionally introduced before Stage 4 confirmation wiring"
-    )
-)]
+pub(super) struct ConfirmedWindowsSetValuePayload {
+    payload: ProcessLocalSetValuePayload,
+}
+
+impl ConfirmedWindowsSetValuePayload {
+    pub(super) fn payload_ref(&self) -> SetValuePayloadRef {
+        self.payload.payload_ref
+    }
+
+    pub(super) fn mode(&self) -> SetValueMode {
+        self.payload.mode
+    }
+
+    pub(super) fn utf8_bytes(&self) -> &[u8] {
+        self.payload.utf8_bytes()
+    }
+}
+
 fn peek_pending_set_value_payload(
     pending: &HashMap<Uuid, PendingWindowsSetValuePayload>,
     session_id: SessionId,
@@ -192,13 +222,6 @@ fn peek_pending_set_value_payload(
     })
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Task 8 Stage 2 one-shot consume is intentionally introduced before Stage 4 confirmation wiring"
-    )
-)]
 fn consume_pending_set_value_payload(
     pending: &mut HashMap<Uuid, PendingWindowsSetValuePayload>,
     session_id: SessionId,
@@ -266,8 +289,8 @@ fn prepare_server_owned_set_value_payload(
             Vec::new(),
         ),
     };
-    let payload = ProcessLocalSetValuePayload::new(payload_ref, payload_mode, utf8)
-        .map_err(str::to_owned)?;
+    let payload =
+        ProcessLocalSetValuePayload::new(payload_ref, payload_mode, utf8).map_err(str::to_owned)?;
     let expected_postcondition_contract_ref = PayloadEqualityPostconditionContractV1 {
         mode: contract_mode,
         payload_ref: payload_ref.0.to_string(),
@@ -556,9 +579,9 @@ mod tests {
     use std::{collections::HashMap, path::PathBuf};
 
     use localview_live_bridge::{
-        verify_set_value_payload_binding, ActionEnvelopeMetadata, ActionIdempotencyClass,
-        ActionRiskClass, BridgeActionKind, CanonicalActionOperation, ConsequentialJournal,
-        LiveBridge, ProviderObservationBinding,
+        ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
+        CanonicalActionOperation, ConsequentialJournal, LiveBridge, ProviderObservationBinding,
+        verify_set_value_payload_binding,
     };
     use localview_protocol::{
         EventContinuityState, PrincipalRef, ProviderIncarnationRef, TargetIncarnationRef,
@@ -716,7 +739,10 @@ mod tests {
             .stage(action_id, pending_payload(session_id, confirmation_ref))
             .await
             .expect_err("duplicate action id must not replace live plaintext authority");
-        assert_eq!(duplicate, "SetValue payload authority already exists for action");
+        assert_eq!(
+            duplicate,
+            "SetValue payload authority already exists for action"
+        );
 
         let consumed = authority
             .consume(session_id, action_id, confirmation_ref)
@@ -762,14 +788,20 @@ mod tests {
         assert_eq!(binding.payload_ref, payload.payload_ref);
         assert_eq!(binding.mode, payload.mode);
         assert_eq!(binding.payload_utf8_len, SENTINEL.len() as u64);
-        assert!(verify_set_value_payload_binding(
-            &authority.commitment_key,
-            &binding,
-            SENTINEL.as_bytes(),
-        )
-        .is_ok());
+        assert!(
+            verify_set_value_payload_binding(
+                &authority.commitment_key,
+                &binding,
+                SENTINEL.as_bytes(),
+            )
+            .is_ok()
+        );
         let encoded = serde_json::to_vec(&binding).unwrap();
-        assert!(!encoded.windows(SENTINEL.len()).any(|window| window == SENTINEL.as_bytes()));
+        assert!(
+            !encoded
+                .windows(SENTINEL.len())
+                .any(|window| window == SENTINEL.as_bytes())
+        );
 
         let _ = std::fs::remove_file(path);
     }
@@ -793,6 +825,10 @@ mod tests {
                 payload_ref.0
             )
         );
-        assert!(!prepared.expected_postcondition_contract_ref.contains(SENTINEL));
+        assert!(
+            !prepared
+                .expected_postcondition_contract_ref
+                .contains(SENTINEL)
+        );
     }
 }

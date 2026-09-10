@@ -28,9 +28,12 @@ use localview_protocol::{PrincipalRef, ProviderElementRef, SessionId};
 use localview_sessions::SessionManager;
 use localview_windows_observe_runtime::{
     WindowsUiaActionPreflightRequest, WindowsUiaAuthorizationRevalidationReceipt,
-    WindowsUiaAuthorizationRevalidator, WindowsUiaSemanticPostconditionVerifier,
-    WindowsUiaVerifiedActionTarget, WindowsUiaVerifiedExecutionOutcome,
-    execute_verified_canonical_uia_action,
+    WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchSealRequest,
+    WindowsUiaPreparedDispatchRequest, WindowsUiaSemanticPostconditionVerifier,
+    WindowsUiaSetValueExecutionPayload, WindowsUiaVerifiedActionTarget,
+    WindowsUiaVerifiedExecutionOutcome, arm_uia_dispatch_execution,
+    execute_armed_uia_set_value_dispatch, execute_verified_canonical_uia_action,
+    prepare_uia_dispatch,
 };
 use localview_windows_uia_provider::{WindowsUiaDispatchContextRequirements, WindowsUiaPattern};
 use serde::Deserialize;
@@ -574,15 +577,17 @@ async fn confirm_windows_consequential_action(
         return unavailable("durable consequential control journal is unavailable");
     };
 
-    // Peek without consuming so a purely read-only executor-resolution failure
-    // cannot burn confirmation authority. Exact consumption happens immediately
-    // before the verified coordinator call.
+    // Planning, session release, and confirmation all share this gate so an exact
+    // SetValue confirmation cannot race either process-local authority map.
+    let plan_gate = control.plan_gate.lock().await;
     let Some(peeked) =
         peek_pending_plan(&control, session_id, action_id, request.confirmation_ref).await
     else {
         return confirmation_missing_or_consumed();
     };
 
+    // Pure executor resolution happens before consuming either one-shot capability.
+    // A missing attachment therefore cannot burn an otherwise valid confirmation.
     let executor = match runtime.uia_dispatch_executor(session_id).await {
         Ok(executor) => executor,
         Err(error) => {
@@ -599,14 +604,224 @@ async fn confirm_windows_consequential_action(
         }
     };
 
+    let admitted_operation = match control.journal.admitted_operation(action_id).await {
+        Ok(Some(operation)) => operation,
+        Ok(None) => {
+            let _ = consume_pending_plan(&control, session_id, action_id, request.confirmation_ref)
+                .await;
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "windows_consequential_operation_binding_missing",
+                    "action_id": action_id,
+                    "confirmation_consumed": true,
+                    "retry_allowed": false,
+                    "replan_required": true,
+                })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            let _ = consume_pending_plan(&control, session_id, action_id, request.confirmation_ref)
+                .await;
+            if control
+                .set_value
+                .peek(session_id, action_id, request.confirmation_ref)
+                .await
+            {
+                let _ = control
+                    .set_value
+                    .consume_verified(
+                        control.journal.as_ref(),
+                        session_id,
+                        action_id,
+                        request.confirmation_ref,
+                    )
+                    .await;
+            }
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "windows_consequential_operation_binding_unavailable",
+                    "message": error.to_string(),
+                    "action_id": action_id,
+                    "confirmation_consumed": true,
+                    "retry_allowed": false,
+                    "replan_required": true,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let set_value_payload_pending = control
+        .set_value
+        .peek(session_id, action_id, request.confirmation_ref)
+        .await;
+    let is_set_value = admitted_operation == CanonicalActionOperation::SetValue;
+    if is_set_value != set_value_payload_pending {
+        let _ =
+            consume_pending_plan(&control, session_id, action_id, request.confirmation_ref).await;
+        if set_value_payload_pending {
+            let _ = control
+                .set_value
+                .consume_verified(
+                    control.journal.as_ref(),
+                    session_id,
+                    action_id,
+                    request.confirmation_ref,
+                )
+                .await;
+        }
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "windows_consequential_set_value_authority_mismatch",
+                "action_id": action_id,
+                "confirmation_consumed": true,
+                "retry_allowed": false,
+                "replan_required": true,
+            })),
+        )
+            .into_response();
+    }
+
     let Some(plan) =
         consume_pending_plan(&control, session_id, action_id, request.confirmation_ref).await
     else {
         return confirmation_missing_or_consumed();
     };
+    let confirmed_set_value = if is_set_value {
+        match control
+            .set_value
+            .consume_verified(
+                control.journal.as_ref(),
+                session_id,
+                action_id,
+                request.confirmation_ref,
+            )
+            .await
+        {
+            Ok(Some(payload)) => Some(payload),
+            Ok(None) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "windows_consequential_set_value_payload_missing",
+                        "action_id": action_id,
+                        "confirmation_consumed": true,
+                        "retry_allowed": false,
+                        "replan_required": true,
+                    })),
+                )
+                    .into_response();
+            }
+            Err(message) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "windows_consequential_set_value_payload_rejected",
+                        "message": message,
+                        "action_id": action_id,
+                        "confirmation_consumed": true,
+                        "retry_allowed": false,
+                        "replan_required": true,
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        None
+    };
+    drop(plan_gate);
     debug_assert_eq!(peeked.queued.action.id, plan.queued.action.id);
 
     let revalidator = ProcessLocalConfirmationAuthority::new(&plan);
+    if let Some(payload) = confirmed_set_value {
+        let authority = plan.queued.envelope.metadata.clone();
+        let target = plan.target.clone();
+        let result: Result<WindowsUiaVerifiedExecutionOutcome, String> = async {
+            let preflight = runtime
+                .preflight_uia_action(
+                    session_id,
+                    WindowsUiaActionPreflightRequest {
+                        authority: authority.clone(),
+                        element_ref: target.element_ref,
+                        required_pattern: target.required_pattern,
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            let prepared = prepare_uia_dispatch(
+                &state.live,
+                control.journal.as_ref(),
+                runtime.as_ref(),
+                session_id,
+                WindowsUiaPreparedDispatchRequest {
+                    seal: WindowsUiaDispatchSealRequest {
+                        action_id,
+                        authority,
+                        preflight,
+                        context_requirements: target.context_requirements,
+                    },
+                },
+                &revalidator,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let armed = arm_uia_dispatch_execution(
+                &state.live,
+                control.journal.as_ref(),
+                runtime.as_ref(),
+                session_id,
+                prepared,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            execute_armed_uia_set_value_dispatch(
+                &state.live,
+                control.journal.as_ref(),
+                runtime.as_ref(),
+                session_id,
+                armed,
+                WindowsUiaSetValueExecutionPayload {
+                    payload_ref: payload.payload_ref(),
+                    mode: payload.mode(),
+                    utf8_bytes: payload.utf8_bytes(),
+                },
+                &executor,
+            )
+            .await
+            .map_err(|error| error.to_string())
+        }
+        .await;
+
+        return match result {
+            Ok(outcome) => verified_outcome_response(outcome),
+            Err(message) => {
+                let reconciliation_required = control
+                    .journal
+                    .requires_reconciliation(action_id)
+                    .await
+                    .unwrap_or(false);
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "windows_consequential_verified_set_value_execution_failed",
+                        "message": message,
+                        "action_id": action_id,
+                        "confirmation_consumed": true,
+                        "retry_allowed": false,
+                        "replan_required": !reconciliation_required,
+                        "reconciliation_required": reconciliation_required,
+                    })),
+                )
+                    .into_response()
+            }
+        };
+    }
+
     let verifier = WindowsUiaSemanticPostconditionVerifier;
     match execute_verified_canonical_uia_action(
         &state.live,
