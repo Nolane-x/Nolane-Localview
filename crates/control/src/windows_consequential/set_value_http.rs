@@ -8,6 +8,9 @@ use axum::{
     response::IntoResponse,
 };
 use localview_live_bridge::{SetValueCommitmentKey, SetValueMode, SetValuePayloadRef};
+use localview_postcondition_contracts::{
+    PayloadEqualityModeV1, PayloadEqualityPostconditionContractV1,
+};
 use localview_protocol::{ProviderElementRef, SessionId};
 use localview_windows_uia_provider::MAX_SET_VALUE_UTF8_BYTES;
 use serde::Deserialize;
@@ -270,6 +273,42 @@ impl SetValuePlanMode {
             Self::ClearValue => 0,
         }
     }
+}
+
+struct PreparedServerOwnedSetValuePayload {
+    payload: ProcessLocalSetValuePayload,
+    expected_postcondition_contract_ref: String,
+}
+
+fn prepare_server_owned_set_value_payload(
+    mode: SetValuePlanMode,
+    payload_ref: SetValuePayloadRef,
+) -> Result<PreparedServerOwnedSetValuePayload, String> {
+    let (payload_mode, contract_mode, utf8) = match mode {
+        SetValuePlanMode::ReplaceValue(value) => (
+            SetValueMode::ReplaceValue,
+            PayloadEqualityModeV1::ReplaceValue,
+            value.into_bytes(),
+        ),
+        SetValuePlanMode::ClearValue => (
+            SetValueMode::ClearValue,
+            PayloadEqualityModeV1::ClearValue,
+            Vec::new(),
+        ),
+    };
+    let payload = ProcessLocalSetValuePayload::new(payload_ref, payload_mode, utf8)
+        .map_err(str::to_owned)?;
+    let expected_postcondition_contract_ref = PayloadEqualityPostconditionContractV1 {
+        mode: contract_mode,
+        payload_ref: payload_ref.0.to_string(),
+    }
+    .to_contract_ref()
+    .map_err(|error| error.to_string())?;
+
+    Ok(PreparedServerOwnedSetValuePayload {
+        payload,
+        expected_postcondition_contract_ref,
+    })
 }
 
 pub(super) async fn plan_windows_consequential_set_value(
