@@ -180,16 +180,17 @@ mod platform {
 
     use super::*;
     use crate::{
-        WindowsUiaActionCapabilities, WindowsUiaDispatchContextObservation,
-        WindowsUiaDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaPattern,
-        WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchReceipt,
-        WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport,
-        WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
-        WindowsUiaSetValueEquality, WindowsUiaSetValueVerificationReceipt,
-        WindowsUiaSetValueVerificationRequest, evaluate_windows_uia_dispatch_context,
+        WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact,
+        WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
+        WindowsUiaDispatchContextRequest, WindowsUiaPattern, WindowsUiaPatternDispatchOperation,
+        WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
+        WindowsUiaPatternSupport, WindowsUiaSetValueDispatchReceipt,
+        WindowsUiaSetValueDispatchRequest, WindowsUiaSetValueEquality,
+        WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,
+        WindowsUiaValueCapabilityFacts, evaluate_windows_uia_dispatch_context,
     };
 
-    const PROPERTIES_PER_NODE: usize = 17;
+    const PROPERTIES_PER_NODE: usize = 19;
     const CACHE_PROFILE_REVISION: &str = "windows-uia-control-view-v1";
     const PERMISSION_VISIBILITY_REVISION: &str = "windows-uia-interactive-user-v1";
     const SELECTION_ITEM_IS_SELECTED_ATTRIBUTE: &str = "windows_uia.selection_item.is_selected";
@@ -1438,6 +1439,11 @@ mod platform {
                 }
             };
             let action_capabilities = observe_action_capabilities(&element);
+            let value_capability_facts = observe_value_capability_facts(
+                &element,
+                action_capabilities.support_for(WindowsUiaPattern::Value),
+                &mut node_debt,
+            );
             let selection_item_is_selected = if action_capabilities
                 .support_for(WindowsUiaPattern::SelectionItem)
                 == WindowsUiaPatternSupport::Supported
@@ -1545,6 +1551,7 @@ mod platform {
                 attributes.insert("runtime_id_observed".into(), "true".into());
             }
             action_capabilities.write_attributes(&mut attributes);
+            value_capability_facts.write_attributes(&mut attributes);
             if let Some(selected) = selection_item_is_selected {
                 attributes.insert(
                     SELECTION_ITEM_IS_SELECTED_ATTRIBUTE.into(),
@@ -1607,6 +1614,47 @@ mod platform {
             }
         }
         (nodes, retained_elements, usage, debt)
+    }
+
+    fn observe_value_capability_facts(
+        element: &IUIAutomationElement,
+        value_support: WindowsUiaPatternSupport,
+        node_debt: &mut Vec<String>,
+    ) -> WindowsUiaValueCapabilityFacts {
+        let is_password = match unsafe {
+            // SAFETY: the UIA element is retained and read only on this dedicated MTA.
+            element.CurrentIsPassword()
+        } {
+            Ok(value) => WindowsUiaBooleanCapabilityFact::from_bool(value.as_bool()),
+            Err(_) => {
+                node_debt.push("uia_property_is_password_unavailable".into());
+                WindowsUiaBooleanCapabilityFact::Unknown
+            }
+        };
+
+        let is_read_only = if value_support == WindowsUiaPatternSupport::Supported {
+            match unsafe {
+                // SAFETY: the exact UIA element and temporary ValuePattern remain
+                // apartment-owned; this reads capability state and performs no mutation.
+                element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            } {
+                Ok(pattern) => match unsafe { pattern.CurrentIsReadOnly() } {
+                    Ok(value) => WindowsUiaBooleanCapabilityFact::from_bool(value.as_bool()),
+                    Err(_) => {
+                        node_debt.push("uia_property_value_is_read_only_unavailable".into());
+                        WindowsUiaBooleanCapabilityFact::Unknown
+                    }
+                },
+                Err(_) => {
+                    node_debt.push("uia_property_value_is_read_only_unavailable".into());
+                    WindowsUiaBooleanCapabilityFact::Unknown
+                }
+            }
+        } else {
+            WindowsUiaBooleanCapabilityFact::Unknown
+        };
+
+        WindowsUiaValueCapabilityFacts::new(value_support, is_password, is_read_only)
     }
 
     fn observe_action_capabilities(element: &IUIAutomationElement) -> WindowsUiaActionCapabilities {
