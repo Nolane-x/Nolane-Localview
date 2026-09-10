@@ -17,16 +17,54 @@ jobs:
         with:
           ref: feat/v43-windows-set-value-payload-authority
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Normalize Rust formatting
-        shell: bash
+      - name: Normalize only missing-operation cleanup block
+        shell: python
         run: |
-          set -euo pipefail
-          cargo fmt --all
-          changed="$(git diff --name-only)"
-          test "$changed" = "crates/control/src/windows_consequential.rs"
+          from pathlib import Path
+
+          path = Path('crates/control/src/windows_consequential.rs')
+          text = path.read_text(encoding='utf-8')
+          match_marker = 'let admitted_operation = match control.journal.admitted_operation(action_id).await'
+          match_start = text.index(match_marker)
+          ok_start = text.index('        Ok(None) => {', match_start)
+          err_start = text.index('        Err(error) => {', ok_start)
+          branch = text[ok_start:err_start]
+          old = '''  if control
+      .set_value
+      .peek(session_id, action_id, request.confirmation_ref)
+      .await
+  {
+      let _ = control
+          .set_value
+          .consume_verified(
+              control.journal.as_ref(),
+              session_id,
+              action_id,
+              request.confirmation_ref,
+          )
+          .await;
+  }
+  return ('''
+          new = '''            if control
+                .set_value
+                .peek(session_id, action_id, request.confirmation_ref)
+                .await
+            {
+                let _ = control
+                    .set_value
+                    .consume_verified(
+                        control.journal.as_ref(),
+                        session_id,
+                        action_id,
+                        request.confirmation_ref,
+                    )
+                    .await;
+            }
+            return ('''
+          if branch.count(old) != 1:
+              raise SystemExit(f'target block count={branch.count(old)}; refusing mutation')
+          updated_branch = branch.replace(old, new, 1)
+          path.write_text(text[:ok_start] + updated_branch + text[err_start:], encoding='utf-8')
       - name: Commit normalized source and remove one-shot helper
         shell: bash
         run: |
