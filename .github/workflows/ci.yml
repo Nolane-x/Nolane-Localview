@@ -60,6 +60,8 @@ jobs:
         run: cargo test -p localview-live-bridge --test native_executor_exact_result_lookup_contract
       - name: Tests
         run: cargo test --workspace --exclude localview-desktop
+      - name: V4.3 validation lab authority contract
+        run: cargo test -p localview-validation-lab -- --nocapture
       - name: Durable session identity continuity contract
         run: |
           cargo test -p localview-sessions --test durable_identity_registry
