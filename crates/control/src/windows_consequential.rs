@@ -58,6 +58,7 @@ struct WindowsConsequentialControlHandle {
     journal: Arc<ConsequentialJournal>,
     pending: Arc<Mutex<HashMap<Uuid, PendingWindowsConsequentialPlan>>>,
     plan_gate: Arc<Mutex<()>>,
+    set_value: set_value_http::WindowsSetValuePayloadAuthority,
 }
 
 struct WindowsConsequentialControlEntry {
@@ -236,6 +237,13 @@ pub fn configure_windows_consequential_control_for_sessions(
 
     match journal {
         Some(journal) => {
+            let set_value = match set_value_http::WindowsSetValuePayloadAuthority::new() {
+                Ok(authority) => authority,
+                Err(_) => {
+                    entries.remove(&key);
+                    return;
+                }
+            };
             entries.insert(
                 key,
                 WindowsConsequentialControlEntry {
@@ -244,6 +252,7 @@ pub fn configure_windows_consequential_control_for_sessions(
                         journal,
                         pending: Arc::new(Mutex::new(HashMap::new())),
                         plan_gate: Arc::new(Mutex::new(())),
+                        set_value,
                     },
                 },
             );
@@ -269,6 +278,7 @@ pub async fn release_windows_consequential_control_session_for_sessions(
         .lock()
         .await
         .retain(|_, plan| plan.queued.action.session_id != session_id);
+    handle.set_value.release_session(session_id).await;
 }
 
 fn windows_consequential_control_for_sessions(
@@ -917,6 +927,7 @@ mod tests {
                 journal,
                 pending: Arc::new(Mutex::new(HashMap::new())),
                 plan_gate: Arc::new(Mutex::new(())),
+                set_value: set_value_http::WindowsSetValuePayloadAuthority::new().unwrap(),
             },
             path,
         )

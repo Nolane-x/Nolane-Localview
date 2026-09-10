@@ -28,7 +28,8 @@ pub(super) struct WindowsSetValuePayloadAuthority {
 
 impl WindowsSetValuePayloadAuthority {
     pub(super) fn new() -> Result<Self, String> {
-        let commitment_key = SetValueCommitmentKey::generate().map_err(|error| error.to_string())?;
+        let commitment_key =
+            SetValueCommitmentKey::generate().map_err(|error| error.to_string())?;
         Ok(Self {
             commitment_key: Arc::new(commitment_key),
             pending: Arc::new(Mutex::new(HashMap::new())),
@@ -43,13 +44,6 @@ impl WindowsSetValuePayloadAuthority {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Task 8 Stage 2 payload authority is intentionally introduced before Stage 3 server-owned route wiring"
-    )
-)]
 struct ProcessLocalSetValuePayload {
     payload_ref: SetValuePayloadRef,
     mode: SetValueMode,
@@ -105,16 +99,16 @@ impl fmt::Debug for ProcessLocalSetValuePayload {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Task 8 Stage 2 pending payload authority is intentionally introduced before Stage 3 confirmation wiring"
-    )
-)]
 struct PendingWindowsSetValuePayload {
     session_id: SessionId,
     confirmation_ref: Uuid,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Task 8 payload remains process-local but is not read until Stage 3 exact-confirmation dispatch wiring"
+        )
+    )]
     payload: ProcessLocalSetValuePayload,
 }
 
