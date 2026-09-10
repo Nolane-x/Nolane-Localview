@@ -186,7 +186,8 @@ fn exact_validated_receipt_and_actual_authority_admit_prospective_seed_pass() {
 
 #[test]
 fn typed_failure_observation_is_bound_into_result_metrics_and_digest() {
-    let prereg = preregistration();
+    let mut prereg = preregistration();
+    prereg.declared_metrics.insert(LabMetricKind::Wpdr);
     let mut run = LabRunBuilder::start(prospective_admission(&prereg), actual_authority(&prereg))
         .unwrap();
     run.append_observation(typed_observation(
