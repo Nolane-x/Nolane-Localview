@@ -10,8 +10,8 @@ use localview_native_provider::{
     SemanticSnapshotCache, SnapshotResourceUsage, UserSelectedWindowTarget,
 };
 use localview_protocol::{
-    EventContinuityState, PrincipalRef, ProviderElementRealization, ProviderElementRef,
-    ProviderIncarnationRef, ReconciliationCompleteness, SessionId, TargetIncarnationRef,
+    PrincipalRef, ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef,
+    ReconciliationCompleteness, SessionId, TargetIncarnationRef,
 };
 use localview_windows_observe_runtime::{
     WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
