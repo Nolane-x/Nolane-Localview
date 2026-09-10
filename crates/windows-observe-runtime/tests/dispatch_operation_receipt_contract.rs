@@ -6,7 +6,7 @@ use std::{
 
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
-    ConsequentialJournal, ConsequentialPostconditionEvidence, ConsequentialPostconditionStatus,
+    CanonicalActionOperation, ConsequentialJournal, ConsequentialJournalTransition,
     ConsequentialRecoveryState, LiveBridge,
 };
 use localview_native_provider::{
@@ -16,23 +16,24 @@ use localview_native_provider::{
 use localview_protocol::{
     DispatchResult, PrincipalRef, ProviderElementRealization, ProviderElementRef,
     ProviderIncarnationRef, ReconciliationCompleteness, SessionId, TargetIncarnationRef,
-    TransportResult, WorldOutcome,
+    TransportResult,
 };
 use localview_windows_observe_runtime::{
     WindowsObserveActionLeaseProvider, WindowsObserveDispatchContextProvider,
     WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
-    WindowsObserveSubscriptionLineage, WindowsUiaAuthorizationRevalidationReceipt,
-    WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchExecutor, WindowsUiaPostconditionVerifier,
+    WindowsObserveSubscriptionLineage, WindowsUiaActionPreflightRequest,
+    WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
+    WindowsUiaDispatchExecutionCoordinatorError, WindowsUiaDispatchExecutor,
+    WindowsUiaDispatchSealRequest, WindowsUiaPreparedDispatchRequest,
     WindowsUiaProviderExecutionReceipt, WindowsUiaProviderExecutionRequest,
-    WindowsUiaVerifiedActionTarget, WindowsUiaVerifiedExecutionOutcome,
-    execute_verified_canonical_uia_action,
+    arm_uia_dispatch_execution, execute_armed_uia_dispatch, prepare_uia_dispatch,
 };
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaBoundDispatchContextReceipt,
     WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
     WindowsUiaDispatchContextRequest, WindowsUiaDispatchContextRequirements,
     WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest, WindowsUiaEventDrain,
-    WindowsUiaPattern, WindowsUiaPatternSupport,
+    WindowsUiaPattern, WindowsUiaPatternDispatchOperation, WindowsUiaPatternSupport,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -50,7 +51,6 @@ struct FakeProviderError;
 #[derive(Debug, Default)]
 struct FakeProviderState {
     snapshot: Option<Arc<NativeSemanticSnapshotRevision>>,
-    context_calls: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -63,13 +63,13 @@ struct FakeProvider {
 impl FakeProvider {
     fn new() -> Self {
         Self {
-            provider: ProviderIncarnationRef::from("provider:windows-uia:verified-action-coordinator"),
-            target: TargetIncarnationRef::from("target:windows:verified-action-coordinator"),
+            provider: ProviderIncarnationRef::from("provider:windows-uia:dispatch-operation-receipt"),
+            target: TargetIncarnationRef::from("target:windows:dispatch-operation-receipt"),
             state: Arc::new(Mutex::new(FakeProviderState::default())),
         }
     }
 
-    fn current_snapshot(&self) -> Arc<NativeSemanticSnapshotRevision> {
+    fn snapshot(&self) -> Arc<NativeSemanticSnapshotRevision> {
         self.state
             .lock()
             .unwrap()
@@ -78,14 +78,10 @@ impl FakeProvider {
             .expect("runtime must publish an initial snapshot")
     }
 
-    fn context_calls(&self) -> usize {
-        self.state.lock().unwrap().context_calls
-    }
-
     fn build_snapshot(&self, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
         let mut capabilities = WindowsUiaActionCapabilities::default();
         capabilities.record(
-            WindowsUiaPattern::Invoke,
+            WindowsUiaPattern::ExpandCollapse,
             WindowsUiaPatternSupport::Supported,
         );
         let mut attributes = BTreeMap::from([("provider".into(), "windows_uia".into())]);
@@ -96,20 +92,20 @@ impl FakeProvider {
                 provider_family: "windows_uia".into(),
                 provider_incarnation_ref: self.provider.clone(),
                 target_incarnation_ref: self.target.clone(),
-                opaque_provider_element_id: "uia-runtime:[120,1]".into(),
-                semantic_locator_hints: vec!["automation_id=verified-action".into()],
-                parent_surface_ref: Some("window:verified-action".into()),
+                opaque_provider_element_id: "uia-runtime:[402,1]".into(),
+                semantic_locator_hints: vec!["automation_id=expandable".into()],
+                parent_surface_ref: Some("window:dispatch-operation-receipt".into()),
                 acquisition_cut_ref: cut.clone(),
                 realization: ProviderElementRealization::RealizedCurrent,
                 lifetime_profile_revision: "windows-uia-lifetime-v1".into(),
             },
             parent_index: None,
             depth: 0,
-            role: Some("button".into()),
-            name: Some("Verified Action".into()),
-            control_type: Some("uia_control_type:50000".into()),
-            automation_id: Some("verified-action".into()),
-            class_name: Some("Button".into()),
+            role: Some("tree item".into()),
+            name: Some("Expandable".into()),
+            control_type: Some("uia_control_type:50024".into()),
+            automation_id: Some("expandable".into()),
+            class_name: Some("TreeViewItem".into()),
             is_enabled: Some(true),
             is_offscreen: Some(false),
             attributes,
@@ -122,7 +118,7 @@ impl FakeProvider {
                 provider_incarnation_ref: self.provider.clone(),
                 target_incarnation_ref: self.target.clone(),
                 snapshot_cut_ref: cut,
-                surface_scope: "window:verified-action".into(),
+                surface_scope: "window:dispatch-operation-receipt".into(),
                 cache_profile_revision: "windows-uia-control-view-v1".into(),
                 permission_visibility_revision: "windows-uia-interactive-user-v1".into(),
                 capture_sequence: 1,
@@ -214,7 +210,7 @@ impl WindowsObserveActionLeaseProvider for FakeProvider {
         _attachment: &Self::Attachment,
         request: WindowsUiaElementLeaseRequest,
     ) -> Result<WindowsUiaElementLeaseReceipt, Self::Error> {
-        let snapshot = self.current_snapshot();
+        let snapshot = self.snapshot();
         if request.snapshot_cut_ref != snapshot.snapshot_cut_ref()
             || request.element_ref != snapshot.nodes()[0].element_ref
         {
@@ -235,7 +231,6 @@ impl WindowsObserveDispatchContextProvider for FakeProvider {
         _attachment: &Self::Attachment,
         request: WindowsUiaDispatchContextRequest,
     ) -> Result<WindowsUiaBoundDispatchContextReceipt, Self::Error> {
-        self.state.lock().unwrap().context_calls += 1;
         Ok(WindowsUiaBoundDispatchContextReceipt {
             requirements: request.requirements,
             context: WindowsUiaDispatchContextReceipt {
@@ -244,10 +239,10 @@ impl WindowsObserveDispatchContextProvider for FakeProvider {
                 target_incarnation_ref: self.target.clone(),
                 element_ref: request.element_ref,
                 observation: WindowsUiaDispatchContextObservation {
-                    target_window_handle: 0x1200,
-                    target_process_id: 120,
-                    foreground_window_handle: Some(0x1200),
-                    foreground_process_id: Some(120),
+                    target_window_handle: 0x4020,
+                    target_process_id: 402,
+                    foreground_window_handle: Some(0x4020),
+                    foreground_process_id: Some(402),
                     exact_element_focused: request
                         .requirements
                         .require_exact_element_focus
@@ -263,16 +258,7 @@ impl WindowsObserveDispatchContextProvider for FakeProvider {
 #[error("fake authorization failure")]
 struct FakeAuthorizationError;
 
-#[derive(Default)]
-struct FakeAuthorizationRevalidator {
-    calls: Mutex<usize>,
-}
-
-impl FakeAuthorizationRevalidator {
-    fn call_count(&self) -> usize {
-        *self.calls.lock().unwrap()
-    }
-}
+struct FakeAuthorizationRevalidator;
 
 impl WindowsUiaAuthorizationRevalidator for FakeAuthorizationRevalidator {
     type Error = FakeAuthorizationError;
@@ -282,7 +268,6 @@ impl WindowsUiaAuthorizationRevalidator for FakeAuthorizationRevalidator {
         action_id: Uuid,
         authority: &ActionEnvelopeMetadata,
     ) -> Result<WindowsUiaAuthorizationRevalidationReceipt, Self::Error> {
-        *self.calls.lock().unwrap() += 1;
         Ok(WindowsUiaAuthorizationRevalidationReceipt {
             action_id,
             decision_principal_ref: authority.decision_principal_ref.clone(),
@@ -292,29 +277,22 @@ impl WindowsUiaAuthorizationRevalidator for FakeAuthorizationRevalidator {
     }
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("fake executor failure")]
-struct FakeExecutorError;
+#[derive(Debug)]
+struct ForgeDispatchOperationExecutor;
 
-#[derive(Default)]
-struct FakeExecutor {
-    calls: Mutex<usize>,
-}
-
-impl FakeExecutor {
-    fn call_count(&self) -> usize {
-        *self.calls.lock().unwrap()
-    }
-}
-
-impl WindowsUiaDispatchExecutor for FakeExecutor {
-    type Error = FakeExecutorError;
+impl WindowsUiaDispatchExecutor for ForgeDispatchOperationExecutor {
+    type Error = FakeProviderError;
 
     async fn execute(
         &self,
         request: &WindowsUiaProviderExecutionRequest,
     ) -> Result<WindowsUiaProviderExecutionReceipt, Self::Error> {
-        *self.calls.lock().unwrap() += 1;
+        assert_eq!(
+            request.dispatch_operation(),
+            WindowsUiaPatternDispatchOperation::Expand,
+            "durably admitted Expand must mint an Expand provider verb"
+        );
+
         Ok(WindowsUiaProviderExecutionReceipt {
             dispatch_attempt_ref: request.dispatch_attempt_ref(),
             action_id: request.action_id(),
@@ -325,7 +303,7 @@ impl WindowsUiaDispatchExecutor for FakeExecutor {
             target_incarnation_ref: request.target_incarnation_ref().clone(),
             element_ref: request.element_ref().clone(),
             required_pattern: request.required_pattern(),
-            dispatch_operation: request.dispatch_operation(),
+            dispatch_operation: WindowsUiaPatternDispatchOperation::Collapse,
             context_requirements: request.context_requirements(),
             transport_result: TransportResult::DeliveredToExecutor,
             dispatch_result: DispatchResult::DispatchedFull,
@@ -333,64 +311,52 @@ impl WindowsUiaDispatchExecutor for FakeExecutor {
     }
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("fake verifier failure")]
-struct FakeVerifierError;
-
-struct FakeVerifier;
-
-impl WindowsUiaPostconditionVerifier for FakeVerifier {
-    type Error = FakeVerifierError;
-
-    fn verify(
-        &self,
-        _action_id: Uuid,
-        expected_contract_refs: &[String],
-        snapshot: &NativeSemanticSnapshotRevision,
-    ) -> Result<Vec<ConsequentialPostconditionEvidence>, Self::Error> {
-        Ok(expected_contract_refs
-            .iter()
-            .map(|contract_ref| ConsequentialPostconditionEvidence {
-                contract_ref: contract_ref.clone(),
-                status: ConsequentialPostconditionStatus::VerifiedPass,
-                receipt_ref: format!("verified-action:{}:{contract_ref}", snapshot.snapshot_cut_ref()),
-            })
-            .collect())
-    }
-}
-
 fn session() -> SessionId {
-    Uuid::from_u128(0x1201)
+    Uuid::from_u128(0x4021)
 }
 
 fn selection() -> UserSelectedWindowTarget {
     UserSelectedWindowTarget {
-        native_window_handle: 0x1200,
-        expected_process_id: 120,
-        selection_nonce: Uuid::from_u128(0x1202),
+        native_window_handle: 0x4020,
+        expected_process_id: 402,
+        selection_nonce: Uuid::from_u128(0x4022),
     }
 }
 
-fn authority(provider: &FakeProvider, snapshot: &NativeSemanticSnapshotRevision) -> ActionEnvelopeMetadata {
+fn requirements() -> WindowsUiaDispatchContextRequirements {
+    WindowsUiaDispatchContextRequirements {
+        require_foreground_target: true,
+        require_exact_element_focus: true,
+        require_no_modal_blocker: true,
+    }
+}
+
+fn authority(
+    provider: &FakeProvider,
+    snapshot: &NativeSemanticSnapshotRevision,
+) -> ActionEnvelopeMetadata {
     ActionEnvelopeMetadata {
-        decision_principal_ref: PrincipalRef::from("principal:decision:verified-action"),
-        acting_principal_ref: PrincipalRef::from("principal:acting:verified-action"),
-        authorization_revision: "authorization:verified-action:v1".into(),
+        decision_principal_ref: PrincipalRef::from("principal:decision:dispatch-operation-receipt"),
+        acting_principal_ref: PrincipalRef::from("principal:acting:dispatch-operation-receipt"),
+        authorization_revision: "authorization:dispatch-operation-receipt:v1".into(),
         precondition_snapshot_cut_ref: snapshot.snapshot_cut_ref().into(),
         provider_incarnation_ref: provider.provider.clone(),
         target_incarnation_ref: provider.target.clone(),
         risk_class: ActionRiskClass::ReversibleUiState,
         idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
-        expected_postcondition_contract_refs: vec!["postcondition:verified-action".into()],
+        expected_postcondition_contract_refs: vec!["postcondition:dispatch-operation-receipt".into()],
     }
 }
 
-fn journal_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("localview-{label}-{}.jsonl", Uuid::new_v4()))
+fn journal_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "localview-windows-dispatch-operation-receipt-{}.jsonl",
+        Uuid::new_v4()
+    ))
 }
 
 #[tokio::test]
-async fn one_call_coordinator_closes_exact_canonical_action_through_verified_commit() {
+async fn forged_dispatch_operation_receipt_is_rejected_before_linearization() {
     let bridge = LiveBridge::new(64, 8);
     let provider = FakeProvider::new();
     let runtime = WindowsObserveRuntimeManager::new(
@@ -404,62 +370,88 @@ async fn one_call_coordinator_closes_exact_canonical_action_through_verified_com
     .unwrap();
     runtime.attach(session(), selection()).await.unwrap();
 
-    let snapshot = provider.current_snapshot();
-    let metadata = authority(&provider, &snapshot);
+    let snapshot = provider.snapshot();
+    let metadata = authority(&provider, snapshot.as_ref());
     let queued = bridge
-        .enqueue_canonical_action(session(), None, BridgeActionKind::Click, metadata)
+        .enqueue_canonical_action(session(), None, BridgeActionKind::Click, metadata.clone())
         .await
         .unwrap();
-    let path = journal_path("verified-action-coordinator-success");
+
+    let path = journal_path();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
     journal
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
-    journal.record_intent_operation_bound(&queued).await.unwrap();
+    journal
+        .record_intent_operation_bound_explicit(&queued, CanonicalActionOperation::Expand)
+        .await
+        .unwrap();
 
-    let authorization = FakeAuthorizationRevalidator::default();
-    let executor = FakeExecutor::default();
-    let outcome = execute_verified_canonical_uia_action(
+    let preflight = runtime
+        .preflight_uia_action(
+            session(),
+            WindowsUiaActionPreflightRequest {
+                authority: metadata.clone(),
+                element_ref: snapshot.nodes()[0].element_ref.clone(),
+                required_pattern: WindowsUiaPattern::ExpandCollapse,
+            },
+        )
+        .await
+        .unwrap();
+
+    let prepared = prepare_uia_dispatch(
         &bridge,
         &journal,
         &runtime,
-        &queued,
-        WindowsUiaVerifiedActionTarget {
-            element_ref: snapshot.nodes()[0].element_ref.clone(),
-            required_pattern: WindowsUiaPattern::Invoke,
-            context_requirements: WindowsUiaDispatchContextRequirements {
-                require_foreground_target: true,
-                require_exact_element_focus: false,
-                require_no_modal_blocker: true,
+        session(),
+        WindowsUiaPreparedDispatchRequest {
+            seal: WindowsUiaDispatchSealRequest {
+                action_id: queued.action.id,
+                authority: metadata,
+                preflight,
+                context_requirements: requirements(),
             },
         },
-        &authorization,
-        &executor,
-        &FakeVerifier,
+        &FakeAuthorizationRevalidator,
     )
     .await
     .unwrap();
+    let armed = arm_uia_dispatch_execution(&bridge, &journal, &runtime, session(), prepared)
+        .await
+        .unwrap();
+    let action_id = armed.action_id();
 
-    assert!(matches!(
-        outcome,
-        WindowsUiaVerifiedExecutionOutcome::Committed {
-            world_outcome: WorldOutcome::VerifiedExpected,
-            ..
-        }
-    ));
-    assert_eq!(authorization.call_count(), 1);
-    assert_eq!(executor.call_count(), 1);
-    assert_eq!(provider.context_calls(), 2);
+    let error = execute_armed_uia_dispatch(
+        &bridge,
+        &journal,
+        session(),
+        armed,
+        &ForgeDispatchOperationExecutor,
+    )
+    .await
+    .unwrap_err();
+
     assert_eq!(
-        journal.recovery_state(queued.action.id).await,
-        Some(ConsequentialRecoveryState::Committed)
+        error,
+        WindowsUiaDispatchExecutionCoordinatorError::ProviderReceiptMismatch
+    );
+    assert_eq!(
+        journal.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::DispatchPrepared)
+    );
+    assert_eq!(journal.requires_reconciliation(action_id).await, Some(true));
+    assert!(
+        journal
+            .entries_for(action_id)
+            .await
+            .iter()
+            .all(|entry| !matches!(
+                entry.transition,
+                ConsequentialJournalTransition::DispatchLinearized { .. }
+            )),
+        "forged operation receipt must never be linearized"
     );
 
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(format!(
-        "{}.operation-{}.json",
-        path.display(),
-        queued.action.id
-    ));
+    let _ = std::fs::remove_file(path);
 }

@@ -25,6 +25,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Compile isolated UIA provider
         run: cargo check -p localview-windows-uia-provider --all-targets
+      - name: V4.3 SetValue payload binding/privacy contract
+        run: cargo test -p localview-live-bridge --test v43_set_value_payload_binding -- --nocapture
+      - name: V4.3 SetValue server-owned HTTP contract
+        run: cargo test -p localview-control --test windows_consequential_set_value_control -- --nocapture
+      - name: V4.3 SetValue move-only request contract
+        run: cargo test -p localview-windows-uia-provider --test set_value_dispatch_contract -- --nocapture
+      - name: V4.3 SetValue equality metadata contract
+        run: cargo test -p localview-windows-uia-provider --test set_value_equality_contract -- --nocapture
+      - name: V4.3 SetValue provider fresh equality contract
+        run: cargo test -p localview-windows-uia-provider --test set_value_provider_verification_contract -- --nocapture
+      - name: V4.3 ValuePattern writable/password/read-only preflight contract
+        run: cargo test -p localview-windows-observe-runtime --test set_value_safe_preflight_contract -- --nocapture
       - name: Phase 6 UIA action capability contract
         run: cargo test -p localview-windows-uia-provider --test action_capability_contract -- --nocapture
       - name: Phase 6 provider dispatch context fence contract
@@ -55,6 +67,12 @@ jobs:
         run: cargo test -p localview-windows-observe-runtime --test prepared_dispatch_contract execution_arm -- --nocapture
       - name: Phase 6 one-shot provider dispatch outcome coordinator
         run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior -- --nocapture
+      - name: V4.3 SetValue production runtime adapter contract
+        run: cargo test -p localview-windows-observe-runtime --test set_value_runtime_provider_adapter_contract -- --nocapture
+      - name: V4.3 SetValue fresh equality execution contract
+        run: cargo test -p localview-windows-observe-runtime --test set_value_execution_contract -- --nocapture
+      - name: V4.3 SetValue restart no-payload no-redispatch recovery
+        run: cargo test -p localview-windows-observe-runtime --test set_value_recovery_contract -- --nocapture
       - name: Phase 5 resource accounting and governor contract
         run: cargo test -p localview-windows-observe-runtime --test resource_accounting_contract -- --nocapture
       - name: Phase 6 read-only semantic action contract
@@ -89,6 +107,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test expand_collapse_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real retained Win32 UIA SetValue dispatch
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-windows-uia-provider --test set_value_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Invoke to verified post-dispatch commit
         env:
           LOCALVIEW_UIA_SMOKE: "1"
@@ -109,6 +131,10 @@ jobs:
         env:
           LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-control --test windows_consequential_expand_collapse_windows_smoke -- --ignored --nocapture --test-threads=1
+      - name: Real HTTP SetValue to fresh equality verified durable commit
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+        run: cargo test -p localview-control --test windows_consequential_set_value_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real bounded Win32 UIA event subscription
         env:
           LOCALVIEW_UIA_SMOKE: "1"

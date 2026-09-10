@@ -16,6 +16,10 @@ const NATIVE_SEMANTIC_VERSION_V2: &str = "2";
 const CONTRACT_PREFIX_V1: &str = "lvpc:native-semantic:v1:";
 const CONTRACT_PREFIX_V2: &str = "lvpc:native-semantic:v2:";
 const CONTRACT_FAMILY_PREFIX: &str = "lvpc:native-semantic:v";
+const PAYLOAD_EQUALITY_FAMILY: &str = "payload-equality";
+const PAYLOAD_EQUALITY_VERSION_V1: &str = "1";
+const PAYLOAD_EQUALITY_PREFIX_V1: &str = "lvpc:payload-equality:v1:";
+const PAYLOAD_EQUALITY_FAMILY_PREFIX: &str = "lvpc:payload-equality:v";
 
 /// Correctness-bearing schema entry admitted by a registry revision.
 ///
@@ -29,7 +33,7 @@ pub struct PostconditionContractSchema {
     pub version: &'static str,
 }
 
-const STANDARD_SCHEMAS: [PostconditionContractSchema; 2] = [
+const STANDARD_SCHEMAS: [PostconditionContractSchema; 3] = [
     PostconditionContractSchema {
         family: NATIVE_SEMANTIC_FAMILY,
         version: NATIVE_SEMANTIC_VERSION_V1,
@@ -38,12 +42,17 @@ const STANDARD_SCHEMAS: [PostconditionContractSchema; 2] = [
         family: NATIVE_SEMANTIC_FAMILY,
         version: NATIVE_SEMANTIC_VERSION_V2,
     },
+    PostconditionContractSchema {
+        family: PAYLOAD_EQUALITY_FAMILY,
+        version: PAYLOAD_EQUALITY_VERSION_V1,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegisteredPostconditionContract {
     NativeSemanticV1(NativeSemanticPostconditionContractV1),
     NativeSemanticV2(NativeSemanticPostconditionContractV2),
+    PayloadEqualityV1(PayloadEqualityPostconditionContractV1),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -56,6 +65,8 @@ pub enum PostconditionContractRegistryError {
     UnsupportedVersion { family: String, version: String },
     #[error("registered native semantic postcondition contract is invalid: {0}")]
     NativeSemanticContract(NativeSemanticPostconditionContractError),
+    #[error("registered payload equality postcondition contract is invalid: {0}")]
+    PayloadEqualityContract(PayloadEqualityPostconditionContractError),
 }
 
 /// Immutable registry of correctness-bearing postcondition schemas understood by
@@ -108,6 +119,11 @@ impl PostconditionContractRegistry {
                     .map(RegisteredPostconditionContract::NativeSemanticV2)
                     .map_err(PostconditionContractRegistryError::NativeSemanticContract)
             }
+            (PAYLOAD_EQUALITY_FAMILY, PAYLOAD_EQUALITY_VERSION_V1) => {
+                PayloadEqualityPostconditionContractV1::from_contract_ref(contract_ref)
+                    .map(RegisteredPostconditionContract::PayloadEqualityV1)
+                    .map_err(PostconditionContractRegistryError::PayloadEqualityContract)
+            }
             _ => unreachable!("registered postcondition schema lacks a decoder"),
         }
     }
@@ -123,6 +139,9 @@ impl PostconditionContractRegistry {
             }
             RegisteredPostconditionContract::NativeSemanticV2(contract) => {
                 Ok(contract.evaluate(snapshot))
+            }
+            RegisteredPostconditionContract::PayloadEqualityV1(_) => {
+                Ok(NativeSemanticPostconditionEvaluation::Unknown)
             }
         }
     }
@@ -149,6 +168,129 @@ fn parse_registry_header(
         .ok_or(PostconditionContractRegistryError::InvalidReference)?;
     let _ = payload;
     Ok((family, &version_tag[1..]))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadEqualityModeV1 {
+    ReplaceValue,
+    ClearValue,
+}
+
+impl PayloadEqualityModeV1 {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ReplaceValue => "replace_value",
+            Self::ClearValue => "clear_value",
+        }
+    }
+
+    fn parse(value: &Value) -> Result<Self, PayloadEqualityPostconditionContractError> {
+        match value.as_str() {
+            Some("replace_value") => Ok(Self::ReplaceValue),
+            Some("clear_value") => Ok(Self::ClearValue),
+            _ => Err(PayloadEqualityPostconditionContractError::InvalidPayload),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PayloadEqualityPostconditionContractV1 {
+    pub mode: PayloadEqualityModeV1,
+    pub payload_ref: String,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum PayloadEqualityPostconditionContractError {
+    #[error("unsupported payload equality postcondition contract version {version}")]
+    UnsupportedVersion { version: String },
+    #[error("payload equality postcondition contract family is unsupported")]
+    UnsupportedFamily,
+    #[error("payload equality postcondition contract payload is invalid")]
+    InvalidPayload,
+    #[error("payload equality postcondition contract contains an unknown correctness field")]
+    UnknownField,
+    #[error("payload equality payload reference is not a canonical UUID")]
+    InvalidPayloadRef,
+    #[error("payload equality postcondition reference is not canonically encoded")]
+    NonCanonicalReference,
+}
+
+impl PayloadEqualityPostconditionContractV1 {
+    pub fn to_contract_ref(
+        &self,
+    ) -> Result<String, PayloadEqualityPostconditionContractError> {
+        if !is_canonical_uuid(&self.payload_ref) {
+            return Err(PayloadEqualityPostconditionContractError::InvalidPayloadRef);
+        }
+        let payload_ref = serde_json::to_string(&self.payload_ref)
+            .map_err(|_| PayloadEqualityPostconditionContractError::InvalidPayload)?;
+        Ok(format!(
+            "{PAYLOAD_EQUALITY_PREFIX_V1}{{\"mode\":\"{}\",\"payload_ref\":{payload_ref}}}",
+            self.mode.as_str()
+        ))
+    }
+
+    pub fn from_contract_ref(
+        contract_ref: &str,
+    ) -> Result<Self, PayloadEqualityPostconditionContractError> {
+        let payload = payload_equality_payload_for_version(contract_ref)?;
+        let value: Value = serde_json::from_str(payload)
+            .map_err(|_| PayloadEqualityPostconditionContractError::InvalidPayload)?;
+        let object = value
+            .as_object()
+            .ok_or(PayloadEqualityPostconditionContractError::InvalidPayload)?;
+        if object.len() != 2
+            || !object.contains_key("mode")
+            || !object.contains_key("payload_ref")
+        {
+            return Err(PayloadEqualityPostconditionContractError::UnknownField);
+        }
+
+        let payload_ref = object
+            .get("payload_ref")
+            .and_then(Value::as_str)
+            .ok_or(PayloadEqualityPostconditionContractError::InvalidPayload)?
+            .to_owned();
+        if !is_canonical_uuid(&payload_ref) {
+            return Err(PayloadEqualityPostconditionContractError::InvalidPayloadRef);
+        }
+        let contract = Self {
+            mode: PayloadEqualityModeV1::parse(
+                object
+                    .get("mode")
+                    .ok_or(PayloadEqualityPostconditionContractError::InvalidPayload)?,
+            )?,
+            payload_ref,
+        };
+        if contract.to_contract_ref()? != contract_ref {
+            return Err(PayloadEqualityPostconditionContractError::NonCanonicalReference);
+        }
+        Ok(contract)
+    }
+}
+
+fn payload_equality_payload_for_version(
+    contract_ref: &str,
+) -> Result<&str, PayloadEqualityPostconditionContractError> {
+    if let Some(payload) = contract_ref.strip_prefix(PAYLOAD_EQUALITY_PREFIX_V1) {
+        Ok(payload)
+    } else if let Some(rest) = contract_ref.strip_prefix(PAYLOAD_EQUALITY_FAMILY_PREFIX) {
+        let version = rest.split(':').next().unwrap_or(rest).to_owned();
+        Err(PayloadEqualityPostconditionContractError::UnsupportedVersion { version })
+    } else {
+        Err(PayloadEqualityPostconditionContractError::UnsupportedFamily)
+    }
+}
+
+fn is_canonical_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(index, byte)| match index {
+        8 | 13 | 18 | 23 => *byte == b'-',
+        _ => byte.is_ascii_digit() || (b'a'..=b'f').contains(byte),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

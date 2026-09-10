@@ -1,0 +1,834 @@
+use std::{collections::HashMap, fmt};
+
+use axum::{
+    Json,
+    body::Bytes,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+};
+use localview_live_bridge::{
+    SetValueCommitmentKey, SetValueMode, SetValuePayloadRef, verify_set_value_payload_binding,
+};
+use localview_postcondition_contracts::{
+    PayloadEqualityModeV1, PayloadEqualityPostconditionContractV1,
+};
+use localview_protocol::{ProviderElementRef, SessionId};
+use localview_windows_uia_provider::MAX_SET_VALUE_UTF8_BYTES;
+use serde::Deserialize;
+use uuid::Uuid;
+use zeroize::Zeroizing;
+
+use super::*;
+
+#[derive(Clone)]
+pub(super) struct WindowsSetValuePayloadAuthority {
+    commitment_key: Arc<SetValueCommitmentKey>,
+    pending: Arc<Mutex<HashMap<Uuid, PendingWindowsSetValuePayload>>>,
+}
+
+impl WindowsSetValuePayloadAuthority {
+    pub(super) fn new() -> Result<Self, String> {
+        let commitment_key =
+            SetValueCommitmentKey::generate().map_err(|error| error.to_string())?;
+        Ok(Self {
+            commitment_key: Arc::new(commitment_key),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    async fn persist_binding(
+        &self,
+        journal: &localview_live_bridge::ConsequentialJournal,
+        queued: &localview_live_bridge::CanonicalQueuedAction,
+        payload: &ProcessLocalSetValuePayload,
+    ) -> Result<
+        localview_live_bridge::DurableSetValuePayloadBinding,
+        localview_live_bridge::ConsequentialJournalError,
+    > {
+        journal
+            .record_set_value_payload_binding(
+                queued,
+                self.commitment_key.as_ref(),
+                payload.payload_ref,
+                payload.mode,
+                payload.utf8_bytes(),
+            )
+            .await
+    }
+
+    async fn stage(
+        &self,
+        action_id: Uuid,
+        candidate: PendingWindowsSetValuePayload,
+    ) -> Result<(), &'static str> {
+        use std::collections::hash_map::Entry;
+
+        match self.pending.lock().await.entry(action_id) {
+            Entry::Vacant(entry) => {
+                entry.insert(candidate);
+                Ok(())
+            }
+            Entry::Occupied(_) => Err("SetValue payload authority already exists for action"),
+        }
+    }
+
+    pub(super) async fn peek(
+        &self,
+        session_id: SessionId,
+        action_id: Uuid,
+        confirmation_ref: Uuid,
+    ) -> bool {
+        let pending = self.pending.lock().await;
+        peek_pending_set_value_payload(&pending, session_id, action_id, confirmation_ref)
+    }
+
+    async fn consume(
+        &self,
+        session_id: SessionId,
+        action_id: Uuid,
+        confirmation_ref: Uuid,
+    ) -> Option<PendingWindowsSetValuePayload> {
+        let mut pending = self.pending.lock().await;
+        consume_pending_set_value_payload(&mut pending, session_id, action_id, confirmation_ref)
+    }
+
+    pub(super) async fn consume_verified(
+        &self,
+        journal: &localview_live_bridge::ConsequentialJournal,
+        session_id: SessionId,
+        action_id: Uuid,
+        confirmation_ref: Uuid,
+    ) -> Result<Option<ConfirmedWindowsSetValuePayload>, String> {
+        let Some(candidate) = self.consume(session_id, action_id, confirmation_ref).await else {
+            return Ok(None);
+        };
+        let payload = candidate.payload;
+        let binding = journal
+            .set_value_payload_binding(action_id)
+            .await
+            .map_err(|error| format!("SetValue payload binding could not be loaded: {error}"))?
+            .ok_or_else(|| "SetValue durable payload binding is missing".to_owned())?;
+        let payload_utf8_len = u64::try_from(payload.utf8_len())
+            .map_err(|_| "SetValue process-local payload length is not representable".to_owned())?;
+        if binding.action_id != action_id
+            || binding.payload_ref != payload.payload_ref
+            || binding.mode != payload.mode
+            || binding.payload_utf8_len != payload_utf8_len
+        {
+            return Err(
+                "SetValue durable payload binding metadata does not match process-local authority"
+                    .to_owned(),
+            );
+        }
+        verify_set_value_payload_binding(
+            self.commitment_key.as_ref(),
+            &binding,
+            payload.utf8_bytes(),
+        )
+        .map_err(|error| format!("SetValue payload commitment verification failed: {error}"))?;
+
+        Ok(Some(ConfirmedWindowsSetValuePayload { payload }))
+    }
+
+    pub(super) async fn release_session(&self, session_id: SessionId) {
+        self.pending
+            .lock()
+            .await
+            .retain(|_, candidate| candidate.session_id != session_id);
+    }
+}
+
+struct ProcessLocalSetValuePayload {
+    payload_ref: SetValuePayloadRef,
+    mode: SetValueMode,
+    utf8: Zeroizing<Vec<u8>>,
+}
+
+impl ProcessLocalSetValuePayload {
+    fn new(
+        payload_ref: SetValuePayloadRef,
+        mode: SetValueMode,
+        utf8: Vec<u8>,
+    ) -> Result<Self, &'static str> {
+        if utf8.len() > MAX_SET_VALUE_UTF8_BYTES {
+            return Err("SetValue payload exceeds 16 KiB UTF-8 limit");
+        }
+        if utf8.contains(&0) {
+            return Err("SetValue payload contains U+0000");
+        }
+        if matches!(mode, SetValueMode::ClearValue) && !utf8.is_empty() {
+            return Err("clear_value payload must be empty");
+        }
+
+        Ok(Self {
+            payload_ref,
+            mode,
+            utf8: Zeroizing::new(utf8),
+        })
+    }
+
+    fn utf8_bytes(&self) -> &[u8] {
+        self.utf8.as_slice()
+    }
+
+    fn utf8_len(&self) -> usize {
+        self.utf8.len()
+    }
+}
+
+impl fmt::Debug for ProcessLocalSetValuePayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProcessLocalSetValuePayload")
+            .field("payload_ref", &self.payload_ref)
+            .field("mode", &self.mode)
+            .field("utf8_len", &self.utf8_len())
+            .finish()
+    }
+}
+
+struct PendingWindowsSetValuePayload {
+    session_id: SessionId,
+    confirmation_ref: Uuid,
+    payload: ProcessLocalSetValuePayload,
+}
+
+pub(super) struct ConfirmedWindowsSetValuePayload {
+    payload: ProcessLocalSetValuePayload,
+}
+
+impl ConfirmedWindowsSetValuePayload {
+    pub(super) fn payload_ref(&self) -> SetValuePayloadRef {
+        self.payload.payload_ref
+    }
+
+    pub(super) fn mode(&self) -> SetValueMode {
+        self.payload.mode
+    }
+
+    pub(super) fn utf8_bytes(&self) -> &[u8] {
+        self.payload.utf8_bytes()
+    }
+}
+
+fn peek_pending_set_value_payload(
+    pending: &HashMap<Uuid, PendingWindowsSetValuePayload>,
+    session_id: SessionId,
+    action_id: Uuid,
+    confirmation_ref: Uuid,
+) -> bool {
+    pending.get(&action_id).is_some_and(|candidate| {
+        candidate.session_id == session_id && candidate.confirmation_ref == confirmation_ref
+    })
+}
+
+fn consume_pending_set_value_payload(
+    pending: &mut HashMap<Uuid, PendingWindowsSetValuePayload>,
+    session_id: SessionId,
+    action_id: Uuid,
+    confirmation_ref: Uuid,
+) -> Option<PendingWindowsSetValuePayload> {
+    if !peek_pending_set_value_payload(pending, session_id, action_id, confirmation_ref) {
+        return None;
+    }
+    pending.remove(&action_id)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+enum WindowsSetValuePlanRequest {
+    ReplaceValue {
+        element_ref: ProviderElementRef,
+        value: String,
+    },
+    ClearValue {
+        element_ref: ProviderElementRef,
+    },
+}
+
+impl WindowsSetValuePlanRequest {
+    fn validate(self) -> Result<(ProviderElementRef, SetValuePlanMode), &'static str> {
+        match self {
+            Self::ReplaceValue { element_ref, value } => {
+                if value.len() > MAX_SET_VALUE_UTF8_BYTES {
+                    return Err("replace_value payload exceeds 16 KiB UTF-8 limit");
+                }
+                if value.as_bytes().contains(&0) {
+                    return Err("replace_value payload contains U+0000");
+                }
+                Ok((element_ref, SetValuePlanMode::ReplaceValue(value)))
+            }
+            Self::ClearValue { element_ref } => Ok((element_ref, SetValuePlanMode::ClearValue)),
+        }
+    }
+}
+
+enum SetValuePlanMode {
+    ReplaceValue(String),
+    ClearValue,
+}
+
+struct PreparedServerOwnedSetValuePayload {
+    payload: ProcessLocalSetValuePayload,
+    expected_postcondition_contract_ref: String,
+}
+
+fn prepare_server_owned_set_value_payload(
+    mode: SetValuePlanMode,
+    payload_ref: SetValuePayloadRef,
+) -> Result<PreparedServerOwnedSetValuePayload, String> {
+    let (payload_mode, contract_mode, utf8) = match mode {
+        SetValuePlanMode::ReplaceValue(value) => (
+            SetValueMode::ReplaceValue,
+            PayloadEqualityModeV1::ReplaceValue,
+            value.into_bytes(),
+        ),
+        SetValuePlanMode::ClearValue => (
+            SetValueMode::ClearValue,
+            PayloadEqualityModeV1::ClearValue,
+            Vec::new(),
+        ),
+    };
+    let payload =
+        ProcessLocalSetValuePayload::new(payload_ref, payload_mode, utf8).map_err(str::to_owned)?;
+    let expected_postcondition_contract_ref = PayloadEqualityPostconditionContractV1 {
+        mode: contract_mode,
+        payload_ref: payload_ref.0.to_string(),
+    }
+    .to_contract_ref()
+    .map_err(|error| error.to_string())?;
+
+    Ok(PreparedServerOwnedSetValuePayload {
+        payload,
+        expected_postcondition_contract_ref,
+    })
+}
+
+pub(super) async fn plan_windows_consequential_set_value(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(session_id): Path<SessionId>,
+    body: Bytes,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if state.sessions.get(session_id).await.is_none() {
+        return session_not_found();
+    }
+
+    let request = match serde_json::from_slice::<WindowsSetValuePlanRequest>(&body) {
+        Ok(request) => request,
+        Err(_) => return invalid_set_value_request("SetValue plan request shape is invalid"),
+    };
+    let (element_ref, mode) = match request.validate() {
+        Ok(validated) => validated,
+        Err(message) => return invalid_set_value_request(message),
+    };
+
+    let Some(runtime) = windows_observe_runtime_for_sessions(&state.sessions) else {
+        return unavailable("Windows UIA runtime is unavailable");
+    };
+    let Some(control) = windows_consequential_control_for_sessions(&state.sessions) else {
+        return unavailable("durable consequential control journal is unavailable");
+    };
+
+    // Serialize SetValue planning with every other consequential plan and with
+    // session release. No confirmation becomes visible until fresh evidence,
+    // canonical intent, operation identity, and the opaque HMAC payload binding
+    // are all durable.
+    let _plan_gate = control.plan_gate.lock().await;
+    if control.pending.lock().await.len() >= MAX_PENDING_WINDOWS_CONSEQUENTIAL_PLANS {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": "windows_consequential_plan_capacity_exhausted",
+                "max_pending_plans": MAX_PENDING_WINDOWS_CONSEQUENTIAL_PLANS,
+            })),
+        )
+            .into_response();
+    }
+
+    let fresh_evidence = match runtime
+        .refresh_uia_action_evidence(session_id, element_ref)
+        .await
+    {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "windows_consequential_fresh_evidence_rejected",
+                    "message": error.to_string(),
+                    "dispatch_performed": false,
+                    "confirmation_created": false,
+                })),
+            )
+                .into_response();
+        }
+    };
+    let refreshed_element_ref = fresh_evidence.refreshed_element_ref;
+
+    // The payload reference and payload-equality contract are server-owned. The
+    // plaintext remains only in the Zeroizing process-local payload object and
+    // is never copied into ActionEnvelopeMetadata or the generic action carrier.
+    let payload_ref = SetValuePayloadRef(Uuid::new_v4());
+    let prepared = match prepare_server_owned_set_value_payload(mode, payload_ref) {
+        Ok(prepared) => prepared,
+        Err(_) => return invalid_set_value_request("SetValue payload preparation failed"),
+    };
+    let confirmation_ref = Uuid::new_v4();
+    let authorization_revision_ref = Uuid::new_v4();
+    let authority = ActionEnvelopeMetadata {
+        decision_principal_ref: PrincipalRef::from(DECISION_PRINCIPAL_REF),
+        acting_principal_ref: PrincipalRef::from(ACTING_PRINCIPAL_REF),
+        authorization_revision: format!(
+            "authorization:local-control:confirmation-v1:{authorization_revision_ref}"
+        ),
+        precondition_snapshot_cut_ref: fresh_evidence.snapshot_cut_ref.clone(),
+        provider_incarnation_ref: refreshed_element_ref.provider_incarnation_ref.clone(),
+        target_incarnation_ref: refreshed_element_ref.target_incarnation_ref.clone(),
+        risk_class: ActionRiskClass::DestructiveOrIrreversible,
+        idempotency_class: ActionIdempotencyClass::Irreversible,
+        expected_postcondition_contract_refs: vec![
+            prepared.expected_postcondition_contract_ref.clone(),
+        ],
+    };
+
+    // Value support alone is insufficient. The existing Value preflight also
+    // requires explicit non-password and writable facts; unknown/unsafe states
+    // fail closed before any durable consequential intent is admitted.
+    let preflight = match runtime
+        .preflight_uia_action(
+            session_id,
+            WindowsUiaActionPreflightRequest {
+                authority: authority.clone(),
+                element_ref: refreshed_element_ref,
+                required_pattern: WindowsUiaPattern::Value,
+            },
+        )
+        .await
+    {
+        Ok(preflight) => preflight,
+        Err(error) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "windows_consequential_preflight_rejected",
+                    "message": error.to_string(),
+                    "dispatch_performed": false,
+                    "confirmation_created": false,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Preserve the V1-V3 public wire carrier without placing SetValue plaintext
+    // in it. Canonical SetValue identity is persisted separately below and is
+    // the authority-bearing operation used by the verified execution path.
+    let queued = match state
+        .live
+        .bind_direct_canonical_action(
+            session_id,
+            Some(preflight.element_ref.opaque_provider_element_id.clone()),
+            localview_live_bridge::BridgeActionKind::TypeText {
+                text: String::new(),
+                clear_first: false,
+            },
+            authority.clone(),
+        )
+        .await
+    {
+        Ok(queued) => queued,
+        Err(error) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "windows_consequential_canonical_binding_rejected",
+                    "binding_error": format!("{error:?}"),
+                    "dispatch_performed": false,
+                    "confirmation_created": false,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if let Err(error) = control
+        .journal
+        .record_intent_admitted(queued.envelope.clone())
+        .await
+    {
+        return durable_admission_failure(
+            queued.action.id,
+            "intent_admission_failed",
+            error.to_string(),
+        );
+    }
+    if let Err(error) = control
+        .journal
+        .record_intent_operation_bound_explicit(&queued, CanonicalActionOperation::SetValue)
+        .await
+    {
+        return durable_admission_failure(
+            queued.action.id,
+            "operation_binding_failed",
+            error.to_string(),
+        );
+    }
+    if let Err(error) = control
+        .set_value
+        .persist_binding(control.journal.as_ref(), &queued, &prepared.payload)
+        .await
+    {
+        return durable_admission_failure(
+            queued.action.id,
+            "set_value_payload_binding_failed",
+            error.to_string(),
+        );
+    }
+
+    let target = WindowsUiaVerifiedActionTarget {
+        element_ref: preflight.element_ref,
+        required_pattern: WindowsUiaPattern::Value,
+        context_requirements: WindowsUiaDispatchContextRequirements {
+            require_foreground_target: true,
+            require_exact_element_focus: false,
+            require_no_modal_blocker: true,
+        },
+    };
+    let action_id = queued.action.id;
+
+    // Publish payload authority first, then generic confirmation metadata while
+    // still holding the plan gate. A concurrent confirm can therefore never see
+    // a SetValue plan without its matching live payload capability.
+    if control
+        .set_value
+        .stage(
+            action_id,
+            PendingWindowsSetValuePayload {
+                session_id,
+                confirmation_ref,
+                payload: prepared.payload,
+            },
+        )
+        .await
+        .is_err()
+    {
+        return set_value_pending_stage_failure(action_id);
+    }
+    control.pending.lock().await.insert(
+        action_id,
+        PendingWindowsConsequentialPlan {
+            confirmation_ref,
+            queued,
+            target,
+        },
+    );
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "action_id": action_id,
+            "confirmation_ref": confirmation_ref,
+            "confirmation_required": true,
+            "confirmation_authority": "bearer_holder_explicit_confirmation",
+            "operation": "set_value",
+            "risk_class": "s4_destructive_or_irreversible",
+            "idempotency_class": "irreversible",
+            "precondition_snapshot_cut_ref": authority.precondition_snapshot_cut_ref,
+            "planning_reconciliation_receipt_ref": fresh_evidence.reconciliation_receipt_ref,
+            "expected_postcondition_contract_refs": authority.expected_postcondition_contract_refs,
+            "restart_restores_confirmation_authority": false,
+        })),
+    )
+        .into_response()
+}
+
+fn invalid_set_value_request(message: &'static str) -> axum::response::Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(serde_json::json!({
+            "error": "invalid_windows_set_value_plan_request",
+            "message": message,
+            "dispatch_performed": false,
+            "confirmation_created": false,
+        })),
+    )
+        .into_response()
+}
+
+fn set_value_pending_stage_failure(action_id: Uuid) -> axum::response::Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({
+            "error": "windows_set_value_process_local_authority_stage_failed",
+            "action_id": action_id,
+            "dispatch_performed": false,
+            "confirmation_created": false,
+            "retry_same_action_allowed": false,
+            "reconciliation_required": true,
+        })),
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, path::PathBuf};
+
+    use localview_live_bridge::{
+        ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
+        CanonicalActionOperation, ConsequentialJournal, LiveBridge, ProviderObservationBinding,
+        verify_set_value_payload_binding,
+    };
+    use localview_protocol::{
+        EventContinuityState, PrincipalRef, ProviderIncarnationRef, TargetIncarnationRef,
+    };
+    use uuid::Uuid;
+
+    use super::*;
+
+    const SENTINEL: &str = "localview-task8-process-local-secret-9124f98d";
+
+    fn pending_payload(
+        session_id: SessionId,
+        confirmation_ref: Uuid,
+    ) -> PendingWindowsSetValuePayload {
+        PendingWindowsSetValuePayload {
+            session_id,
+            confirmation_ref,
+            payload: ProcessLocalSetValuePayload::new(
+                SetValuePayloadRef(Uuid::from_u128(0x8a01)),
+                SetValueMode::ReplaceValue,
+                SENTINEL.as_bytes().to_vec(),
+            )
+            .expect("valid bounded process-local payload"),
+        }
+    }
+
+    fn journal_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("localview-{label}-{}.jsonl", Uuid::new_v4()))
+    }
+
+    async fn admitted_set_value_action() -> localview_live_bridge::CanonicalQueuedAction {
+        let bridge = LiveBridge::new(32, 8);
+        let session_id: SessionId = Uuid::from_u128(0x8a30);
+        let provider = ProviderIncarnationRef::from("provider:windows-uia:task8-control-binding");
+        let target = TargetIncarnationRef::from("target:windows:task8-control-binding");
+        bridge
+            .bind_provider_observation(ProviderObservationBinding {
+                session_id,
+                generation: 1,
+                provider_incarnation_ref: provider.clone(),
+                target_incarnation_ref: target.clone(),
+                initial_continuity: EventContinuityState::OrderingOpaque,
+                sequence_baseline: Some(0),
+            })
+            .await
+            .unwrap();
+
+        bridge
+            .bind_direct_canonical_action(
+                session_id,
+                None,
+                BridgeActionKind::TypeText {
+                    text: String::new(),
+                    clear_first: false,
+                },
+                ActionEnvelopeMetadata {
+                    decision_principal_ref: PrincipalRef::from("principal:task8:decision"),
+                    acting_principal_ref: PrincipalRef::from("principal:task8:acting"),
+                    authorization_revision: "authorization:task8:v1".into(),
+                    precondition_snapshot_cut_ref: "cut:task8:1".into(),
+                    provider_incarnation_ref: provider,
+                    target_incarnation_ref: target,
+                    risk_class: ActionRiskClass::DestructiveOrIrreversible,
+                    idempotency_class: ActionIdempotencyClass::Irreversible,
+                    expected_postcondition_contract_refs: vec![
+                        "postcondition:task8:set-value-binding".into(),
+                    ],
+                },
+            )
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn process_local_payload_debug_is_metadata_only() {
+        let payload = ProcessLocalSetValuePayload::new(
+            SetValuePayloadRef(Uuid::from_u128(0x8a02)),
+            SetValueMode::ReplaceValue,
+            SENTINEL.as_bytes().to_vec(),
+        )
+        .expect("valid bounded process-local payload");
+
+        assert_eq!(payload.utf8_bytes(), SENTINEL.as_bytes());
+        assert_eq!(payload.utf8_len(), SENTINEL.len());
+        let debug = format!("{payload:?}");
+        assert!(!debug.contains(SENTINEL));
+        assert!(debug.contains("utf8_len"));
+    }
+
+    #[test]
+    fn wrong_confirmation_keeps_set_value_payload_and_exact_confirmation_moves_once() {
+        let session_id = Uuid::from_u128(0x8a10);
+        let action_id = Uuid::from_u128(0x8a11);
+        let confirmation_ref = Uuid::from_u128(0x8a12);
+        let wrong_confirmation = Uuid::from_u128(0xdead);
+        let mut pending = HashMap::new();
+        pending.insert(action_id, pending_payload(session_id, confirmation_ref));
+
+        assert!(
+            consume_pending_set_value_payload(
+                &mut pending,
+                session_id,
+                action_id,
+                wrong_confirmation,
+            )
+            .is_none(),
+            "wrong confirmation must not consume process-local payload authority"
+        );
+        assert!(peek_pending_set_value_payload(
+            &pending,
+            session_id,
+            action_id,
+            confirmation_ref,
+        ));
+
+        let consumed = consume_pending_set_value_payload(
+            &mut pending,
+            session_id,
+            action_id,
+            confirmation_ref,
+        )
+        .expect("exact confirmation moves payload authority");
+        assert_eq!(consumed.payload.utf8_bytes(), SENTINEL.as_bytes());
+        assert!(
+            consume_pending_set_value_payload(
+                &mut pending,
+                session_id,
+                action_id,
+                confirmation_ref,
+            )
+            .is_none(),
+            "exact confirmation is one-shot"
+        );
+    }
+
+    #[tokio::test]
+    async fn payload_authority_refuses_duplicate_action_stage_and_consumes_exactly_once() {
+        let authority = WindowsSetValuePayloadAuthority::new().expect("process-local authority");
+        let session_id = Uuid::from_u128(0x8a20);
+        let action_id = Uuid::from_u128(0x8a21);
+        let confirmation_ref = Uuid::from_u128(0x8a22);
+
+        authority
+            .stage(action_id, pending_payload(session_id, confirmation_ref))
+            .await
+            .expect("first stage must reserve exact action authority");
+        assert!(
+            authority
+                .peek(session_id, action_id, confirmation_ref)
+                .await,
+            "staged payload must be visible only through exact session/action/confirmation metadata"
+        );
+
+        let duplicate = authority
+            .stage(action_id, pending_payload(session_id, confirmation_ref))
+            .await
+            .expect_err("duplicate action id must not replace live plaintext authority");
+        assert_eq!(
+            duplicate,
+            "SetValue payload authority already exists for action"
+        );
+
+        let consumed = authority
+            .consume(session_id, action_id, confirmation_ref)
+            .await
+            .expect("exact metadata consumes the staged payload");
+        assert_eq!(consumed.payload.utf8_bytes(), SENTINEL.as_bytes());
+        assert!(
+            authority
+                .consume(session_id, action_id, confirmation_ref)
+                .await
+                .is_none(),
+            "SetValue payload authority must be one-shot"
+        );
+    }
+
+    #[tokio::test]
+    async fn payload_authority_persists_exact_opaque_binding_with_process_key() {
+        let authority = WindowsSetValuePayloadAuthority::new().expect("process-local authority");
+        let queued = admitted_set_value_action().await;
+        let path = journal_path("task8-control-set-value-binding");
+        let journal = ConsequentialJournal::open(&path).await.unwrap();
+        journal
+            .record_intent_admitted(queued.envelope.clone())
+            .await
+            .unwrap();
+        journal
+            .record_intent_operation_bound_explicit(&queued, CanonicalActionOperation::SetValue)
+            .await
+            .unwrap();
+        let payload = ProcessLocalSetValuePayload::new(
+            SetValuePayloadRef(Uuid::from_u128(0x8a31)),
+            SetValueMode::ReplaceValue,
+            SENTINEL.as_bytes().to_vec(),
+        )
+        .unwrap();
+
+        let binding = authority
+            .persist_binding(&journal, &queued, &payload)
+            .await
+            .expect("control-owned authority must persist the exact opaque payload commitment");
+
+        assert_eq!(binding.action_id, queued.action.id);
+        assert_eq!(binding.payload_ref, payload.payload_ref);
+        assert_eq!(binding.mode, payload.mode);
+        assert_eq!(binding.payload_utf8_len, SENTINEL.len() as u64);
+        assert!(
+            verify_set_value_payload_binding(
+                &authority.commitment_key,
+                &binding,
+                SENTINEL.as_bytes(),
+            )
+            .is_ok()
+        );
+        let encoded = serde_json::to_vec(&binding).unwrap();
+        assert!(
+            !encoded
+                .windows(SENTINEL.len())
+                .any(|window| window == SENTINEL.as_bytes())
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn server_owned_set_value_payload_contract_is_opaque_and_exact() {
+        let payload_ref = SetValuePayloadRef(Uuid::from_u128(0x8a40));
+        let prepared = prepare_server_owned_set_value_payload(
+            SetValuePlanMode::ReplaceValue(SENTINEL.to_owned()),
+            payload_ref,
+        )
+        .expect("valid SetValue payload preparation");
+
+        assert_eq!(prepared.payload.payload_ref, payload_ref);
+        assert_eq!(prepared.payload.mode, SetValueMode::ReplaceValue);
+        assert_eq!(prepared.payload.utf8_bytes(), SENTINEL.as_bytes());
+        assert_eq!(
+            prepared.expected_postcondition_contract_ref,
+            format!(
+                "lvpc:payload-equality:v1:{{\"mode\":\"replace_value\",\"payload_ref\":\"{}\"}}",
+                payload_ref.0
+            )
+        );
+        assert!(
+            !prepared
+                .expected_postcondition_contract_ref
+                .contains(SENTINEL)
+        );
+    }
+}

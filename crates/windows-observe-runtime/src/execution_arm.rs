@@ -271,6 +271,7 @@ pub struct WindowsUiaProviderExecutionReceipt {
     pub target_incarnation_ref: TargetIncarnationRef,
     pub element_ref: ProviderElementRef,
     pub required_pattern: WindowsUiaPattern,
+    pub dispatch_operation: WindowsUiaPatternDispatchOperation,
     pub context_requirements: WindowsUiaDispatchContextRequirements,
     pub transport_result: TransportResult,
     pub dispatch_result: DispatchResult,
@@ -670,6 +671,7 @@ fn provider_receipt_matches_request(
         && receipt.target_incarnation_ref == request.target_incarnation_ref
         && receipt.element_ref == request.element_ref
         && receipt.required_pattern == request.required_pattern
+        && receipt.dispatch_operation == request.dispatch_operation
         && receipt.context_requirements == request.context_requirements
 }
 

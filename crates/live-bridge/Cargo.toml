@@ -10,10 +10,14 @@ path = "src/v43_lib.rs"
 
 [dependencies]
 chrono.workspace = true
+getrandom.workspace = true
+hmac.workspace = true
 localview-protocol = { path = "../protocol" }
 localview-token-budget = { path = "../token-budget" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
