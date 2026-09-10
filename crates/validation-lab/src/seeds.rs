@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::LabError;
+use crate::{CanonicalDigest, LabError, canonical_digest};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LabSeedIdentity {
@@ -36,6 +36,12 @@ pub struct LabSeed {
 pub struct LabSeedCatalog {
     corpus_revision: String,
     seeds: BTreeMap<LabSeedIdentity, LabSeed>,
+}
+
+#[derive(Serialize)]
+struct CanonicalSeedCatalog<'a> {
+    corpus_revision: &'a str,
+    seeds: Vec<&'a LabSeed>,
 }
 
 impl LabSeedCatalog {
@@ -84,6 +90,13 @@ impl LabSeedCatalog {
 
     pub fn get(&self, identity: &LabSeedIdentity) -> Option<&LabSeed> {
         self.seeds.get(identity)
+    }
+
+    pub fn canonical_digest(&self) -> Result<CanonicalDigest, LabError> {
+        canonical_digest(&CanonicalSeedCatalog {
+            corpus_revision: &self.corpus_revision,
+            seeds: self.seeds.values().collect(),
+        })
     }
 }
 
