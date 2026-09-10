@@ -52,11 +52,64 @@ fn oracle_correction_uses_a_new_revision_and_preserves_both_seeds() {
 }
 
 #[test]
+fn catalog_digest_binds_oracle_revision_and_seed_content() {
+    let baseline = LabSeedCatalog::new("corpus-r2", vec![seed("oracle-r1", "STALE")]).unwrap();
+    let corrected = LabSeedCatalog::new(
+        "corpus-r2",
+        vec![seed("oracle-r2", "RECONCILIATION_REQUIRED")],
+    )
+    .unwrap();
+    assert_ne!(
+        baseline.canonical_digest().unwrap(),
+        corrected.canonical_digest().unwrap()
+    );
+
+    let mut changed_content = seed("oracle-r1", "STALE");
+    changed_content.input_fixture = json!({"generation": 8, "incarnation": "i1"});
+    let changed = LabSeedCatalog::new("corpus-r2", vec![changed_content]).unwrap();
+    assert_ne!(
+        baseline.canonical_digest().unwrap(),
+        changed.canonical_digest().unwrap()
+    );
+}
+
+#[test]
+fn catalog_digest_is_independent_of_set_and_seed_insertion_order() {
+    let mut first = seed("oracle-r1", "STALE");
+    first.spec_surface_refs = [1055, 841, 843].into_iter().collect();
+    first.forbidden_outcomes = ["CURRENT".into(), "UNKNOWN".into()].into_iter().collect();
+
+    let mut same = seed("oracle-r1", "STALE");
+    same.spec_surface_refs = [843, 1055, 841].into_iter().collect();
+    same.forbidden_outcomes = ["UNKNOWN".into(), "CURRENT".into()].into_iter().collect();
+
+    let other = seed("oracle-r2", "RECONCILIATION_REQUIRED");
+    let a = LabSeedCatalog::new("corpus-r2", vec![first, other.clone()]).unwrap();
+    let b = LabSeedCatalog::new("corpus-r2", vec![other, same]).unwrap();
+
+    assert_eq!(a.canonical_digest().unwrap(), b.canonical_digest().unwrap());
+}
+
+#[test]
 fn seed_and_catalog_authority_fields_cannot_be_empty() {
     let mut invalid_seed = seed("oracle-r1", "STALE");
     invalid_seed.identity.seed_id.clear();
     assert!(matches!(
         LabSeedCatalog::new("corpus-r1", vec![invalid_seed]),
+        Err(LabError::EmptyAuthorityField { .. })
+    ));
+
+    let mut invalid_prediction = seed("oracle-r1", "STALE");
+    invalid_prediction.identity.prediction_revision.clear();
+    assert!(matches!(
+        LabSeedCatalog::new("corpus-r1", vec![invalid_prediction]),
+        Err(LabError::EmptyAuthorityField { .. })
+    ));
+
+    let mut invalid_oracle = seed("oracle-r1", "STALE");
+    invalid_oracle.identity.oracle_revision.clear();
+    assert!(matches!(
+        LabSeedCatalog::new("corpus-r1", vec![invalid_oracle]),
         Err(LabError::EmptyAuthorityField { .. })
     ));
 
