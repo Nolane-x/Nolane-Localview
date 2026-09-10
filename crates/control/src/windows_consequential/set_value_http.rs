@@ -18,10 +18,6 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct WindowsSetValuePayloadAuthority {
-    #[expect(
-        dead_code,
-        reason = "Task 8 control-lifetime commitment key is armed before the server-owned planning slice consumes it"
-    )]
     commitment_key: Arc<SetValueCommitmentKey>,
     pending: Arc<Mutex<HashMap<Uuid, PendingWindowsSetValuePayload>>>,
 }
