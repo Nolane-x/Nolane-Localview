@@ -10,11 +10,11 @@ Base: `main@9df2d2ae4817a1f85c3fef4e114db4ebbb9e0352`
 
 ## 1. Purpose
 
-V4.3 requires falsification infrastructure, not merely additional runtime features. The Validation Lab must make correctness-critical semantics executable as bounded, reproducible research claims with machine-readable provenance. A clean run must mean exactly what was executed and nothing stronger; a counterexample must remain durable evidence rather than disappear into CI logs.
+V4.3 requires falsification infrastructure, not merely more runtime features. Correctness-critical semantics must be executable as bounded, reproducible research claims with machine-readable provenance. A clean run must mean exactly what was executed and nothing stronger; a counterexample must remain durable evidence rather than disappear into CI logs.
 
-This design introduces a **thin Validation Lab authority core** above existing deterministic primitives. It does not reimplement mutation testing, state-space compilation, provider logic, or runtime verification. It creates the research-evidence boundary that binds preregistration, seed identity, observations, metric classification, and result strength.
+This design introduces a thin **Validation Lab authority core** above existing deterministic primitives. It does not reimplement mutation testing, state-space compilation, provider logic, or runtime verification. It creates the research-evidence boundary that binds preregistration, seed identity, oracle revision, observations, metric accounting, result strength, and canonical artifacts.
 
-The first implementation slice intentionally stops before L2–L9 campaign orchestration. Its job is to make later campaigns impossible to overclaim or misclassify.
+The first implementation slice intentionally stops before L2–L9 campaign orchestration. Its job is to make later campaigns impossible to overclaim or silently misclassify.
 
 ## 2. Source-of-truth requirements
 
@@ -34,13 +34,11 @@ This design implements the authority/provenance foundation required by the V4.2/
 - Silent Unsoundness Target (§1338).
 - Definition of Done — V4.3 Lab (§1384).
 
-The design preserves the specification rule that lab artifacts are research records and production LocalView must not depend on their presence on a user machine.
+Lab artifacts are research records. Production LocalView must not depend on their existence on a user machine.
 
-## 3. Architectural classification
+## 3. Selected architecture
 
-This is an architectural change because no existing crate owns the complete lifecycle of lab preregistration, immutable run identity, result-strength classification, or metric authority. Existing crates provide useful pieces but do not own this boundary.
-
-The selected architecture is:
+This is an architectural change because no existing crate owns the complete lifecycle of lab preregistration, immutable run identity, result-strength classification, or metric authority.
 
 ```text
 V4.3 spec / campaign definition
@@ -48,9 +46,11 @@ V4.3 spec / campaign definition
         v
 localview-validation-lab
   - preregistration authority
-  - immutable revision identity
-  - seed/result contracts
-  - metric accounting
+  - immutable revision context
+  - completed-run identity
+  - seed/oracle contracts
+  - observation/result contracts
+  - deterministic metric accounting
   - result-strength classification
   - canonical artifact serialization/digests
         |
@@ -61,7 +61,7 @@ localview-mutation      localview-state-space
 (existing L2 primitive) (existing L4 primitive)
         |
         +---------- future adapters ----------+
-                   L3/L5/L6/L7/L8/L9
+                   L1/L3/L5/L6/L7/L8/L9
 
 Shipping daemon / desktop / runtime
         X
@@ -69,51 +69,41 @@ Shipping daemon / desktop / runtime
         no dependency on validation-lab
 ```
 
-The lab crate may depend on pure/shared contract crates when required, but shipping runtime crates must not depend on the lab crate.
+The Validation Lab may depend on pure/shared contracts. Shipping runtime crates must not depend on the lab crate.
 
 ## 4. Existing primitives to reuse
 
 ### 4.1 `localview-mutation`
 
-The repository already has deterministic mutation semantics:
+The repository already has deterministic mutation semantics: mutation classes/operators, `MutationCase`, `MutationOutcome`, `MutationVerdict::{Killed, Survived, Invalid, SkippedUnsafe}`, and `VerificationQualityMap`.
 
-- mutation classes and operators;
-- `MutationCase`;
-- `MutationOutcome`;
-- `MutationVerdict::{Killed, Survived, Invalid, SkippedUnsafe}`;
-- `VerificationQualityMap` including overall/weighted kill rates and survivors.
-
-The Validation Lab must reuse these semantics for future L2 integration. It must not create a second mutation verdict model.
+Future L2 integration must reuse these semantics. The lab must not create a second mutation verdict system.
 
 ### 4.2 `localview-state-space`
 
-The repository already has a deterministic bounded state-space compiler with:
+The repository already has a deterministic bounded state-space compiler with dimensions, values, constraints, risk weighting, boundary values, bounded `max_states`, stable state keys, and pair coverage.
 
-- dimensions and values;
-- constraints;
-- risk weighting and boundary values;
-- bounded `max_states` selection;
-- deterministic state keys and pair coverage.
+Future L4 integration must reuse this compiler instead of creating a competing state enumerator.
 
-The Validation Lab must reuse this compiler for future L4 bounded-state campaigns rather than inventing a competing state enumerator.
+### 4.3 `localview-reports` and `localview-quality`
 
-### 4.3 Reports and quality crates
-
-`localview-reports` and `localview-quality` remain product/reporting surfaces. They are not the authority for research result strength. A future exporter may convert lab artifacts into human-readable reports, but the canonical result must be defined by the lab contracts first.
+These remain product/reporting surfaces. They are not the authority for research result strength. A future exporter may render lab artifacts, but canonical research meaning is defined by the lab contracts first.
 
 ## 5. Core invariants
 
-The first implementation must preserve all of the following.
-
 ### I1 — No prospective claim without preregistration
 
-A run can be classified as prediction-valid only if the expected distinction, seed corpus revision, bound, random source profile, and comparison profile are committed to a canonical preregistration artifact before execution begins.
+A run can receive a prospective result class only when expected distinctions, seed corpus revision, declared bound, random source profile, and comparison profile were committed to a canonical preregistration artifact before execution began.
 
-If this condition is not satisfied, the run may still execute but its maximum result class is `EXPLORATORY_OBSERVATION`.
+If preregistration is missing or invalid before execution, execution may continue only as exploratory work. Finalization must force `EXPLORATORY_OBSERVATION` and record a typed downgrade reason.
 
-### I2 — Result strength is typed and non-escalating
+### I2 — Valid receipt drift is a hard error
 
-Every result has exactly one research-strength class from the specification taxonomy:
+Once execution starts under a valid preregistration receipt, a digest mismatch or drift in bound/comparison/corpus authority is not equivalent to “no preregistration.” It is a broken authority chain and finalization must fail with a typed error. The system must not silently downgrade a tampered or mismatched prospective run into exploratory output.
+
+### I3 — Result strength is typed and non-escalating
+
+Every completed result has exactly one research-strength class:
 
 - `EXPLORATORY_OBSERVATION`
 - `PREREGISTERED_SEED_PASS`
@@ -127,41 +117,31 @@ Every result has exactly one research-strength class from the specification taxo
 - `REAL_PROVIDER_INTEGRATION_PASS`
 - `INDEPENDENT_REPLICATION_PASS`
 
-No type or renderer may equate these with `PROVED`.
+No type, serializer, renderer, or CI summary may equate these with `PROVED`.
 
-### I3 — Unknown and conservative blocks are not silent unsoundness
+### I4 — Conservative non-success is not silent unsoundness
 
-The metric layer must distinguish wrong success from explicit non-success. The following conservative outcomes are not counted as silent unsoundness merely because the desired action did not complete:
+`UNKNOWN`, `INCONCLUSIVE`, `RECONCILIATION_REQUIRED`, `UNSUPPORTED`, and conservative block/rejection do not become silent unsoundness merely because the desired action did not complete. A metric numerator increases only when the exact typed failure predicate is satisfied.
 
-- `UNKNOWN`
-- `INCONCLUSIVE`
-- `RECONCILIATION_REQUIRED`
-- `UNSUPPORTED`
-- conservative block/rejection
+### I5 — Zero observations are not zero failures
 
-A metric numerator increases only when its exact failure predicate is satisfied.
+A metric with denominator `0` is `NOT_MEASURED`. It is never rendered as `0%`, never treated as passing, and never satisfies a release target.
 
-### I4 — Zero observations are not zero failures
+### I6 — Counterexamples outrank clean bounded runs
 
-A metric with denominator `0` is `NOT_MEASURED`, never `0.0` and never a passing rate.
+A valid counterexample is direct evidence against an invariant for the witnessed fixture. A clean bounded run states only that no counterexample was found inside the declared model, bound, and assumptions.
 
-This prevents an empty campaign from satisfying a release target accidentally.
+### I7 — Oracle correction is append-only provenance
 
-### I5 — Counterexamples outrank clean bounded runs
+An incorrect oracle remains addressable together with the result that exposed the problem. Correction creates a new oracle revision and requires a new preregistration. History is not rewritten to make dashboards green.
 
-A valid counterexample is retained as direct evidence against the relevant invariant for that fixture. A clean bounded run states only that no counterexample was found within the declared model/bound/assumptions.
+### I8 — Canonical content, not file names, carries identity
 
-### I6 — Oracle correction is append-only provenance
+Relevant semantic changes must alter canonical digests. Cosmetic pretty-printing, map insertion order, or set insertion order must not.
 
-If an oracle is later shown to be wrong, the original oracle revision and result remain addressable. The correction creates a new oracle revision and requires a new preregistration. History must not be rewritten to make a dashboard green.
+### I9 — Heavy lab is excluded from shipping authority
 
-### I7 — Lab artifacts are canonical and content-bound
-
-Run identity and result identity are not file names. Canonical serialized content is hashed. Any relevant semantic change changes the digest.
-
-### I8 — Heavy lab is excluded from shipping authority
-
-The daemon, desktop app, provider runtime, observation runtime, and normal CLI runtime must not require lab artifacts or the Validation Lab crate to function.
+The daemon, desktop app, provider runtime, observation runtime, and normal product startup must not require the Validation Lab crate or lab artifacts.
 
 ## 6. Proposed crate
 
@@ -181,21 +161,19 @@ crates/validation-lab/
     artifact.rs
 ```
 
-The crate name should be `localview-validation-lab`.
+Crate name: `localview-validation-lab`.
 
-It is a workspace development/research crate. It must remain pure Rust with `#![forbid(unsafe_code)]` and no OS/browser/model calls in the authority core.
+The authority core is pure Rust, uses `#![forbid(unsafe_code)]`, and performs no OS, browser, provider, network, wall-clock ordering, or model calls.
 
-The first slice should depend only on small deterministic shared dependencies such as `serde`, `serde_json`, and `sha2` unless an existing repository contract type is required. L2/L4 dependencies on `localview-mutation` and `localview-state-space` should be introduced only when their adapters are implemented, not preemptively.
+The first slice should depend only on deterministic shared dependencies such as `serde`, `serde_json`, and `sha2`. Dependencies on `localview-mutation` and `localview-state-space` are added only when L2/L4 adapters are implemented.
 
-## 7. Data contracts
+## 7. Identity model
 
-### 7.1 `ResearchResultClass`
+The specification requires each completed lab run to bind the revisions and the result artifact digest. To avoid a circular digest, the design splits pre-execution context from completed identity.
 
-A closed enum matching the specification taxonomy exactly. Serialization uses stable snake_case wire names. Unknown future classes must fail deserialization rather than silently collapse into an existing class.
+### 7.1 `LabRevisionContext`
 
-### 7.2 `LabRevisionIdentity`
-
-The identity object binds:
+Pre-execution immutable context:
 
 ```text
 lab_revision
@@ -205,15 +183,28 @@ reference_reducer_revision
 mutation_catalog_revision
 comparison_profile_revision
 random_source_profile
-platform_profile?        # required for provider-backed campaigns
+platform_profile?
 start_sequence
 ```
 
-`result_artifact_digest` is not an input to preregistration identity because that would be circular. It is added only to the completed run receipt after canonical result serialization.
+All required string fields are non-empty. `platform_profile` is mandatory for provider-backed prospective campaigns and absent for model-free campaigns.
 
-Every field except optional `platform_profile` is non-empty and normalized structurally, not semantically. The lab does not trim or reinterpret arbitrary revision labels after construction.
+### 7.2 `CompletedLabRunIdentity`
 
-### 7.3 `LabSeed`
+Created only after result serialization:
+
+```text
+revision_context: LabRevisionContext
+result_artifact_digest
+```
+
+The canonical `LabResultPayload` is serialized and hashed first. That digest is then attached to `CompletedLabRunIdentity`, which is stored in the completed run receipt. The digest is therefore bound to the run without hashing itself.
+
+File names are not identities.
+
+## 8. Seed and oracle contracts
+
+### 8.1 `LabSeed`
 
 Minimum fields:
 
@@ -230,53 +221,78 @@ prediction_revision
 oracle_revision
 ```
 
-`input_fixture` is a canonical JSON value in the authority core. Typed campaign adapters may wrap richer domain objects, but the serialized lab seed must preserve an exact canonical representation.
+Seeds are machine-readable and immutable by `(seed_id, prediction_revision, oracle_revision)` within one seed corpus revision. Reusing that identity with different canonical content is an error.
 
-Seeds are immutable by `(seed_id, prediction_revision, oracle_revision)` within a corpus revision. Reusing the same identity with different canonical content is an error.
+### 8.2 Fixture representation
 
-### 7.4 `LabPreregistration`
+`input_fixture` is ordinary JSON data. Identity/revision fields and metric counters use integer/string authority only. Fixture JSON may contain finite JSON numbers because geometry, ratios, and timeout fixtures can require non-integer values.
 
-Contains:
+Canonicalization owns numeric encoding and pins it with golden vectors. JSON does not admit NaN or infinity; such values are rejected before canonicalization.
 
-- `LabRevisionIdentity` excluding result digest;
-- ordered seed identities or a seed-corpus digest;
-- declared campaign layer/type;
+### 8.3 Oracle correction
+
+A corrected oracle increments or otherwise changes `oracle_revision`. Both old and corrected seeds remain addressable. A correction does not mutate prior result artifacts.
+
+## 9. Preregistration
+
+`LabPreregistration` contains:
+
+- `LabRevisionContext`;
+- seed-corpus digest and ordered executed seed identities when declared in advance;
+- campaign layer/type;
 - expected distinctions;
 - model/state bound when applicable;
 - random seed/source profile;
 - comparison profile revision;
 - assumptions;
 - declared metric set;
-- creation sequence.
+- creation logical sequence.
 
-The preregistration exposes a canonical digest. Execution APIs require the digest, not a mutable object reference.
+Preregistration is canonicalized and hashed before prospective execution. Execution receives an immutable `PreregistrationReceipt { digest, logical_sequence }`.
 
-### 7.5 `LabObservation`
+There are two explicit modes:
 
-An observation is the smallest exact claim used by metric reducers. It records:
+```text
+Prospective { receipt }
+Exploratory { downgrade_reason }
+```
+
+There is no implicit fallback mode.
+
+## 10. Observation and result lifecycle
+
+### 10.1 `LabObservation`
+
+An observation records the smallest exact fact used by metric reducers:
 
 ```text
 observation_id
 seed_id?
-principal_expected?
-principal_dispatched?
 expected_outcome
 observed_outcome
+principal_expected?
+principal_dispatched?
 failure_flags[]
 evidence_refs[]
 provider_backed
 comparison_profile_revision
 ```
 
-The core does not infer high-level failure semantics from free-form strings. Campaign adapters must set typed failure flags based on domain-specific evidence.
+The authority core never derives correctness-critical failure semantics from human-readable strings. Campaign adapters provide typed failure flags backed by domain evidence.
 
-### 7.6 `LabResult`
+### 10.2 `LabRunBuilder`
 
-A result binds:
+The run builder is append-only until finalization. Each observation receives a canonical digest. After finalization, appending another observation is a typed error.
 
-- preregistration digest;
-- full revision identity;
+### 10.3 `LabResultPayload`
+
+The payload binds:
+
+- preregistration digest when prospective;
+- exact `LabRevisionContext`;
+- execution mode;
 - research result class;
+- downgrade reason when exploratory due to preregistration failure;
 - executed seed identities;
 - observation digests;
 - metric snapshot;
@@ -285,31 +301,37 @@ A result binds:
 - assumptions actually used;
 - bound actually used;
 - start/end logical sequence;
-- environment artifact digest when applicable;
-- canonical result digest.
+- environment artifact digest when applicable.
 
-A run that violates its preregistered comparison/bound inputs must not retain a prospective result class. It is downgraded to `EXPLORATORY_OBSERVATION` with an explicit mismatch reason.
+Finalization canonicalizes this payload, computes its digest, and returns:
 
-## 8. Canonical serialization and digest rules
+```text
+CompletedLabRun {
+  identity: CompletedLabRunIdentity,
+  payload: LabResultPayload
+}
+```
 
-Research authority must not depend on map insertion order or pretty-printing. The crate therefore owns one canonical JSON encoding path.
+## 11. Canonical serialization and digest rules
+
+Research authority must not depend on pretty-printing or map construction order.
 
 Rules:
 
-1. object keys are recursively sorted lexicographically;
-2. arrays preserve declared semantic order unless the contract explicitly defines set semantics;
-3. set-like fields are normalized into sorted unique arrays before canonicalization;
-4. floating-point values are prohibited in identity, seed authority, preregistration, and metric counts unless a future contract explicitly defines canonical float semantics;
-5. UTF-8 strings are preserved byte-for-byte after JSON decoding; no Unicode normalization is applied;
-6. digests use SHA-256 over canonical UTF-8 bytes with a versioned domain prefix such as `localview-validation-lab/v1\0`.
+1. recursively sort object keys lexicographically;
+2. preserve arrays whose order is semantically meaningful;
+3. normalize set-like fields into sorted unique arrays before canonicalization;
+4. reject non-finite numeric values before they reach canonical JSON;
+5. serialize finite JSON numbers through one pinned canonical serializer and cover integers/fractions/exponents with cross-platform golden vectors;
+6. preserve UTF-8 string content byte-for-byte after JSON decoding; do not perform Unicode normalization;
+7. hash canonical UTF-8 bytes using SHA-256 with versioned domain separation, beginning with `localview-validation-lab/v1\0`;
+8. changing canonicalization semantics requires a new version, never an in-place reinterpretation.
 
-The canonicalization version is part of the contract. A future incompatible canonicalization requires a new version, not an in-place semantic change.
+## 12. Metric authority
 
-## 9. Metric authority
+### 12.1 Required metric kinds
 
-### 9.1 Metric kinds
-
-The core exposes all V4.3 metrics:
+The core represents all V4.3 metrics:
 
 - `SUAR` — Silent Unsound Action Rate
 - `WPDR` — Wrong-Principal Dispatch Rate
@@ -326,9 +348,9 @@ The core exposes all V4.3 metrics:
 - `RPOMR` — Real-Provider Oracle Mismatch Rate
 - `CBFR` — Cleanup-to-Baseline Failure Rate
 
-### 9.2 Metric value
+### 12.2 Metric value
 
-Each metric snapshot stores integer authority, not only a float:
+Canonical metric authority stores counts, not a floating-point percentage:
 
 ```text
 kind
@@ -338,18 +360,11 @@ status: MEASURED | NOT_MEASURED
 rate_ppb?: u64
 ```
 
-`rate_ppb` is parts-per-billion computed with checked integer arithmetic when denominator > 0. This avoids float nondeterminism in canonical research artifacts while retaining exact numerator/denominator.
+When denominator is positive, `rate_ppb` is computed with checked integer arithmetic. When denominator is `0`, status is `NOT_MEASURED` and rate is absent.
 
-For denominator `0`:
+### 12.3 Silent-unsoundness gate
 
-```text
-status = NOT_MEASURED
-rate_ppb = absent
-```
-
-### 9.3 Silent-unsoundness release gate
-
-A `SilentUnsoundnessGate` evaluates the required zero-target subset:
+The V4.3 zero-target subset is:
 
 ```text
 SUAR
@@ -359,13 +374,15 @@ PDMR
 UOBRR
 ```
 
-For each required metric:
+Per metric:
 
-- measured numerator `0` => PASS for that metric;
-- measured numerator `>0` => FAIL;
-- not measured => INCOMPLETE, not PASS.
+```text
+PASS       measured, numerator == 0
+FAIL       measured, numerator > 0
+INCOMPLETE denominator == 0 / NOT_MEASURED
+```
 
-Overall gate:
+Overall:
 
 ```text
 FAIL       if any required metric fails
@@ -373,23 +390,23 @@ INCOMPLETE if none fail but one or more are not measured
 PASS       only if all required metrics are measured and zero
 ```
 
-This directly prevents an empty corpus from creating a false V4.3 closure signal.
+An empty campaign therefore cannot produce a release-pass signal.
 
-### 9.4 Observation classification
+### 12.4 Typed accounting
 
-The core metric reducer consumes typed flags, not human messages. Examples:
+The core reducer consumes typed flags. Examples:
 
-- `wrong_principal_dispatch` increments WPDR numerator and dispatch-attempt denominator;
-- `principal_information_leak` increments PILR numerator and principal-sensitive observation denominator;
-- `blind_retry_after_unknown` increments UOBRR numerator and unknown-outcome retry-opportunity denominator;
-- `partial_dispatch_misclassified_success` increments PDMR numerator and partial-dispatch denominator;
-- a conservative `INCONCLUSIVE` with no dispatch-as-success flag does not increment SUAR.
+- `wrong_principal_dispatch` increments WPDR numerator and its dispatch-opportunity denominator;
+- `principal_information_leak` increments PILR numerator and its principal-sensitive observation denominator;
+- `blind_retry_after_unknown` increments UOBRR numerator and its unknown-outcome retry-opportunity denominator;
+- `partial_dispatch_misclassified_success` increments PDMR numerator and its partial-dispatch denominator;
+- conservative `INCONCLUSIVE` without an unsound-success flag does not increment SUAR.
 
-Detailed predicates for each metric belong to their campaign adapters and permanent seed suites. The core guarantees deterministic accounting once the typed classification is supplied.
+Exact denominator eligibility for each metric is defined by permanent campaign adapters and seed suites. The authority core guarantees deterministic counting once eligibility and typed failure flags are supplied.
 
-## 10. Artifact model
+## 13. Artifact model
 
-The authority core defines canonical schemas and helper writers/readers for the specification artifact set:
+The specification artifact set is represented explicitly:
 
 ```text
 LAB-PREREGISTRATION.json
@@ -403,84 +420,94 @@ LAB-COUNTEREXAMPLES/
 LAB-MINIMIZED-SEEDS/
 ```
 
-The first implementation slice needs to fully support canonical preregistration, seed catalog, and results. It may define typed placeholders for future report artifact kinds only as enum variants/manifest entries; it must not emit fabricated empty reports for layers that did not run.
+The first slice fully implements canonical preregistration, seed-catalog, and result artifacts. Future artifact kinds may exist in a manifest enum so absence is typed, but the first slice must not fabricate empty mutation/differential/coverage/environment reports.
 
-Artifact manifests distinguish:
+Artifact state is one of:
 
-- `PRESENT`
-- `NOT_APPLICABLE`
-- `NOT_RUN`
+```text
+PRESENT
+NOT_APPLICABLE
+NOT_RUN
+```
 
-They do not treat an absent L2/L6 report as a successful empty campaign.
+`NOT_RUN` is never interpreted as a successful zero-result campaign.
 
-## 11. Lifecycle
+## 14. Lifecycle and authority transitions
 
-### 11.1 Preregister
+### 14.1 Preregister
 
 1. Build immutable seed catalog.
-2. Validate duplicate seed identities.
-3. Build `LabPreregistration` with exact revisions/bounds/comparison profile.
+2. Validate duplicate seed identities and oracle collisions.
+3. Build `LabPreregistration` with exact revisions, bounds, expected distinctions, and comparison profile.
 4. Canonicalize and digest it.
-5. Persist preregistration artifact before campaign execution.
-6. Return `PreregistrationReceipt { digest, logical_sequence }`.
+5. Persist the preregistration artifact before prospective execution.
+6. Return the immutable receipt.
 
-### 11.2 Execute
+### 14.2 Start execution
 
-The authority core itself does not execute OS/provider actions. A campaign adapter receives only an immutable preregistration receipt plus its typed fixture inputs.
+A caller chooses explicitly:
 
-### 11.3 Record observations
+- `Prospective(receipt)`: receipt must validate against the canonical preregistration artifact before first observation;
+- `Exploratory(reason)`: no prospective result class can later be minted for that run.
 
-Campaign adapters submit typed observations. Observations are append-only within a run builder and receive canonical digests.
+### 14.3 Record observations
 
-### 11.4 Finalize
+Campaign adapters append typed observations. Observation order uses logical sequence, not wall-clock time, for semantic authority.
 
-Finalization:
+### 14.4 Finalize
 
-1. verifies preregistration digest and declared campaign inputs still match;
-2. deterministically reduces metrics;
-3. evaluates any applicable release gate;
-4. derives the strongest permitted result class from execution facts without escalation;
-5. canonicalizes `LabResult`;
-6. computes `result_artifact_digest`;
-7. emits a completed run receipt.
+Prospective finalization:
 
-After finalization, the run builder cannot accept more observations.
+1. revalidates preregistration digest;
+2. verifies actual corpus/bound/comparison authority matches preregistration;
+3. deterministically reduces metrics;
+4. evaluates applicable release gates;
+5. derives the strongest permitted research result class;
+6. canonicalizes `LabResultPayload`;
+7. computes `result_artifact_digest`;
+8. returns `CompletedLabRunIdentity + LabResultPayload`.
 
-## 12. Failure semantics
+Exploratory finalization follows steps 3, 6, 7, and 8 but research result class is forced to `EXPLORATORY_OBSERVATION` with the original downgrade reason.
 
-The authority core must fail closed on:
+## 15. Failure semantics
 
-- duplicate seed identity with different content;
-- empty required revision identities;
+Hard errors:
+
+- duplicate seed identity with different canonical content;
+- empty required revision fields;
+- non-finite fixture numbers;
 - canonicalization failure;
-- preregistration digest mismatch;
-- execution input drift from preregistration;
-- counter overflow in metrics;
-- invalid metric numerator greater than denominator where the metric contract defines the numerator as a subset;
-- prospective result requested without valid preregistration;
-- provider-backed prospective result without platform profile;
-- result finalization attempted twice;
+- valid preregistration receipt whose digest no longer matches persisted preregistration;
+- prospective execution whose actual seed corpus, bound, or comparison authority drifts after admission;
+- provider-backed prospective run without platform profile;
+- counter overflow;
+- numerator greater than denominator for subset-defined metrics;
+- finalization attempted twice;
 - observation appended after finalization.
 
-Research execution may continue as exploratory when preregistration validity is absent, but the system must encode that downgrade explicitly. It must never silently preserve a stronger class.
+Typed downgrade to exploratory:
 
-## 13. TDD plan for the first implementation slice
+- execution begins without a preregistration receipt;
+- preregistration creation/persistence failed before prospective authority was admitted;
+- caller explicitly selects exploratory mode.
 
-Implementation must follow permanent RED -> GREEN lineage.
+A hard authority mismatch after prospective admission is never laundered into exploratory success.
+
+## 16. TDD plan for the first implementation slice
+
+Implementation must preserve permanent RED -> GREEN lineage.
 
 ### RED-A — Metric completeness and zero-denominator safety
 
-Permanent tests require:
+Tests require:
 
-- all 14 `LabMetricKind` values exist;
-- a fresh metric snapshot has `denominator = 0`, `status = NOT_MEASURED`, and no rate;
-- the silent-unsoundness gate over an empty snapshot is `INCOMPLETE`, never `PASS`.
+- all 14 metric kinds;
+- fresh metrics are `NOT_MEASURED` with denominator `0` and no rate;
+- an empty silent-unsoundness gate is `INCOMPLETE`, never `PASS`.
 
-Expected initial RED: crate/types do not exist.
+### RED-B — Wrong-principal accounting
 
-### RED-B — Exact wrong-principal accounting
-
-A fixture with one dispatch opportunity and one wrong-principal dispatch must produce:
+One eligible dispatch opportunity containing one wrong-principal dispatch yields:
 
 ```text
 WPDR numerator = 1
@@ -491,144 +518,146 @@ silent-unsoundness gate = FAIL
 
 ### RED-C — Conservative inconclusive is not SUAR
 
-A fixture whose observed outcome is `INCONCLUSIVE` and has no unsound-success classification must not increment SUAR numerator. It still contributes only to the denominator defined by its campaign metric profile when applicable.
+`INCONCLUSIVE` without an unsound-success flag does not increment SUAR numerator.
 
-### RED-D — Preregistration digest is semantic
+### RED-D — Canonical preregistration digest
 
-Changing any of the following must change the preregistration digest:
+Changing expected distinction, seed corpus revision, bound, comparison profile, or random source profile changes the digest. Reordering set-like fields does not.
 
-- expected distinction;
-- seed corpus revision;
-- model/state bound;
-- comparison profile revision;
-- random source profile.
+Golden vectors cover integer, fractional, exponent, Unicode, nested-object, and set-order cases on Ubuntu/macOS/Windows.
 
-Reordering canonical set-like fields must not change the digest.
+### RED-E — Missing preregistration cannot mint a prospective class
 
-### RED-E — Prospective claim downgrade
+A run started without valid preregistration finalizes as `EXPLORATORY_OBSERVATION` with a typed downgrade reason even if the caller asks for `PREREGISTERED_SEED_PASS`.
 
-A result requested as `PREREGISTERED_SEED_PASS` without a valid preregistration receipt must finalize as `EXPLORATORY_OBSERVATION` or fail with a typed authority error; implementation will choose one invariant and apply it consistently. The selected contract for this design is **typed downgrade with an explicit downgrade reason**, because the specification explicitly permits exploratory execution after preregistration failure.
+### RED-F — Admitted prospective drift is not downgraded
 
-### RED-F — Oracle revision immutability
+A valid prospective run whose preregistration digest or declared bound changes before finalization must return a typed authority error and produce no completed prospective result artifact.
 
-Two seeds with the same `(seed_id, prediction_revision, oracle_revision)` and different canonical expected outcomes must be rejected as an identity collision. A corrected oracle uses a new `oracle_revision` and both revisions remain addressable.
+### RED-G — Oracle revision immutability
 
-### RED-G — Shipping dependency exclusion
+Same `(seed_id, prediction_revision, oracle_revision)` plus different canonical expected outcome is rejected. A corrected oracle uses a new revision and both remain addressable.
 
-A repository-level contract test verifies that shipping members (`apps/daemon`, `apps/desktop/src-tauri`, runtime/provider crates) do not list `localview-validation-lab` as a dependency. Future lab CLI/tools may depend on it; production authority may not.
+### RED-H — Completed identity has no digest cycle
 
-## 14. Implementation boundaries for the first PR
+Golden test proves `LabResultPayload` digest is stable, `CompletedLabRunIdentity` embeds that digest, and changing the result payload changes the completed identity without requiring self-hashing.
 
-The first PR will implement only:
+### RED-I — Shipping dependency exclusion
+
+Repository-level test verifies shipping members, including daemon/desktop/runtime/provider crates, do not depend on `localview-validation-lab`.
+
+## 17. First-PR implementation boundary
+
+The first PR implements only:
 
 1. `localview-validation-lab` crate and workspace registration;
-2. canonical JSON + SHA-256 domain-separated digests;
-3. research result taxonomy;
-4. revision identity;
-5. machine-readable seed catalog and oracle revision collision checks;
-6. preregistration and receipt;
-7. observation/result lifecycle;
-8. all 14 metric kinds and deterministic integer accounting;
-9. silent-unsoundness zero-target gate;
-10. canonical preregistration/seed/result artifact serialization;
-11. permanent tests including shipping-dependency exclusion.
+2. canonical JSON + versioned SHA-256 digest authority;
+3. result-strength taxonomy;
+4. `LabRevisionContext` and `CompletedLabRunIdentity`;
+5. seed catalog and oracle-revision collision checks;
+6. preregistration and immutable receipts;
+7. prospective vs exploratory execution mode;
+8. observation/result lifecycle;
+9. all 14 metric kinds with deterministic integer accounting;
+10. silent-unsoundness zero-target gate;
+11. canonical preregistration/seed/result artifacts;
+12. permanent cross-platform golden tests;
+13. shipping-dependency exclusion contract.
 
-The first PR will **not** implement campaign engines for L2 mutation, L3 property generation, L4 bounded temporal search, L5 concurrency exploration, L6 differential reducers, L7 fake provider, L8 real provider, or L9 resource stress. Those become separate TDD slices after this authority core is exact-head GREEN.
+It does **not** implement campaign engines for L1 semantic execution, L2 mutation, L3 property generation, L4 bounded temporal search, L5 concurrency, L6 differential reducers, L7 fake provider, L8 real provider, or L9 resource stress.
 
-## 15. Future integration order
+## 18. Future integration order
 
-After the authority core is verified, the recommended sequence is:
+After exact-head GREEN authority core:
 
-1. **L1 deterministic semantic seed runner** — cheapest end-to-end consumer of preregistration + seed + result authority.
-2. **L2 mutation adapter** — consume `localview-mutation` outcomes and produce MSR plus survivor/counterexample artifacts.
-3. **L4 bounded-state adapter** — consume `localview-state-space` plans/results with exact bound provenance.
-4. **L3 property/metamorphic campaigns** — deterministic random-source profiles and counterexample minimization.
-5. **L6 differential reducer harness** — CRDR and first-divergence artifacts.
-6. **L7 fake-provider campaigns** — provider lifecycle/freshness/principal faults without OS uncertainty.
-7. **L5 concurrency exploration** — deterministic scheduler over narrow authority/resource models.
-8. **L8 real-provider seeds** — platform-profile-bound runs and RPOMR.
-9. **L9 resource/failure campaigns** — CBFR, leak/cleanup/recovery and long-lived stress.
+1. L1 deterministic semantic seed runner.
+2. L2 adapter over `localview-mutation` and MSR.
+3. L4 adapter over `localview-state-space` with exact bound provenance.
+4. L3 property/metamorphic campaigns plus minimization.
+5. L6 differential reducer harness and CRDR.
+6. L7 fake-provider lifecycle/freshness/principal campaigns.
+7. L5 deterministic concurrency exploration over narrow authority/resource models.
+8. L8 platform-profile-bound real-provider seeds and RPOMR.
+9. L9 cleanup/resource/failure campaigns and CBFR.
 
-This order deliberately obtains deterministic semantic evidence before adding OS/provider nondeterminism.
+Deterministic semantic evidence intentionally comes before OS/provider nondeterminism.
 
-## 16. CI strategy
+## 19. CI strategy
 
-The first PR should add one named, fast cross-platform gate such as:
+The first PR adds one fast named gate:
 
 ```text
 V4.3 validation lab authority contract
 ```
 
-It runs the authority-core tests on Ubuntu, macOS, and Windows as part of existing Rust core CI.
+It runs authority-core tests and canonical golden vectors on Ubuntu, macOS, and Windows within the Rust-core CI structure.
 
-Heavy future campaigns must use dedicated workflows or explicit manual/scheduled lanes. They must not make every normal code push run million-case searches or real-provider ceremonies.
+Heavy future campaigns use dedicated manual/scheduled workflows. Normal pushes must not run million-case searches or real-provider ceremonies by default.
 
-CI output must never translate a bounded clean result into `PROVED`.
+CI summaries may report exact result classes but never `PROVED`.
 
-## 17. Security and privacy
+## 20. Security, privacy, and resident-runtime policy
 
-The authority core must not require plaintext user secrets, desktop-wide capture, provider credentials, or arbitrary environment dumps.
+The authority core requires no real secrets, provider credentials, clipboard data, password values, desktop-wide recording, or arbitrary environment dumps.
 
-Provider-backed future `LAB-ENVIRONMENT.json` data must use explicit allowlisted fields. Secret-bearing environment variables, tokens, clipboard data, password fields, and raw private UI content are outside this core contract.
+Future provider-backed `LAB-ENVIRONMENT.json` uses an explicit allowlist. Secret-bearing environment variables, tokens, raw private UI text, and password fields are excluded.
 
-Seed fixtures that intentionally contain secret-like synthetic values must be clearly synthetic and must not be sourced from real user state.
+Synthetic secret-like fixture strings are allowed only when explicitly synthetic and not sourced from user state.
 
-## 18. Performance and resident-runtime policy
+No observer thread, timer, provider crawl, screen recorder, browser, or model process is introduced by the authority core. Normal LocalView startup performs zero Validation Lab work unless an explicit future lab command/workflow invokes it.
 
-The authority core is not resident work. No observer thread, background timer, provider crawl, screen recording, or model process is introduced by this design.
-
-Normal LocalView startup must perform zero Validation Lab work unless a future explicit lab command/workflow invokes it.
-
-## 19. Alternatives rejected
+## 21. Alternatives rejected
 
 ### Monolithic L0–L9 implementation
 
-Rejected because it would combine research authority, generators, mutation, state exploration, concurrency, fake/real providers, and stress into one unreviewable change. RED -> GREEN lineage and root-cause attribution would become weak.
+Rejected because research authority, generators, mutation, temporal state search, concurrency, differential execution, providers, and stress would become one unreviewable change with weak failure attribution.
 
 ### Embed lab authority in `localview-quality`
 
-Rejected because product quality findings and research result strength have different authority semantics. A UI quality warning is not a preregistered falsification result.
+Rejected because product quality findings and preregistered research claims have different authority semantics.
 
 ### Embed lab authority in `localview-mutation`
 
-Rejected because mutation is only one lab layer. Doing so would make mutation semantics the accidental owner of differential, provider, freshness, reconciliation, and cleanup research evidence.
+Rejected because mutation is one lab layer, not the owner of differential, provider, freshness, reconciliation, or cleanup research evidence.
 
-## 20. Acceptance criteria for authority-core completion
+## 22. Acceptance criteria
 
-The authority-core slice is complete only when all of the following are true on one exact PR head:
+The authority-core slice is complete only when one exact PR head satisfies all of the following:
 
 - permanent RED lineage exists for the new contracts;
 - all first-slice tests are GREEN on Ubuntu, macOS, and Windows;
-- canonical digest tests are deterministic across platforms;
+- canonical digest golden vectors are identical across platforms;
 - all 14 V4.3 metrics are represented;
 - zero-denominator metrics are `NOT_MEASURED`;
-- empty silent-unsoundness evidence cannot pass the gate;
+- empty silent-unsoundness evidence cannot pass;
 - wrong-principal and blind-retry fixtures fail the zero-target gate;
 - conservative `INCONCLUSIVE` does not become silent unsoundness by default;
-- preregistration drift prevents prospective classification;
+- missing preregistration forces exploratory classification;
+- admitted prospective drift fails with a typed authority error;
 - oracle correction preserves revision history;
-- result classes never render or serialize as `PROVED`;
+- completed-run identity binds result digest without a circular hash;
+- no result class renders or serializes as `PROVED`;
 - shipping runtime crates have no dependency on `localview-validation-lab`;
-- no temporary probe workflow/script remains in the branch;
+- no temporary probe workflow/script remains;
 - PR exact head is verified before merge;
-- post-merge `main` is re-verified before the slice is called closed.
+- post-merge `main` is re-verified before closure.
 
-## 21. Non-goals
+## 23. Non-goals
 
-This slice does not claim that V4.3 is fully validated. It creates the authority needed to make future validation claims meaningful.
+This slice does not claim V4.3 is fully validated. It creates the authority needed to make future validation claims meaningful.
 
 It does not:
 
 - prove LocalView correct;
 - implement every L0–L9 campaign;
 - replace existing runtime tests;
-- turn model checking into a claim of formal proof;
+- treat bounded model search as formal proof;
 - add resident background validation;
-- add a second mutation/state-space framework;
-- weaken conservative unknown/inconclusive semantics to improve pass rates.
+- duplicate mutation/state-space frameworks;
+- weaken unknown/inconclusive semantics to improve pass rates.
 
-## 22. Design decision summary
+## 24. Design decision summary
 
-The Validation Lab becomes a **research authority plane**, separate from the resident runtime. It records what was predicted, what exact corpus/model/profile was run, what was observed, how metrics were counted, and the strongest result class justified by that evidence.
+Validation Lab is a **research authority plane** separate from the resident runtime. It records what was predicted, what exact corpus/model/profile was admitted, what was observed, how metrics were counted, and the strongest research result class justified by that evidence.
 
-The first implementation slice is intentionally narrow: authority before scale. Once this core is exact-head GREEN, existing `localview-mutation` and `localview-state-space` primitives can be connected into stronger L2/L4 campaigns without inventing provenance rules ad hoc in each layer.
+The first implementation slice is intentionally narrow: authority before scale. Once it is exact-head GREEN, `localview-mutation` and `localview-state-space` can be connected into stronger L2/L4 campaigns without inventing provenance rules ad hoc in each layer.
