@@ -24,7 +24,7 @@ impl LabSeedIdentity {
 pub struct LabSeed {
     pub identity: LabSeedIdentity,
     pub family: String,
-    pub spec_surface_refs: BTreeSet<u64>,
+    pub spec_surface_refs: BTreeSet<u32>,
     pub input_fixture: Value,
     pub expected_semantic_outcome: String,
     pub forbidden_outcomes: BTreeSet<String>,
