@@ -78,6 +78,26 @@ pub enum LabError {
     },
     #[error("prospective execution authority drifted at {field}")]
     ProspectiveAuthorityDrift { field: &'static str },
+    #[error("provider-backed prospective observation requires a preregistered platform profile")]
+    ProviderBackedObservationRequiresPlatformProfile,
+    #[error("observation authority drifted at {field}")]
+    ObservationAuthorityDrift { field: &'static str },
+    #[error(
+        "observation sequence {logical_sequence} must be after run start sequence {start_sequence}"
+    )]
+    ObservationSequenceNotAfterStart {
+        logical_sequence: u64,
+        start_sequence: u64,
+    },
+    #[error(
+        "observation sequence {logical_sequence} must be greater than previous accepted sequence {previous_sequence}"
+    )]
+    ObservationSequenceNotMonotonic {
+        previous_sequence: u64,
+        logical_sequence: u64,
+    },
+    #[error("prospective observation uses undeclared metric {metric:?}")]
+    ObservationUsesUndeclaredMetric { metric: LabMetricKind },
     #[error("validation lab run is already finalized")]
     AlreadyFinalized,
 }
