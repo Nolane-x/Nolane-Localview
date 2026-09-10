@@ -332,4 +332,42 @@ mod tests {
             "exact confirmation is one-shot"
         );
     }
+
+    #[tokio::test]
+    async fn payload_authority_refuses_duplicate_action_stage_and_consumes_exactly_once() {
+        let authority = WindowsSetValuePayloadAuthority::new().expect("process-local authority");
+        let session_id = Uuid::from_u128(0x8a20);
+        let action_id = Uuid::from_u128(0x8a21);
+        let confirmation_ref = Uuid::from_u128(0x8a22);
+
+        authority
+            .stage(action_id, pending_payload(session_id, confirmation_ref))
+            .await
+            .expect("first stage must reserve exact action authority");
+        assert!(
+            authority
+                .peek(session_id, action_id, confirmation_ref)
+                .await,
+            "staged payload must be visible only through exact session/action/confirmation metadata"
+        );
+
+        let duplicate = authority
+            .stage(action_id, pending_payload(session_id, confirmation_ref))
+            .await
+            .expect_err("duplicate action id must not replace live plaintext authority");
+        assert_eq!(duplicate, "SetValue payload authority already exists for action");
+
+        let consumed = authority
+            .consume(session_id, action_id, confirmation_ref)
+            .await
+            .expect("exact metadata consumes the staged payload");
+        assert_eq!(consumed.payload.utf8_bytes(), SENTINEL.as_bytes());
+        assert!(
+            authority
+                .consume(session_id, action_id, confirmation_ref)
+                .await
+                .is_none(),
+            "SetValue payload authority must be one-shot"
+        );
+    }
 }
