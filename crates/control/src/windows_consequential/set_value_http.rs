@@ -40,6 +40,33 @@ impl WindowsSetValuePayloadAuthority {
         not(test),
         expect(
             dead_code,
+            reason = "Task 8 control-owned durable commitment bridge is armed before the server-owned planning route consumes it"
+        )
+    )]
+    async fn persist_binding(
+        &self,
+        journal: &localview_live_bridge::ConsequentialJournal,
+        queued: &localview_live_bridge::CanonicalQueuedAction,
+        payload: &ProcessLocalSetValuePayload,
+    ) -> Result<
+        localview_live_bridge::DurableSetValuePayloadBinding,
+        localview_live_bridge::ConsequentialJournalError,
+    > {
+        journal
+            .record_set_value_payload_binding(
+                queued,
+                self.commitment_key.as_ref(),
+                payload.payload_ref,
+                payload.mode,
+                payload.utf8_bytes(),
+            )
+            .await
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
             reason = "Task 8 authority-owned staging is introduced before the server-owned route consumes it"
         )
     )]
