@@ -222,6 +222,7 @@ mod windows_consequential_set_value_windows_smoke {
         });
 
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -263,7 +264,12 @@ mod windows_consequential_set_value_windows_smoke {
                 .expect("SetValue plan response must contain action_id"),
         )
         .expect("parse SetValue action id");
-        assert!(plan["confirmation_ref"].as_str().is_some());
+        let confirmation_ref = Uuid::parse_str(
+            plan["confirmation_ref"]
+                .as_str()
+                .expect("SetValue plan response must contain confirmation_ref"),
+        )
+        .expect("parse SetValue confirmation_ref");
         let precondition_cut = plan["precondition_snapshot_cut_ref"]
             .as_str()
             .expect("SetValue plan response must contain fresh precondition cut");
@@ -305,6 +311,40 @@ mod windows_consequential_set_value_windows_smoke {
             &fs::read(&payload_path).expect("read SetValue payload companion"),
             "payload companion",
         );
+
+        let confirm_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/sessions/{session_id}/windows-observe/consequential/{action_id}/confirm"
+                    ))
+                    .header(AUTHORIZATION, "Bearer set-value-control-smoke-token")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"confirmation_ref": confirmation_ref}).to_string(),
+                    ))
+                    .expect("build exact SetValue confirmation request"),
+            )
+            .await
+            .expect("run exact SetValue confirmation request");
+        let (confirm_status, confirm_body) = response_body(confirm_response).await;
+        assert!(
+            !confirm_body.contains(SENTINEL),
+            "SetValue confirmation response must never expose plaintext"
+        );
+        assert_eq!(
+            confirm_status,
+            StatusCode::OK,
+            "exact SetValue confirmation must execute through the dedicated verified SetValue path: {confirm_body}"
+        );
+        let confirmed: serde_json::Value =
+            serde_json::from_str(&confirm_body).expect("decode SetValue confirmation result");
+        assert_eq!(confirmed["status"], "committed");
+        assert_eq!(confirmed["world_outcome"], "verified_expected");
+        assert_eq!(confirmed["confirmation_consumed"], true);
+        assert_eq!(confirmed["retry_allowed"], false);
 
         configure_windows_consequential_control_for_sessions(&sessions, None);
         runtime
