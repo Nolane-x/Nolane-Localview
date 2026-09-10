@@ -21,58 +21,39 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+
           path = Path('crates/control/src/windows_consequential.rs')
           text = path.read_text(encoding='utf-8')
-          old = '''        Ok(None) => {
-              let _ = consume_pending_plan(&control, session_id, action_id, request.confirmation_ref)
-                  .await;
-              return (
-                  StatusCode::CONFLICT,
-                  Json(serde_json::json!({
-                      "error": "windows_consequential_operation_binding_missing",
-                      "action_id": action_id,
-                      "confirmation_consumed": true,
-                      "retry_allowed": false,
-                      "replan_required": true,
-                  })),
-              )
-                  .into_response();
-          }
-          Err(error) => {'''
-          new = '''        Ok(None) => {
-              let _ = consume_pending_plan(&control, session_id, action_id, request.confirmation_ref)
-                  .await;
-              if control
-                  .set_value
-                  .peek(session_id, action_id, request.confirmation_ref)
-                  .await
-              {
-                  let _ = control
-                      .set_value
-                      .consume_verified(
-                          control.journal.as_ref(),
-                          session_id,
-                          action_id,
-                          request.confirmation_ref,
-                      )
-                      .await;
-              }
-              return (
-                  StatusCode::CONFLICT,
-                  Json(serde_json::json!({
-                      "error": "windows_consequential_operation_binding_missing",
-                      "action_id": action_id,
-                      "confirmation_consumed": true,
-                      "retry_allowed": false,
-                      "replan_required": true,
-                  })),
-              )
-                  .into_response();
-          }
-          Err(error) => {'''
-          if text.count(old) != 1:
-              raise SystemExit(f'exact patch anchor count={text.count(old)}; refusing mutation')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          match_marker = 'let admitted_operation = match control.journal.admitted_operation(action_id).await'
+          match_start = text.index(match_marker)
+          ok_start = text.index('        Ok(None) => {', match_start)
+          err_start = text.index('        Err(error) => {', ok_start)
+          branch = text[ok_start:err_start]
+          if 'control.set_value' in branch:
+              raise SystemExit('missing-operation branch already has SetValue cleanup; refusing duplicate mutation')
+          needle = '                .await;\n            return ('
+          if branch.count(needle) != 1:
+              raise SystemExit(f'branch cleanup insertion anchor count={branch.count(needle)}; refusing mutation')
+          cleanup = '''                .await;
+            if control
+                .set_value
+                .peek(session_id, action_id, request.confirmation_ref)
+                .await
+            {
+                let _ = control
+                    .set_value
+                    .consume_verified(
+                        control.journal.as_ref(),
+                        session_id,
+                        action_id,
+                        request.confirmation_ref,
+                    )
+                    .await;
+            }
+            return ('''
+          updated_branch = branch.replace(needle, cleanup, 1)
+          updated = text[:ok_start] + updated_branch + text[err_start:]
+          path.write_text(updated, encoding='utf-8')
       - name: Commit fix and remove one-shot helper
         shell: bash
         run: |
