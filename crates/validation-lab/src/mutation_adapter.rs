@@ -16,7 +16,7 @@ pub enum MutationNotMeasuredReason {
 #[serde(rename_all = "snake_case", tag = "measurement_status")]
 pub enum MutationLabRecord {
     Measured {
-        observation: LabObservation,
+        observation: Box<LabObservation>,
         result_evidence: ResultEvidence,
     },
     NotMeasured {
@@ -73,7 +73,7 @@ pub fn adapt_mutation_outcome(
             };
 
             Ok(MutationLabRecord::Measured {
-                observation,
+                observation: Box::new(observation),
                 result_evidence: if survived {
                     ResultEvidence::MutantSurvived
                 } else {
