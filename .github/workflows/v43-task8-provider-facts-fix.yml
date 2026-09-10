@@ -1,0 +1,85 @@
+name: V4.3 Task 8 Provider Facts Patch
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v43-task8-provider-facts-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-provider-facts:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Publish exact UIA SetValue safety facts in semantic snapshots
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('crates/windows-uia-provider/src/lib.rs')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  '        WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport,\n'
+                  '        WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,\n',
+                  '        WindowsUiaBooleanCapabilityFact, WindowsUiaPatternDispatchRequest,\n'
+                  '        WindowsUiaPatternSupport, WindowsUiaSetValueDispatchReceipt,\n'
+                  '        WindowsUiaSetValueDispatchRequest, WindowsUiaValueCapabilityFacts,\n',
+              ),
+              (
+                  '    const PROPERTIES_PER_NODE: usize = 17;\n',
+                  '    const PROPERTIES_PER_NODE: usize = 19;\n',
+              ),
+              (
+                  '            let action_capabilities = observe_action_capabilities(&element);\n'
+                  '            let selection_item_is_selected = if action_capabilities\n',
+                  '            let action_capabilities = observe_action_capabilities(&element);\n'
+                  '            let value_capability_facts = observe_value_capability_facts(\n'
+                  '                &element,\n'
+                  '                action_capabilities.support_for(WindowsUiaPattern::Value),\n'
+                  '                &mut node_debt,\n'
+                  '            );\n'
+                  '            let selection_item_is_selected = if action_capabilities\n',
+              ),
+              (
+                  '            action_capabilities.write_attributes(&mut attributes);\n'
+                  '            if let Some(selected) = selection_item_is_selected {\n',
+                  '            action_capabilities.write_attributes(&mut attributes);\n'
+                  '            value_capability_facts.write_attributes(&mut attributes);\n'
+                  '            if let Some(selected) = selection_item_is_selected {\n',
+              ),
+              (
+                  '    fn observe_action_capabilities(element: &IUIAutomationElement) -> WindowsUiaActionCapabilities {\n',
+                  '''    fn observe_value_capability_facts(\n        element: &IUIAutomationElement,\n        value_support: WindowsUiaPatternSupport,\n        node_debt: &mut Vec<String>,\n    ) -> WindowsUiaValueCapabilityFacts {\n        let is_password = match unsafe {\n            // SAFETY: the UIA element is retained and read only on this dedicated MTA.\n            element.CurrentIsPassword()\n        } {\n            Ok(value) => WindowsUiaBooleanCapabilityFact::from_bool(value.as_bool()),\n            Err(_) => {\n                node_debt.push("uia_property_is_password_unavailable".into());\n                WindowsUiaBooleanCapabilityFact::Unknown\n            }\n        };\n\n        let is_read_only = if value_support == WindowsUiaPatternSupport::Supported {\n            match unsafe {\n                // SAFETY: the exact UIA element and temporary ValuePattern remain\n                // apartment-owned; this reads capability state and performs no mutation.\n                element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)\n            } {\n                Ok(pattern) => match unsafe { pattern.CurrentIsReadOnly() } {\n                    Ok(value) => WindowsUiaBooleanCapabilityFact::from_bool(value.as_bool()),\n                    Err(_) => {\n                        node_debt.push("uia_property_value_is_read_only_unavailable".into());\n                        WindowsUiaBooleanCapabilityFact::Unknown\n                    }\n                },\n                Err(_) => {\n                    node_debt.push("uia_property_value_is_read_only_unavailable".into());\n                    WindowsUiaBooleanCapabilityFact::Unknown\n                }\n            }\n        } else {\n            WindowsUiaBooleanCapabilityFact::Unknown\n        };\n\n        WindowsUiaValueCapabilityFacts::new(value_support, is_password, is_read_only)\n    }\n\n    fn observe_action_capabilities(element: &IUIAutomationElement) -> WindowsUiaActionCapabilities {\n''',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'exact provider patch anchor count was {count}, expected 1: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+      - name: Verify patch shape
+        run: |
+          cargo fmt --all -- --check
+          git diff --check
+          git diff -- crates/windows-uia-provider/src/lib.rs
+      - name: Commit exact provider evidence fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'localview-ci'
+          git config user.email 'localview-ci@users.noreply.github.com'
+          git add crates/windows-uia-provider/src/lib.rs
+          git commit -m 'fix(v43): publish real SetValue safety facts'
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
