@@ -76,7 +76,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --all
+          rustfmt --edition 2024 crates/windows-uia-provider/src/lib.rs
           git diff --check
           changed="$(git diff --name-only)"
           test "$changed" = "crates/windows-uia-provider/src/lib.rs"
