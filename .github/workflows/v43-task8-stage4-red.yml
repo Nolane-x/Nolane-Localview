@@ -1,0 +1,60 @@
+name: V4.3 Task 8 Stage 4 RED
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v43-task8-stage4-red.yml'
+      - 'crates/control/src/windows_consequential.rs'
+      - 'crates/control/src/windows_consequential/set_value_http.rs'
+      - 'crates/control/tests/windows_consequential_set_value_windows_smoke.rs'
+      - 'crates/windows-observe-runtime/**'
+      - 'crates/windows-uia-provider/**'
+      - 'crates/live-bridge/**'
+
+jobs:
+  real-http-set-value-confirm-red:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_UIA_SMOKE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Materialize Stage 4 exact-confirmation assertion
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('crates/control/tests/windows_consequential_set_value_windows_smoke.rs')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''        let response = app\n            .oneshot(\n'''
+          new = '''        let response = app\n            .clone()\n            .oneshot(\n'''
+          if text.count(old) != 1:
+              raise SystemExit('plan request app anchor was not unique')
+          text = text.replace(old, new, 1)
+
+          old = '''        assert!(plan["confirmation_ref"].as_str().is_some());\n        let precondition_cut = plan["precondition_snapshot_cut_ref"]\n'''
+          new = '''        let confirmation_ref = Uuid::parse_str(\n            plan["confirmation_ref"]\n                .as_str()\n                .expect("SetValue plan response must contain confirmation_ref"),\n        )\n        .expect("parse SetValue confirmation_ref");\n        let precondition_cut = plan["precondition_snapshot_cut_ref"]\n'''
+          if text.count(old) != 1:
+              raise SystemExit('confirmation_ref anchor was not unique')
+          text = text.replace(old, new, 1)
+
+          marker = '''        configure_windows_consequential_control_for_sessions(&sessions, None);\n'''
+          insert = '''        let confirm_response = app\n            .clone()\n            .oneshot(\n                Request::builder()\n                    .method("POST")\n                    .uri(format!(\n                        "/v1/sessions/{session_id}/windows-observe/consequential/{action_id}/confirm"\n                    ))\n                    .header(AUTHORIZATION, "Bearer set-value-control-smoke-token")\n                    .header("content-type", "application/json")\n                    .body(Body::from(\n                        serde_json::json!({"confirmation_ref": confirmation_ref}).to_string(),\n                    ))\n                    .expect("build exact SetValue confirmation request"),\n            )\n            .await\n            .expect("run exact SetValue confirmation request");\n        let (confirm_status, confirm_body) = response_body(confirm_response).await;\n        assert!(\n            !confirm_body.contains(SENTINEL),\n            "SetValue confirmation response must never expose plaintext"\n        );\n        assert_eq!(\n            confirm_status,\n            StatusCode::OK,\n            "exact SetValue confirmation must execute through the dedicated verified SetValue path: {confirm_body}"\n        );\n        let confirmed: serde_json::Value =\n            serde_json::from_str(&confirm_body).expect("decode SetValue confirmation result");\n        assert_eq!(confirmed["status"], "committed");\n        assert_eq!(confirmed["world_outcome"], "verified_expected");\n        assert_eq!(confirmed["confirmation_consumed"], true);\n        assert_eq!(confirmed["retry_allowed"], false);\n\n'''
+          if text.count(marker) != 1:
+              raise SystemExit('confirmation insertion anchor was not unique')
+          text = text.replace(marker, insert + marker, 1)
+          path.write_text(text, encoding='utf-8')
+      - name: Verify RED patch is test-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "crates/control/tests/windows_consequential_set_value_windows_smoke.rs"
+          git diff -- crates/control/tests/windows_consequential_set_value_windows_smoke.rs
+      - name: Run real HTTP SetValue exact-confirmation RED
+        shell: bash
+        run: cargo test -p localview-control --test windows_consequential_set_value_windows_smoke -- --ignored --nocapture --test-threads=1
