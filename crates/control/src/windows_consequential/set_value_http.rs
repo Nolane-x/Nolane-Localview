@@ -397,7 +397,9 @@ mod tests {
                     target_incarnation_ref: target,
                     risk_class: ActionRiskClass::DestructiveOrIrreversible,
                     idempotency_class: ActionIdempotencyClass::Irreversible,
-                    expected_postcondition_contract_refs: Vec::new(),
+                    expected_postcondition_contract_refs: vec![
+                        "postcondition:task8:set-value-binding".into(),
+                    ],
                 },
             )
             .await
