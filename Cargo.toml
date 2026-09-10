@@ -57,6 +57,7 @@ members = [
   "crates/inspector",
   "crates/experience",
   "crates/runtime-abi",
+  "crates/validation-lab",
   "apps/daemon",
   "apps/cli",
   "apps/desktop/src-tauri",
