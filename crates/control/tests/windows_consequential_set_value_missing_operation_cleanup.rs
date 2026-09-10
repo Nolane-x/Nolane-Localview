@@ -16,7 +16,14 @@ fn missing_operation_binding_consumes_set_value_process_local_authority() {
     let missing_branch = &missing_tail[..missing_end];
 
     assert!(
-        missing_branch.contains(".set_value") && missing_branch.contains("consume_verified"),
-        "once generic confirmation is consumed, the missing-operation path must also consume any exact SetValue process-local payload authority so plaintext cannot remain staged and unreachable"
+        missing_branch.contains(".set_value")
+            && missing_branch.contains(".peek(session_id, action_id, request.confirmation_ref)")
+            && missing_branch.contains(".consume_verified(")
+            && missing_branch.contains("control.journal.as_ref()")
+            && missing_branch.contains("session_id")
+            && missing_branch.contains("action_id")
+            && missing_branch.contains("request.confirmation_ref")
+            && missing_branch.contains("\"confirmation_consumed\": true"),
+        "once generic confirmation is consumed, the missing-operation path must consume the exact SetValue process-local payload authority under the same session/action/confirmation binding so plaintext cannot remain staged and unreachable"
     );
 }
