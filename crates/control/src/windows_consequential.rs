@@ -609,22 +609,22 @@ async fn confirm_windows_consequential_action(
         Ok(None) => {
             let _ = consume_pending_plan(&control, session_id, action_id, request.confirmation_ref)
                 .await;
-  if control
-      .set_value
-      .peek(session_id, action_id, request.confirmation_ref)
-      .await
-  {
-      let _ = control
-          .set_value
-          .consume_verified(
-              control.journal.as_ref(),
-              session_id,
-              action_id,
-              request.confirmation_ref,
-          )
-          .await;
-  }
-  return (
+            if control
+                .set_value
+                .peek(session_id, action_id, request.confirmation_ref)
+                .await
+            {
+                let _ = control
+                    .set_value
+                    .consume_verified(
+                        control.journal.as_ref(),
+                        session_id,
+                        action_id,
+                        request.confirmation_ref,
+                    )
+                    .await;
+            }
+            return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({
                     "error": "windows_consequential_operation_binding_missing",
