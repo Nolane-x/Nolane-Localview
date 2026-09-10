@@ -208,8 +208,8 @@ mod windows_consequential_expand_collapse_windows_smoke {
                         max_nodes: 32,
                         max_depth: 4,
                         // Keep the property ceiling aligned with the explicit node ceiling:
-                        // 32 bounded nodes × 17 tracked properties per semantic node.
-                        max_properties: 544,
+                        // 32 bounded nodes × 19 tracked properties per semantic node.
+                        max_properties: 608,
                     },
                     command_timeout: Duration::from_secs(5),
                 },
