@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CanonicalDigest, LabError, LabMetricKind, LabRevisionContext, LabSeedIdentity,
-    canonical_json_bytes,
-    canonical::digest_canonical_bytes,
+    canonical::digest_canonical_bytes, canonical_json_bytes,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -83,6 +82,23 @@ impl ValidatedPreregistrationReceipt {
 
     pub fn persistence_ref(&self) -> &str {
         &self.persistence_ref
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreregistrationReceiptProjection {
+    pub digest: CanonicalDigest,
+    pub logical_sequence: u64,
+    pub persistence_ref: String,
+}
+
+impl From<&ValidatedPreregistrationReceipt> for PreregistrationReceiptProjection {
+    fn from(receipt: &ValidatedPreregistrationReceipt) -> Self {
+        Self {
+            digest: receipt.digest.clone(),
+            logical_sequence: receipt.logical_sequence,
+            persistence_ref: receipt.persistence_ref.clone(),
+        }
     }
 }
 

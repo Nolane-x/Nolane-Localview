@@ -15,17 +15,22 @@ mod canonical;
 mod identity;
 mod metrics;
 mod preregistration;
+mod result;
 mod seeds;
 
 pub use canonical::{CanonicalDigest, canonical_digest, canonical_json_bytes};
-pub use identity::LabRevisionContext;
+pub use identity::{CompletedLabRunIdentity, LabRevisionContext};
 pub use metrics::{
     LabMetricKind, LabMetricValue, MetricSnapshot, MetricStatus, SilentUnsoundnessGateStatus,
     evaluate_silent_unsoundness_gate,
 };
 pub use preregistration::{
     CampaignLayer, LabPreregistration, PersistedPreregistrationReceipt, PreparedPreregistration,
-    ValidatedPreregistrationReceipt, validate_persisted_receipt,
+    PreregistrationReceiptProjection, ValidatedPreregistrationReceipt, validate_persisted_receipt,
+};
+pub use result::{
+    ActualExecutionAuthority, CompletedLabRun, DowngradeReason, ExecutionMode, LabResultPayload,
+    LabRunAdmission, LabRunBuilder, ResearchResultClass, ResultEvidence,
 };
 pub use seeds::{LabSeed, LabSeedCatalog, LabSeedIdentity};
 
@@ -54,4 +59,15 @@ pub enum LabError {
     },
     #[error("invalid persisted preregistration receipt: {reason}")]
     InvalidPersistenceReceipt { reason: &'static str },
+    #[error(
+        "preregistration receipt sequence {receipt_sequence} is not before run start sequence {start_sequence}"
+    )]
+    PreregistrationNotPersistedBeforeStart {
+        receipt_sequence: u64,
+        start_sequence: u64,
+    },
+    #[error("prospective execution authority drifted at {field}")]
+    ProspectiveAuthorityDrift { field: &'static str },
+    #[error("validation lab run is already finalized")]
+    AlreadyFinalized,
 }

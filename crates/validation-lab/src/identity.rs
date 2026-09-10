@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::LabError;
+use crate::{CanonicalDigest, LabError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LabRevisionContext {
@@ -29,6 +29,12 @@ impl LabRevisionContext {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletedLabRunIdentity {
+    pub revision_context: LabRevisionContext,
+    pub result_artifact_digest: CanonicalDigest,
 }
 
 fn require(field: &'static str, value: &str) -> Result<(), LabError> {
