@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::LabError;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LabSeedIdentity {
     pub seed_id: String,
     pub prediction_revision: String,
@@ -12,14 +13,14 @@ pub struct LabSeedIdentity {
 }
 
 impl LabSeedIdentity {
-    fn validate(&self) -> Result<(), LabError> {
+    pub(crate) fn validate(&self) -> Result<(), LabError> {
         require_authority_field("seed_id", &self.seed_id)?;
         require_authority_field("prediction_revision", &self.prediction_revision)?;
         require_authority_field("oracle_revision", &self.oracle_revision)
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LabSeed {
     pub identity: LabSeedIdentity,
     pub family: String,
