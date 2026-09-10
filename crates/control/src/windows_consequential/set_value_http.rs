@@ -278,9 +278,6 @@ pub(super) async fn plan_windows_consequential_set_value(
     Path(session_id): Path<SessionId>,
     body: Bytes,
 ) -> axum::response::Response {
-    // Body bytes are intentionally not deserialized until bearer and session
-    // authority have been checked. This keeps malformed or hostile payloads out
-    // of the consequential planning domain entirely.
     if !authorized(&headers, &state) {
         return denied();
     }
@@ -297,8 +294,6 @@ pub(super) async fn plan_windows_consequential_set_value(
         Err(message) => return invalid_set_value_request(message),
     };
 
-    // Do not allocate action ids, confirmation capabilities, HMAC material or
-    // durable intent before the exact runtime/control dependencies exist.
     let Some(_runtime) = windows_observe_runtime_for_sessions(&state.sessions) else {
         return unavailable("Windows UIA runtime is unavailable");
     };
@@ -306,8 +301,6 @@ pub(super) async fn plan_windows_consequential_set_value(
         return unavailable("durable consequential control journal is unavailable");
     };
 
-    // The next Task-8 GREEN slice replaces this fail-closed boundary with the
-    // server-owned fresh-evidence/HMAC/pending-payload admission protocol.
     let _payload_len = mode.payload_len();
     unavailable("Windows UIA SetValue server-owned planning is not yet armed")
 }
@@ -546,5 +539,27 @@ mod tests {
         assert!(!encoded.windows(SENTINEL.len()).any(|window| window == SENTINEL.as_bytes()));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn server_owned_set_value_payload_contract_is_opaque_and_exact() {
+        let payload_ref = SetValuePayloadRef(Uuid::from_u128(0x8a40));
+        let prepared = prepare_server_owned_set_value_payload(
+            SetValuePlanMode::ReplaceValue(SENTINEL.to_owned()),
+            payload_ref,
+        )
+        .expect("valid SetValue payload preparation");
+
+        assert_eq!(prepared.payload.payload_ref, payload_ref);
+        assert_eq!(prepared.payload.mode, SetValueMode::ReplaceValue);
+        assert_eq!(prepared.payload.utf8_bytes(), SENTINEL.as_bytes());
+        assert_eq!(
+            prepared.expected_postcondition_contract_ref,
+            format!(
+                "lvpc:payload-equality:v1:{{\"mode\":\"replace_value\",\"payload_ref\":\"{}\"}}",
+                payload_ref.0
+            )
+        );
+        assert!(!prepared.expected_postcondition_contract_ref.contains(SENTINEL));
     }
 }
