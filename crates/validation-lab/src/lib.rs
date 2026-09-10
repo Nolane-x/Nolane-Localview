@@ -1,3 +1,14 @@
+//! Deterministic research authority for LocalView V4.3 validation campaigns.
+//!
+//! A validated preregistration receipt is an authority capability minted only by
+//! `validate_persisted_receipt`; untrusted serialized data must not be able to
+//! reconstruct it directly.
+//!
+//! ```compile_fail
+//! fn require_deserialize<T: serde::de::DeserializeOwned>() {}
+//! require_deserialize::<localview_validation_lab::ValidatedPreregistrationReceipt>();
+//! ```
+
 #![forbid(unsafe_code)]
 
 mod canonical;
