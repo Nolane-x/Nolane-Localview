@@ -19,6 +19,7 @@ mod mutation_adapter;
 mod preregistration;
 mod result;
 mod seeds;
+mod semantic_adapter;
 
 pub use artifact::{CanonicalArtifact, LabArtifactKind, LabArtifactState};
 pub use canonical::{CanonicalDigest, canonical_digest, canonical_json_bytes};
@@ -39,6 +40,7 @@ pub use result::{
     LabRunAdmission, LabRunBuilder, ResearchResultClass, ResultEvidence,
 };
 pub use seeds::{LabSeed, LabSeedCatalog, LabSeedIdentity};
+pub use semantic_adapter::{SemanticSeedLabRecord, adapt_semantic_seed_outcome};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum LabError {
@@ -66,6 +68,8 @@ pub enum LabError {
     },
     #[error("authority field {field} cannot be empty")]
     EmptyAuthorityField { field: &'static str },
+    #[error("unsupported L1 semantic comparison mode: {mode}")]
+    UnsupportedSemanticComparisonMode { mode: String },
     #[error("canonical serialization failed: {message}")]
     CanonicalSerialization { message: String },
     #[error("persisted preregistration digest does not match prepared preregistration")]
