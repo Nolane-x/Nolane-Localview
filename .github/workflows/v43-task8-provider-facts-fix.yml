@@ -28,14 +28,14 @@ jobs:
 
           replacements = [
               (
-                  '    WindowsUiaEventProperty, WindowsUiaPattern, WindowsUiaPatternDispatchOperation,\n',
-                  '    WindowsUiaBooleanCapabilityFact, WindowsUiaEventProperty, WindowsUiaPattern,\n'
-                  '    WindowsUiaPatternDispatchOperation,\n',
+                  '        WindowsUiaActionCapabilities, WindowsUiaDispatchContextObservation,\n',
+                  '        WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact,\n'
+                  '        WindowsUiaDispatchContextObservation,\n',
               ),
               (
-                  '    WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,\n',
-                  '    WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,\n'
-                  '    WindowsUiaValueCapabilityFacts,\n',
+                  '        WindowsUiaSetValueVerificationRequest, evaluate_windows_uia_dispatch_context,\n',
+                  '        WindowsUiaSetValueVerificationRequest, WindowsUiaValueCapabilityFacts,\n'
+                  '        evaluate_windows_uia_dispatch_context,\n',
               ),
               (
                   '    const PROPERTIES_PER_NODE: usize = 17;\n',
