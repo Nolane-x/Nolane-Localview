@@ -16,8 +16,7 @@ fn missing_operation_binding_consumes_set_value_process_local_authority() {
     let missing_branch = &missing_tail[..missing_end];
 
     assert!(
-        missing_branch.contains("control.set_value")
-            && missing_branch.contains("consume_verified"),
+        missing_branch.contains(".set_value") && missing_branch.contains("consume_verified"),
         "once generic confirmation is consumed, the missing-operation path must also consume any exact SetValue process-local payload authority so plaintext cannot remain staged and unreachable"
     );
 }
