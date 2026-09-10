@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/v43-windows-set-value-payload-authority
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,6 +12,7 @@ permissions:
 jobs:
   wire:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
