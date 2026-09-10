@@ -36,6 +36,63 @@ impl WindowsSetValuePayloadAuthority {
         })
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Task 8 authority-owned staging is introduced before the server-owned route consumes it"
+        )
+    )]
+    async fn stage(
+        &self,
+        action_id: Uuid,
+        candidate: PendingWindowsSetValuePayload,
+    ) -> Result<(), &'static str> {
+        use std::collections::hash_map::Entry;
+
+        match self.pending.lock().await.entry(action_id) {
+            Entry::Vacant(entry) => {
+                entry.insert(candidate);
+                Ok(())
+            }
+            Entry::Occupied(_) => Err("SetValue payload authority already exists for action"),
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Task 8 authority-owned peek is introduced before exact-confirmation route wiring"
+        )
+    )]
+    async fn peek(
+        &self,
+        session_id: SessionId,
+        action_id: Uuid,
+        confirmation_ref: Uuid,
+    ) -> bool {
+        let pending = self.pending.lock().await;
+        peek_pending_set_value_payload(&pending, session_id, action_id, confirmation_ref)
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Task 8 authority-owned consume is introduced before exact-confirmation route wiring"
+        )
+    )]
+    async fn consume(
+        &self,
+        session_id: SessionId,
+        action_id: Uuid,
+        confirmation_ref: Uuid,
+    ) -> Option<PendingWindowsSetValuePayload> {
+        let mut pending = self.pending.lock().await;
+        consume_pending_set_value_payload(&mut pending, session_id, action_id, confirmation_ref)
+    }
+
     pub(super) async fn release_session(&self, session_id: SessionId) {
         self.pending
             .lock()
