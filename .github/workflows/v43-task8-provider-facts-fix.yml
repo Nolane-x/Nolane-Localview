@@ -28,11 +28,14 @@ jobs:
 
           replacements = [
               (
-                  '        WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport,\n'
-                  '        WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,\n',
-                  '        WindowsUiaBooleanCapabilityFact, WindowsUiaPatternDispatchRequest,\n'
-                  '        WindowsUiaPatternSupport, WindowsUiaSetValueDispatchReceipt,\n'
-                  '        WindowsUiaSetValueDispatchRequest, WindowsUiaValueCapabilityFacts,\n',
+                  '    WindowsUiaEventProperty, WindowsUiaPattern, WindowsUiaPatternDispatchOperation,\n',
+                  '    WindowsUiaBooleanCapabilityFact, WindowsUiaEventProperty, WindowsUiaPattern,\n'
+                  '    WindowsUiaPatternDispatchOperation,\n',
+              ),
+              (
+                  '    WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,\n',
+                  '    WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,\n'
+                  '    WindowsUiaValueCapabilityFacts,\n',
               ),
               (
                   '    const PROPERTIES_PER_NODE: usize = 17;\n',
@@ -65,14 +68,18 @@ jobs:
           for old, new in replacements:
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f'exact provider patch anchor count was {count}, expected 1: {old[:80]!r}')
+                  raise SystemExit(f'exact provider patch anchor count was {count}, expected 1: {old[:100]!r}')
               text = text.replace(old, new, 1)
 
           path.write_text(text, encoding='utf-8')
-      - name: Verify patch shape
+      - name: Format and verify patch shape
+        shell: bash
         run: |
-          cargo fmt --all -- --check
+          set -euo pipefail
+          cargo fmt --all
           git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "crates/windows-uia-provider/src/lib.rs"
           git diff -- crates/windows-uia-provider/src/lib.rs
       - name: Commit exact provider evidence fix
         shell: bash
