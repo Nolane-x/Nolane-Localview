@@ -33,12 +33,10 @@ mod windows_seed {
     };
 
     const INITIAL_NAME: &str = "LocalView V4.3 Real Provider Seed";
-    const W04_UNSUPPORTED_INVOKE_NAME: &str = "LocalView W04 Unsupported Invoke";
 
     pub fn run() -> Result<(), Box<dyn Error>> {
         let window = create_parent_window()?;
-        let mut control = create_control(window, INITIAL_NAME)?;
-        let unsupported_invoke_control = create_unsupported_invoke_control(window)?;
+        let mut control = create_invoke_control(window, INITIAL_NAME)?;
         let mut state = SeedState::new(
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -46,7 +44,6 @@ mod windows_seed {
             raw_handle(control),
             Uuid::new_v4(),
             INITIAL_NAME.to_owned(),
-            raw_handle(unsupported_invoke_control),
         );
 
         emit(&SeedResponse::Ready {
@@ -111,11 +108,15 @@ mod windows_seed {
                         }
                     }
                     SeedCommand::RecreateControl => {
-                        let logical_name = state.ground_truth().logical_name;
+                        let ground_truth = state.ground_truth();
                         unsafe {
                             DestroyWindow(control)?;
                         }
-                        control = match create_control(window, &logical_name) {
+                        control = match if ground_truth.expected_invoke_support {
+                            create_invoke_control(window, &ground_truth.logical_name)
+                        } else {
+                            create_unsupported_invoke_control(window, &ground_truth.logical_name)
+                        } {
                             Ok(control) => control,
                             Err(error) => {
                                 emit(&SeedResponse::error(
@@ -127,6 +128,33 @@ mod windows_seed {
                         };
 
                         match state.record_recreated_control(raw_handle(control), Uuid::new_v4()) {
+                            Ok(ground_truth) => emit(&SeedResponse::applied(ground_truth))?,
+                            Err(error) => emit(&SeedResponse::error(
+                                "seed_state_rejected",
+                                error.to_string(),
+                            ))?,
+                        }
+                    }
+                    SeedCommand::PresentUnsupportedInvokeControl => {
+                        let logical_name = state.ground_truth().logical_name;
+                        unsafe {
+                            DestroyWindow(control)?;
+                        }
+                        control = match create_unsupported_invoke_control(window, &logical_name) {
+                            Ok(control) => control,
+                            Err(error) => {
+                                emit(&SeedResponse::error(
+                                    "present_unsupported_invoke_control_failed",
+                                    error.to_string(),
+                                ))?;
+                                return Err(error.into());
+                            }
+                        };
+
+                        match state.record_unsupported_invoke_control(
+                            raw_handle(control),
+                            Uuid::new_v4(),
+                        ) {
                             Ok(ground_truth) => emit(&SeedResponse::applied(ground_truth))?,
                             Err(error) => emit(&SeedResponse::error(
                                 "seed_state_rejected",
@@ -151,7 +179,6 @@ mod windows_seed {
         }
 
         unsafe {
-            DestroyWindow(unsupported_invoke_control)?;
             DestroyWindow(control)?;
             DestroyWindow(window)?;
         }
@@ -203,7 +230,7 @@ mod windows_seed {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 520,
-                260,
+                220,
                 None,
                 None,
                 None,
@@ -216,41 +243,33 @@ mod windows_seed {
         Ok(window)
     }
 
-    fn create_control(parent: HWND, logical_name: &str) -> windows::core::Result<HWND> {
+    fn create_invoke_control(parent: HWND, logical_name: &str) -> windows::core::Result<HWND> {
+        create_child_control(parent, logical_name, w!("BUTTON"))
+    }
+
+    fn create_unsupported_invoke_control(
+        parent: HWND,
+        logical_name: &str,
+    ) -> windows::core::Result<HWND> {
+        create_child_control(parent, logical_name, w!("STATIC"))
+    }
+
+    fn create_child_control(
+        parent: HWND,
+        logical_name: &str,
+        class_name: PCWSTR,
+    ) -> windows::core::Result<HWND> {
         let wide_name = wide(logical_name);
         let control = unsafe {
             CreateWindowExW(
                 Default::default(),
-                w!("BUTTON"),
+                class_name,
                 PCWSTR(wide_name.as_ptr()),
                 WS_CHILD | WS_VISIBLE,
                 40,
                 60,
                 420,
                 80,
-                Some(parent),
-                None,
-                None,
-                None,
-            )?
-        };
-        unsafe {
-            let _ = ShowWindow(control, SW_SHOW);
-        }
-        Ok(control)
-    }
-
-    fn create_unsupported_invoke_control(parent: HWND) -> windows::core::Result<HWND> {
-        let control = unsafe {
-            CreateWindowExW(
-                Default::default(),
-                w!("STATIC"),
-                w!("LocalView W04 Unsupported Invoke"),
-                WS_CHILD | WS_VISIBLE,
-                40,
-                160,
-                420,
-                32,
                 Some(parent),
                 None,
                 None,

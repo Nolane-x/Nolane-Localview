@@ -11,8 +11,7 @@ pub struct GroundTruth {
     pub control_handle: u64,
     pub control_incarnation: Uuid,
     pub logical_name: String,
-    pub unsupported_invoke_control_handle: u64,
-    pub unsupported_invoke_side_effect_count: u64,
+    pub expected_invoke_support: bool,
     pub recreation_generation: u64,
     pub logical_sequence: u64,
     pub terminal: bool,
@@ -48,7 +47,6 @@ impl SeedState {
         control_handle: u64,
         control_incarnation: Uuid,
         logical_name: String,
-        unsupported_invoke_control_handle: u64,
     ) -> Self {
         Self {
             ground_truth: GroundTruth {
@@ -58,8 +56,7 @@ impl SeedState {
                 control_handle,
                 control_incarnation,
                 logical_name,
-                unsupported_invoke_control_handle,
-                unsupported_invoke_side_effect_count: 0,
+                expected_invoke_support: true,
                 recreation_generation: 1,
                 logical_sequence: 1,
                 terminal: false,
@@ -110,6 +107,17 @@ impl SeedState {
             .checked_add(1)
             .expect("seed logical sequence must remain bounded in tests");
         Ok(self.ground_truth())
+    }
+
+    pub fn record_unsupported_invoke_control(
+        &mut self,
+        control_handle: u64,
+        control_incarnation: Uuid,
+    ) -> Result<GroundTruth, SeedStateError> {
+        let mut ground_truth = self.record_recreated_control(control_handle, control_incarnation)?;
+        self.ground_truth.expected_invoke_support = false;
+        ground_truth.expected_invoke_support = false;
+        Ok(ground_truth)
     }
 
     pub fn shutdown(&mut self) -> Result<GroundTruth, SeedStateError> {

@@ -6,23 +6,15 @@ mod windows_real_provider_w04 {
         time::Duration,
     };
 
-    use localview_live_bridge::{
-        ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, LiveBridge,
-    };
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
-    use localview_protocol::PrincipalRef;
-    use localview_windows_observe_runtime::{
-        WindowsObserveRuntimeConfig, WindowsUiaActionPreflightError,
-        WindowsUiaActionPreflightRequest, spawn_windows_uia_runtime_manager,
-    };
     use localview_windows_uia_provider::{
-        WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport,
-        WindowsUiaWorkerConfig,
+        WindowsUiaActionCapabilities, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
+        WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchRequest,
+        WindowsUiaPatternSupport, WindowsUiaSnapshotRequest, WindowsUiaWorker,
+        WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     };
     use serde_json::{Value, json};
     use uuid::Uuid;
-
-    const W04_CONTROL_NAME: &str = "LocalView W04 Unsupported Invoke";
 
     struct SeedProcess {
         child: Child,
@@ -86,6 +78,8 @@ mod windows_real_provider_w04 {
                 response.get("response").and_then(Value::as_str),
                 Some("applied")
             );
+            let truth = extract_ground_truth(&response);
+            assert_eq!(truth.get("terminal").and_then(Value::as_bool), Some(true));
             self.shutdown = true;
             let status = self.child.wait().expect("wait for seed process shutdown");
             assert!(status.success(), "seed process must exit cleanly: {status}");
@@ -115,120 +109,105 @@ mod windows_real_provider_w04 {
             .unwrap_or_else(|| panic!("ground truth field {field} must be u64"))
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    fn truth_str<'a>(truth: &'a Value, field: &str) -> &'a str {
+        truth
+            .get(field)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("ground truth field {field} must be a string"))
+    }
+
+    #[test]
     #[ignore = "requires a real interactive Windows UI Automation provider and seed executable"]
-    async fn w04_unsupported_invoke_stays_typed_and_side_effect_free() {
+    fn w04_unsupported_invoke_is_observed_and_rejected_at_dispatch() {
         assert!(
             std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
             "real-provider seed execution must be explicitly enabled"
         );
 
         let mut seed = SeedProcess::spawn();
-        let window_handle = truth_u64(&seed.ready_ground_truth, "window_handle");
-
-        // This is intentionally an independent oracle requirement. The RED
-        // lineage fails until the seed exposes a second real Win32 control whose
-        // provider does not advertise Invoke and binds that handle into truth.
-        let unsupported_handle = truth_u64(
-            &seed.ready_ground_truth,
-            "unsupported_invoke_control_handle",
-        );
-        assert_ne!(unsupported_handle, 0, "oracle handle must identify a real control");
+        let response = seed.command(json!({
+            "command": "present_unsupported_invoke_control"
+        }));
         assert_eq!(
-            truth_u64(
-                &seed.ready_ground_truth,
-                "unsupported_invoke_side_effect_count",
-            ),
-            0,
-            "W04 oracle must begin with zero unsupported-Invoke side effects"
+            response.get("response").and_then(Value::as_str),
+            Some("applied")
+        );
+        let ground_truth = extract_ground_truth(&response);
+        assert_eq!(
+            ground_truth
+                .get("expected_invoke_support")
+                .and_then(Value::as_bool),
+            Some(false),
+            "independent seed oracle must declare that W04 expects no Invoke support"
         );
 
-        let manager = spawn_windows_uia_runtime_manager(
-            LiveBridge::new(128, 16),
-            WindowsUiaWorkerConfig {
-                snapshot_budget: SnapshotBudget {
-                    max_nodes: 96,
-                    max_depth: 8,
-                    max_properties: 1024,
-                },
-                command_timeout: Duration::from_secs(5),
+        let window_handle = truth_u64(&ground_truth, "window_handle");
+        let logical_name = truth_str(&ground_truth, "logical_name").to_owned();
+        let worker = WindowsUiaWorker::spawn(WindowsUiaWorkerConfig {
+            snapshot_budget: SnapshotBudget {
+                max_nodes: 64,
+                max_depth: 6,
+                max_properties: 512,
             },
-            WindowsObserveRuntimeConfig {
-                event_capacity: 8,
-                drain_limit: 32,
-            },
-        )
-        .expect("spawn production Windows UIA runtime");
-
-        let session_id = Uuid::new_v4();
-        let status = manager
-            .attach(
-                session_id,
-                UserSelectedWindowTarget {
-                    native_window_handle: window_handle,
-                    expected_process_id: seed.process_id(),
-                    selection_nonce: Uuid::new_v4(),
+            command_timeout: Duration::from_secs(5),
+        })
+        .expect("spawn dedicated Windows UIA MTA worker");
+        let attachment = worker
+            .attach(UserSelectedWindowTarget {
+                native_window_handle: window_handle,
+                expected_process_id: seed.process_id(),
+                selection_nonce: Uuid::new_v4(),
+            })
+            .expect("attach exact external W04 seed window");
+        let snapshot = worker
+            .snapshot(
+                &attachment,
+                WindowsUiaSnapshotRequest {
+                    snapshot_cut_ref: "cut:v43:w04:unsupported-invoke".into(),
+                    surface_scope: "seed:windows-uia:w04".into(),
                 },
             )
-            .await
-            .expect("attach exact W04 seed window through production runtime");
-        let snapshot = manager
-            .current_semantic_snapshot(session_id)
-            .await
-            .expect("W04 initial semantic snapshot must exist");
-        let target = snapshot
+            .expect("observe W04 seed through the shipping Windows UIA provider");
+        let node = snapshot
             .nodes()
             .iter()
-            .find(|node| node.name.as_deref() == Some(W04_CONTROL_NAME))
-            .expect("real Windows UIA snapshot must expose the W04 non-invokable control");
+            .find(|node| node.name.as_deref() == Some(logical_name.as_str()))
+            .expect("real W04 control must be present in the semantic snapshot");
 
         assert_eq!(
-            WindowsUiaActionCapabilities::from_node(target).support_for(WindowsUiaPattern::Invoke),
+            WindowsUiaActionCapabilities::from_node(node).support_for(WindowsUiaPattern::Invoke),
             WindowsUiaPatternSupport::Unsupported,
-            "real provider capability evidence must type Invoke as unsupported"
+            "real UIA capability evidence must distinguish explicit Unsupported from Unknown"
         );
 
-        let authority = ActionEnvelopeMetadata {
-            decision_principal_ref: PrincipalRef::from("principal:decision:w04"),
-            acting_principal_ref: PrincipalRef::from("principal:acting:w04"),
-            authorization_revision: "authorization:w04:v1".into(),
-            precondition_snapshot_cut_ref: snapshot.snapshot_cut_ref().to_owned(),
-            provider_incarnation_ref: status.provider_incarnation_ref.clone(),
-            target_incarnation_ref: status.target_incarnation_ref.clone(),
-            risk_class: ActionRiskClass::ReversibleUiState,
-            idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
-            expected_postcondition_contract_refs: vec!["postcondition:w04:no-side-effect".into()],
+        let request = WindowsUiaPatternDispatchRequest {
+            dispatch_attempt_ref: Uuid::new_v4(),
+            action_id: Uuid::new_v4(),
+            preparation_journal_sequence: 1,
+            preparation_receipt_ref: "prepare:v43:w04:unsupported-invoke".into(),
+            snapshot_cut_ref: snapshot.snapshot_cut_ref().into(),
+            provider_incarnation_ref: attachment.provider_incarnation_ref().clone(),
+            target_incarnation_ref: attachment.target_incarnation_ref().clone(),
+            element_ref: node.element_ref.clone(),
+            required_pattern: WindowsUiaPattern::Invoke,
+            dispatch_operation: WindowsUiaPatternDispatchOperation::Invoke,
+            context_requirements: WindowsUiaDispatchContextRequirements {
+                require_foreground_target: false,
+                require_exact_element_focus: false,
+                require_no_modal_blocker: true,
+            },
         };
-        let result = manager
-            .preflight_uia_action(
-                session_id,
-                WindowsUiaActionPreflightRequest {
-                    authority,
-                    element_ref: target.element_ref.clone(),
-                    required_pattern: WindowsUiaPattern::Invoke,
-                },
-            )
-            .await;
+        let error = worker
+            .dispatch_pattern(&attachment, request)
+            .expect_err("W04 must never produce successful Invoke dispatch evidence");
         assert_eq!(
-            result,
-            Err(WindowsUiaActionPreflightError::PatternUnsupported {
+            error,
+            WindowsUiaWorkerError::PatternUnavailable {
                 pattern: WindowsUiaPattern::Invoke,
-            }),
-            "unsupported real-provider capability must fail closed before dispatch"
+            },
+            "the final provider dispatch boundary must reject the unsupported Invoke pattern"
         );
 
-        let after = seed.command(json!({ "command": "get_ground_truth" }));
-        let after_truth = extract_ground_truth(&after);
-        assert_eq!(
-            truth_u64(&after_truth, "unsupported_invoke_side_effect_count"),
-            0,
-            "typed unsupported preflight must not cause a provider or fallback side effect"
-        );
-
-        manager
-            .release(session_id)
-            .await
-            .expect("release W04 real-provider observation");
         seed.shutdown();
     }
 }

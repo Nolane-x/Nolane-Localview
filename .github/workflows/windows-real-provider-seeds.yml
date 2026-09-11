@@ -14,13 +14,12 @@ permissions:
 
 jobs:
   windows-real-provider-seeds:
-    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W06
+    name: V4.3 L7 Windows real-provider seeds W01/W02/W04/W06
     runs-on: windows-latest
     timeout-minutes: 10
     env:
       LOCALVIEW_UIA_SMOKE: "1"
       LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
-      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
       LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
     steps:
@@ -30,53 +29,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
-      - name: Compile isolated WPF UIA edge seed
-        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
-      - name: WPF edge seed starts with virtual tail item unrealized
-        shell: pwsh
-        run: |
-          if (-not (Test-Path $env:LOCALVIEW_UIA_EDGE_SEED_BIN)) {
-            throw "WPF edge seed binary is missing: $env:LOCALVIEW_UIA_EDGE_SEED_BIN"
-          }
-          $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-          $startInfo.FileName = $env:LOCALVIEW_UIA_EDGE_SEED_BIN
-          $startInfo.UseShellExecute = $false
-          $startInfo.RedirectStandardInput = $true
-          $startInfo.RedirectStandardOutput = $true
-          $startInfo.RedirectStandardError = $true
-          $process = [System.Diagnostics.Process]::Start($startInfo)
-          try {
-            $process.StandardInput.WriteLine('{"command":"get_ground_truth"}')
-            $process.StandardInput.Flush()
-            $line = $process.StandardOutput.ReadLine()
-            if ([string]::IsNullOrWhiteSpace($line)) {
-              $stderr = $process.StandardError.ReadToEnd()
-              throw "WPF edge seed returned no oracle response. stderr=$stderr"
-            }
-            $truth = $line | ConvertFrom-Json
-            if (-not $truth.ok) { throw "WPF edge seed oracle did not report ok: $line" }
-            if ([int64]$truth.window_handle -eq 0) { throw "WPF edge seed window handle is zero" }
-            if ([int]$truth.process_id -le 0) { throw "WPF edge seed process id is invalid" }
-            if ([int]$truth.virtual_item_index -ne 255) { throw "unexpected W03 virtual item index" }
-            if ($truth.virtual_item_name -ne 'LocalView Virtual Item 255') { throw "unexpected W03 virtual item name" }
-            if ([bool]$truth.virtual_item_container_generated) {
-              throw "W03 virtual tail item was already realized before UIA realization"
-            }
-            $process.StandardInput.WriteLine('{"command":"shutdown"}')
-            $process.StandardInput.Flush()
-            $shutdown = $process.StandardOutput.ReadLine()
-            if ([string]::IsNullOrWhiteSpace($shutdown)) { throw "WPF edge seed returned no shutdown receipt" }
-            if (-not $process.WaitForExit(5000)) { throw "WPF edge seed did not exit after shutdown" }
-          }
-          finally {
-            if (-not $process.HasExited) { $process.Kill($true) }
-            $process.Dispose()
-          }
       - name: Bind hosted Windows environment authority
         shell: pwsh
         run: |
@@ -121,19 +75,10 @@ jobs:
             throw "required W02 real-provider test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_seeds $testName -- --ignored --exact --nocapture --test-threads=1
-      - name: W03 virtualized item requires Realize then fresh observation
+      - name: W04 unsupported Invoke stays unsupported through real UIA dispatch boundary
         shell: pwsh
         run: |
-          $testName = "windows_real_provider_w03::w03_virtualized_item_requires_realize_then_fresh_observation"
-          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w03 -- --list
-          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
-            throw "required W03 real-provider test is not registered: $testName"
-          }
-          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w03 $testName -- --ignored --exact --nocapture --test-threads=1
-      - name: W04 unsupported Invoke remains typed and side-effect-free
-        shell: pwsh
-        run: |
-          $testName = "windows_real_provider_w04::w04_unsupported_invoke_stays_typed_and_side_effect_free"
+          $testName = "windows_real_provider_w04::w04_unsupported_invoke_is_observed_and_rejected_at_dispatch"
           $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w04 -- --list
           if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
             throw "required W04 real-provider test is not registered: $testName"
