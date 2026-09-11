@@ -31,6 +31,11 @@ pub struct DifferentialVectorSetLabRecord {
 pub fn adapt_differential_vector_set(
     input: DifferentialVectorSetInput,
 ) -> Result<DifferentialVectorSetLabRecord, LabError> {
+    if input.vector_set_id.trim().is_empty() {
+        return Err(LabError::EmptyAuthorityField {
+            field: "vector_set_id",
+        });
+    }
     if input.comparison_profile_revision.trim().is_empty() {
         return Err(LabError::EmptyAuthorityField {
             field: "comparison_profile_revision",
@@ -44,6 +49,9 @@ pub fn adapt_differential_vector_set(
 
     let mut vector_ids = BTreeSet::new();
     for vector in &input.vectors {
+        if vector.vector_id.trim().is_empty() {
+            return Err(LabError::EmptyAuthorityField { field: "vector_id" });
+        }
         if !vector_ids.insert(vector.vector_id.clone()) {
             return Err(LabError::DuplicateDifferentialVectorId {
                 vector_id: vector.vector_id.clone(),
