@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 
 namespace LocalView.WindowsUiaEdgeSeed;
@@ -8,6 +9,8 @@ internal sealed class EdgeWindow : Window
 {
     public const int VirtualItemIndex = 255;
     public const string VirtualItemName = "LocalView Virtual Item 255";
+    public const string VirtualizedListAutomationId = "LocalViewW03VirtualizedItems";
+    public const string VirtualizedListName = "LocalView W03 Virtualized Items";
 
     private readonly ListBox _virtualizedList;
 
@@ -30,6 +33,8 @@ internal sealed class EdgeWindow : Window
             Margin = new Thickness(16),
             ItemsSource = items,
         };
+        AutomationProperties.SetAutomationId(_virtualizedList, VirtualizedListAutomationId);
+        AutomationProperties.SetName(_virtualizedList, VirtualizedListName);
 
         VirtualizingStackPanel.SetIsVirtualizing(_virtualizedList, true);
         VirtualizingStackPanel.SetVirtualizationMode(
