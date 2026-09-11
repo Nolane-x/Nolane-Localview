@@ -17,14 +17,34 @@ jobs:
     name: Real Windows UIA observe
     runs-on: windows-latest
     timeout-minutes: 10
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_ARTIFACT_DIR: ${{ runner.temp }}\localview-l7-real-provider
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Compile isolated UIA provider
         run: cargo check -p localview-windows-uia-provider --all-targets
+      - name: Compile and test isolated Windows L7 seed package
+        run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
+      - name: Bind hosted Windows L7 environment authority
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:LOCALVIEW_L7_ARTIFACT_DIR | Out-Null
+          "LOCALVIEW_WINDOWS_BUILD=$([System.Environment]::OSVersion.VersionString)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $culture = (Get-Culture).Name
+          $uiCulture = (Get-UICulture).Name
+          "LOCALVIEW_LOCALE_INPUT_METHOD=culture=$culture;ui-culture=$uiCulture;input-method=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_DISPLAY_TOPOLOGY=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_DPI_SCALE=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_PERMISSION_STATE=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: V4.3 SetValue payload binding/privacy contract
         run: cargo test -p localview-live-bridge --test v43_set_value_payload_binding -- --nocapture
       - name: V4.3 SetValue server-owned HTTP contract
@@ -84,62 +104,41 @@ jobs:
       - name: V4.3 ExpandCollapse server-owned HTTP routes
         run: cargo test -p localview-control --test windows_consequential_expand_collapse_control -- --nocapture
       - name: Real Win32 UIA snapshot + exact element lease lifetime
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test windows_uia_smoke -- --ignored --nocapture
       - name: Real Win32 dispatch context + exact focused element fence
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test dispatch_context_worker_smoke -- --ignored --nocapture
       - name: Real retained Win32 UIA Invoke dispatch
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test pattern_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Win32 UIA SelectionItem dispatch
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test selection_item_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Win32 UIA Toggle dispatch
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test toggle_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Win32 UIA Expand state observation
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test expand_collapse_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Win32 UIA SetValue dispatch
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test set_value_dispatch_worker_smoke -- --ignored --nocapture --test-threads=1
       - name: Real retained Invoke to verified post-dispatch commit
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-observe-runtime --test windows_runtime_dispatch_smoke -- --ignored --nocapture --test-threads=1
       - name: Real HTTP plan + confirm to verified durable Invoke commit
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-control --test windows_consequential_control_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real HTTP plan + confirm to verified durable SelectionItem commit
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-control --test windows_consequential_selection_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real HTTP plan + confirm to verified durable Toggle commit
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-control --test windows_consequential_toggle_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real HTTP Expand then Collapse with verified durable commits
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-control --test windows_consequential_expand_collapse_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real HTTP SetValue to fresh equality verified durable commit
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-control --test windows_consequential_set_value_windows_smoke -- --ignored --nocapture --test-threads=1
       - name: Real bounded Win32 UIA event subscription
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-uia-provider --test windows_uia_event_smoke -- --ignored --nocapture
       - name: Real Win32 UIA runtime manager
-        env:
-          LOCALVIEW_UIA_SMOKE: "1"
         run: cargo test -p localview-windows-observe-runtime --test windows_runtime_smoke -- --ignored --nocapture
+      - name: V4.3 L7 Windows prospective campaign W01/W02/W06
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_w02_w06_to_exact_candidate"
+          $listed = cargo test -p localview-windows-observe-runtime --test v43_real_provider_campaign -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required prospective L7 campaign test is not registered: $testName"
+          }
+          cargo test -p localview-windows-observe-runtime --test v43_real_provider_campaign $testName -- --ignored --exact --nocapture --test-threads=1
