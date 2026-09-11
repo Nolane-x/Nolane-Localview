@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CanonicalDigest, CompletedLabRunIdentity, LabError, LabMetricKind, LabObservation,
-    LabPreregistration, LabRevisionContext, LabSeedIdentity, MetricSnapshot,
-    PreregistrationReceiptProjection, ValidatedPreregistrationReceipt, canonical_digest,
-    reduce_metric_observations,
+    LabPreregistration, LabRevisionContext, LabSeedIdentity, MetricSnapshot, MetricStatus,
+    PreregistrationReceiptProjection, ProviderCampaignKind, ValidatedPreregistrationReceipt,
+    canonical_digest, reduce_metric_observations, validate_provider_campaign_layer,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -138,6 +138,7 @@ pub struct LabRunBuilder {
     actual_execution_authority: ActualExecutionAuthority,
     assumptions_used: BTreeSet<String>,
     bound_used: Option<u64>,
+    provider_campaign_kind: Option<ProviderCampaignKind>,
     finalized: bool,
 }
 
@@ -182,6 +183,7 @@ impl LabRunBuilder {
                     actual_execution_authority,
                     assumptions_used: preregistration.assumptions,
                     bound_used: preregistration.model_bound,
+                    provider_campaign_kind: None,
                     finalized: false,
                 })
             }
@@ -208,10 +210,31 @@ impl LabRunBuilder {
                     actual_execution_authority,
                     assumptions_used: assumptions,
                     bound_used: None,
+                    provider_campaign_kind: None,
                     finalized: false,
                 })
             }
         }
+    }
+
+    pub fn start_provider_campaign(
+        campaign: ProviderCampaignKind,
+        admission: LabRunAdmission,
+        actual_execution_authority: ActualExecutionAuthority,
+    ) -> Result<Self, LabError> {
+        let layer = match &admission {
+            LabRunAdmission::Prospective {
+                preregistration, ..
+            } => preregistration.campaign_layer,
+            LabRunAdmission::Exploratory { .. } => {
+                return Err(LabError::ProviderCampaignRequiresProspectiveAdmission);
+            }
+        };
+        validate_provider_campaign_layer(campaign, layer)?;
+
+        let mut builder = Self::start(admission, actual_execution_authority)?;
+        builder.provider_campaign_kind = Some(campaign);
+        Ok(builder)
     }
 
     pub fn append_observation(&mut self, observation: LabObservation) -> Result<(), LabError> {
@@ -274,11 +297,15 @@ impl LabRunBuilder {
             return Err(LabError::AlreadyFinalized);
         }
 
+        let metric_snapshot = reduce_metric_observations(&self.observations)?;
+        if evidence == ResultEvidence::RealProviderIntegrationPass {
+            self.validate_real_provider_pass(&metric_snapshot)?;
+        }
+
         let result_class = match self.execution_mode {
             ExecutionMode::Prospective { .. } => evidence.class(),
             ExecutionMode::Exploratory { .. } => ResearchResultClass::ExploratoryObservation,
         };
-        let metric_snapshot = reduce_metric_observations(&self.observations)?;
 
         let payload = LabResultPayload {
             preregistration_digest: self.preregistration_digest.clone(),
@@ -303,6 +330,51 @@ impl LabRunBuilder {
 
         self.finalized = true;
         Ok(CompletedLabRun { identity, payload })
+    }
+
+    fn validate_real_provider_pass(&self, snapshot: &MetricSnapshot) -> Result<(), LabError> {
+        if self.provider_campaign_kind != Some(ProviderCampaignKind::RealProviderSeedApplications) {
+            return Err(LabError::InvalidRealProviderPass {
+                reason: "real_provider_pass_requires_typed_l7_campaign_admission",
+            });
+        }
+        if self.revision_context.platform_profile.is_none() {
+            return Err(LabError::InvalidRealProviderPass {
+                reason: "real_provider_pass_requires_platform_profile",
+            });
+        }
+
+        let rpomr = snapshot
+            .get(LabMetricKind::Rpomr)
+            .expect("RPOMR is always initialized in a metric snapshot");
+        if rpomr.status != MetricStatus::Measured || rpomr.denominator == 0 {
+            return Err(LabError::InvalidRealProviderPass {
+                reason: "real_provider_pass_requires_measured_rpomr",
+            });
+        }
+        if rpomr.numerator != 0 {
+            return Err(LabError::InvalidRealProviderPass {
+                reason: "real_provider_pass_requires_zero_rpomr_mismatches",
+            });
+        }
+        if self.observations.iter().any(|observation| {
+            !observation.provider_backed
+                || !observation.eligible_metrics.contains(&LabMetricKind::Rpomr)
+        }) {
+            return Err(LabError::InvalidRealProviderPass {
+                reason: "real_provider_pass_requires_provider_backed_rpomr_observations",
+            });
+        }
+        if self
+            .observations
+            .iter()
+            .any(|observation| !observation.failure_flags.is_empty())
+        {
+            return Err(LabError::InvalidRealProviderPass {
+                reason: "real_provider_pass_requires_failure_free_observations",
+            });
+        }
+        Ok(())
     }
 }
 
