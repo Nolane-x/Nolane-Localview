@@ -72,6 +72,15 @@ internal sealed class OracleProtocol
                         provider_call_entered = _window.ProviderCallEntered(),
                     });
                     break;
+                case "release_provider_hang":
+                    _window.ReleaseProviderHang();
+                    Write(new
+                    {
+                        ok = true,
+                        command = "release_provider_hang",
+                        hang_armed = _window.IsProviderHangArmed(),
+                    });
+                    break;
                 case "shutdown":
                     _window.ReleaseProviderHang();
                     Write(new { ok = true, command = "shutdown" });
