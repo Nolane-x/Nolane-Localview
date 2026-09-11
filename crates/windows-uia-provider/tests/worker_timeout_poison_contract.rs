@@ -1,17 +1,22 @@
 #[path = "../src/worker_health.rs"]
 mod worker_health;
 
-use worker_health::WorkerHealth;
+use std::{sync::mpsc, time::Duration};
+use worker_health::{WorkerHealth, WorkerHealthError, WorkerReceiveError};
 
 #[test]
 fn first_timeout_poisons_worker_and_later_commands_fail_fast() {
     let health = WorkerHealth::new();
+    let (_sender, receiver) = mpsc::channel::<Result<(), ()>>();
 
-    assert!(health.ensure_healthy().is_ok());
-
-    health.poison_after_timeout();
-
-    assert!(health.ensure_healthy().is_err());
+    assert_eq!(
+        health.recv_timeout(&receiver, Duration::from_millis(1)),
+        Err(WorkerReceiveError::Timeout)
+    );
+    assert_eq!(
+        health.ensure_healthy(),
+        Err(WorkerHealthError::Poisoned)
+    );
     assert!(health.is_poisoned());
 }
 
