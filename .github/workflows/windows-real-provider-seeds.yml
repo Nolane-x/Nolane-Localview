@@ -26,8 +26,8 @@ jobs:
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
       - name: Opaque callback reconciliation authority contract
         run: cargo test -p localview-windows-observe-runtime --test opaque_callback_reconciliation_contract -- --nocapture --test-threads=1
-      - name: W01 real event gap requires reconciliation
+      - name: W01 missing/coalesced property events require reconciliation
         env:
           LOCALVIEW_UIA_SMOKE: "1"
           LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
-        run: cargo test -p localview-windows-observe-runtime --test v43_real_provider_seeds w01_event_gap_requires_reconciliation -- --ignored --nocapture --test-threads=1
+        run: cargo test -p localview-windows-observe-runtime --test v43_real_provider_seeds w01_missing_or_coalesced_property_events_require_reconciliation -- --ignored --nocapture --test-threads=1
