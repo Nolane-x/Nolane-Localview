@@ -10,6 +10,7 @@ mod subscription;
 #[cfg(not(windows))]
 #[path = "subscription_stub.rs"]
 mod subscription;
+mod virtualized_item;
 #[path = "lib.rs"]
 mod worker;
 
@@ -19,6 +20,7 @@ pub use event_buffer::*;
 pub use pattern_dispatch::*;
 pub use set_value_dispatch::*;
 pub use subscription::*;
+pub use virtualized_item::*;
 pub use worker::{
     WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
     WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
