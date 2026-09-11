@@ -118,12 +118,8 @@ impl WindowsUiaVirtualizedItemRealizeRequest {
         if placeholder_element_ref.acquisition_cut_ref != snapshot_cut_ref {
             return Err(WindowsUiaVirtualizedItemRequestError::AcquisitionCutMismatch);
         }
-        if placeholder_element_ref.realization
-            != ProviderElementRealization::RealizationRequired
-        {
-            return Err(
-                WindowsUiaVirtualizedItemRequestError::PlaceholderNotRealizationRequired,
-            );
+        if placeholder_element_ref.realization != ProviderElementRealization::RealizationRequired {
+            return Err(WindowsUiaVirtualizedItemRequestError::PlaceholderNotRealizationRequired);
         }
 
         Ok(Self {
@@ -157,23 +153,35 @@ impl crate::WindowsUiaWorker {
     /// primitive; until then this method must never mint placeholder authority.
     pub fn query_virtualized_item(
         &self,
-        _attachment: &crate::worker::WindowsUiaAttachment,
-        _request: WindowsUiaVirtualizedItemQueryRequest,
+        attachment: &crate::worker::WindowsUiaAttachment,
+        request: WindowsUiaVirtualizedItemQueryRequest,
     ) -> Result<WindowsUiaVirtualizedItemQueryReceipt, crate::worker::WindowsUiaWorkerError> {
-        Err(crate::worker::WindowsUiaWorkerError::ProviderFailure(
-            "Windows UIA virtualized-item query is not implemented".into(),
-        ))
+        #[cfg(windows)]
+        {
+            self.query_virtualized_item_on_mta(attachment, request)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (attachment, request);
+            Err(crate::worker::WindowsUiaWorkerError::UnsupportedPlatform)
+        }
     }
 
     /// Public fail-closed surface for W03. A realization receipt is intentionally
     /// impossible until the owning MTA has a tested VirtualizedItem implementation.
     pub fn realize_virtualized_item(
         &self,
-        _attachment: &crate::worker::WindowsUiaAttachment,
-        _request: WindowsUiaVirtualizedItemRealizeRequest,
+        attachment: &crate::worker::WindowsUiaAttachment,
+        request: WindowsUiaVirtualizedItemRealizeRequest,
     ) -> Result<WindowsUiaVirtualizedItemRealizeReceipt, crate::worker::WindowsUiaWorkerError> {
-        Err(crate::worker::WindowsUiaWorkerError::ProviderFailure(
-            "Windows UIA virtualized-item realization is not implemented".into(),
-        ))
+        #[cfg(windows)]
+        {
+            self.realize_virtualized_item_on_mta(attachment, request)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (attachment, request);
+            Err(crate::worker::WindowsUiaWorkerError::UnsupportedPlatform)
+        }
     }
 }

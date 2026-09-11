@@ -117,6 +117,14 @@ pub enum WindowsUiaWorkerError {
     },
     #[error("Windows UI Automation exact element lease was not found in the latest snapshot")]
     ElementLeaseNotFound,
+    #[error("Windows UI Automation virtualized-item request does not match worker authority")]
+    InvalidVirtualizedItemRequest,
+    #[error("Windows UI Automation ItemContainer pattern is unavailable")]
+    VirtualizedItemContainerPatternUnavailable,
+    #[error("Windows UI Automation VirtualizedItem pattern is unavailable")]
+    VirtualizedItemPatternUnavailable,
+    #[error("Windows UI Automation retained virtualized placeholder is unavailable")]
+    VirtualizedItemPlaceholderNotFound,
     #[error("Windows UI Automation dispatch context is blocked: {0}")]
     DispatchContextBlocked(#[from] crate::WindowsUiaDispatchContextBlocker),
     #[error("Windows target identity error: {0}")]
@@ -156,20 +164,24 @@ mod platform {
                 SafeArrayGetUBound,
             },
             Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+            Variant::VARIANT,
         },
         UI::{
             Accessibility::{
                 CUIAutomation, IUIAutomation, IUIAutomationElement,
                 IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
-                IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern,
-                IUIAutomationTreeWalker, IUIAutomationValuePattern, UIA_ExpandCollapsePatternId,
-                UIA_InvokePatternId, UIA_IsExpandCollapsePatternAvailablePropertyId,
+                IUIAutomationItemContainerPattern, IUIAutomationSelectionItemPattern,
+                IUIAutomationTogglePattern, IUIAutomationTreeWalker, IUIAutomationValuePattern,
+                IUIAutomationVirtualizedItemPattern, UIA_AutomationIdPropertyId,
+                UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
+                UIA_IsExpandCollapsePatternAvailablePropertyId,
                 UIA_IsInvokePatternAvailablePropertyId, UIA_IsScrollItemPatternAvailablePropertyId,
                 UIA_IsSelectionItemPatternAvailablePropertyId,
                 UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
-                UIA_IsVirtualizedItemPatternAvailablePropertyId, UIA_PROPERTY_ID,
-                UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId,
-                UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId, UIA_ValuePatternId,
+                UIA_IsVirtualizedItemPatternAvailablePropertyId, UIA_ItemContainerPatternId,
+                UIA_NamePropertyId, UIA_PROPERTY_ID, UIA_SelectionItemIsSelectedPropertyId,
+                UIA_SelectionItemPatternId, UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId,
+                UIA_ValuePatternId, UIA_VirtualizedItemPatternId,
             },
             WindowsAndMessaging::{
                 GetForegroundWindow, GetLastActivePopup, GetWindowThreadProcessId, IsWindowVisible,
@@ -182,12 +194,15 @@ mod platform {
     use crate::{
         WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact,
         WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
-        WindowsUiaDispatchContextRequest, WindowsUiaPattern, WindowsUiaPatternDispatchOperation,
-        WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
-        WindowsUiaPatternSupport, WindowsUiaSetValueDispatchReceipt,
-        WindowsUiaSetValueDispatchRequest, WindowsUiaSetValueEquality,
-        WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,
-        WindowsUiaValueCapabilityFacts, evaluate_windows_uia_dispatch_context,
+        WindowsUiaDispatchContextRequest, WindowsUiaItemLookupProperty, WindowsUiaPattern,
+        WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchReceipt,
+        WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport,
+        WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
+        WindowsUiaSetValueEquality, WindowsUiaSetValueVerificationReceipt,
+        WindowsUiaSetValueVerificationRequest, WindowsUiaValueCapabilityFacts,
+        WindowsUiaVirtualizedItemQueryReceipt, WindowsUiaVirtualizedItemQueryRequest,
+        WindowsUiaVirtualizedItemRealizeReceipt, WindowsUiaVirtualizedItemRealizeRequest,
+        evaluate_windows_uia_dispatch_context,
     };
 
     const PROPERTIES_PER_NODE: usize = 19;
@@ -232,6 +247,16 @@ mod platform {
             request: WindowsUiaSetValueVerificationRequest,
             reply: Sender<Result<WindowsUiaSetValueVerificationReceipt, WindowsUiaWorkerError>>,
         },
+        QueryVirtualizedItem {
+            attachment: WindowsUiaAttachment,
+            request: WindowsUiaVirtualizedItemQueryRequest,
+            reply: Sender<Result<WindowsUiaVirtualizedItemQueryReceipt, WindowsUiaWorkerError>>,
+        },
+        RealizeVirtualizedItem {
+            attachment: WindowsUiaAttachment,
+            request: WindowsUiaVirtualizedItemRealizeRequest,
+            reply: Sender<Result<WindowsUiaVirtualizedItemRealizeReceipt, WindowsUiaWorkerError>>,
+        },
         Shutdown,
     }
 
@@ -245,6 +270,16 @@ mod platform {
         elements: Vec<RetainedElementLease>,
     }
 
+    struct RetainedVirtualizedPlaceholder {
+        element_ref: ProviderElementRef,
+        element: IUIAutomationElement,
+    }
+
+    struct RetainedVirtualizedPlaceholderSet {
+        snapshot_cut_ref: String,
+        placeholders: Vec<RetainedVirtualizedPlaceholder>,
+    }
+
     struct WorkerState {
         automation: IUIAutomation,
         walker: IUIAutomationTreeWalker,
@@ -252,6 +287,7 @@ mod platform {
         snapshot_budget: SnapshotBudget,
         caches: HashMap<TargetIncarnationRef, SemanticSnapshotCache>,
         element_leases: HashMap<TargetIncarnationRef, RetainedElementLeaseSet>,
+        virtualized_placeholders: HashMap<TargetIncarnationRef, RetainedVirtualizedPlaceholderSet>,
     }
 
     pub struct WindowsUiaWorker {
@@ -452,6 +488,56 @@ mod platform {
             recv_command(reply_rx, self.command_timeout)
         }
 
+        pub(crate) fn query_virtualized_item_on_mta(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaVirtualizedItemQueryRequest,
+        ) -> Result<WindowsUiaVirtualizedItemQueryReceipt, WindowsUiaWorkerError> {
+            let container = request.container_element_ref();
+            if attachment.provider_incarnation_ref != self.provider_incarnation_ref
+                || container.provider_incarnation_ref != self.provider_incarnation_ref
+                || container.target_incarnation_ref != attachment.target_incarnation_ref
+                || container.acquisition_cut_ref != request.snapshot_cut_ref()
+            {
+                return Err(WindowsUiaWorkerError::InvalidVirtualizedItemRequest);
+            }
+
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.sender
+                .send(WorkerCommand::QueryVirtualizedItem {
+                    attachment: attachment.clone(),
+                    request,
+                    reply: reply_tx,
+                })
+                .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
+            recv_command(reply_rx, self.command_timeout)
+        }
+
+        pub(crate) fn realize_virtualized_item_on_mta(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaVirtualizedItemRealizeRequest,
+        ) -> Result<WindowsUiaVirtualizedItemRealizeReceipt, WindowsUiaWorkerError> {
+            let placeholder = request.placeholder_element_ref();
+            if attachment.provider_incarnation_ref != self.provider_incarnation_ref
+                || placeholder.provider_incarnation_ref != self.provider_incarnation_ref
+                || placeholder.target_incarnation_ref != attachment.target_incarnation_ref
+                || placeholder.acquisition_cut_ref != request.snapshot_cut_ref()
+            {
+                return Err(WindowsUiaWorkerError::InvalidVirtualizedItemRequest);
+            }
+
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.sender
+                .send(WorkerCommand::RealizeVirtualizedItem {
+                    attachment: attachment.clone(),
+                    request,
+                    reply: reply_tx,
+                })
+                .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
+            recv_command(reply_rx, self.command_timeout)
+        }
+
         pub fn verify_set_value(
             &self,
             attachment: &WindowsUiaAttachment,
@@ -564,6 +650,7 @@ mod platform {
             snapshot_budget,
             caches: HashMap::new(),
             element_leases: HashMap::new(),
+            virtualized_placeholders: HashMap::new(),
         };
         if startup.send(Ok(provider_incarnation_ref)).is_err() {
             unsafe {
@@ -619,6 +706,20 @@ mod platform {
                     reply,
                 } => {
                     let _ = reply.send(state.verify_set_value(&attachment, request));
+                }
+                WorkerCommand::QueryVirtualizedItem {
+                    attachment,
+                    request,
+                    reply,
+                } => {
+                    let _ = reply.send(state.query_virtualized_item(&attachment, request));
+                }
+                WorkerCommand::RealizeVirtualizedItem {
+                    attachment,
+                    request,
+                    reply,
+                } => {
+                    let _ = reply.send(state.realize_virtualized_item(&attachment, request));
                 }
                 WorkerCommand::Shutdown => break,
             }
@@ -725,6 +826,11 @@ mod platform {
                     elements: retained_elements,
                 },
             );
+            // Any successful observation cut supersedes temporary placeholder
+            // retention. A realization receipt never promotes the old ref; only
+            // nodes observed in this new cut may become RealizedCurrent.
+            self.virtualized_placeholders
+                .remove(&attachment.target_incarnation_ref);
             Ok(revision)
         }
 
@@ -744,6 +850,150 @@ mod platform {
                 provider_incarnation_ref: self.provider_incarnation_ref.clone(),
                 target_incarnation_ref: attachment.target_incarnation_ref.clone(),
                 element_ref: retained.element_ref.clone(),
+            })
+        }
+
+        fn query_virtualized_item(
+            &mut self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaVirtualizedItemQueryRequest,
+        ) -> Result<WindowsUiaVirtualizedItemQueryReceipt, WindowsUiaWorkerError> {
+            let container = {
+                let retained = self.exact_retained_element(
+                    attachment,
+                    request.snapshot_cut_ref(),
+                    request.container_element_ref(),
+                )?;
+                retained.element.clone()
+            };
+
+            let item_container = unsafe {
+                // SAFETY: the retained container and returned pattern stay on this
+                // worker's owning MTA for the entire lookup.
+                container.GetCurrentPatternAs::<IUIAutomationItemContainerPattern>(
+                    UIA_ItemContainerPatternId,
+                )
+            }
+            .map_err(|_| WindowsUiaWorkerError::VirtualizedItemContainerPatternUnavailable)?;
+
+            let property_id = match request.property() {
+                WindowsUiaItemLookupProperty::Name => UIA_NamePropertyId,
+                WindowsUiaItemLookupProperty::AutomationId => UIA_AutomationIdPropertyId,
+            };
+            let lookup_value = VARIANT::from(request.value());
+            let placeholder = unsafe {
+                // SAFETY: start-after is intentionally null to search the entire
+                // exact ItemContainer; the VARIANT is local and valid for this call.
+                item_container.FindItemByProperty(
+                    None::<&IUIAutomationElement>,
+                    property_id,
+                    &lookup_value,
+                )
+            }
+            .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+
+            // Microsoft requires a virtualized placeholder to support this pattern;
+            // do not probe arbitrary placeholder properties because they may return
+            // UIA_E_ELEMENTNOTAVAILABLE before realization.
+            unsafe {
+                placeholder.GetCurrentPatternAs::<IUIAutomationVirtualizedItemPattern>(
+                    UIA_VirtualizedItemPatternId,
+                )
+            }
+            .map_err(|_| WindowsUiaWorkerError::VirtualizedItemPatternUnavailable)?;
+
+            let runtime_id = unsafe {
+                // SAFETY: best-effort identity hint read from the MTA-owned placeholder.
+                runtime_id_hint(&placeholder)
+            }
+            .unwrap_or_default();
+            let mut placeholder_element_ref = provider_element_ref_from_runtime_id(
+                self.provider_incarnation_ref.clone(),
+                attachment.target_incarnation_ref.clone(),
+                &runtime_id,
+                request.snapshot_cut_ref(),
+                ProviderElementRealization::RealizationRequired,
+            );
+            if runtime_id.is_empty() {
+                placeholder_element_ref.opaque_provider_element_id =
+                    format!("uia-virtualized-placeholder:{}", Uuid::new_v4());
+            }
+            placeholder_element_ref.parent_surface_ref =
+                request.container_element_ref().parent_surface_ref.clone();
+            placeholder_element_ref
+                .semantic_locator_hints
+                .push(match request.property() {
+                    WindowsUiaItemLookupProperty::Name => format!("name={}", request.value()),
+                    WindowsUiaItemLookupProperty::AutomationId => {
+                        format!("automation_id={}", request.value())
+                    }
+                });
+
+            let receipt = WindowsUiaVirtualizedItemQueryReceipt {
+                snapshot_cut_ref: request.snapshot_cut_ref().to_owned(),
+                provider_incarnation_ref: self.provider_incarnation_ref.clone(),
+                target_incarnation_ref: attachment.target_incarnation_ref.clone(),
+                container_element_ref: request.container_element_ref().clone(),
+                placeholder_element_ref: placeholder_element_ref.clone(),
+            };
+            self.virtualized_placeholders.insert(
+                attachment.target_incarnation_ref.clone(),
+                RetainedVirtualizedPlaceholderSet {
+                    snapshot_cut_ref: request.snapshot_cut_ref().to_owned(),
+                    placeholders: vec![RetainedVirtualizedPlaceholder {
+                        element_ref: placeholder_element_ref,
+                        element: placeholder,
+                    }],
+                },
+            );
+            Ok(receipt)
+        }
+
+        fn realize_virtualized_item(
+            &mut self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaVirtualizedItemRealizeRequest,
+        ) -> Result<WindowsUiaVirtualizedItemRealizeReceipt, WindowsUiaWorkerError> {
+            self.require_current_target(attachment)?;
+            let placeholder = {
+                let retained = self
+                    .virtualized_placeholders
+                    .get(&attachment.target_incarnation_ref)
+                    .ok_or(WindowsUiaWorkerError::VirtualizedItemPlaceholderNotFound)?;
+                if retained.snapshot_cut_ref != request.snapshot_cut_ref() {
+                    return Err(WindowsUiaWorkerError::ElementLeaseSnapshotExpired {
+                        requested_cut: request.snapshot_cut_ref().to_owned(),
+                        current_cut: retained.snapshot_cut_ref.clone(),
+                    });
+                }
+                retained
+                    .placeholders
+                    .iter()
+                    .find(|retained| &retained.element_ref == request.placeholder_element_ref())
+                    .ok_or(WindowsUiaWorkerError::VirtualizedItemPlaceholderNotFound)?
+                    .element
+                    .clone()
+            };
+
+            let virtualized_item = unsafe {
+                // SAFETY: placeholder and pattern remain on this worker's MTA.
+                placeholder.GetCurrentPatternAs::<IUIAutomationVirtualizedItemPattern>(
+                    UIA_VirtualizedItemPatternId,
+                )
+            }
+            .map_err(|_| WindowsUiaWorkerError::VirtualizedItemPatternUnavailable)?;
+            unsafe {
+                // SAFETY: this is the single provider-side realization operation.
+                virtualized_item.Realize()
+            }
+            .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+
+            self.virtualized_placeholders
+                .remove(&attachment.target_incarnation_ref);
+            Ok(WindowsUiaVirtualizedItemRealizeReceipt {
+                provider_incarnation_ref: self.provider_incarnation_ref.clone(),
+                target_incarnation_ref: attachment.target_incarnation_ref.clone(),
+                previous_placeholder_ref: request.placeholder_element_ref().clone(),
             })
         }
 

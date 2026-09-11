@@ -253,6 +253,24 @@ mod platform {
             self.inner.dispatch_set_value(attachment, request)
         }
 
+        pub(crate) fn query_virtualized_item_on_mta(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: crate::WindowsUiaVirtualizedItemQueryRequest,
+        ) -> Result<crate::WindowsUiaVirtualizedItemQueryReceipt, WindowsUiaWorkerError> {
+            self.inner
+                .query_virtualized_item_on_mta(attachment, request)
+        }
+
+        pub(crate) fn realize_virtualized_item_on_mta(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: crate::WindowsUiaVirtualizedItemRealizeRequest,
+        ) -> Result<crate::WindowsUiaVirtualizedItemRealizeReceipt, WindowsUiaWorkerError> {
+            self.inner
+                .realize_virtualized_item_on_mta(attachment, request)
+        }
+
         pub fn verify_set_value(
             &self,
             attachment: &WindowsUiaAttachment,
