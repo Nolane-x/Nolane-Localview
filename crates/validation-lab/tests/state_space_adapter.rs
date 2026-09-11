@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use localview_state_space::{StateDimension, StateSpacePlan, StateValue, compile};
 use localview_validation_lab::{LabError, adapt_bounded_state_space};
