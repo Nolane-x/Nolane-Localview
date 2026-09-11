@@ -11,6 +11,8 @@ pub struct GroundTruth {
     pub control_handle: u64,
     pub control_incarnation: Uuid,
     pub logical_name: String,
+    pub unsupported_invoke_control_handle: u64,
+    pub unsupported_invoke_side_effect_count: u64,
     pub recreation_generation: u64,
     pub logical_sequence: u64,
     pub terminal: bool,
@@ -46,6 +48,7 @@ impl SeedState {
         control_handle: u64,
         control_incarnation: Uuid,
         logical_name: String,
+        unsupported_invoke_control_handle: u64,
     ) -> Self {
         Self {
             ground_truth: GroundTruth {
@@ -55,6 +58,8 @@ impl SeedState {
                 control_handle,
                 control_incarnation,
                 logical_name,
+                unsupported_invoke_control_handle,
+                unsupported_invoke_side_effect_count: 0,
                 recreation_generation: 1,
                 logical_sequence: 1,
                 terminal: false,
