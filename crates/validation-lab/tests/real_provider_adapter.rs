@@ -204,7 +204,7 @@ fn w02_only_measures_aba_when_real_provider_identity_reuse_was_observed() {
     .unwrap();
     assert!(!no_reuse.observation.eligible_metrics.contains(&LabMetricKind::Piaer));
 
-    let malformed = adapt_real_provider_case(input(
+    let same_provider = adapt_real_provider_case(input(
         "W02-same-incarnation",
         RealProviderObservedOutcome::Asserted("name=after".into()),
         RealProviderCaseKind::W02RecreatedElement {
@@ -214,13 +214,10 @@ fn w02_only_measures_aba_when_real_provider_identity_reuse_was_observed() {
             provider_identity_reuse_observed: true,
             accepted_previous_identity_as_current: false,
         },
-    ));
-    assert_eq!(
-        malformed,
-        Err(LabError::InvalidRealProviderScenario {
-            reason: "w02_requires_distinct_provider_incarnations"
-        })
-    );
+    ))
+    .expect("W02 element recreation can occur within one live provider incarnation");
+    assert!(same_provider.observation.eligible_metrics.contains(&LabMetricKind::Piaer));
+    assert!(same_provider.observation.failure_flags.is_empty());
 }
 
 #[test]
