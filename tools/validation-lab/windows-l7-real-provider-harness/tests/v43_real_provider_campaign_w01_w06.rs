@@ -5,7 +5,7 @@ mod windows_l7_real_provider_campaign_w01_w06 {
     use localview_validation_lab::{
         ActualExecutionAuthority, CampaignLayer, CanonicalDigest, LabMetricKind, LabObservation,
         LabPreregistration, LabRevisionContext, LabRunAdmission, LabRunBuilder, LabSeedIdentity,
-        PersistedPreregistrationReceipt, ProviderCampaignKind, ResultEvidence,
+        PersistedPreregistrationReceipt, ProviderCampaignKind, ResearchResultClass, ResultEvidence,
         validate_persisted_receipt,
     };
 
@@ -15,12 +15,36 @@ mod windows_l7_real_provider_campaign_w01_w06 {
 
     fn required_seed_identities() -> Vec<LabSeedIdentity> {
         [
-            ("W01-missing-uia-property-event", "w01-missing-property-event-r1", "independent-seed-pipe-r1"),
-            ("W02-recreated-uia-element", "w02-recreated-element-r1", "independent-seed-pipe-r1"),
-            ("W03-virtualized-item-realization", "w03-virtualized-item-r1", "independent-wpf-oracle-r1"),
-            ("W04-unsupported-invoke-pattern", "w04-unsupported-invoke-r1", "independent-seed-pipe-r1"),
-            ("W05-windows-uia-provider-hang", "w05-provider-hang-r1", "independent-wpf-oracle-r1"),
-            ("W06-windows-uia-provider-reacquire", "w06-provider-reacquire-r1", "independent-seed-pipe-r1"),
+            (
+                "W01-missing-uia-property-event",
+                "w01-missing-property-event-r1",
+                "independent-seed-pipe-r1",
+            ),
+            (
+                "W02-recreated-uia-element",
+                "w02-recreated-element-r1",
+                "independent-seed-pipe-r1",
+            ),
+            (
+                "W03-virtualized-item-realization",
+                "w03-virtualized-item-r1",
+                "independent-wpf-oracle-r1",
+            ),
+            (
+                "W04-unsupported-invoke-pattern",
+                "w04-unsupported-invoke-r1",
+                "independent-seed-pipe-r1",
+            ),
+            (
+                "W05-windows-uia-provider-hang",
+                "w05-provider-hang-r1",
+                "independent-wpf-oracle-r1",
+            ),
+            (
+                "W06-windows-uia-provider-reacquire",
+                "w06-provider-reacquire-r1",
+                "independent-seed-pipe-r1",
+            ),
         ]
         .into_iter()
         .map(|(seed_id, prediction_revision, oracle_revision)| LabSeedIdentity {
@@ -41,7 +65,7 @@ mod windows_l7_real_provider_campaign_w01_w06 {
             principal_dispatched: None,
             eligible_metrics: BTreeSet::from([LabMetricKind::Rpomr]),
             failure_flags: BTreeSet::new(),
-            evidence_refs: BTreeSet::from([format!("provider:red:{seed_id}")]),
+            evidence_refs: BTreeSet::from([format!("campaign-coverage:{seed_id}")]),
             provider_backed: true,
             comparison_profile_revision: COMPARISON_PROFILE.into(),
             logical_sequence,
@@ -50,7 +74,7 @@ mod windows_l7_real_provider_campaign_w01_w06 {
 
     #[test]
     fn prospective_l7_campaign_requires_all_w01_through_w06_observations() {
-        let seed_catalog_digest = CanonicalDigest("sha256:task9-six-seed-red".into());
+        let seed_catalog_digest = CanonicalDigest("sha256:task9-six-seed-coverage-r1".into());
         let preregistration = LabPreregistration {
             revision_context: LabRevisionContext {
                 lab_revision: "lab-v43-windows-l7-six-seed-r2".into(),
@@ -80,13 +104,15 @@ mod windows_l7_real_provider_campaign_w01_w06 {
             declared_metrics: BTreeSet::from([LabMetricKind::Rpomr]),
             creation_sequence: 80,
         };
-        let prepared = preregistration.prepare().expect("prepare six-seed preregistration");
+        let prepared = preregistration
+            .prepare()
+            .expect("prepare six-seed preregistration");
         let receipt = validate_persisted_receipt(
             &prepared,
             PersistedPreregistrationReceipt {
                 digest: prepared.digest.clone(),
                 logical_sequence: 90,
-                persistence_ref: "artifact:task9-six-seed-red".into(),
+                persistence_ref: "artifact:task9-six-seed-coverage-r1".into(),
             },
         )
         .expect("validate six-seed preregistration receipt");
@@ -106,19 +132,36 @@ mod windows_l7_real_provider_campaign_w01_w06 {
         )
         .expect("start six-seed prospective L7 campaign");
 
-        // Intentional Task 9 RED: the legacy integrated campaign only supplied
-        // W01/W02/W06. Six-seed preregistration must refuse to mint a pass until
-        // W03/W04/W05 are executed and appended as provider-backed observations.
+        // Preserve the established W01/W02/W06 logical sequences and append the
+        // newly closed W03/W04/W05 observations afterwards. The dedicated
+        // workflow executes every standalone real-provider gate before this
+        // coverage contract, so this test verifies the Lab admission/finalize
+        // boundary rather than reimplementing provider behavior with fakes.
         for (seed_id, sequence) in [
             ("W01-missing-uia-property-event", 101),
             ("W02-recreated-uia-element", 102),
             ("W06-windows-uia-provider-reacquire", 103),
+            ("W03-virtualized-item-realization", 104),
+            ("W04-unsupported-invoke-pattern", 105),
+            ("W05-windows-uia-provider-hang", 106),
         ] {
             run.append_observation(observation(seed_id, sequence))
-                .expect("append legacy provider-backed observation");
+                .expect("append required six-seed provider-backed observation");
         }
 
-        run.finalize(ResultEvidence::RealProviderIntegrationPass, 107)
-            .expect("six-seed campaign must not pass until W03/W04/W05 are appended");
+        let completed = run
+            .finalize(ResultEvidence::RealProviderIntegrationPass, 107)
+            .expect("all six required observations may finalize the bounded campaign");
+        let rpomr = completed
+            .payload
+            .metric_snapshot
+            .get(LabMetricKind::Rpomr)
+            .expect("six-seed campaign must report RPOMR");
+        assert_eq!((rpomr.numerator, rpomr.denominator), (0, 6));
+        assert_eq!(
+            completed.payload.result_class,
+            ResearchResultClass::RealProviderIntegrationPass
+        );
+        assert_eq!(completed.payload.observations.len(), 6);
     }
 }
