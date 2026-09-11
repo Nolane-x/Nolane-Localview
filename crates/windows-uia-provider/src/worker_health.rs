@@ -56,9 +56,4 @@ impl WorkerHealth {
     pub(crate) fn poison_after_timeout(&self) {
         self.poisoned.store(true, Ordering::Release);
     }
-
-    #[cfg(test)]
-    pub(crate) fn is_poisoned(&self) -> bool {
-        self.poisoned.load(Ordering::Acquire)
-    }
 }
