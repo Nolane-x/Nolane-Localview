@@ -20,6 +20,7 @@ mod metamorphic_adapter;
 mod metrics;
 mod mutation_adapter;
 mod preregistration;
+mod real_provider_adapter;
 mod result;
 mod seeds;
 mod semantic_adapter;
@@ -49,6 +50,10 @@ pub use preregistration::{
     CampaignLayer, LabPreregistration, PersistedPreregistrationReceipt, PreparedPreregistration,
     PreregistrationReceiptProjection, ProviderCampaignKind, ValidatedPreregistrationReceipt,
     validate_persisted_receipt, validate_provider_campaign_layer,
+};
+pub use real_provider_adapter::{
+    RealProviderCaseInput, RealProviderCaseKind, RealProviderGroundTruth, RealProviderLabRecord,
+    RealProviderObservedOutcome, adapt_real_provider_case, derive_real_provider_campaign_evidence,
 };
 pub use result::{
     ActualExecutionAuthority, CompletedLabRun, DowngradeReason, ExecutionMode, LabResultPayload,
@@ -92,6 +97,8 @@ pub enum LabError {
     DuplicateDifferentialVectorId { vector_id: String },
     #[error("invalid L6 fake-provider scenario: {reason}")]
     InvalidFakeProviderScenario { reason: &'static str },
+    #[error("invalid L7 real-provider scenario: {reason}")]
+    InvalidRealProviderScenario { reason: &'static str },
     #[error(
         "provider campaign {campaign:?} requires layer {expected:?}, but preregistration used {actual:?}"
     )]
