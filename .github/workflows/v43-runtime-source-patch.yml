@@ -1,0 +1,37 @@
+name: V4.3 Runtime Source Patch
+
+on:
+  push:
+    branches: [feat/v43-l7-windows-real-provider-closure]
+    paths:
+      - '.github/v43-runtime-source-patch-trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-l7-windows-real-provider-closure
+      - name: Apply narrow opaque-callback reconciliation fix
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/windows-observe-runtime/src/runtime_manager.rs')
+          text = path.read_text()
+          old = '''        let reconciliation_needed = requires_reconciliation(report.continuity)\n            && observed_status.current_snapshot_completeness.is_none();\n'''
+          new = '''        // Windows UIA's declared event profile is OpaqueBestEffort and does not\n        // guarantee complete property-change coverage. Any accepted callback can\n        // therefore prove that the pre-callback snapshot is no longer current,\n        // even when provider-local sequences remain contiguous and no bounded\n        // buffer drop is observable. Reconcile once for that accepted batch; an\n        // empty drain still performs no polling.\n        let opaque_callback_requires_reconciliation = report.ingest.accepted > 0\n            && report.continuity == EventContinuityState::OrderingOpaque;\n        let reconciliation_needed = opaque_callback_requires_reconciliation\n            || (requires_reconciliation(report.continuity)\n                && observed_status.current_snapshot_completeness.is_none());\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one reconciliation block, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+      - name: Commit source fix
+        shell: bash
+        run: |
+          git config user.name 'localview-v43-ci'
+          git config user.email 'actions@users.noreply.github.com'
+          git add crates/windows-observe-runtime/src/runtime_manager.rs
+          git commit -m 'fix(v43): reconcile accepted opaque UIA callbacks'
+          git push origin HEAD:feat/v43-l7-windows-real-provider-closure
