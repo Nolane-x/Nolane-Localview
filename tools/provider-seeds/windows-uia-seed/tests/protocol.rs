@@ -1,6 +1,4 @@
-use localview_windows_uia_seed::{
-    SeedCommand, SeedState, SeedStateError,
-};
+use localview_windows_uia_seed::{SeedCommand, SeedState, SeedStateError};
 use uuid::Uuid;
 
 fn fixture() -> SeedState {
@@ -11,6 +9,7 @@ fn fixture() -> SeedState {
         200,
         Uuid::from_u128(3),
         "initial".to_owned(),
+        300,
     )
 }
 
@@ -24,6 +23,8 @@ fn initial_ground_truth_starts_at_generation_one() {
     assert_eq!(truth.window_handle, 100);
     assert_eq!(truth.control_handle, 200);
     assert_eq!(truth.logical_name, "initial");
+    assert_eq!(truth.unsupported_invoke_control_handle, 300);
+    assert_eq!(truth.unsupported_invoke_side_effect_count, 0);
 }
 
 #[test]
@@ -37,10 +38,12 @@ fn burst_name_changes_retains_last_name_and_advances_sequence_per_mutation() {
     assert_eq!(truth.logical_name, "C");
     assert_eq!(truth.logical_sequence, before + 3);
     assert_eq!(truth.recreation_generation, 1);
+    assert_eq!(truth.unsupported_invoke_control_handle, 300);
+    assert_eq!(truth.unsupported_invoke_side_effect_count, 0);
 }
 
 #[test]
-fn recreate_changes_control_incarnation_and_generation_without_replacing_window() {
+fn recreate_changes_control_incarnation_and_generation_without_replacing_window_or_w04_control() {
     let mut state = fixture();
     let previous = state.ground_truth();
     let next_incarnation = Uuid::from_u128(4);
@@ -55,6 +58,12 @@ fn recreate_changes_control_incarnation_and_generation_without_replacing_window(
     assert_eq!(truth.control_incarnation, next_incarnation);
     assert_eq!(truth.recreation_generation, previous.recreation_generation + 1);
     assert_eq!(truth.logical_sequence, previous.logical_sequence + 1);
+    assert_eq!(
+        truth.unsupported_invoke_control_handle,
+        previous.unsupported_invoke_control_handle,
+        "W02 recreation must not silently replace the W04 fixture control",
+    );
+    assert_eq!(truth.unsupported_invoke_side_effect_count, 0);
 }
 
 #[test]
