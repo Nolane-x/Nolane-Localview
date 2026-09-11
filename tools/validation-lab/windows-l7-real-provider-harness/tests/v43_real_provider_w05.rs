@@ -1,17 +1,24 @@
 #[cfg(windows)]
 mod windows_real_provider_w05 {
     use std::{
+        collections::BTreeSet,
         io::{BufRead, BufReader, Write},
         process::{Child, ChildStdin, ChildStdout, Command, Stdio},
         time::{Duration, Instant},
     };
 
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
+    use localview_validation_lab::{
+        LabMetricKind, RealProviderCaseInput, RealProviderCaseKind, RealProviderGroundTruth,
+        RealProviderObservedOutcome, ResultEvidence, adapt_real_provider_case, canonical_digest,
+    };
     use localview_windows_uia_provider::{
         WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
     };
     use serde_json::{Value, json};
     use uuid::Uuid;
+
+    const HOSTILE_PROVIDER_NAME: &str = "LocalView W05 Hostile Provider";
 
     struct EdgeSeedProcess {
         child: Child,
@@ -92,6 +99,21 @@ mod windows_real_provider_w05 {
                 .expect("W05 oracle must report provider_call_entered")
         }
 
+        fn release_provider_hang(&mut self) -> Value {
+            let response = self.command(json!({ "command": "release_provider_hang" }));
+            assert_eq!(
+                response.get("ok").and_then(Value::as_bool),
+                Some(true),
+                "W05 oracle must release the hostile provider without shutting down the seed: {response}"
+            );
+            assert_eq!(
+                response.get("hang_armed").and_then(Value::as_bool),
+                Some(false),
+                "W05 oracle must prove the provider hang is disarmed before reacquire"
+            );
+            response
+        }
+
         fn shutdown(mut self) {
             let response = self.command(json!({ "command": "shutdown" }));
             assert_eq!(response.get("ok").and_then(Value::as_bool), Some(true));
@@ -117,9 +139,28 @@ mod windows_real_provider_w05 {
             .unwrap_or_else(|| panic!("edge ground-truth field {field} must be u64"))
     }
 
+    fn worker_config(command_timeout: Duration) -> WindowsUiaWorkerConfig {
+        WindowsUiaWorkerConfig {
+            snapshot_budget: SnapshotBudget {
+                max_nodes: 128,
+                max_depth: 12,
+                max_properties: 2048,
+            },
+            command_timeout,
+        }
+    }
+
+    fn selection(seed: &EdgeSeedProcess, window_handle: u64) -> UserSelectedWindowTarget {
+        UserSelectedWindowTarget {
+            native_window_handle: window_handle,
+            expected_process_id: seed.process_id(),
+            selection_nonce: Uuid::new_v4(),
+        }
+    }
+
     #[test]
     #[ignore = "requires a real interactive Windows UI Automation provider and hostile WPF edge seed"]
-    fn w05_provider_hang_times_out_once_then_poison_fails_fast() {
+    fn w05_provider_hang_poison_requires_fresh_provider_reacquire() {
         assert!(
             std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
             "real-provider seed execution must be explicitly enabled"
@@ -136,39 +177,37 @@ mod windows_real_provider_w05 {
         assert_ne!(window_handle, 0, "W05 oracle must expose a live WPF HWND");
 
         let command_timeout = Duration::from_millis(350);
-        let worker = WindowsUiaWorker::spawn(WindowsUiaWorkerConfig {
-            snapshot_budget: SnapshotBudget {
-                max_nodes: 128,
-                max_depth: 12,
-                max_properties: 2048,
-            },
-            command_timeout,
-        })
-        .expect("spawn production Windows UIA worker");
-        let attachment = worker
-            .attach(UserSelectedWindowTarget {
-                native_window_handle: window_handle,
-                expected_process_id: seed.process_id(),
-                selection_nonce: Uuid::new_v4(),
-            })
+        let worker_a = WindowsUiaWorker::spawn(worker_config(command_timeout))
+            .expect("spawn production Windows UIA worker A");
+        let attachment_a = worker_a
+            .attach(selection(&seed, window_handle))
             .expect("attach exact W05 WPF seed window before arming the hostile provider path");
+        let provider_a = attachment_a.provider_incarnation_ref().clone();
 
-        worker
+        let before = worker_a
             .snapshot(
-                &attachment,
+                &attachment_a,
                 WindowsUiaSnapshotRequest {
                     snapshot_cut_ref: format!("w05:baseline:{}", Uuid::new_v4()),
                     surface_scope: "surface:w05:wpf-edge-seed".into(),
                 },
             )
             .expect("W05 baseline snapshot must succeed before the provider hang is armed");
+        let old_ref = before
+            .nodes()
+            .iter()
+            .find(|node| node.name.as_deref() == Some(HOSTILE_PROVIDER_NAME))
+            .expect("W05 baseline snapshot must contain the hostile provider element")
+            .element_ref
+            .clone();
+        assert_eq!(old_ref.provider_incarnation_ref, provider_a);
 
         seed.arm_provider_hang();
 
         let timeout_started = Instant::now();
-        let timeout_error = worker
+        let timeout_error = worker_a
             .snapshot(
-                &attachment,
+                &attachment_a,
                 WindowsUiaSnapshotRequest {
                     snapshot_cut_ref: format!("w05:hung:{}", Uuid::new_v4()),
                     surface_scope: "surface:w05:wpf-edge-seed".into(),
@@ -191,9 +230,9 @@ mod windows_real_provider_w05 {
         );
 
         let poisoned_started = Instant::now();
-        let poisoned_error = worker
+        let poisoned_error = worker_a
             .snapshot(
-                &attachment,
+                &attachment_a,
                 WindowsUiaSnapshotRequest {
                     snapshot_cut_ref: format!("w05:poisoned:{}", Uuid::new_v4()),
                     surface_scope: "surface:w05:wpf-edge-seed".into(),
@@ -207,7 +246,82 @@ mod windows_real_provider_w05 {
             "poisoned worker must fail fast instead of waiting another provider timeout: {poisoned_elapsed:?}"
         );
 
-        drop(worker);
+        let released_truth = seed.release_provider_hang();
+        drop(worker_a);
+
+        let worker_b = WindowsUiaWorker::spawn(worker_config(command_timeout))
+            .expect("spawn fresh Windows UIA worker B after poison quarantine");
+        let attachment_b = worker_b
+            .attach(selection(&seed, window_handle))
+            .expect("fresh worker B must reacquire the same still-live W05 seed");
+        let provider_b = attachment_b.provider_incarnation_ref().clone();
+        assert_ne!(
+            provider_a, provider_b,
+            "W05 reacquire must mint a genuinely fresh provider incarnation"
+        );
+
+        let after = worker_b
+            .snapshot(
+                &attachment_b,
+                WindowsUiaSnapshotRequest {
+                    snapshot_cut_ref: format!("w05:reacquired:{}", Uuid::new_v4()),
+                    surface_scope: "surface:w05:wpf-edge-seed".into(),
+                },
+            )
+            .expect("fresh worker B must recover provider observation after hang release");
+        let new_ref = after
+            .nodes()
+            .iter()
+            .find(|node| node.name.as_deref() == Some(HOSTILE_PROVIDER_NAME))
+            .expect("W05 reacquired snapshot must contain the hostile provider element")
+            .element_ref
+            .clone();
+        assert_eq!(new_ref.provider_incarnation_ref, provider_b);
+        let stale_authority_survived_reacquire =
+            after.nodes().iter().any(|node| node.element_ref == old_ref);
+        assert!(
+            !stale_authority_survived_reacquire,
+            "no authority issued by poisoned provider incarnation A may survive worker B reacquire"
+        );
+
+        let record = adapt_real_provider_case(RealProviderCaseInput {
+            case_id: "W05-windows-uia-provider-hang",
+            seed_app_digest: "seed-app:windows-uia-edge-seed:w05",
+            platform_profile_revision: "windows-uia-hosted-r1",
+            environment_artifact_digest: "environment:w05-windows-hosted",
+            provider_evidence_refs: BTreeSet::from([
+                format!("windows-uia:before:{}", before.observed_digest()),
+                format!("windows-uia:after:{}", after.observed_digest()),
+                format!("windows-uia:provider-a:{}", provider_a.as_str()),
+                format!("windows-uia:provider-b:{}", provider_b.as_str()),
+            ]),
+            ground_truth: RealProviderGroundTruth {
+                canonical_outcome: "provider-hang-quarantined-and-reacquired".into(),
+                digest: canonical_digest(&released_truth).expect("digest W05 independent oracle truth"),
+            },
+            observed_outcome: RealProviderObservedOutcome::Asserted(
+                "provider-hang-quarantined-and-reacquired".into(),
+            ),
+            case_kind: RealProviderCaseKind::W05ProviderHang {
+                caller_returned_bounded: timeout_elapsed < Duration::from_secs(2),
+                poisoned_worker_reused: false,
+                provider_reacquired: true,
+                stale_authority_survived_reacquire,
+            },
+            comparison_profile_revision: "real-provider-exact-r1",
+            logical_sequence: 505,
+        })
+        .expect("adapt exact W05 real-provider evidence");
+        assert_eq!(
+            record.result_evidence,
+            Some(ResultEvidence::RealProviderIntegrationPass)
+        );
+        assert_eq!(
+            record.observation.eligible_metrics,
+            BTreeSet::from([LabMetricKind::Rpomr])
+        );
+
+        drop(worker_b);
         seed.shutdown();
     }
 }
