@@ -13,6 +13,7 @@
 
 mod artifact;
 mod canonical;
+mod differential_adapter;
 mod identity;
 mod metamorphic_adapter;
 mod metrics;
@@ -25,6 +26,10 @@ mod state_space_adapter;
 
 pub use artifact::{CanonicalArtifact, LabArtifactKind, LabArtifactState};
 pub use canonical::{CanonicalDigest, canonical_digest, canonical_json_bytes};
+pub use differential_adapter::{
+    DifferentialVector, DifferentialVectorSetInput, DifferentialVectorSetLabRecord,
+    adapt_differential_vector_set,
+};
 pub use identity::{CompletedLabRunIdentity, LabRevisionContext};
 pub use metamorphic_adapter::{
     MetamorphicCaseInput, MetamorphicLabRecord, MetamorphicRelation, adapt_metamorphic_case,
@@ -76,6 +81,10 @@ pub enum LabError {
     EmptyAuthorityField { field: &'static str },
     #[error("unsupported L1 semantic comparison mode: {mode}")]
     UnsupportedSemanticComparisonMode { mode: String },
+    #[error("unsupported L6 differential comparison mode: {mode}")]
+    UnsupportedDifferentialComparisonMode { mode: String },
+    #[error("duplicate L6 differential vector identity: {vector_id}")]
+    DuplicateDifferentialVectorId { vector_id: String },
     #[error("state-space declared bound must be greater than zero, got {declared_bound}")]
     InvalidStateSpaceBound { declared_bound: usize },
     #[error(
