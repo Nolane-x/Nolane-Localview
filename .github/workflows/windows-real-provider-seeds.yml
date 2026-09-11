@@ -21,7 +21,6 @@ jobs:
       LOCALVIEW_UIA_SMOKE: "1"
       LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
       LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      LOCALVIEW_L7_ARTIFACT_DIR: ${{ runner.temp }}\localview-l7-real-provider
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,7 +33,9 @@ jobs:
       - name: Bind hosted Windows environment authority
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path $env:LOCALVIEW_L7_ARTIFACT_DIR | Out-Null
+          $artifactDir = Join-Path $env:RUNNER_TEMP "localview-l7-real-provider"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          "LOCALVIEW_L7_ARTIFACT_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "LOCALVIEW_WINDOWS_BUILD=$([System.Environment]::OSVersion.VersionString)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $culture = (Get-Culture).Name
           $uiCulture = (Get-UICulture).Name
