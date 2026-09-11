@@ -24,3 +24,8 @@ jobs:
           components: rustfmt, clippy
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
+      - name: W01 real event gap requires reconciliation
+        env:
+          LOCALVIEW_UIA_SMOKE: "1"
+          LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
+        run: cargo test -p localview-windows-observe-runtime --test v43_real_provider_seeds w01_event_gap_requires_reconciliation -- --ignored --nocapture --test-threads=1
