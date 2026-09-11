@@ -20,6 +20,7 @@ jobs:
     env:
       LOCALVIEW_UIA_SMOKE: "1"
       LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
       LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
     steps:
@@ -29,8 +30,53 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
+      - name: Compile isolated WPF UIA edge seed
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+      - name: WPF edge seed starts with virtual tail item unrealized
+        shell: pwsh
+        run: |
+          if (-not (Test-Path $env:LOCALVIEW_UIA_EDGE_SEED_BIN)) {
+            throw "WPF edge seed binary is missing: $env:LOCALVIEW_UIA_EDGE_SEED_BIN"
+          }
+          $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+          $startInfo.FileName = $env:LOCALVIEW_UIA_EDGE_SEED_BIN
+          $startInfo.UseShellExecute = $false
+          $startInfo.RedirectStandardInput = $true
+          $startInfo.RedirectStandardOutput = $true
+          $startInfo.RedirectStandardError = $true
+          $process = [System.Diagnostics.Process]::Start($startInfo)
+          try {
+            $process.StandardInput.WriteLine('{"command":"get_ground_truth"}')
+            $process.StandardInput.Flush()
+            $line = $process.StandardOutput.ReadLine()
+            if ([string]::IsNullOrWhiteSpace($line)) {
+              $stderr = $process.StandardError.ReadToEnd()
+              throw "WPF edge seed returned no oracle response. stderr=$stderr"
+            }
+            $truth = $line | ConvertFrom-Json
+            if (-not $truth.ok) { throw "WPF edge seed oracle did not report ok: $line" }
+            if ([int64]$truth.window_handle -eq 0) { throw "WPF edge seed window handle is zero" }
+            if ([int]$truth.process_id -le 0) { throw "WPF edge seed process id is invalid" }
+            if ([int]$truth.virtual_item_index -ne 255) { throw "unexpected W03 virtual item index" }
+            if ($truth.virtual_item_name -ne 'LocalView Virtual Item 255') { throw "unexpected W03 virtual item name" }
+            if ([bool]$truth.virtual_item_container_generated) {
+              throw "W03 virtual tail item was already realized before UIA realization"
+            }
+            $process.StandardInput.WriteLine('{"command":"shutdown"}')
+            $process.StandardInput.Flush()
+            $shutdown = $process.StandardOutput.ReadLine()
+            if ([string]::IsNullOrWhiteSpace($shutdown)) { throw "WPF edge seed returned no shutdown receipt" }
+            if (-not $process.WaitForExit(5000)) { throw "WPF edge seed did not exit after shutdown" }
+          }
+          finally {
+            if (-not $process.HasExited) { $process.Kill($true) }
+            $process.Dispose()
+          }
       - name: Bind hosted Windows environment authority
         shell: pwsh
         run: |
