@@ -137,9 +137,10 @@ jobs:
       - name: V4.3 L7 Windows prospective campaign W01/W02/W06
         shell: pwsh
         run: |
+          $manifest = "tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml"
           $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_w02_w06_to_exact_candidate"
-          $listed = cargo test -p localview-windows-observe-runtime --test v43_real_provider_campaign -- --list
+          $listed = cargo test --manifest-path $manifest --test v43_real_provider_campaign -- --list
           if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
             throw "required prospective L7 campaign test is not registered: $testName"
           }
-          cargo test -p localview-windows-observe-runtime --test v43_real_provider_campaign $testName -- --ignored --exact --nocapture --test-threads=1
+          cargo test --manifest-path $manifest --test v43_real_provider_campaign $testName -- --ignored --exact --nocapture --test-threads=1
