@@ -581,7 +581,11 @@ mod windows_l7_real_provider_campaign {
             "candidate_sha": required_env("LOCALVIEW_CANDIDATE_SHA"),
             "environment_digest": environment_digest.0.clone(),
             "seed_executable_digest": seed_digest.clone(),
-            "required_cases": ["W01", "W02", "W06"],
+            "required_cases": [
+                "W01-missing-uia-property-event",
+                "W02-recreated-uia-element",
+                "W06-windows-uia-provider-reacquire"
+            ],
         }))
         .expect("digest L7 seed catalog");
         let preregistration = LabPreregistration {
@@ -599,17 +603,17 @@ mod windows_l7_real_provider_campaign {
             seed_catalog_digest: seed_catalog_digest.clone(),
             seed_identities: vec![
                 LabSeedIdentity {
-                    seed_id: "W01".into(),
+                    seed_id: "W01-missing-uia-property-event".into(),
                     prediction_revision: "w01-missing-property-event-r1".into(),
                     oracle_revision: "independent-seed-pipe-r1".into(),
                 },
                 LabSeedIdentity {
-                    seed_id: "W02".into(),
+                    seed_id: "W02-recreated-uia-element".into(),
                     prediction_revision: "w02-recreated-element-r1".into(),
                     oracle_revision: "independent-seed-pipe-r1".into(),
                 },
                 LabSeedIdentity {
-                    seed_id: "W06".into(),
+                    seed_id: "W06-windows-uia-provider-reacquire".into(),
                     prediction_revision: "w06-provider-reacquire-r1".into(),
                     oracle_revision: "independent-seed-pipe-r1".into(),
                 },
