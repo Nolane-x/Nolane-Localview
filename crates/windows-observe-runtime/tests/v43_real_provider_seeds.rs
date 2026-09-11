@@ -123,7 +123,9 @@ mod windows_real_provider_seeds {
             .unwrap_or_else(|| panic!("ground truth field {field} must be a string"))
     }
 
-    fn runtime_manager(bridge: LiveBridge) -> localview_windows_observe_runtime::WindowsObserveRuntimeManager {
+    fn runtime_manager(
+        bridge: LiveBridge,
+    ) -> localview_windows_observe_runtime::WindowsUiaObserveRuntimeManager {
         spawn_windows_uia_runtime_manager(
             bridge,
             WindowsUiaWorkerConfig {
