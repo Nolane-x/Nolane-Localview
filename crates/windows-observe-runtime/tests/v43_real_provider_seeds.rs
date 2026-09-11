@@ -123,18 +123,8 @@ mod windows_real_provider_seeds {
             .unwrap_or_else(|| panic!("ground truth field {field} must be a string"))
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "requires a real interactive Windows UI Automation provider and seed executable"]
-    async fn w01_missing_or_coalesced_property_events_require_reconciliation() {
-        assert!(
-            std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
-            "real-provider seed execution must be explicitly enabled"
-        );
-
-        let mut seed = SeedProcess::spawn();
-        let window_handle = truth_u64(&seed.ready_ground_truth, "window_handle");
-        let bridge = LiveBridge::new(128, 16);
-        let manager = spawn_windows_uia_runtime_manager(
+    fn runtime_manager(bridge: LiveBridge) -> localview_windows_observe_runtime::WindowsObserveRuntimeManager {
+        spawn_windows_uia_runtime_manager(
             bridge,
             WindowsUiaWorkerConfig {
                 snapshot_budget: SnapshotBudget {
@@ -149,7 +139,20 @@ mod windows_real_provider_seeds {
                 drain_limit: 32,
             },
         )
-        .expect("spawn production Windows UIA observe runtime");
+        .expect("spawn production Windows UIA observe runtime")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires a real interactive Windows UI Automation provider and seed executable"]
+    async fn w01_missing_or_coalesced_property_events_require_reconciliation() {
+        assert!(
+            std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
+            "real-provider seed execution must be explicitly enabled"
+        );
+
+        let mut seed = SeedProcess::spawn();
+        let window_handle = truth_u64(&seed.ready_ground_truth, "window_handle");
+        let manager = runtime_manager(LiveBridge::new(128, 16));
 
         let session_id = Uuid::new_v4();
         let initial_status = manager
@@ -219,9 +222,6 @@ mod windows_real_provider_seeds {
         );
         assert!(outcome.status.reconciliation_receipt_id.is_some());
 
-        // Compare the runtime-owned reconciled snapshot against the independent
-        // seed oracle. Production LocalView never reads the oracle channel; only
-        // this L7 test harness does.
         let snapshot = manager
             .current_semantic_snapshot(session_id)
             .await
@@ -292,6 +292,166 @@ mod windows_real_provider_seeds {
             .release(session_id)
             .await
             .expect("release real-provider runtime observation");
+        assert!(manager.status(session_id).await.is_none());
+        seed.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires a real interactive Windows UI Automation provider and seed executable"]
+    async fn w02_recreated_element_never_resurrects_stale_identity() {
+        assert!(
+            std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
+            "real-provider seed execution must be explicitly enabled"
+        );
+
+        let mut seed = SeedProcess::spawn();
+        let window_handle = truth_u64(&seed.ready_ground_truth, "window_handle");
+        let initial_name = truth_str(&seed.ready_ground_truth, "logical_name").to_owned();
+        let initial_control_handle = truth_u64(&seed.ready_ground_truth, "control_handle");
+        let initial_control_incarnation =
+            truth_str(&seed.ready_ground_truth, "control_incarnation").to_owned();
+        let manager = runtime_manager(LiveBridge::new(128, 16));
+        let session_id = Uuid::new_v4();
+
+        manager
+            .attach(
+                session_id,
+                UserSelectedWindowTarget {
+                    native_window_handle: window_handle,
+                    expected_process_id: seed.process_id(),
+                    selection_nonce: Uuid::new_v4(),
+                },
+            )
+            .await
+            .expect("attach exact external W02 seed window");
+        let before = manager
+            .current_semantic_snapshot(session_id)
+            .await
+            .expect("initial W02 snapshot must exist");
+        let old_ref = before
+            .nodes()
+            .iter()
+            .find(|node| node.name.as_deref() == Some(initial_name.as_str()))
+            .expect("initial snapshot must contain the seed control")
+            .element_ref
+            .clone();
+
+        let recreated = seed.command(json!({ "command": "recreate_control" }));
+        assert_eq!(
+            recreated.get("response").and_then(Value::as_str),
+            Some("applied")
+        );
+        let ground_truth = extract_ground_truth(&recreated);
+        assert_ne!(
+            truth_u64(&ground_truth, "control_handle"),
+            initial_control_handle,
+            "seed oracle must prove a new native control was created"
+        );
+        assert_ne!(
+            truth_str(&ground_truth, "control_incarnation"),
+            initial_control_incarnation,
+            "seed oracle must prove the control lifetime changed"
+        );
+        assert_eq!(truth_u64(&ground_truth, "recreation_generation"), 2);
+        thread::sleep(Duration::from_millis(300));
+
+        let outcome = manager
+            .drain_once(session_id)
+            .await
+            .expect("drain W02 structure callbacks and reconcile recreated element");
+        assert!(
+            outcome.report.ingest.accepted > 0,
+            "real control recreation must produce provider invalidation evidence"
+        );
+        assert!(
+            outcome.reconciliation_performed,
+            "accepted opaque recreation evidence must invalidate the pre-recreation snapshot"
+        );
+
+        let after = manager
+            .current_semantic_snapshot(session_id)
+            .await
+            .expect("post-recreation W02 snapshot must exist");
+        let new_ref = after
+            .nodes()
+            .iter()
+            .find(|node| node.name.as_deref() == Some(initial_name.as_str()))
+            .expect("reconciled snapshot must contain the recreated seed control")
+            .element_ref
+            .clone();
+
+        assert_eq!(
+            old_ref.provider_incarnation_ref,
+            new_ref.provider_incarnation_ref,
+            "W02 isolates element recreation inside one live provider incarnation"
+        );
+        assert_ne!(
+            old_ref.acquisition_cut_ref, new_ref.acquisition_cut_ref,
+            "recreated element authority must be reacquired at a new observation cut"
+        );
+        let accepted_previous_identity_as_current = after
+            .nodes()
+            .iter()
+            .any(|node| node.element_ref == old_ref);
+        assert!(
+            !accepted_previous_identity_as_current,
+            "the exact pre-recreation ProviderElementRef must never authorize the new control"
+        );
+
+        let provider_identity_reuse_observed = old_ref.opaque_provider_element_id
+            == new_ref.opaque_provider_element_id;
+        let ground_truth_digest = canonical_digest(&ground_truth).expect("digest W02 oracle truth");
+        let record = adapt_real_provider_case(RealProviderCaseInput {
+            case_id: "W02-recreated-uia-element",
+            seed_app_digest: "seed-app:windows-uia-seed:task5-w02",
+            platform_profile_revision: "windows-uia-hosted-r1",
+            environment_artifact_digest: "environment:task5-windows-hosted",
+            provider_evidence_refs: BTreeSet::from([
+                format!("windows-uia:before:{}", before.observed_digest()),
+                format!("windows-uia:after:{}", after.observed_digest()),
+                format!(
+                    "seed:control-incarnation:{}",
+                    truth_str(&ground_truth, "control_incarnation")
+                ),
+            ]),
+            ground_truth: RealProviderGroundTruth {
+                canonical_outcome: "stale-element-ref-rejected".into(),
+                digest: ground_truth_digest,
+            },
+            observed_outcome: RealProviderObservedOutcome::Asserted(
+                "stale-element-ref-rejected".into(),
+            ),
+            case_kind: RealProviderCaseKind::W02RecreatedElement {
+                previous_provider_incarnation: old_ref.provider_incarnation_ref.clone(),
+                current_provider_incarnation: new_ref.provider_incarnation_ref.clone(),
+                opaque_provider_element_id: old_ref.opaque_provider_element_id.clone(),
+                provider_identity_reuse_observed,
+                accepted_previous_identity_as_current,
+            },
+            comparison_profile_revision: "real-provider-exact-r1",
+            logical_sequence: truth_u64(&ground_truth, "logical_sequence"),
+        })
+        .expect("adapt exact W02 real-provider evidence");
+        assert_eq!(
+            record.result_evidence,
+            Some(ResultEvidence::RealProviderIntegrationPass)
+        );
+        if provider_identity_reuse_observed {
+            assert!(
+                record.observation.eligible_metrics.contains(&LabMetricKind::Piaer),
+                "PIAER is eligible only when the real provider reused its opaque element identity"
+            );
+        } else {
+            assert!(
+                !record.observation.eligible_metrics.contains(&LabMetricKind::Piaer),
+                "absence of provider identity reuse must not be counted as a clean PIAER trial"
+            );
+        }
+
+        manager
+            .release(session_id)
+            .await
+            .expect("release W02 runtime observation");
         assert!(manager.status(session_id).await.is_none());
         seed.shutdown();
     }
