@@ -150,3 +150,30 @@ pub struct WindowsUiaVirtualizedItemRealizeReceipt {
     pub target_incarnation_ref: TargetIncarnationRef,
     pub previous_placeholder_ref: ProviderElementRef,
 }
+
+impl crate::WindowsUiaWorker {
+    /// Public fail-closed surface for W03. The real UIA implementation is added
+    /// only after a hosted-Windows behavior test proves the missing provider
+    /// primitive; until then this method must never mint placeholder authority.
+    pub fn query_virtualized_item(
+        &self,
+        _attachment: &crate::worker::WindowsUiaAttachment,
+        _request: WindowsUiaVirtualizedItemQueryRequest,
+    ) -> Result<WindowsUiaVirtualizedItemQueryReceipt, crate::worker::WindowsUiaWorkerError> {
+        Err(crate::worker::WindowsUiaWorkerError::ProviderFailure(
+            "Windows UIA virtualized-item query is not implemented".into(),
+        ))
+    }
+
+    /// Public fail-closed surface for W03. A realization receipt is intentionally
+    /// impossible until the owning MTA has a tested VirtualizedItem implementation.
+    pub fn realize_virtualized_item(
+        &self,
+        _attachment: &crate::worker::WindowsUiaAttachment,
+        _request: WindowsUiaVirtualizedItemRealizeRequest,
+    ) -> Result<WindowsUiaVirtualizedItemRealizeReceipt, crate::worker::WindowsUiaWorkerError> {
+        Err(crate::worker::WindowsUiaWorkerError::ProviderFailure(
+            "Windows UIA virtualized-item realization is not implemented".into(),
+        ))
+    }
+}
