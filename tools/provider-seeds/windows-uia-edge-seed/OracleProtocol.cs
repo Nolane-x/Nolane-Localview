@@ -54,7 +54,26 @@ internal sealed class OracleProtocol
                 case "get_virtual_item_state":
                     Write(ReadVirtualItemState());
                     break;
+                case "arm_provider_hang":
+                    _window.ArmProviderHang();
+                    Write(new
+                    {
+                        ok = true,
+                        command = "arm_provider_hang",
+                        hang_armed = _window.IsProviderHangArmed(),
+                    });
+                    break;
+                case "get_provider_hang_state":
+                    Write(new
+                    {
+                        ok = true,
+                        command = "get_provider_hang_state",
+                        hang_armed = _window.IsProviderHangArmed(),
+                        provider_call_entered = _window.ProviderCallEntered(),
+                    });
+                    break;
                 case "shutdown":
+                    _window.ReleaseProviderHang();
                     Write(new { ok = true, command = "shutdown" });
                     _window.Dispatcher.BeginInvoke(() => _window.Close());
                     break;
