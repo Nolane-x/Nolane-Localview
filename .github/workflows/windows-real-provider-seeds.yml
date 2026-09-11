@@ -34,12 +34,12 @@ jobs:
           LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
         shell: pwsh
         run: |
-          $testName = "windows_real_provider_seeds::w06_provider_worker_reacquire_rejects_stale_authority_and_cleans_up"
-          $listed = cargo test -p localview-windows-observe-runtime --test v43_real_provider_seeds -- --list
+          $testName = "windows_real_provider_w06::w06_provider_reacquire_rebinds_incarnation_and_cleans_up"
+          $listed = cargo test -p localview-windows-observe-runtime --test v43_real_provider_w06 -- --list
           if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
             throw "required W06 real-provider test is not registered: $testName"
           }
-          cargo test -p localview-windows-observe-runtime --test v43_real_provider_seeds $testName -- --ignored --exact --nocapture --test-threads=1
+          cargo test -p localview-windows-observe-runtime --test v43_real_provider_w06 $testName -- --ignored --exact --nocapture --test-threads=1
       - name: W01 missing/coalesced property events require reconciliation
         env:
           LOCALVIEW_UIA_SMOKE: "1"
