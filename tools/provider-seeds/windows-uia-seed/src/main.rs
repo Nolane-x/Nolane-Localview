@@ -33,10 +33,12 @@ mod windows_seed {
     };
 
     const INITIAL_NAME: &str = "LocalView V4.3 Real Provider Seed";
+    const W04_UNSUPPORTED_INVOKE_NAME: &str = "LocalView W04 Unsupported Invoke";
 
     pub fn run() -> Result<(), Box<dyn Error>> {
         let window = create_parent_window()?;
         let mut control = create_control(window, INITIAL_NAME)?;
+        let unsupported_invoke_control = create_unsupported_invoke_control(window)?;
         let mut state = SeedState::new(
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -44,6 +46,7 @@ mod windows_seed {
             raw_handle(control),
             Uuid::new_v4(),
             INITIAL_NAME.to_owned(),
+            raw_handle(unsupported_invoke_control),
         );
 
         emit(&SeedResponse::Ready {
@@ -148,6 +151,7 @@ mod windows_seed {
         }
 
         unsafe {
+            DestroyWindow(unsupported_invoke_control)?;
             DestroyWindow(control)?;
             DestroyWindow(window)?;
         }
@@ -199,7 +203,7 @@ mod windows_seed {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 520,
-                220,
+                260,
                 None,
                 None,
                 None,
@@ -224,6 +228,29 @@ mod windows_seed {
                 60,
                 420,
                 80,
+                Some(parent),
+                None,
+                None,
+                None,
+            )?
+        };
+        unsafe {
+            let _ = ShowWindow(control, SW_SHOW);
+        }
+        Ok(control)
+    }
+
+    fn create_unsupported_invoke_control(parent: HWND) -> windows::core::Result<HWND> {
+        let control = unsafe {
+            CreateWindowExW(
+                Default::default(),
+                w!("STATIC"),
+                w!("LocalView W04 Unsupported Invoke"),
+                WS_CHILD | WS_VISIBLE,
+                40,
+                160,
+                420,
+                32,
                 Some(parent),
                 None,
                 None,
