@@ -57,6 +57,7 @@ impl WorkerHealth {
         self.poisoned.store(true, Ordering::Release);
     }
 
+    #[cfg(test)]
     pub(crate) fn is_poisoned(&self) -> bool {
         self.poisoned.load(Ordering::Acquire)
     }
