@@ -284,7 +284,11 @@ async fn accounting_tracks_initial_snapshot_bounded_drains_drops_and_reconciliat
     );
 
     manager.attach(session(), selection()).await.unwrap();
-    manager.drain_once(session()).await.unwrap();
+    let opaque = manager.drain_once(session()).await.unwrap();
+    assert!(
+        opaque.reconciliation_performed,
+        "an accepted callback under opaque ordering must consume one bounded reconciliation"
+    );
     let gap = manager.drain_once(session()).await.unwrap();
     assert!(gap.reconciliation_performed);
 
@@ -292,7 +296,7 @@ async fn accounting_tracks_initial_snapshot_bounded_drains_drops_and_reconciliat
         manager.resource_accounting(session()).await,
         Some(WindowsObserveResourceAccounting {
             initial_snapshots: 1,
-            reconciliation_snapshots: 1,
+            reconciliation_snapshots: 2,
             event_drains: 2,
             events_accepted: 2,
             events_rejected_stale: 0,
@@ -332,7 +336,11 @@ async fn reconciliation_resource_denial_preserves_gap_debt_and_attachment_until_
     let manager = manager(provider.clone(), bridge, governor.clone());
 
     manager.attach(session(), selection()).await.unwrap();
-    manager.drain_once(session()).await.unwrap();
+    let opaque = manager.drain_once(session()).await.unwrap();
+    assert!(
+        opaque.reconciliation_performed,
+        "the first accepted opaque callback must reconcile before pressure is armed"
+    );
     provider.arm_critical_pressure_on_next_drain(governor.clone());
 
     let error = manager.drain_once(session()).await.unwrap_err();
@@ -346,7 +354,11 @@ async fn reconciliation_resource_denial_preserves_gap_debt_and_attachment_until_
     let status = manager.status(session()).await.unwrap();
     assert_eq!(status.event_continuity, EventContinuityState::GapDetected);
     assert_eq!(status.current_snapshot_completeness, None);
-    assert_eq!(provider.counts().2, 1, "denied reconciliation must not snapshot");
+    assert_eq!(
+        provider.counts().2,
+        2,
+        "denied gap reconciliation must not add a snapshot beyond attach plus opaque reconciliation"
+    );
 
     assert!(governor.update_process_metrics(0, 0.0));
     let recovered = manager.drain_once(session()).await.unwrap();
@@ -359,10 +371,10 @@ async fn reconciliation_resource_denial_preserves_gap_debt_and_attachment_until_
         recovered.status.current_snapshot_completeness,
         Some(ReconciliationCompleteness::Established)
     );
-    assert_eq!(provider.counts().2, 2);
+    assert_eq!(provider.counts().2, 3);
 
     let accounting = manager.resource_accounting(session()).await.unwrap();
     assert_eq!(accounting.resource_denials, 1);
     assert_eq!(accounting.provider_events_dropped, 2);
-    assert_eq!(accounting.reconciliation_snapshots, 1);
+    assert_eq!(accounting.reconciliation_snapshots, 2);
 }
