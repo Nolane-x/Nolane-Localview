@@ -85,6 +85,14 @@ mod windows_seed {
                                 ui_error = Some(error.to_string());
                                 break;
                             }
+                            // UI Automation ultimately observes Win32 accessibility notifications.
+                            // Give each distinct real mutation a message-pump boundary so Windows does
+                            // not collapse the whole burst into one deferred final-state callback. The
+                            // observe runtime deliberately does not drain during this command, so its
+                            // capacity=1 callback queue must still record overflow rather than relying
+                            // on synthetic gap injection.
+                            pump_pending_messages();
+                            thread::sleep(Duration::from_millis(10));
                         }
                         if let Some(message) = ui_error {
                             emit(&SeedResponse::error("set_window_text_failed", message))?;
@@ -231,6 +239,16 @@ mod windows_seed {
     fn set_control_text(control: HWND, logical_name: &str) -> windows::core::Result<()> {
         let wide_name = wide(logical_name);
         unsafe { SetWindowTextW(control, PCWSTR(wide_name.as_ptr())) }
+    }
+
+    fn pump_pending_messages() {
+        let mut message = MSG::default();
+        while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
     }
 
     fn wide(value: &str) -> Vec<u16> {
