@@ -127,3 +127,23 @@ fn differential_authority_fails_closed_before_observations_are_minted() {
         }
     );
 }
+
+#[test]
+fn empty_differential_identities_fail_closed() {
+    let empty_set = DifferentialVectorSetInput {
+        vector_set_id: "   ".to_owned(),
+        ..input(vec![vector("v1", "a", "a", 401)])
+    };
+    assert_eq!(
+        adapt_differential_vector_set(empty_set).expect_err("empty vector-set identity must fail"),
+        LabError::EmptyAuthorityField {
+            field: "vector_set_id"
+        }
+    );
+
+    let empty_vector = input(vec![vector("   ", "a", "a", 402)]);
+    assert_eq!(
+        adapt_differential_vector_set(empty_vector).expect_err("empty vector identity must fail"),
+        LabError::EmptyAuthorityField { field: "vector_id" }
+    );
+}
