@@ -14,7 +14,6 @@ fn first_timeout_poisons_worker_and_later_commands_fail_fast() {
         Err(WorkerReceiveError::Timeout)
     );
     assert_eq!(health.ensure_healthy(), Err(WorkerHealthError::Poisoned));
-    assert!(health.is_poisoned());
 }
 
 #[test]
@@ -24,7 +23,6 @@ fn fresh_worker_health_starts_unpoisoned() {
 
     let fresh = WorkerHealth::new();
 
-    assert!(first.is_poisoned());
-    assert!(!fresh.is_poisoned());
+    assert_eq!(first.ensure_healthy(), Err(WorkerHealthError::Poisoned));
     assert!(fresh.ensure_healthy().is_ok());
 }
