@@ -11,6 +11,18 @@ pub enum MetamorphicRelation {
     NotEqual,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetamorphicCaseInput<'a, I> {
+    pub case_id: &'a str,
+    pub property_name: &'a str,
+    pub base_outcome: &'a str,
+    pub transformed_outcome: &'a str,
+    pub relation: MetamorphicRelation,
+    pub evidence_refs: I,
+    pub comparison_profile_revision: &'a str,
+    pub logical_sequence: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetamorphicLabRecord {
     pub observation: LabObservation,
@@ -20,19 +32,23 @@ pub struct MetamorphicLabRecord {
 }
 
 pub fn adapt_metamorphic_case<I, S>(
-    case_id: &str,
-    property_name: &str,
-    base_outcome: &str,
-    transformed_outcome: &str,
-    relation: MetamorphicRelation,
-    evidence_refs: I,
-    comparison_profile_revision: &str,
-    logical_sequence: u64,
+    input: MetamorphicCaseInput<'_, I>,
 ) -> Result<MetamorphicLabRecord, LabError>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    let MetamorphicCaseInput {
+        case_id,
+        property_name,
+        base_outcome,
+        transformed_outcome,
+        relation,
+        evidence_refs,
+        comparison_profile_revision,
+        logical_sequence,
+    } = input;
+
     if case_id.trim().is_empty() {
         return Err(LabError::EmptyAuthorityField { field: "case_id" });
     }

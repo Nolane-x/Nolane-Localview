@@ -26,7 +26,7 @@ pub use artifact::{CanonicalArtifact, LabArtifactKind, LabArtifactState};
 pub use canonical::{CanonicalDigest, canonical_digest, canonical_json_bytes};
 pub use identity::{CompletedLabRunIdentity, LabRevisionContext};
 pub use metamorphic_adapter::{
-    MetamorphicLabRecord, MetamorphicRelation, adapt_metamorphic_case,
+    MetamorphicCaseInput, MetamorphicLabRecord, MetamorphicRelation, adapt_metamorphic_case,
 };
 pub use metrics::{
     LabFailureFlag, LabMetricKind, LabMetricValue, LabObservation, MetricSnapshot, MetricStatus,
