@@ -221,6 +221,11 @@ fn apply_case_semantics(
             provider_identity_reuse_observed,
             accepted_previous_identity_as_current,
         } => {
+            // W02 is an element-lifetime/ABA campaign. A control can be destroyed
+            // and recreated while the same provider worker remains alive, so
+            // provider reincarnation is neither required nor sufficient evidence
+            // for the element identity boundary. W06 owns provider-reacquire
+            // reincarnation semantics.
             validate_provider_incarnation(
                 "previous_provider_incarnation",
                 previous_provider_incarnation,
@@ -233,11 +238,6 @@ fn apply_case_semantics(
                 "opaque_provider_element_id",
                 opaque_provider_element_id,
             )?;
-            if previous_provider_incarnation == current_provider_incarnation {
-                return Err(LabError::InvalidRealProviderScenario {
-                    reason: "w02_requires_distinct_provider_incarnations",
-                });
-            }
 
             if *provider_identity_reuse_observed {
                 eligible_metrics.insert(LabMetricKind::Piaer);
