@@ -1,5 +1,6 @@
 name: Temporary W03 Worker GREEN
 
+# One-shot branch-local runner: this commit intentionally retriggers the workflow now that the workflow file already exists on the branch.
 on:
   push:
     branches:
