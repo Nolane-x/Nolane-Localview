@@ -315,7 +315,7 @@ mod windows_real_provider_seeds {
         let manager = runtime_manager(LiveBridge::new(128, 16));
         let session_id = Uuid::new_v4();
 
-        manager
+        let initial_status = manager
             .attach(
                 session_id,
                 UserSelectedWindowTarget {
@@ -357,17 +357,37 @@ mod windows_real_provider_seeds {
         assert_eq!(truth_u64(&ground_truth, "recreation_generation"), 2);
         thread::sleep(Duration::from_millis(300));
 
-        let outcome = manager
-            .drain_once(session_id)
+        // W02 must not assume that a provider emits a structure/property callback
+        // for a destroy/recreate transition. The independent oracle already proves
+        // the control lifetime changed. Reacquire authority through the same live
+        // provider worker so the test remains an element-lifetime campaign rather
+        // than silently turning into W06 provider reincarnation.
+        manager
+            .release(session_id)
             .await
-            .expect("drain W02 structure callbacks and reconcile recreated element");
-        assert!(
-            outcome.report.ingest.accepted > 0,
-            "real control recreation must produce provider invalidation evidence"
+            .expect("release pre-recreation W02 observation authority");
+        assert!(manager.status(session_id).await.is_none());
+
+        let reattached_status = manager
+            .attach(
+                session_id,
+                UserSelectedWindowTarget {
+                    native_window_handle: window_handle,
+                    expected_process_id: seed.process_id(),
+                    selection_nonce: Uuid::new_v4(),
+                },
+            )
+            .await
+            .expect("reacquire recreated W02 control through the same provider worker");
+        assert_eq!(
+            reattached_status.provider_incarnation_ref,
+            initial_status.provider_incarnation_ref,
+            "W02 must stay inside one live provider incarnation"
         );
-        assert!(
-            outcome.reconciliation_performed,
-            "accepted opaque recreation evidence must invalidate the pre-recreation snapshot"
+        assert_eq!(
+            reattached_status.current_snapshot_completeness,
+            Some(ReconciliationCompleteness::Established),
+            "reattach must establish a fresh bounded snapshot before stale identity checks"
         );
 
         let after = manager
@@ -378,7 +398,7 @@ mod windows_real_provider_seeds {
             .nodes()
             .iter()
             .find(|node| node.name.as_deref() == Some(initial_name.as_str()))
-            .expect("reconciled snapshot must contain the recreated seed control")
+            .expect("reacquired snapshot must contain the recreated seed control")
             .element_ref
             .clone();
 
