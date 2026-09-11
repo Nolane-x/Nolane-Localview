@@ -20,6 +20,7 @@ jobs:
     env:
       LOCALVIEW_UIA_SMOKE: "1"
       LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
       LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
     steps:
@@ -29,8 +30,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
+      - name: Build WPF edge seed for W03
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
       - name: Bind hosted Windows environment authority
         shell: pwsh
         run: |
