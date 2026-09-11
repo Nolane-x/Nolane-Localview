@@ -21,6 +21,7 @@ mod preregistration;
 mod result;
 mod seeds;
 mod semantic_adapter;
+mod state_space_adapter;
 
 pub use artifact::{CanonicalArtifact, LabArtifactKind, LabArtifactState};
 pub use canonical::{CanonicalDigest, canonical_digest, canonical_json_bytes};
@@ -45,6 +46,7 @@ pub use result::{
 };
 pub use seeds::{LabSeed, LabSeedCatalog, LabSeedIdentity};
 pub use semantic_adapter::{SemanticSeedLabRecord, adapt_semantic_seed_outcome};
+pub use state_space_adapter::{BoundedStateSpaceLabRecord, adapt_bounded_state_space};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum LabError {
@@ -74,6 +76,15 @@ pub enum LabError {
     EmptyAuthorityField { field: &'static str },
     #[error("unsupported L1 semantic comparison mode: {mode}")]
     UnsupportedSemanticComparisonMode { mode: String },
+    #[error("state-space declared bound must be greater than zero, got {declared_bound}")]
+    InvalidStateSpaceBound { declared_bound: usize },
+    #[error(
+        "state-space declared bound {declared_bound} does not match plan max_states {plan_max_states}"
+    )]
+    StateSpaceBoundMismatch {
+        declared_bound: usize,
+        plan_max_states: usize,
+    },
     #[error("canonical serialization failed: {message}")]
     CanonicalSerialization { message: String },
     #[error("persisted preregistration digest does not match prepared preregistration")]
