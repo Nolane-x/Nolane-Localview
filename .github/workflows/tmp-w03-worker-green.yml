@@ -37,7 +37,17 @@ jobs:
       - name: Normalize patched Rust formatting
         run: cargo fmt --all
       - name: Compile Windows UIA provider
-        run: cargo check -p localview-windows-uia-provider
+        shell: pwsh
+        run: |
+          cargo check -p localview-windows-uia-provider 2>&1 | Tee-Object -FilePath w03-cargo-check.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish W03 compile diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: w03-cargo-check-${{ github.sha }}
+          path: w03-cargo-check.txt
+          if-no-files-found: error
       - name: Build WPF edge seed
         run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
       - name: W03 real provider GREEN proof on patched tree
