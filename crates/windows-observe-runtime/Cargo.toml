@@ -19,7 +19,6 @@ tokio.workspace = true
 uuid.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
-localview-validation-lab = { path = "../validation-lab" }
 sha2.workspace = true
 windows = { version = "0.61", features = [
   "Win32_Foundation",
