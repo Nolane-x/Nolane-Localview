@@ -344,6 +344,34 @@ impl LabRunBuilder {
             });
         }
 
+        let preregistered_seed_ids = self
+            .seed_identities
+            .iter()
+            .map(|identity| identity.seed_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut observed_seed_ids = BTreeSet::new();
+        for observation in &self.observations {
+            let Some(seed_id) = observation.seed_id.as_deref() else {
+                return Err(LabError::InvalidRealProviderPass {
+                    reason: "real_provider_pass_requires_seed_bound_observations",
+                });
+            };
+            if !preregistered_seed_ids.contains(seed_id) {
+                return Err(LabError::InvalidRealProviderPass {
+                    reason: "real_provider_pass_rejects_unregistered_seed_observations",
+                });
+            }
+            observed_seed_ids.insert(seed_id);
+        }
+        if preregistered_seed_ids
+            .iter()
+            .any(|seed_id| !observed_seed_ids.contains(seed_id))
+        {
+            return Err(LabError::InvalidRealProviderPass {
+                reason: "real_provider_pass_requires_all_preregistered_seeds",
+            });
+        }
+
         let rpomr = snapshot
             .get(LabMetricKind::Rpomr)
             .expect("RPOMR is always initialized in a metric snapshot");
