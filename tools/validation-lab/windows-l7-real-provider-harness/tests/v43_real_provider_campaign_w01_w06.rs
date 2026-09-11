@@ -162,6 +162,6 @@ mod windows_l7_real_provider_campaign_w01_w06 {
             completed.payload.result_class,
             ResearchResultClass::RealProviderIntegrationPass
         );
-        assert_eq!(completed.payload.observations.len(), 6);
+        assert_eq!(completed.payload.observation_digests.len(), 6);
     }
 }
