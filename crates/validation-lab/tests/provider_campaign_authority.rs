@@ -187,14 +187,17 @@ fn generic_run_cannot_self_promote_to_real_provider_pass() {
 #[test]
 fn typed_l7_run_cannot_pass_without_measured_clean_rpomr() {
     let prereg = preregistration(CampaignLayer::L7, Some("windows-uia-r1"));
-    let mut empty = LabRunBuilder::start_provider_campaign(
+    let mut missing_rpomr = LabRunBuilder::start_provider_campaign(
         ProviderCampaignKind::RealProviderSeedApplications,
         prospective_admission(&prereg),
         actual_authority(&prereg),
     )
     .unwrap();
+    let mut non_rpomr = rpomr_observation(false);
+    non_rpomr.eligible_metrics.clear();
+    missing_rpomr.append_observation(non_rpomr).unwrap();
     assert_eq!(
-        empty
+        missing_rpomr
             .finalize(ResultEvidence::RealProviderIntegrationPass, 30)
             .unwrap_err(),
         LabError::InvalidRealProviderPass {
