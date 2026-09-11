@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   windows-real-provider-seeds:
-    name: V4.3 L7 Windows real-provider seeds W01/W02/W06
+    name: V4.3 L7 Windows real-provider seeds W01/W02/W04/W06
     runs-on: windows-latest
     timeout-minutes: 10
     env:
@@ -75,6 +75,15 @@ jobs:
             throw "required W02 real-provider test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_seeds $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W04 unsupported Invoke stays unsupported through real UIA dispatch boundary
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w04::w04_unsupported_invoke_is_observed_and_rejected_at_dispatch"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w04 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W04 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w04 $testName -- --ignored --exact --nocapture --test-threads=1
       - name: Prospective L7 campaign binds W01/W02/W06 to exact candidate
         shell: pwsh
         run: |
