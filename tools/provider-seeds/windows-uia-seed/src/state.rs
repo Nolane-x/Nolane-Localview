@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,13 +21,22 @@ pub struct SeedState {
     ground_truth: GroundTruth,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeedStateError {
-    #[error("seed process is terminal")]
     Terminal,
-    #[error("name-change burst must contain at least one mutation")]
     EmptyNameBurst,
 }
+
+impl fmt::Display for SeedStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Terminal => "seed process is terminal",
+            Self::EmptyNameBurst => "name-change burst must contain at least one mutation",
+        })
+    }
+}
+
+impl std::error::Error for SeedStateError {}
 
 impl SeedState {
     pub fn new(
