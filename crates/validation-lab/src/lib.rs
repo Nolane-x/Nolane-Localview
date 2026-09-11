@@ -14,6 +14,7 @@
 mod artifact;
 mod canonical;
 mod differential_adapter;
+mod fake_provider_adapter;
 mod identity;
 mod metamorphic_adapter;
 mod metrics;
@@ -29,6 +30,9 @@ pub use canonical::{CanonicalDigest, canonical_digest, canonical_json_bytes};
 pub use differential_adapter::{
     DifferentialVector, DifferentialVectorSetInput, DifferentialVectorSetLabRecord,
     adapt_differential_vector_set,
+};
+pub use fake_provider_adapter::{
+    FakeProviderCaseInput, FakeProviderLabRecord, FakeProviderScenario, adapt_fake_provider_case,
 };
 pub use identity::{CompletedLabRunIdentity, LabRevisionContext};
 pub use metamorphic_adapter::{
@@ -85,6 +89,8 @@ pub enum LabError {
     UnsupportedDifferentialComparisonMode { mode: String },
     #[error("duplicate L6 differential vector identity: {vector_id}")]
     DuplicateDifferentialVectorId { vector_id: String },
+    #[error("invalid L7 fake-provider scenario: {reason}")]
+    InvalidFakeProviderScenario { reason: &'static str },
     #[error("state-space declared bound must be greater than zero, got {declared_bound}")]
     InvalidStateSpaceBound { declared_bound: usize },
     #[error(
