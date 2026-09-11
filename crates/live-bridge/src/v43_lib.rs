@@ -293,6 +293,19 @@ impl LiveBridge {
                     events: vec![event],
                 })
                 .await;
+
+            // Ordering-opaque callbacks are useful invalidation evidence, not
+            // freshness authority. Once such a callback is accepted, any
+            // snapshot reconciled before that callback can no longer remain the
+            // current authoritative world view. Keep the continuity state opaque
+            // and clear only snapshot completeness; the runtime can then perform
+            // one bounded reconciliation without laundering event reliability.
+            if legacy_report.accepted > 0
+                && state.event_continuity == EventContinuityState::OrderingOpaque
+            {
+                state.reconciliation = None;
+            }
+
             accepted += legacy_report.accepted;
             rejected_stale += legacy_report.rejected_stale;
         }
