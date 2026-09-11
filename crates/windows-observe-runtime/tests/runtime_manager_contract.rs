@@ -238,7 +238,7 @@ async fn attach_owns_subscription_binds_opaque_lineage_and_establishes_initial_s
 }
 
 #[tokio::test]
-async fn contiguous_callback_drain_does_not_poll_snapshot_but_gap_reconciles_once() {
+async fn opaque_callback_reconciles_once_gap_reconciles_again_and_quiet_drain_does_not_poll() {
     let bridge = LiveBridge::new(64, 8);
     let provider = FakeProvider::new(vec![
         WindowsUiaEventDrain {
@@ -270,11 +270,15 @@ async fn contiguous_callback_drain_does_not_poll_snapshot_but_gap_reconciles_onc
     );
 
     let first = manager.drain_once(session()).await.unwrap();
-    assert!(!first.reconciliation_performed);
+    assert!(
+        first.reconciliation_performed,
+        "an accepted callback under opaque ordering invalidates the pre-callback snapshot"
+    );
+    assert_eq!(first.status.event_continuity, EventContinuityState::OrderingOpaque);
     assert_eq!(
         provider.counts().0,
-        1,
-        "contiguous callbacks must not trigger UI tree polling"
+        2,
+        "one accepted opaque callback causes exactly one bounded reconciliation snapshot"
     );
 
     let second = manager.drain_once(session()).await.unwrap();
@@ -289,8 +293,8 @@ async fn contiguous_callback_drain_does_not_poll_snapshot_but_gap_reconciles_onc
     );
     assert_eq!(
         provider.counts().0,
-        2,
-        "one observed gap causes one bounded reconciliation snapshot"
+        3,
+        "one observed gap causes one additional bounded reconciliation snapshot"
     );
 
     let third = manager.drain_once(session()).await.unwrap();
@@ -305,8 +309,8 @@ async fn contiguous_callback_drain_does_not_poll_snapshot_but_gap_reconciles_onc
     );
     assert_eq!(
         provider.counts().0,
-        2,
-        "reconciled historical gap must not trigger repeat snapshots"
+        3,
+        "quiet drain after reconciliation must not trigger repeat snapshots"
     );
 }
 

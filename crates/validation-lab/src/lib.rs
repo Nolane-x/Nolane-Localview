@@ -20,6 +20,7 @@ mod metamorphic_adapter;
 mod metrics;
 mod mutation_adapter;
 mod preregistration;
+mod real_provider_adapter;
 mod result;
 mod seeds;
 mod semantic_adapter;
@@ -47,7 +48,12 @@ pub use mutation_adapter::{
 };
 pub use preregistration::{
     CampaignLayer, LabPreregistration, PersistedPreregistrationReceipt, PreparedPreregistration,
-    PreregistrationReceiptProjection, ValidatedPreregistrationReceipt, validate_persisted_receipt,
+    PreregistrationReceiptProjection, ProviderCampaignKind, ValidatedPreregistrationReceipt,
+    validate_persisted_receipt, validate_provider_campaign_layer,
+};
+pub use real_provider_adapter::{
+    RealProviderCaseInput, RealProviderCaseKind, RealProviderGroundTruth, RealProviderLabRecord,
+    RealProviderObservedOutcome, adapt_real_provider_case, derive_real_provider_campaign_evidence,
 };
 pub use result::{
     ActualExecutionAuthority, CompletedLabRun, DowngradeReason, ExecutionMode, LabResultPayload,
@@ -89,8 +95,22 @@ pub enum LabError {
     UnsupportedDifferentialComparisonMode { mode: String },
     #[error("duplicate L6 differential vector identity: {vector_id}")]
     DuplicateDifferentialVectorId { vector_id: String },
-    #[error("invalid L7 fake-provider scenario: {reason}")]
+    #[error("invalid L6 fake-provider scenario: {reason}")]
     InvalidFakeProviderScenario { reason: &'static str },
+    #[error("invalid L7 real-provider scenario: {reason}")]
+    InvalidRealProviderScenario { reason: &'static str },
+    #[error(
+        "provider campaign {campaign:?} requires layer {expected:?}, but preregistration used {actual:?}"
+    )]
+    ProviderCampaignLayerMismatch {
+        campaign: ProviderCampaignKind,
+        expected: CampaignLayer,
+        actual: CampaignLayer,
+    },
+    #[error("provider campaign authority requires prospective preregistered admission")]
+    ProviderCampaignRequiresProspectiveAdmission,
+    #[error("invalid real-provider integration pass: {reason}")]
+    InvalidRealProviderPass { reason: &'static str },
     #[error("state-space declared bound must be greater than zero, got {declared_bound}")]
     InvalidStateSpaceBound { declared_bound: usize },
     #[error(

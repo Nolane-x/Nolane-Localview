@@ -22,6 +22,37 @@ pub enum CampaignLayer {
     L9,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCampaignKind {
+    FakeProviderSimulator,
+    RealProviderSeedApplications,
+}
+
+impl ProviderCampaignKind {
+    pub const fn required_layer(self) -> CampaignLayer {
+        match self {
+            Self::FakeProviderSimulator => CampaignLayer::L6,
+            Self::RealProviderSeedApplications => CampaignLayer::L7,
+        }
+    }
+}
+
+pub fn validate_provider_campaign_layer(
+    campaign: ProviderCampaignKind,
+    actual: CampaignLayer,
+) -> Result<(), LabError> {
+    let expected = campaign.required_layer();
+    if actual != expected {
+        return Err(LabError::ProviderCampaignLayerMismatch {
+            campaign,
+            expected,
+            actual,
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LabPreregistration {
     pub revision_context: LabRevisionContext,

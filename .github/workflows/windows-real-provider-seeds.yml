@@ -1,0 +1,93 @@
+name: Windows Real Provider Seeds
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-real-provider-seeds-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-real-provider-seeds:
+    name: V4.3 L7 Windows real-provider seeds W01/W02/W06
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Compile and test isolated Windows seed package
+        run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
+      - name: Bind hosted Windows environment authority
+        shell: pwsh
+        run: |
+          $artifactDir = Join-Path $env:RUNNER_TEMP "localview-l7-real-provider"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          "LOCALVIEW_L7_ARTIFACT_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_WINDOWS_BUILD=$([System.Environment]::OSVersion.VersionString)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $culture = (Get-Culture).Name
+          $uiCulture = (Get-UICulture).Name
+          "LOCALVIEW_LOCALE_INPUT_METHOD=culture=$culture;ui-culture=$uiCulture;input-method=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_DISPLAY_TOPOLOGY=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_DPI_SCALE=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_PERMISSION_STATE=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: W02 same-provider element ABA authority contract
+        run: cargo test -p localview-validation-lab --test w02_same_provider_incarnation -- --nocapture --test-threads=1
+      - name: Opaque callback reconciliation authority contract
+        run: cargo test -p localview-windows-observe-runtime --test opaque_callback_reconciliation_contract -- --nocapture --test-threads=1
+      - name: W06 provider worker reacquire rejects stale authority and cleans up
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w06::w06_provider_reacquire_rebinds_incarnation_and_cleans_up"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w06 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W06 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w06 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W01 missing/coalesced property events require reconciliation
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_seeds::w01_missing_or_coalesced_property_events_require_reconciliation"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_seeds -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W01 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_seeds $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W02 recreated element never resurrects stale identity
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_seeds::w02_recreated_element_never_resurrects_stale_identity"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_seeds -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W02 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_seeds $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Prospective L7 campaign binds W01/W02/W06 to exact candidate
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_w02_w06_to_exact_candidate"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required prospective L7 campaign test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Publish bounded L7 Lab artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-l7-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 14

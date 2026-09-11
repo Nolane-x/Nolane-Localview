@@ -1,0 +1,24 @@
+[package]
+name = "localview-windows-l7-real-provider-harness"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace]
+
+[[test]]
+name = "v43_real_provider_campaign"
+path = "tests/v43_real_provider_campaign.rs"
+
+[target.'cfg(windows)'.dependencies]
+localview-live-bridge = { path = "../../../crates/live-bridge" }
+localview-native-provider = { path = "../../../crates/native-provider" }
+localview-protocol = { path = "../../../crates/protocol" }
+localview-validation-lab = { path = "../../../crates/validation-lab" }
+localview-windows-observe-runtime = { path = "../../../crates/windows-observe-runtime" }
+localview-windows-uia-provider = { path = "../../../crates/windows-uia-provider" }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+uuid = { version = "1", features = ["serde", "v4"] }

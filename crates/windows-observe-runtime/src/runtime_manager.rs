@@ -687,8 +687,17 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
             .observation_status(session_id)
             .await
             .ok_or(WindowsObserveRuntimeError::ObservationStateMissing { session_id })?;
-        let reconciliation_needed = requires_reconciliation(report.continuity)
-            && observed_status.current_snapshot_completeness.is_none();
+        // Windows UIA's declared event profile is OpaqueBestEffort and does not
+        // guarantee complete property-change coverage. Any accepted callback can
+        // therefore prove that the pre-callback snapshot is no longer current,
+        // even when provider-local sequences remain contiguous and no bounded
+        // buffer drop is observable. Reconcile once for that accepted batch; an
+        // empty drain still performs no polling.
+        let opaque_callback_requires_reconciliation = report.ingest.accepted > 0
+            && report.continuity == EventContinuityState::OrderingOpaque;
+        let reconciliation_needed = opaque_callback_requires_reconciliation
+            || (requires_reconciliation(report.continuity)
+                && observed_status.current_snapshot_completeness.is_none());
 
         // Reconciliation is a distinct authority decision. The observation may
         // have been admitted before pressure rose while processing the callback
