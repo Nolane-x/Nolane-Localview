@@ -24,6 +24,8 @@ jobs:
           components: rustfmt, clippy
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
+      - name: Opaque callback reconciliation authority contract
+        run: cargo test -p localview-windows-observe-runtime --test opaque_callback_reconciliation_contract -- --nocapture --test-threads=1
       - name: W01 real event gap requires reconciliation
         env:
           LOCALVIEW_UIA_SMOKE: "1"
