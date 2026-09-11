@@ -8,6 +8,7 @@ pub enum SeedCommand {
     GetGroundTruth,
     BurstNameChanges { names: Vec<String> },
     RecreateControl,
+    PresentUnsupportedInvokeControl,
     Shutdown,
 }
 
