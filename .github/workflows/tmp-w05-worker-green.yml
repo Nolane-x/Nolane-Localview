@@ -1,0 +1,42 @@
+name: Temporary W05 Worker Poison GREEN
+
+on:
+  push:
+    branches:
+      - feat/v43-l7-windows-w03-w04-w05-closure
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply deterministic W05 worker poison patch
+        run: python tools/dev/patch_w05_worker_poison.py
+      - name: Normalize Rust formatting
+        run: cargo fmt --all
+      - name: W05 timeout poison contract
+        run: cargo test -p localview-windows-uia-provider --test worker_timeout_poison_contract -- --nocapture
+      - name: Compile Windows UIA provider all targets
+        run: cargo check -p localview-windows-uia-provider --all-targets
+      - name: Commit GREEN worker poison implementation
+        shell: pwsh
+        run: |
+          Remove-Item tools/dev/patch_w05_worker_poison.py
+          Remove-Item .github/workflows/tmp-w05-worker-green.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/windows-uia-provider/src/event_buffer_lib.rs crates/windows-uia-provider/src/lib.rs crates/windows-uia-provider/src/worker_health.rs crates/windows-uia-provider/tests/worker_timeout_poison_contract.rs tools/dev/patch_w05_worker_poison.py .github/workflows/tmp-w05-worker-green.yml
+          git diff --cached --check
+          git commit -m "feat(v43): poison Windows UIA worker after command timeout"
+          git push origin HEAD:feat/v43-l7-windows-w03-w04-w05-closure
