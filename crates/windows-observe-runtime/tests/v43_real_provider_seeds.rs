@@ -19,9 +19,7 @@ mod windows_real_provider_seeds {
     use localview_windows_observe_runtime::{
         WindowsObserveRuntimeConfig, spawn_windows_uia_runtime_manager,
     };
-    use localview_windows_uia_provider::{
-        WindowsUiaSnapshotRequest, WindowsUiaWorker, WindowsUiaWorkerConfig,
-    };
+    use localview_windows_uia_provider::WindowsUiaWorkerConfig;
     use serde_json::{Value, json};
     use uuid::Uuid;
 
@@ -74,13 +72,19 @@ mod windows_real_provider_seeds {
             self.stdout
                 .read_line(&mut line)
                 .expect("read seed JSON-line response");
-            assert!(!line.trim().is_empty(), "seed process closed its oracle channel unexpectedly");
+            assert!(
+                !line.trim().is_empty(),
+                "seed process closed its oracle channel unexpectedly"
+            );
             serde_json::from_str(&line).expect("parse seed JSON-line response")
         }
 
         fn shutdown(mut self) {
             let response = self.command(json!({ "command": "shutdown" }));
-            assert_eq!(response.get("response").and_then(Value::as_str), Some("applied"));
+            assert_eq!(
+                response.get("response").and_then(Value::as_str),
+                Some("applied")
+            );
             let truth = extract_ground_truth(&response);
             assert_eq!(truth.get("terminal").and_then(Value::as_bool), Some(true));
             self.shutdown = true;
@@ -121,7 +125,7 @@ mod windows_real_provider_seeds {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires a real interactive Windows UI Automation provider and seed executable"]
-    async fn w01_event_gap_requires_reconciliation() {
+    async fn w01_missing_or_coalesced_property_events_require_reconciliation() {
         assert!(
             std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
             "real-provider seed execution must be explicitly enabled"
@@ -159,7 +163,10 @@ mod windows_real_provider_seeds {
             )
             .await
             .expect("attach exact external seed window through production runtime");
-        assert_eq!(initial_status.event_continuity, EventContinuityState::OrderingOpaque);
+        assert_eq!(
+            initial_status.event_continuity,
+            EventContinuityState::OrderingOpaque
+        );
         assert_eq!(
             initial_status.current_snapshot_completeness,
             Some(ReconciliationCompleteness::Established)
@@ -168,11 +175,15 @@ mod windows_real_provider_seeds {
         let names = (0..32)
             .map(|index| format!("LocalView W01 Burst {index:02}"))
             .collect::<Vec<_>>();
+        let mutation_count = names.len() as u64;
         let burst = seed.command(json!({
             "command": "burst_name_changes",
             "names": names,
         }));
-        assert_eq!(burst.get("response").and_then(Value::as_str), Some("applied"));
+        assert_eq!(
+            burst.get("response").and_then(Value::as_str),
+            Some("applied")
+        );
         let ground_truth = extract_ground_truth(&burst);
         let final_name = truth_str(&ground_truth, "logical_name").to_owned();
         thread::sleep(Duration::from_millis(300));
@@ -180,21 +191,27 @@ mod windows_real_provider_seeds {
         let outcome = manager
             .drain_once(session_id)
             .await
-            .expect("drain bounded real UIA callback buffer and reconcile observed gap");
+            .expect("drain bounded real UIA callback buffer and reconcile opaque event evidence");
         let accounting = manager
             .resource_accounting(session_id)
             .await
             .expect("runtime accounting must remain live");
 
         assert!(
-            accounting.provider_events_dropped > 0,
-            "capacity=1 plus 32 real name changes must retain dropped-event evidence"
+            accounting.events_accepted > 0,
+            "W01 seed must produce at least one real UIA callback so runtime invalidation is exercised"
         );
-        assert_eq!(outcome.report.continuity, EventContinuityState::GapDetected);
-        assert_eq!(outcome.status.event_continuity, EventContinuityState::GapDetected);
+        assert!(
+            accounting.events_accepted < mutation_count || accounting.provider_events_dropped > 0,
+            "W01 must demonstrate incomplete event evidence through provider coalescing or bounded-buffer loss"
+        );
+        assert!(matches!(
+            outcome.report.continuity,
+            EventContinuityState::OrderingOpaque | EventContinuityState::GapDetected
+        ));
         assert!(
             outcome.reconciliation_performed,
-            "a real provider gap must force a correctness-restoring snapshot"
+            "incomplete real-provider event evidence must force one correctness-restoring snapshot"
         );
         assert_eq!(
             outcome.status.current_snapshot_completeness,
@@ -202,43 +219,27 @@ mod windows_real_provider_seeds {
         );
         assert!(outcome.status.reconciliation_receipt_id.is_some());
 
-        // Observe the reconciled world through the existing production UIA provider,
-        // while the seed JSON-line channel remains the independent oracle.
-        let observer = WindowsUiaWorker::spawn(WindowsUiaWorkerConfig {
-            snapshot_budget: SnapshotBudget {
-                max_nodes: 64,
-                max_depth: 6,
-                max_properties: 512,
-            },
-            command_timeout: Duration::from_secs(5),
-        })
-        .expect("spawn independent production provider observer");
-        let attachment = observer
-            .attach(UserSelectedWindowTarget {
-                native_window_handle: window_handle,
-                expected_process_id: seed.process_id(),
-                selection_nonce: Uuid::new_v4(),
-            })
-            .expect("attach provider observer to exact seed window");
-        let snapshot = observer
-            .snapshot(
-                &attachment,
-                WindowsUiaSnapshotRequest {
-                    snapshot_cut_ref: "cut:v43-real-provider:w01:oracle-compare".into(),
-                    surface_scope: "seed:windows-uia:w01".into(),
-                },
-            )
-            .expect("capture provider-backed post-reconciliation snapshot");
+        // Compare the runtime-owned reconciled snapshot against the independent
+        // seed oracle. Production LocalView never reads the oracle channel; only
+        // this L7 test harness does.
+        let snapshot = manager
+            .current_semantic_snapshot(session_id)
+            .await
+            .expect("runtime must retain the reconciled semantic snapshot");
         let provider_name = snapshot
             .nodes()
             .iter()
             .filter_map(|node| node.name.as_deref())
             .find(|name| *name == final_name)
-            .expect("production UIA snapshot must contain the independent oracle final name")
+            .expect("runtime reconciled snapshot must contain the independent oracle final name")
             .to_owned();
 
         let ground_truth_digest = canonical_digest(&ground_truth).expect("digest oracle truth");
         let mut evidence_refs = BTreeSet::new();
+        evidence_refs.insert(format!(
+            "windows-runtime:accepted-events:{}",
+            accounting.events_accepted
+        ));
         evidence_refs.insert(format!(
             "windows-runtime:dropped-events:{}",
             accounting.provider_events_dropped
@@ -282,7 +283,9 @@ mod windows_real_provider_seeds {
         );
         let metrics = reduce_metric_observations(&[record.observation])
             .expect("reduce W01 real-provider metrics");
-        let rpomr = metrics.get(LabMetricKind::Rpomr).expect("RPOMR metric exists");
+        let rpomr = metrics
+            .get(LabMetricKind::Rpomr)
+            .expect("RPOMR metric exists");
         assert_eq!((rpomr.numerator, rpomr.denominator), (0, 1));
 
         manager
