@@ -13,10 +13,7 @@ fn first_timeout_poisons_worker_and_later_commands_fail_fast() {
         health.recv_timeout(&receiver, Duration::from_millis(1)),
         Err(WorkerReceiveError::Timeout)
     );
-    assert_eq!(
-        health.ensure_healthy(),
-        Err(WorkerHealthError::Poisoned)
-    );
+    assert_eq!(health.ensure_healthy(), Err(WorkerHealthError::Poisoned));
     assert!(health.is_poisoned());
 }
 

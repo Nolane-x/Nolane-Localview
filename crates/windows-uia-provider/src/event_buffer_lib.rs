@@ -13,6 +13,7 @@ mod subscription;
 mod virtualized_item;
 #[path = "lib.rs"]
 mod worker;
+mod worker_health;
 
 pub use action_capability::*;
 pub use dispatch_context::*;

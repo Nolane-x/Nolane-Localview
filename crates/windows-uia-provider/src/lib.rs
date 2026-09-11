@@ -78,6 +78,8 @@ pub enum WindowsUiaWorkerError {
     WorkerUnavailable,
     #[error("Windows UI Automation provider command timed out")]
     CommandTimeout,
+    #[error("Windows UI Automation worker is poisoned after a command timeout")]
+    WorkerPoisoned,
     #[error("Windows UI Automation target identity changed after attachment")]
     TargetReincarnated,
     #[error("Windows UI Automation snapshot request is invalid")]
@@ -191,6 +193,7 @@ mod platform {
     use windows::core::BSTR;
 
     use super::*;
+    use crate::worker_health::{WorkerHealth, WorkerReceiveError};
     use crate::{
         WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact,
         WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
@@ -294,6 +297,7 @@ mod platform {
         sender: Sender<WorkerCommand>,
         command_timeout: Duration,
         provider_incarnation_ref: ProviderIncarnationRef,
+        health: Arc<WorkerHealth>,
     }
 
     impl fmt::Debug for WindowsUiaWorker {
@@ -339,7 +343,28 @@ mod platform {
                 sender: command_tx,
                 command_timeout: config.command_timeout,
                 provider_incarnation_ref,
+                health: Arc::new(WorkerHealth::new()),
             })
+        }
+
+        fn ensure_healthy(&self) -> Result<(), WindowsUiaWorkerError> {
+            self.health
+                .ensure_healthy()
+                .map_err(|_| WindowsUiaWorkerError::WorkerPoisoned)
+        }
+
+        fn receive<T>(
+            &self,
+            receiver: &Receiver<Result<T, WindowsUiaWorkerError>>,
+        ) -> Result<T, WindowsUiaWorkerError> {
+            match self.health.recv_timeout(receiver, self.command_timeout) {
+                Ok(result) => result,
+                Err(WorkerReceiveError::Poisoned) => Err(WindowsUiaWorkerError::WorkerPoisoned),
+                Err(WorkerReceiveError::Timeout) => Err(WindowsUiaWorkerError::CommandTimeout),
+                Err(WorkerReceiveError::Disconnected) => {
+                    Err(WindowsUiaWorkerError::WorkerUnavailable)
+                }
+            }
         }
 
         pub fn provider_incarnation_ref(&self) -> &ProviderIncarnationRef {
@@ -351,13 +376,14 @@ mod platform {
             selection: UserSelectedWindowTarget,
         ) -> Result<WindowsUiaAttachment, WindowsUiaWorkerError> {
             let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::Attach {
                     selection,
                     reply: reply_tx,
                 })
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
-            recv_command(reply_rx, self.command_timeout)
+            self.receive(&reply_rx)
         }
 
         pub fn snapshot(
@@ -374,6 +400,7 @@ mod platform {
             }
 
             let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::Snapshot {
                     attachment: attachment.clone(),
@@ -381,7 +408,7 @@ mod platform {
                     reply: reply_tx,
                 })
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
-            recv_command(reply_rx, self.command_timeout)
+            self.receive(&reply_rx)
         }
 
         pub fn bind_element_lease(
@@ -397,6 +424,7 @@ mod platform {
             }
 
             let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::BindElementLease {
                     attachment: attachment.clone(),
@@ -404,7 +432,7 @@ mod platform {
                     reply: reply_tx,
                 })
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
-            recv_command(reply_rx, self.command_timeout)
+            self.receive(&reply_rx)
         }
 
         pub fn revalidate_dispatch_context(
@@ -420,6 +448,7 @@ mod platform {
             }
 
             let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::RevalidateDispatchContext {
                     attachment: attachment.clone(),
@@ -427,7 +456,7 @@ mod platform {
                     reply: reply_tx,
                 })
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
-            recv_command(reply_rx, self.command_timeout)
+            self.receive(&reply_rx)
         }
 
         pub fn dispatch_pattern(
@@ -448,6 +477,7 @@ mod platform {
                 return Err(WindowsUiaWorkerError::InvalidPatternDispatchRequest);
             }
             let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::DispatchPattern {
                     attachment: attachment.clone(),
@@ -455,7 +485,7 @@ mod platform {
                     reply: reply_tx,
                 })
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
-            recv_command(reply_rx, self.command_timeout)
+            self.receive(&reply_rx)
         }
 
         pub fn dispatch_set_value(
@@ -478,6 +508,7 @@ mod platform {
                 return Err(WindowsUiaWorkerError::InvalidSetValueDispatchRequest);
             }
             let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::DispatchSetValue {
                     attachment: attachment.clone(),
@@ -485,7 +516,7 @@ mod platform {
                     reply: reply_tx,
                 })
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
-            recv_command(reply_rx, self.command_timeout)
+            self.receive(&reply_rx)
         }
 
         pub(crate) fn query_virtualized_item_on_mta(
@@ -503,6 +534,7 @@ mod platform {
             }
 
             let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::QueryVirtualizedItem {
                     attachment: attachment.clone(),
@@ -510,7 +542,7 @@ mod platform {
                     reply: reply_tx,
                 })
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
-            recv_command(reply_rx, self.command_timeout)
+            self.receive(&reply_rx)
         }
 
         pub(crate) fn realize_virtualized_item_on_mta(
@@ -528,6 +560,7 @@ mod platform {
             }
 
             let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::RealizeVirtualizedItem {
                     attachment: attachment.clone(),
@@ -535,7 +568,7 @@ mod platform {
                     reply: reply_tx,
                 })
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
-            recv_command(reply_rx, self.command_timeout)
+            self.receive(&reply_rx)
         }
 
         pub fn verify_set_value(
@@ -556,6 +589,7 @@ mod platform {
                 return Err(WindowsUiaWorkerError::InvalidSetValueVerificationRequest);
             }
             let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::VerifySetValue {
                     attachment: attachment.clone(),
@@ -563,7 +597,7 @@ mod platform {
                     reply: reply_tx,
                 })
                 .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
-            recv_command(reply_rx, self.command_timeout)
+            self.receive(&reply_rx)
         }
     }
 
@@ -573,17 +607,6 @@ mod platform {
             // LocalView caller during cleanup. A responsive worker consumes this
             // shutdown command and uninitializes COM on its owning MTA thread.
             let _ = self.sender.send(WorkerCommand::Shutdown);
-        }
-    }
-
-    fn recv_command<T>(
-        receiver: Receiver<Result<T, WindowsUiaWorkerError>>,
-        timeout: Duration,
-    ) -> Result<T, WindowsUiaWorkerError> {
-        match receiver.recv_timeout(timeout) {
-            Ok(result) => result,
-            Err(RecvTimeoutError::Timeout) => Err(WindowsUiaWorkerError::CommandTimeout),
-            Err(RecvTimeoutError::Disconnected) => Err(WindowsUiaWorkerError::WorkerUnavailable),
         }
     }
 
