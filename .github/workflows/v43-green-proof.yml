@@ -16,6 +16,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run pure verified input contract
         run: cargo test -p localview-windows-uia-provider --test verified_input_contract -- --nocapture
+      - name: Run verified input authority binding contract
+        run: cargo test -p localview-windows-uia-provider --test verified_input_authority_binding_contract -- --nocapture
       - name: Run verified input boundary contract
         run: cargo test -p localview-windows-uia-provider --test verified_input_worker_contract -- --nocapture
       - name: Run W07 W08 W09 lab contract
