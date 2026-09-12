@@ -190,7 +190,8 @@ mod platform {
                 UIA_ValuePatternId, UIA_VirtualizedItemPatternId,
             },
             WindowsAndMessaging::{
-                GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsWindowVisible, GW_ENABLEDPOPUP,
+                GW_ENABLEDPOPUP, GetForegroundWindow, GetWindow, GetWindowThreadProcessId,
+                IsWindowVisible,
             },
         },
     };
@@ -1117,20 +1118,26 @@ mod platform {
 
             let target_hwnd = hwnd_from_u64(attachment.selection.native_window_handle);
             let modal_blocker_window_handle = if request.requirements.require_no_modal_blocker {
-                let popup = unsafe {
+                match unsafe {
                     // SAFETY: target HWND was revalidated by exact_retained_element.
                     GetWindow(target_hwnd, GW_ENABLEDPOPUP)
-                        .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?
-                };
-                let popup_handle = hwnd_to_u64(popup);
-                match popup_handle {
-                    Some(handle)
-                        if handle != attachment.selection.native_window_handle
-                            && unsafe { IsWindowVisible(popup) }.as_bool() =>
-                    {
-                        Some(handle)
+                } {
+                    Ok(popup) => {
+                        let popup_handle = hwnd_to_u64(popup);
+                        match popup_handle {
+                            Some(handle)
+                                if handle != attachment.selection.native_window_handle
+                                    && unsafe { IsWindowVisible(popup) }.as_bool() =>
+                            {
+                                Some(handle)
+                            }
+                            _ => None,
+                        }
                     }
-                    _ => None,
+                    Err(error) if error.code().is_ok() => None,
+                    Err(error) => {
+                        return Err(WindowsUiaWorkerError::ProviderFailure(error.to_string()));
+                    }
                 }
             } else {
                 None
