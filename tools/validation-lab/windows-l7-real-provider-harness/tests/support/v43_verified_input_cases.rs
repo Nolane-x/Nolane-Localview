@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, thread, time::{Duration, Instant}};
+use std::collections::BTreeSet;
+
+#[path = "v43_verified_input_full_smoke.rs"]
+mod full_smoke;
 
 use localview_protocol::DispatchResult;
 use localview_validation_lab::{
@@ -12,14 +15,12 @@ use localview_windows_uia_provider::{
     WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextRequirements,
     WindowsUiaWorkerError, WindowsVerifiedInputBoundaryError, WindowsVerifiedInputEnvironment,
     WindowsVerifiedKeyEvent, WindowsVerifiedKeyboardBatch, execute_windows_verified_input_boundary,
-    observe_windows_verified_input_context, snapshot_windows_keyboard_state,
-    windows_insert_verified_key_events,
 };
 use serde_json::json;
 
 use super::verified_input_seed::{
-    EdgeSeedProcess, INPUT_TARGET_AUTOMATION_ID, attach_and_snapshot, mint_verified_input_authority,
-    spawn_worker, truth_bool, truth_u64,
+    EdgeSeedProcess, INPUT_TARGET_AUTOMATION_ID, attach_and_snapshot,
+    mint_verified_input_authority, spawn_worker, truth_bool, truth_u64,
 };
 
 const W08_SYNTHETIC_HWND: u64 = 0x4308;
@@ -62,41 +63,16 @@ impl WindowsVerifiedInputEnvironment for DeterministicPartialInserter {
 
     fn insert_events(&mut self, events: &[WindowsVerifiedKeyEvent]) -> WindowsInputInsertRawResult {
         self.insert_calls += 1;
-        assert_eq!(events.len(), 4, "W08 campaign wrapper must receive exact four-event batch");
+        assert_eq!(
+            events.len(),
+            4,
+            "W08 campaign wrapper must receive exact four-event batch"
+        );
         WindowsInputInsertRawResult {
             requested_event_count: 4,
             inserted_event_count: 2,
             raw_error_code: None,
         }
-    }
-}
-
-struct ProductionWindowsEnvironment {
-    target_window_handle: u64,
-    target_process_id: u32,
-    insert_calls: u32,
-}
-
-impl WindowsVerifiedInputEnvironment for ProductionWindowsEnvironment {
-    fn observe_dispatch_context(
-        &mut self,
-    ) -> Result<WindowsUiaDispatchContextObservation, WindowsVerifiedInputBoundaryError> {
-        observe_windows_verified_input_context(
-            self.target_window_handle,
-            self.target_process_id,
-            true,
-        )
-    }
-
-    fn snapshot_keyboard_state(
-        &mut self,
-    ) -> Result<WindowsKeyboardStateSnapshot, WindowsVerifiedInputBoundaryError> {
-        snapshot_windows_keyboard_state()
-    }
-
-    fn insert_events(&mut self, events: &[WindowsVerifiedKeyEvent]) -> WindowsInputInsertRawResult {
-        self.insert_calls += 1;
-        windows_insert_verified_key_events(events)
     }
 }
 
@@ -130,35 +106,6 @@ fn four_event_wrapper_batch() -> WindowsVerifiedKeyboardBatch {
     .expect("construct deterministic W08 four-event wrapper batch")
 }
 
-fn two_event_space_batch() -> WindowsVerifiedKeyboardBatch {
-    WindowsVerifiedKeyboardBatch::new(vec![
-        WindowsVerifiedKeyEvent {
-            virtual_key: 0x20,
-            transition: WindowsKeyTransition::KeyDown,
-        },
-        WindowsVerifiedKeyEvent {
-            virtual_key: 0x20,
-            transition: WindowsKeyTransition::KeyUp,
-        },
-    ])
-    .expect("construct production W08 Space batch")
-}
-
-fn wait_for_effect(seed: &mut EdgeSeedProcess, timeout: Duration) -> serde_json::Value {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let state = seed.input_state();
-        if truth_u64(&state, "effect_count") > 0 {
-            return state;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "W08 production full insertion reported success but WPF oracle observed no key effect"
-        );
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
 pub async fn run_w07(
     edge_seed_digest: &str,
     environment_digest: &str,
@@ -185,12 +132,9 @@ pub async fn run_w07(
         .iter()
         .find(|node| node.automation_id.as_deref() == Some(INPUT_TARGET_AUTOMATION_ID))
         .expect("campaign W07 snapshot must retain deterministic input target");
-    let authority = mint_verified_input_authority(
-        &attachment,
-        snapshot.as_ref(),
-        target.element_ref.clone(),
-    )
-    .await;
+    let authority =
+        mint_verified_input_authority(&attachment, snapshot.as_ref(), target.element_ref.clone())
+            .await;
 
     let stolen = seed.steal_foreground();
     let thief_window = truth_u64(&stolen, "thief_window_handle");
@@ -282,35 +226,31 @@ pub async fn run_w08(
         WindowsInputInsertionClass::PartialDispatchUnknownOutcome
     );
     assert!(partial.reconciliation_required);
-    assert_eq!(dispatch_result_for_verified_input(&partial), DispatchResult::DispatchedPartial);
-    assert_eq!(wrapper.insert_calls, 1, "W08 partial outcome must not blind-retry");
+    assert_eq!(
+        dispatch_result_for_verified_input(&partial),
+        DispatchResult::DispatchedPartial
+    );
+    assert_eq!(
+        wrapper.insert_calls, 1,
+        "W08 partial outcome must not blind-retry"
+    );
 
     let mut seed = EdgeSeedProcess::spawn();
-    let fixture = seed.prepare_input_target();
-    let target_window = truth_u64(&fixture, "window_handle");
-    let target_process = truth_u64(&fixture, "process_id") as u32;
-    assert!(truth_bool(&fixture, "target_is_foreground"));
-    assert_eq!(truth_u64(&fixture, "effect_count"), 0);
-
-    let mut production = ProductionWindowsEnvironment {
-        target_window_handle: target_window,
-        target_process_id: target_process,
-        insert_calls: 0,
-    };
-    let full = execute_windows_verified_input_boundary(
-        context_requirements(),
-        &two_event_space_batch(),
-        &mut production,
+    let full = full_smoke::run_production_verified_input_full_smoke(
+        &mut seed,
+        "cut:v43:campaign:w08:production-full",
     )
-    .expect("campaign W08 production SendInput smoke must traverse verified receipt path");
-    assert_eq!(production.insert_calls, 1);
+    .await;
     assert_eq!(full.requested_event_count, 2);
     assert_eq!(full.inserted_event_count, 2);
-    assert_eq!(full.insertion_class, WindowsInputInsertionClass::FullyInserted);
+    assert_eq!(
+        full.insertion_class,
+        WindowsInputInsertionClass::FullyInserted
+    );
     assert!(full.reconciliation_required);
-    let after = wait_for_effect(&mut seed, Duration::from_secs(2));
-    assert_eq!(truth_u64(&after, "effect_count"), 1);
-    assert!(truth_bool(&after, "target_is_foreground"));
+    assert_eq!(full.dispatch_result, DispatchResult::DispatchedFull);
+    assert_eq!(full.effect_count, 1);
+    assert!(full.target_is_foreground);
 
     let ground_truth = json!({
         "partial_wrapper": {
@@ -327,10 +267,11 @@ pub async fn run_w08(
             "inserted_event_count": full.inserted_event_count,
             "classification": "fully_inserted",
             "reconciliation_required": full.reconciliation_required,
-            "insert_call_count": production.insert_calls,
-            "oracle_effect_count": truth_u64(&after, "effect_count")
+            "dispatch_result": "dispatched_full",
+            "authority_path": "journal-minted-request-to-exact-uia-worker",
+            "oracle_effect_count": full.effect_count
         },
-        "claim_boundary": "partial-count evidence is deterministic wrapper/property evidence; hosted Windows production evidence proves ordinary full insertion through the same verified receipt boundary"
+        "claim_boundary": "partial-count evidence is deterministic wrapper/property evidence; hosted Windows production evidence proves ordinary full insertion only through journal-minted exact UIA worker authority"
     });
     let record = adapt_real_provider_case(RealProviderCaseInput {
         case_id: "W08-partial-input-dispatch",
@@ -343,7 +284,8 @@ pub async fn run_w08(
             "windows-uia:w08:wrapper-counts:requested=4,inserted=2".into(),
             "windows-uia:w08:wrapper-insert-calls:1".into(),
             "windows-uia:w08:runtime-mapping:dispatched-partial".into(),
-            "windows-uia:w08:production-sendinput-full:requested=2,inserted=2".into(),
+            "windows-uia:w08:production-worker-full:requested=2,inserted=2".into(),
+            "windows-uia:w08:production-authority-path:journal-minted-exact-uia-worker".into(),
             "windows-uia:w08:production-oracle-effect-count:1".into(),
         ]),
         ground_truth: RealProviderGroundTruth {
@@ -393,12 +335,9 @@ pub async fn run_w09(
         .iter()
         .find(|node| node.automation_id.as_deref() == Some(INPUT_TARGET_AUTOMATION_ID))
         .expect("campaign W09 snapshot must retain deterministic input target");
-    let authority = mint_verified_input_authority(
-        &attachment,
-        snapshot.as_ref(),
-        target.element_ref.clone(),
-    )
-    .await;
+    let authority =
+        mint_verified_input_authority(&attachment, snapshot.as_ref(), target.element_ref.clone())
+            .await;
 
     let held = seed.hold_shift();
     assert!(truth_bool(&held, "shift_down"));

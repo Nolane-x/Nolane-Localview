@@ -1,4 +1,12 @@
 #[cfg(windows)]
+#[path = "support/v43_verified_input_seed.rs"]
+mod verified_input_seed;
+
+#[cfg(windows)]
+#[path = "support/v43_verified_input_full_smoke.rs"]
+mod verified_input_full_smoke;
+
+#[cfg(windows)]
 mod windows_real_provider_w08 {
     use std::{fs, path::PathBuf};
 
@@ -57,7 +65,11 @@ mod windows_real_provider_w08 {
             events: &[WindowsVerifiedKeyEvent],
         ) -> WindowsInputInsertRawResult {
             self.insert_calls += 1;
-            assert_eq!(events.len(), 4, "W08 wrapper must receive the exact authorized batch");
+            assert_eq!(
+                events.len(),
+                4,
+                "W08 wrapper must receive the exact authorized batch"
+            );
             WindowsInputInsertRawResult {
                 requested_event_count: 4,
                 inserted_event_count: 2,
@@ -147,5 +159,74 @@ mod windows_real_provider_w08 {
             )
             .expect("persist W08 wrapper artifact");
         }
+    }
+}
+
+#[cfg(windows)]
+mod windows_real_provider_w08_full {
+    use std::{fs, path::PathBuf};
+
+    use localview_protocol::DispatchResult;
+    use localview_windows_uia_provider::WindowsInputInsertionClass;
+    use serde_json::json;
+
+    use super::{
+        verified_input_full_smoke::run_production_verified_input_full_smoke,
+        verified_input_seed::EdgeSeedProcess,
+    };
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires interactive Windows desktop and WPF edge seed"]
+    async fn w08_production_worker_full_dispatch_uses_authority_path() {
+        assert!(
+            std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
+            "real production input smoke must be explicitly enabled"
+        );
+
+        let mut seed = EdgeSeedProcess::spawn();
+        let full = run_production_verified_input_full_smoke(
+            &mut seed,
+            "cut:v43:w08:production-worker-full",
+        )
+        .await;
+        assert_eq!(full.requested_event_count, 2);
+        assert_eq!(full.inserted_event_count, 2);
+        assert_eq!(
+            full.insertion_class,
+            WindowsInputInsertionClass::FullyInserted
+        );
+        assert!(full.reconciliation_required);
+        assert_eq!(full.dispatch_result, DispatchResult::DispatchedFull);
+        assert_eq!(full.effect_count, 1);
+        assert!(full.target_is_foreground);
+
+        if let Some(dir) = std::env::var_os("LOCALVIEW_L7_ARTIFACT_DIR") {
+            let path = PathBuf::from(dir).join("W08-PRODUCTION-FULL-SMOKE.json");
+            let artifact = json!({
+                "case_id": "W08-partial-input-dispatch",
+                "evidence_kind": "production-windows-worker-full-dispatch-smoke",
+                "candidate_sha": std::env::var("LOCALVIEW_CANDIDATE_SHA")
+                    .unwrap_or_else(|_| "unknown:standalone-w08-smoke".into()),
+                "requested_event_count": full.requested_event_count,
+                "inserted_event_count": full.inserted_event_count,
+                "insertion_class": "fully-inserted",
+                "dispatch_result": "dispatched-full",
+                "reconciliation_required": full.reconciliation_required,
+                "authority_path": "journal-minted WindowsUiaVerifiedInputRequest -> WindowsUiaWorker::dispatch_verified_input",
+                "independent_oracle_effect_count": full.effect_count,
+                "natural_windows_partial_observed": false,
+                "claim_boundary": "production backend evidence proves a full dispatch only through the authority-gated worker; it does not claim hosted Windows naturally produced a partial SendInput result"
+            });
+            fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create W08 artifact directory");
+            fs::write(
+                path,
+                serde_json::to_vec_pretty(&artifact)
+                    .expect("serialize W08 production worker smoke artifact"),
+            )
+            .expect("persist W08 production worker smoke artifact");
+        }
+
+        seed.shutdown();
     }
 }

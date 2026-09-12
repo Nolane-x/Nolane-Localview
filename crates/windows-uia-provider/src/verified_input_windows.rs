@@ -150,7 +150,7 @@ fn to_input(event: WindowsVerifiedKeyEvent) -> INPUT {
 
 /// Perform one platform insertion attempt and report the exact raw count. A
 /// zero or partial count is not interpreted here as a particular policy cause.
-pub fn windows_insert_verified_key_events(
+pub(crate) fn windows_insert_verified_key_events(
     events: &[WindowsVerifiedKeyEvent],
 ) -> WindowsInputInsertRawResult {
     let inputs: Vec<INPUT> = events.iter().copied().map(to_input).collect();

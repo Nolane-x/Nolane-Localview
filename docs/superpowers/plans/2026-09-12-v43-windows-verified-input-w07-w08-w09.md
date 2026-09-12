@@ -108,7 +108,7 @@
 - Create/modify `crates/windows-uia-provider/tests/windows_verified_input_smoke.rs`.
 
 - [x] Deterministic wrapper returns exactly 2 accepted of 4 requested through the production classification/receipt path; assert partial+unknown+reconcile+no retry.
-- [x] Separate Windows smoke proves the production backend uses the same receipt path for an ordinary full dispatch against synthetic target.
+- [x] Separate Windows smoke proves the production backend only through a journal-minted request and exact UIA worker for an ordinary full dispatch against synthetic target.
 - [x] Artifacts must distinguish wrapper evidence from real platform full-dispatch evidence; do not claim hosted Windows naturally produced a partial result.
 - [x] Commit.
 
