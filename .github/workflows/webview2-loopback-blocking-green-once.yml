@@ -1,0 +1,62 @@
+name: WebView2 Loopback Blocking GREEN Once
+
+on:
+  push:
+    branches: [fix/webview2-loopback-accepted-stream-blocking]
+    paths:
+      - .github/workflows/webview2-loopback-blocking-green-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prove-webview2-loopback-fix:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_GUI_SMOKE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/webview2-loopback-accepted-stream-blocking
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply minimal accepted-stream blocking fix
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          path = Path("crates/native-capture/tests/windows_gui_smoke.rs")
+          text = path.read_text(encoding="utf-8")
+          old = '''                connection_index = connection_index.saturating_add(1);
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("bound WebView2 fixture request read");'''
+          new = '''                connection_index = connection_index.saturating_add(1);
+                stream
+                    .set_nonblocking(false)
+                    .expect("make accepted WebView2 fixture stream blocking");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("bound WebView2 fixture request read");'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one accepted-stream anchor, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          '@ | python -
+          cargo fmt --all -- --check
+          git diff --check
+          git diff -- crates/native-capture/tests/windows_gui_smoke.rs
+      - name: Prove real WebView2 rendered-pixel smoke GREEN
+        run: cargo test -p localview-native-capture --features gui-smoke --test windows_gui_smoke -- --nocapture
+      - name: Commit only proven fixture fix
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/native-capture/tests/windows_gui_smoke.rs
+          git diff --cached --check
+          if (git diff --cached --quiet) { throw "expected WebView2 fixture fix is missing" }
+          git commit -m "test: make WebView2 accepted stream blocking"
+          git push origin HEAD:fix/webview2-loopback-accepted-stream-blocking
