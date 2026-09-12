@@ -6,7 +6,8 @@ use localview_windows_uia_provider::{
 
 #[test]
 fn raw_verified_input_request_fields_are_not_publicly_constructible() {
-    let source = fs::read_to_string("src/verified_input.rs").expect("read verified_input.rs");
+    let source_path = format!("{}/src/verified_input.rs", env!("CARGO_MANIFEST_DIR"));
+    let source = fs::read_to_string(source_path).expect("read verified_input.rs");
     let start = source
         .find("pub struct WindowsUiaVerifiedInputRequest {")
         .expect("verified-input request must exist");
@@ -26,6 +27,7 @@ fn raw_verified_input_request_fields_are_not_publicly_constructible() {
         "pub target_incarnation_ref:",
         "pub element_ref:",
         "pub context_requirements:",
+        "pub batch_digest:",
         "pub batch:",
     ] {
         assert!(
@@ -46,7 +48,10 @@ fn raw_verified_input_request_fields_are_not_publicly_constructible() {
 
 #[test]
 fn verified_input_receipt_exposes_exact_authority_and_batch_binding() {
-    fn assert_binding_api(receipt: &WindowsUiaVerifiedInputReceipt, request: &WindowsUiaVerifiedInputRequest) {
+    fn assert_binding_api(
+        receipt: &WindowsUiaVerifiedInputReceipt,
+        request: &WindowsUiaVerifiedInputRequest,
+    ) {
         assert_eq!(receipt.dispatch_attempt_ref(), request.dispatch_attempt_ref());
         assert_eq!(receipt.action_id(), request.action_id());
         assert_eq!(
@@ -71,5 +76,6 @@ fn verified_input_receipt_exposes_exact_authority_and_batch_binding() {
         assert!(receipt.boundary().reconciliation_required);
     }
 
-    let _ = assert_binding_api as fn(&WindowsUiaVerifiedInputReceipt, &WindowsUiaVerifiedInputRequest);
+    let _ = assert_binding_api
+        as fn(&WindowsUiaVerifiedInputReceipt, &WindowsUiaVerifiedInputRequest);
 }
