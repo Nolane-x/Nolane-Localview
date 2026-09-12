@@ -1,0 +1,18 @@
+name: V4.3 Green Proof
+
+on:
+  push:
+    branches:
+      - feat/v43-l7-windows-w07-w08-w09-input-authority
+
+permissions:
+  contents: read
+
+jobs:
+  verified-input-green:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run verified input contract
+        run: cargo test -p localview-windows-uia-provider --test verified_input_contract -- --nocapture
