@@ -44,7 +44,9 @@ jobs:
               assert new_call in text, "verified-input verified-call anchor missing"
 
           path.write_text(text)
-      - name: Check formatting
+      - name: Format exact test file
+        run: rustfmt --edition 2024 crates/windows-observe-runtime/tests/execution_coordinator_behavior.rs
+      - name: Check workspace formatting
         run: cargo fmt --all -- --check
       - name: Compile coordinator behavior
         run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior --no-run
