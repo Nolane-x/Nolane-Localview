@@ -113,6 +113,31 @@ impl EdgeSeedProcess {
         response
     }
 
+    pub fn open_modal_blocker(&mut self) -> Value {
+        let response = self.command(json!({ "command": "open_modal_blocker" }));
+        assert_eq!(
+            response.get("ok").and_then(Value::as_bool),
+            Some(true),
+            "W11 edge seed must provide deterministic owned modal blocker: {response}"
+        );
+        assert_eq!(
+            response.get("modal_is_open").and_then(Value::as_bool),
+            Some(true),
+            "W11 must prove the owned modal is visible before LocalView final dispatch boundary"
+        );
+        response
+    }
+
+    pub fn close_modal_blocker(&mut self) -> Value {
+        let response = self.command(json!({ "command": "close_modal_blocker" }));
+        assert_eq!(response.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            response.get("modal_is_open").and_then(Value::as_bool),
+            Some(false)
+        );
+        response
+    }
+
     pub fn hold_shift(&mut self) -> Value {
         let response = self.command(json!({ "command": "hold_shift" }));
         assert_eq!(
@@ -192,7 +217,7 @@ pub fn spawn_worker() -> WindowsUiaWorker {
         },
         command_timeout: Duration::from_secs(5),
     })
-    .expect("spawn production Windows UIA worker for W07/W09")
+    .expect("spawn production Windows UIA worker for W07/W09/W11")
 }
 
 pub fn attach_and_snapshot(
@@ -200,14 +225,17 @@ pub fn attach_and_snapshot(
     seed: &EdgeSeedProcess,
     window_handle: u64,
     cut: &str,
-) -> (WindowsUiaAttachment, std::sync::Arc<localview_native_provider::NativeSemanticSnapshotRevision>) {
+) -> (
+    WindowsUiaAttachment,
+    std::sync::Arc<localview_native_provider::NativeSemanticSnapshotRevision>,
+) {
     let attachment = worker
         .attach(UserSelectedWindowTarget {
             native_window_handle: window_handle,
             expected_process_id: seed.process_id(),
             selection_nonce: Uuid::new_v4(),
         })
-        .expect("attach exact W07/W09 edge-seed target window");
+        .expect("attach exact W07/W09/W11 edge-seed target window");
     let snapshot = worker
         .snapshot(
             &attachment,
@@ -216,7 +244,7 @@ pub fn attach_and_snapshot(
                 surface_scope: "seed:windows-uia:verified-input".into(),
             },
         )
-        .expect("observe exact W07/W09 input target through shipping Windows UIA provider");
+        .expect("observe exact verified-input target through shipping Windows UIA provider");
     (attachment, snapshot)
 }
 

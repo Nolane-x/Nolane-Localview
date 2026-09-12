@@ -69,6 +69,20 @@ internal sealed class OracleProtocol
                         return ReadVerifiedInputStateOnUiThread("steal_foreground");
                     }));
                     break;
+                case "open_modal_blocker":
+                    Write(_window.Dispatcher.Invoke(() =>
+                    {
+                        _window.OpenModalBlocker();
+                        return ReadVerifiedInputStateOnUiThread("open_modal_blocker");
+                    }));
+                    break;
+                case "close_modal_blocker":
+                    Write(_window.Dispatcher.Invoke(() =>
+                    {
+                        _window.CloseModalBlocker();
+                        return ReadVerifiedInputStateOnUiThread("close_modal_blocker");
+                    }));
+                    break;
                 case "hold_shift":
                     Write(_window.Dispatcher.Invoke(() =>
                     {
@@ -177,6 +191,9 @@ internal sealed class OracleProtocol
             target_automation_id = EdgeWindow.VerifiedInputTargetAutomationId,
             window_handle = _window.WindowHandle(),
             thief_window_handle = _window.ForegroundThiefWindowHandle(),
+            modal_window_handle = _window.ModalBlockerWindowHandle(),
+            modal_owner_window_handle = _window.ModalBlockerOwnerWindowHandle(),
+            modal_is_open = _window.IsModalBlockerOpen(),
             foreground_window_handle = _window.ForegroundWindowHandle(),
             target_is_foreground = _window.IsTargetForeground(),
             thief_is_foreground = _window.IsThiefForeground(),
