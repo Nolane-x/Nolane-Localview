@@ -1,5 +1,10 @@
 use thiserror::Error;
 
+use crate::{
+    WindowsUiaDispatchContextBlocker, WindowsUiaDispatchContextObservation,
+    WindowsUiaDispatchContextRequirements, evaluate_windows_uia_dispatch_context,
+};
+
 pub const MAX_VERIFIED_KEY_EVENTS: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,4 +125,102 @@ pub fn classify_windows_input_insertion(
         return Ok(WindowsInputInsertionClass::ZeroInsertedBlocked);
     }
     Ok(WindowsInputInsertionClass::PartialDispatchUnknownOutcome)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsInputInsertRawResult {
+    pub requested_event_count: u32,
+    pub inserted_event_count: u32,
+    pub raw_error_code: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsVerifiedInputBoundaryReceipt {
+    pub dispatch_context: WindowsUiaDispatchContextObservation,
+    pub keyboard_state: WindowsKeyboardStateSnapshot,
+    pub requested_event_count: u32,
+    pub inserted_event_count: u32,
+    pub insertion_class: WindowsInputInsertionClass,
+    pub raw_error_code: Option<u32>,
+    pub reconciliation_required: bool,
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum WindowsVerifiedInputBoundaryError {
+    #[error("verified input environment could not observe final dispatch context")]
+    ContextObservationFailed,
+    #[error("verified input final dispatch context is blocked: {0}")]
+    ContextBlocked(WindowsUiaDispatchContextBlocker),
+    #[error("verified input environment could not snapshot keyboard state")]
+    KeyboardStateObservationFailed,
+    #[error("verified input final keyboard state conflicts with the authorized batch")]
+    InputStateConflict,
+    #[error(
+        "verified input backend reported requested={reported} but the authorized batch contains {expected} events"
+    )]
+    RequestedCountMismatch { expected: u32, reported: u32 },
+    #[error("verified input backend returned an invalid insertion count: {0}")]
+    InvalidInsertionResult(WindowsInputDispatchBlocker),
+}
+
+/// Narrow environment abstraction used to keep the final volatile observations
+/// and the single platform insertion attempt in one explicit ordering boundary.
+/// Production implementations are responsible for collecting these observations
+/// from the live Windows target; tests can exercise the authority semantics
+/// without performing any OS side effect.
+pub trait WindowsVerifiedInputEnvironment {
+    fn observe_dispatch_context(
+        &mut self,
+    ) -> Result<WindowsUiaDispatchContextObservation, WindowsVerifiedInputBoundaryError>;
+
+    fn snapshot_keyboard_state(
+        &mut self,
+    ) -> Result<WindowsKeyboardStateSnapshot, WindowsVerifiedInputBoundaryError>;
+
+    fn insert_events(&mut self, events: &[WindowsVerifiedKeyEvent]) -> WindowsInputInsertRawResult;
+}
+
+/// Execute one verified keyboard boundary in fail-closed order:
+/// final context -> keyboard state -> one insertion attempt -> classification.
+/// No insertion occurs when either volatile fence is blocked.
+pub fn execute_windows_verified_input_boundary<E>(
+    requirements: WindowsUiaDispatchContextRequirements,
+    batch: &WindowsVerifiedKeyboardBatch,
+    environment: &mut E,
+) -> Result<WindowsVerifiedInputBoundaryReceipt, WindowsVerifiedInputBoundaryError>
+where
+    E: WindowsVerifiedInputEnvironment,
+{
+    let dispatch_context = environment.observe_dispatch_context()?;
+    evaluate_windows_uia_dispatch_context(requirements, &dispatch_context)
+        .map_err(WindowsVerifiedInputBoundaryError::ContextBlocked)?;
+
+    let keyboard_state = environment.snapshot_keyboard_state()?;
+    evaluate_windows_keyboard_state(&keyboard_state).map_err(|error| match error {
+        WindowsInputDispatchBlocker::InputStateConflict => {
+            WindowsVerifiedInputBoundaryError::InputStateConflict
+        }
+        other => WindowsVerifiedInputBoundaryError::InvalidInsertionResult(other),
+    })?;
+
+    let raw = environment.insert_events(batch.events());
+    let expected = batch.len() as u32;
+    if raw.requested_event_count != expected {
+        return Err(WindowsVerifiedInputBoundaryError::RequestedCountMismatch {
+            expected,
+            reported: raw.requested_event_count,
+        });
+    }
+    let insertion_class = classify_windows_input_insertion(expected, raw.inserted_event_count)
+        .map_err(WindowsVerifiedInputBoundaryError::InvalidInsertionResult)?;
+
+    Ok(WindowsVerifiedInputBoundaryReceipt {
+        dispatch_context,
+        keyboard_state,
+        requested_event_count: expected,
+        inserted_event_count: raw.inserted_event_count,
+        insertion_class,
+        raw_error_code: raw.raw_error_code,
+        reconciliation_required: true,
+    })
 }
