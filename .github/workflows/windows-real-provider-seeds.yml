@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   windows-real-provider-seeds:
-    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W05/W06
+    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W05/W06/W07/W08/W09
     runs-on: windows-latest
     timeout-minutes: 10
     env:
@@ -35,7 +35,7 @@ jobs:
           dotnet-version: 8.0.x
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
-      - name: Build WPF edge seed for W03/W05/W07/W09
+      - name: Build WPF edge seed for W03/W05/W07/W08/W09
         run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
       - name: Bind hosted Windows environment authority
         shell: pwsh
@@ -117,6 +117,24 @@ jobs:
             throw "required W07 real-provider test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w07 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W08 deterministic partial wrapper preserves unknown and denies retry
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w08::w08_deterministic_partial_wrapper_preserves_unknown_without_retry"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w08 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W08 deterministic wrapper test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w08 $testName -- --exact --nocapture --test-threads=1
+      - name: W08 production SendInput full-dispatch smoke uses verified receipt path
+        shell: pwsh
+        run: |
+          $testName = "production_send_input_full_dispatch_uses_verified_receipt_path"
+          $listed = cargo test -p localview-windows-uia-provider --test windows_verified_input_smoke -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W08 production SendInput smoke is not registered: $testName"
+          }
+          cargo test -p localview-windows-uia-provider --test windows_verified_input_smoke $testName -- --ignored --exact --nocapture --test-threads=1
       - name: W09 held modifier is blocked without normalization or input effect
         shell: pwsh
         run: |
