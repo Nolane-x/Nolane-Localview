@@ -28,11 +28,11 @@ use localview_windows_observe_runtime::{
     WindowsUiaDispatchExecutor, WindowsUiaDispatchSealRequest, WindowsUiaPostconditionVerifier,
     WindowsUiaPreparedDispatchRequest, WindowsUiaProviderExecutionReceipt,
     WindowsUiaProviderExecutionRequest, WindowsUiaVerifiedExecutionOutcome,
-    WindowsUiaVerifiedInputExecutionCoordinatorError, WindowsUiaVerifiedInputExecutor,
-    WindowsUiaVerifiedInputProviderReceipt, arm_uia_dispatch_execution, execute_armed_uia_dispatch,
-    execute_armed_uia_dispatch_verified, execute_armed_uia_verified_input,
-    execute_armed_uia_verified_input_verified, prepare_uia_dispatch,
-    recover_consequential_uia_action,
+    WindowsUiaVerifiedInputExecutionCoordinatorError, WindowsUiaVerifiedInputExecutionRequest,
+    WindowsUiaVerifiedInputExecutor, WindowsUiaVerifiedInputProviderReceipt,
+    arm_uia_dispatch_execution, execute_armed_uia_dispatch, execute_armed_uia_dispatch_verified,
+    execute_armed_uia_verified_input, execute_armed_uia_verified_input_verified,
+    prepare_uia_dispatch, recover_consequential_uia_action,
 };
 use localview_windows_uia_provider::{
     WindowsInputInsertionClass, WindowsKeyTransition, WindowsKeyboardStateSnapshot,
@@ -1410,8 +1410,10 @@ async fn full_verified_input_reaches_world_success_only_after_fresh_postconditio
         &journal,
         &runtime,
         session(),
-        armed,
-        verified_input_batch(),
+        WindowsUiaVerifiedInputExecutionRequest {
+            armed,
+            batch: verified_input_batch(),
+        },
         &executor,
         &verifier,
     )
