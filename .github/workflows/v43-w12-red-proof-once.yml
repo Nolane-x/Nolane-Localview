@@ -31,27 +31,26 @@ jobs:
         run: |
           $path = "tools/validation-lab/windows-l7-real-provider-harness/tests/support/v43_verified_input_seed.rs"
           $text = [System.IO.File]::ReadAllText($path)
-          $marker = @'
-    pub fn shutdown(mut self) {
-'@
+          $marker = "    pub fn shutdown(mut self) {"
           if (-not $text.Contains($marker)) {
             throw "expected EdgeSeedProcess shutdown method marker not found"
           }
-          $helper = @'
-    pub fn kill_and_wait(mut self) {
-        if self.shift_owned {
-            let _ = self.release_shift();
-        }
-        self.child
-            .kill()
-            .expect("terminate WPF edge seed process for restart authority test");
-        self.child
-            .wait()
-            .expect("wait for terminated WPF edge seed process");
-        self.shutdown = true;
-    }
-
-'@
+          $helperLines = @(
+            "    pub fn kill_and_wait(mut self) {",
+            "        if self.shift_owned {",
+            "            let _ = self.release_shift();",
+            "        }",
+            "        self.child",
+            "            .kill()",
+            "            .expect(`"terminate WPF edge seed process for restart authority test`" );",
+            "        self.child",
+            "            .wait()",
+            "            .expect(`"wait for terminated WPF edge seed process`" );",
+            "        self.shutdown = true;",
+            "    }",
+            ""
+          )
+          $helper = ($helperLines -join [Environment]::NewLine) + [Environment]::NewLine
           $text = $text.Replace($marker, $helper + $marker)
           [System.IO.File]::WriteAllText($path, $text, [System.Text.UTF8Encoding]::new($false))
           git diff --check
