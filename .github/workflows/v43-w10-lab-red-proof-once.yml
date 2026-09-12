@@ -1,4 +1,4 @@
-name: V4.3 W10 Geometry RED Proof Once
+name: V4.3 W10 Geometry GREEN Proof Once
 
 on:
   push:
@@ -11,11 +11,13 @@ permissions:
   contents: read
 
 jobs:
-  geometry-red:
+  geometry-green:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Prove typed W10 geometry contracts are absent
+      - name: Verify typed W10 geometry contracts
         run: cargo test -p localview-windows-uia-provider --test geometry_contract -- --nocapture
+      - name: Verify full Windows UIA provider pure regression suite
+        run: cargo test -p localview-windows-uia-provider -- --nocapture
