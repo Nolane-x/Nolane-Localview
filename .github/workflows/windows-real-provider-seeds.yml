@@ -126,15 +126,15 @@ jobs:
             throw "required W08 deterministic wrapper test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w08 $testName -- --exact --nocapture --test-threads=1
-      - name: W08 production SendInput full-dispatch smoke uses verified receipt path
+      - name: W08 production full-dispatch smoke uses journal-minted exact UIA worker authority
         shell: pwsh
         run: |
-          $testName = "production_send_input_full_dispatch_uses_verified_receipt_path"
-          $listed = cargo test -p localview-windows-uia-provider --test windows_verified_input_smoke -- --list
+          $testName = "windows_real_provider_w08_full::w08_production_worker_full_dispatch_uses_authority_path"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w08 -- --list
           if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
-            throw "required W08 production SendInput smoke is not registered: $testName"
+            throw "required W08 authority-path production smoke is not registered: $testName"
           }
-          cargo test -p localview-windows-uia-provider --test windows_verified_input_smoke $testName -- --ignored --exact --nocapture --test-threads=1
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w08 $testName -- --ignored --exact --nocapture --test-threads=1
       - name: W09 held modifier is blocked without normalization or input effect
         shell: pwsh
         run: |
