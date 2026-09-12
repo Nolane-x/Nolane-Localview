@@ -1,12 +1,14 @@
 #[cfg(windows)]
-mod windows_real_provider_w09 {
-    #[path = "support/v43_verified_input_seed.rs"]
-    mod support;
+#[path = "support/v43_verified_input_seed.rs"]
+mod verified_input_seed;
 
+#[cfg(windows)]
+mod windows_real_provider_w09 {
     use localview_windows_uia_provider::{
         WindowsUiaWorkerError, WindowsVerifiedInputBoundaryError,
     };
-    use support::{
+
+    use super::verified_input_seed::{
         EdgeSeedProcess, INPUT_TARGET_AUTOMATION_ID, attach_and_snapshot,
         mint_verified_input_authority, spawn_worker, truth_bool, truth_u64,
     };
@@ -40,7 +42,12 @@ mod windows_real_provider_w09 {
             .iter()
             .find(|node| node.automation_id.as_deref() == Some(INPUT_TARGET_AUTOMATION_ID))
             .expect("production UIA snapshot must retain the deterministic W09 input target");
-        let authority = mint_verified_input_authority(&attachment, snapshot.as_ref(), target.element_ref.clone()).await;
+        let authority = mint_verified_input_authority(
+            &attachment,
+            snapshot.as_ref(),
+            target.element_ref.clone(),
+        )
+        .await;
 
         let held = seed.hold_shift();
         assert!(truth_bool(&held, "shift_down"));
