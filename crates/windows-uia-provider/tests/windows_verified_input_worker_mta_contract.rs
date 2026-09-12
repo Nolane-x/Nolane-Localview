@@ -1,8 +1,8 @@
 #![cfg(windows)]
 
 use localview_windows_uia_provider::{
-    WindowsUiaAttachment, WindowsUiaVerifiedInputRequest, WindowsUiaWorker, WindowsUiaWorkerError,
-    WindowsVerifiedInputBoundaryReceipt,
+    WindowsUiaAttachment, WindowsUiaVerifiedInputReceipt, WindowsUiaVerifiedInputRequest,
+    WindowsUiaWorker, WindowsUiaWorkerError,
 };
 
 #[test]
@@ -11,6 +11,6 @@ fn verified_input_is_owned_by_the_exact_uia_worker_boundary() {
         &WindowsUiaWorker,
         &WindowsUiaAttachment,
         WindowsUiaVerifiedInputRequest,
-    ) -> Result<WindowsVerifiedInputBoundaryReceipt, WindowsUiaWorkerError> =
+    ) -> Result<WindowsUiaVerifiedInputReceipt, WindowsUiaWorkerError> =
         WindowsUiaWorker::dispatch_verified_input;
 }

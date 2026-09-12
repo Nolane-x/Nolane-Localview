@@ -207,12 +207,13 @@ mod platform {
         WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
         WindowsUiaSetValueEquality, WindowsUiaSetValueVerificationReceipt,
         WindowsUiaSetValueVerificationRequest, WindowsUiaValueCapabilityFacts,
-        WindowsUiaVerifiedInputRequest, WindowsUiaVirtualizedItemQueryReceipt,
-        WindowsUiaVirtualizedItemQueryRequest, WindowsUiaVirtualizedItemRealizeReceipt,
-        WindowsUiaVirtualizedItemRealizeRequest, WindowsVerifiedInputBoundaryError,
-        WindowsVerifiedInputBoundaryReceipt, classify_windows_input_insertion,
-        evaluate_windows_keyboard_state, evaluate_windows_uia_dispatch_context,
-        snapshot_windows_keyboard_state, windows_insert_verified_key_events,
+        WindowsUiaVerifiedInputReceipt, WindowsUiaVerifiedInputRequest,
+        WindowsUiaVirtualizedItemQueryReceipt, WindowsUiaVirtualizedItemQueryRequest,
+        WindowsUiaVirtualizedItemRealizeReceipt, WindowsUiaVirtualizedItemRealizeRequest,
+        WindowsVerifiedInputBoundaryError, WindowsVerifiedInputBoundaryReceipt,
+        classify_windows_input_insertion, evaluate_windows_keyboard_state,
+        evaluate_windows_uia_dispatch_context, snapshot_windows_keyboard_state,
+        windows_insert_verified_key_events,
     };
 
     const PROPERTIES_PER_NODE: usize = 19;
@@ -255,7 +256,7 @@ mod platform {
         DispatchVerifiedInput {
             attachment: WindowsUiaAttachment,
             request: WindowsUiaVerifiedInputRequest,
-            reply: Sender<Result<WindowsVerifiedInputBoundaryReceipt, WindowsUiaWorkerError>>,
+            reply: Sender<Result<WindowsUiaVerifiedInputReceipt, WindowsUiaWorkerError>>,
         },
         VerifySetValue {
             attachment: WindowsUiaAttachment,
@@ -535,7 +536,7 @@ mod platform {
             &self,
             attachment: &WindowsUiaAttachment,
             request: WindowsUiaVerifiedInputRequest,
-        ) -> Result<WindowsVerifiedInputBoundaryReceipt, WindowsUiaWorkerError> {
+        ) -> Result<WindowsUiaVerifiedInputReceipt, WindowsUiaWorkerError> {
             if request.dispatch_attempt_ref.is_nil()
                 || request.action_id.is_nil()
                 || request.preparation_journal_sequence == 0
@@ -1157,7 +1158,7 @@ mod platform {
             &self,
             attachment: &WindowsUiaAttachment,
             request: WindowsUiaVerifiedInputRequest,
-        ) -> Result<WindowsVerifiedInputBoundaryReceipt, WindowsUiaWorkerError> {
+        ) -> Result<WindowsUiaVerifiedInputReceipt, WindowsUiaWorkerError> {
             if request.provider_incarnation_ref != self.provider_incarnation_ref
                 || request.provider_incarnation_ref != attachment.provider_incarnation_ref
                 || request.target_incarnation_ref != attachment.target_incarnation_ref
@@ -1197,7 +1198,7 @@ mod platform {
                 classify_windows_input_insertion(expected, raw.inserted_event_count)
                     .map_err(WindowsVerifiedInputBoundaryError::InvalidInsertionResult)?;
 
-            Ok(WindowsVerifiedInputBoundaryReceipt {
+            let boundary = WindowsVerifiedInputBoundaryReceipt {
                 dispatch_context: context.observation,
                 keyboard_state,
                 requested_event_count: expected,
@@ -1205,7 +1206,10 @@ mod platform {
                 insertion_class,
                 raw_error_code: raw.raw_error_code,
                 reconciliation_required: true,
-            })
+            };
+            Ok(WindowsUiaVerifiedInputReceipt::from_request(
+                request, boundary,
+            ))
         }
 
         fn dispatch_pattern(

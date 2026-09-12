@@ -2709,6 +2709,7 @@ dependencies = [
  "localview-live-bridge",
  "localview-native-provider",
  "localview-protocol",
+ "sha2",
  "thiserror 2.0.20",
  "uuid",
  "windows",

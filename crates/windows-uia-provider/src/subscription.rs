@@ -12,7 +12,7 @@ use crate::{
     WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
     WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
     WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,
-    WindowsUiaVerifiedInputRequest, WindowsVerifiedInputBoundaryReceipt,
+    WindowsUiaVerifiedInputReceipt, WindowsUiaVerifiedInputRequest,
     event_buffer::{WindowsUiaEventBuffer, WindowsUiaEventDraft, WindowsUiaEventKind},
     worker::{
         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
@@ -258,7 +258,7 @@ mod platform {
             &self,
             attachment: &WindowsUiaAttachment,
             request: WindowsUiaVerifiedInputRequest,
-        ) -> Result<WindowsVerifiedInputBoundaryReceipt, WindowsUiaWorkerError> {
+        ) -> Result<WindowsUiaVerifiedInputReceipt, WindowsUiaWorkerError> {
             self.inner.dispatch_verified_input(attachment, request)
         }
 

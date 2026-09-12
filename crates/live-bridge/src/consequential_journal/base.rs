@@ -245,6 +245,10 @@ impl DispatchExecutionPermit {
     pub fn preparation_journal_sequence(&self) -> u64 {
         self.preparation_journal_sequence
     }
+
+    pub fn preparation_receipt_ref(&self) -> &str {
+        &self.preparation_receipt_ref
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

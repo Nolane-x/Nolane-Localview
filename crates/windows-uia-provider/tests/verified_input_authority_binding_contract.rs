@@ -52,7 +52,10 @@ fn verified_input_receipt_exposes_exact_authority_and_batch_binding() {
         receipt: &WindowsUiaVerifiedInputReceipt,
         request: &WindowsUiaVerifiedInputRequest,
     ) {
-        assert_eq!(receipt.dispatch_attempt_ref(), request.dispatch_attempt_ref());
+        assert_eq!(
+            receipt.dispatch_attempt_ref(),
+            request.dispatch_attempt_ref()
+        );
         assert_eq!(receipt.action_id(), request.action_id());
         assert_eq!(
             receipt.preparation_journal_sequence(),
@@ -76,6 +79,6 @@ fn verified_input_receipt_exposes_exact_authority_and_batch_binding() {
         assert!(receipt.boundary().reconciliation_required);
     }
 
-    let _ = assert_binding_api
-        as fn(&WindowsUiaVerifiedInputReceipt, &WindowsUiaVerifiedInputRequest);
+    let _ =
+        assert_binding_api as fn(&WindowsUiaVerifiedInputReceipt, &WindowsUiaVerifiedInputRequest);
 }
