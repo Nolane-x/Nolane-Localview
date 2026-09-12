@@ -190,7 +190,7 @@ mod platform {
                 UIA_ValuePatternId, UIA_VirtualizedItemPatternId,
             },
             WindowsAndMessaging::{
-                GetForegroundWindow, GetLastActivePopup, GetWindowThreadProcessId, IsWindowVisible,
+                GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsWindowVisible, GW_ENABLEDPOPUP,
             },
         },
     };
@@ -1119,7 +1119,8 @@ mod platform {
             let modal_blocker_window_handle = if request.requirements.require_no_modal_blocker {
                 let popup = unsafe {
                     // SAFETY: target HWND was revalidated by exact_retained_element.
-                    GetLastActivePopup(target_hwnd)
+                    GetWindow(target_hwnd, GW_ENABLEDPOPUP)
+                        .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?
                 };
                 let popup_handle = hwnd_to_u64(popup);
                 match popup_handle {
