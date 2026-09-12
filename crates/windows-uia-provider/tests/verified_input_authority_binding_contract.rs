@@ -49,6 +49,24 @@ fn raw_verified_input_request_fields_are_not_publicly_constructible() {
 }
 
 #[test]
+fn raw_windows_sendinput_backend_is_not_publicly_reexported() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let backend = fs::read_to_string(format!("{manifest_dir}/src/verified_input_windows.rs"))
+        .expect("read verified_input_windows.rs");
+    assert!(
+        !backend.contains("pub fn windows_insert_verified_key_events("),
+        "raw SendInput backend must not be a public provider API"
+    );
+
+    let crate_root = fs::read_to_string(format!("{manifest_dir}/src/event_buffer_lib.rs"))
+        .expect("read event_buffer_lib.rs");
+    assert!(
+        !crate_root.contains("pub use verified_input_windows::*;"),
+        "Windows verified-input backend must not be glob-reexported publicly"
+    );
+}
+
+#[test]
 fn verified_input_receipt_exposes_exact_authority_and_batch_binding() {
     fn assert_binding_api(
         receipt: &WindowsUiaVerifiedInputReceipt,
