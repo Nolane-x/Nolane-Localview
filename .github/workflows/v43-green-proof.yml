@@ -9,10 +9,12 @@ permissions:
   contents: read
 
 jobs:
-  verified-input-green:
+  verified-input-contracts:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run verified input contract
+      - name: Run pure verified input contract
         run: cargo test -p localview-windows-uia-provider --test verified_input_contract -- --nocapture
+      - name: Run verified input boundary contract
+        run: cargo test -p localview-windows-uia-provider --test verified_input_worker_contract -- --nocapture
