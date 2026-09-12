@@ -17,13 +17,13 @@ use localview_protocol::{
     ReconciliationCompleteness, SessionId, TargetIncarnationRef,
 };
 use localview_windows_observe_runtime::{
-    arm_uia_dispatch_execution, prepare_uia_dispatch, WindowsObserveActionLeaseProvider,
-    WindowsObserveDispatchContextProvider, WindowsObserveProvider, WindowsObserveRuntimeConfig,
-    WindowsObserveRuntimeManager, WindowsObserveSubscriptionLineage,
-    WindowsUiaActionPreflightRequest, WindowsUiaAuthorizationRevalidationReceipt,
-    WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchExecutionArmError,
-    WindowsUiaDispatchSealRequest, WindowsUiaPreparedDispatchError,
-    WindowsUiaPreparedDispatchRequest,
+    WindowsObserveActionLeaseProvider, WindowsObserveDispatchContextProvider,
+    WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
+    WindowsObserveSubscriptionLineage, WindowsUiaActionPreflightRequest,
+    WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
+    WindowsUiaDispatchExecutionArmError, WindowsUiaDispatchSealRequest,
+    WindowsUiaPreparedDispatchError, WindowsUiaPreparedDispatchRequest, arm_uia_dispatch_execution,
+    prepare_uia_dispatch,
 };
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaBoundDispatchContextReceipt,
@@ -94,7 +94,10 @@ impl FakeProvider {
 
     fn build_snapshot(&self, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
         let mut capabilities = WindowsUiaActionCapabilities::default();
-        capabilities.record(WindowsUiaPattern::Invoke, WindowsUiaPatternSupport::Supported);
+        capabilities.record(
+            WindowsUiaPattern::Invoke,
+            WindowsUiaPatternSupport::Supported,
+        );
         let mut attributes = BTreeMap::from([("provider".into(), "windows_uia".into())]);
         capabilities.write_attributes(&mut attributes);
 
@@ -122,7 +125,8 @@ impl FakeProvider {
             attributes,
         };
 
-        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache =
+            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -325,7 +329,10 @@ fn requirements() -> WindowsUiaDispatchContextRequirements {
     }
 }
 
-fn authority(provider: &FakeProvider, snapshot: &NativeSemanticSnapshotRevision) -> ActionEnvelopeMetadata {
+fn authority(
+    provider: &FakeProvider,
+    snapshot: &NativeSemanticSnapshotRevision,
+) -> ActionEnvelopeMetadata {
     ActionEnvelopeMetadata {
         decision_principal_ref: PrincipalRef::from("principal:decision:prepared-dispatch"),
         acting_principal_ref: PrincipalRef::from("principal:acting:prepared-dispatch"),
@@ -340,7 +347,10 @@ fn authority(provider: &FakeProvider, snapshot: &NativeSemanticSnapshotRevision)
 }
 
 fn journal_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("localview-windows-{label}-{}.jsonl", Uuid::new_v4()))
+    std::env::temp_dir().join(format!(
+        "localview-windows-{label}-{}.jsonl",
+        Uuid::new_v4()
+    ))
 }
 
 async fn fixture(
@@ -434,7 +444,11 @@ async fn sealed_dispatch_is_durably_prepared_before_any_executor_boundary() {
     );
     assert_eq!(
         prepared.preparation().precondition_snapshot_cut_ref,
-        prepared.seal().authority.authority.precondition_snapshot_cut_ref
+        prepared
+            .seal()
+            .authority
+            .authority
+            .precondition_snapshot_cut_ref
     );
     assert_eq!(
         journal.recovery_state(action_id).await,
@@ -519,16 +533,18 @@ async fn execution_arm_reobserves_exact_context_before_consuming_prepared_capabi
     );
     assert_eq!(
         armed.armed_context().element_ref,
-        armed.seal().authority.dispatch_revalidation.element_lease.element_ref
+        armed
+            .seal()
+            .authority
+            .dispatch_revalidation
+            .element_lease
+            .element_ref
     );
     assert_eq!(
         journal.recovery_state(action_id).await,
         Some(ConsequentialRecoveryState::DispatchPrepared)
     );
-    assert_eq!(
-        journal.requires_reconciliation(action_id).await,
-        Some(true)
-    );
+    assert_eq!(journal.requires_reconciliation(action_id).await, Some(true));
 
     let _ = std::fs::remove_file(path);
 }
@@ -556,7 +572,10 @@ async fn execution_arm_rejects_second_context_element_drift_and_never_reprepares
     let error = arm_uia_dispatch_execution(&bridge, &journal, &runtime, session(), prepared)
         .await
         .unwrap_err();
-    assert_eq!(error, WindowsUiaDispatchExecutionArmError::ContextReceiptMismatch);
+    assert_eq!(
+        error,
+        WindowsUiaDispatchExecutionArmError::ContextReceiptMismatch
+    );
     assert_eq!(provider.context_calls(), 2);
     assert_eq!(
         journal.recovery_state(action_id).await,

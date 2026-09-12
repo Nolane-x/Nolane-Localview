@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Debug, Deserialize)]
 struct RpcRequest {
@@ -137,8 +137,8 @@ async fn call_tool(params: &Value) -> Result<Value> {
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let base = std::env::var("LOCALVIEW_CONTROL")
-        .unwrap_or_else(|_| "http://127.0.0.1:45454".into());
+    let base =
+        std::env::var("LOCALVIEW_CONTROL").unwrap_or_else(|_| "http://127.0.0.1:45454".into());
     let token = read_token().await?;
     let client = reqwest::Client::new();
 
@@ -153,7 +153,9 @@ async fn call_tool(params: &Value) -> Result<Value> {
         let snapshot = fresh_page_snapshot(&client, &base, &token, session).await?;
         let node = find_semantic_node(&snapshot, reference)
             .cloned()
-            .with_context(|| format!("element reference not found in fresh snapshot: {reference}"))?;
+            .with_context(|| {
+                format!("element reference not found in fresh snapshot: {reference}")
+            })?;
         return tool_content(json!({
             "reference": reference,
             "version": snapshot.get("version"),
@@ -169,7 +171,9 @@ async fn call_tool(params: &Value) -> Result<Value> {
             let id = string_arg(&args, "id")?;
             authed_get(&client, &base, &token, &format!("/v1/sessions/{id}")).await?
         }
-        "session.project_state" => session_get(&client, &base, &token, &args, "project-state").await?,
+        "session.project_state" => {
+            session_get(&client, &base, &token, &args, "project-state").await?
+        }
         "session.analysis" => session_get(&client, &base, &token, &args, "analysis").await?,
         "session.diagnose" => session_get(&client, &base, &token, &args, "diagnose").await?,
         "session.verify" => session_get(&client, &base, &token, &args, "verify").await?,
@@ -191,23 +195,11 @@ async fn call_tool(params: &Value) -> Result<Value> {
         }
         "evidence.trace" => {
             let id = string_arg(&args, "id")?;
-            authed_get(
-                &client,
-                &base,
-                &token,
-                &format!("/v1/evidence/{id}/trace"),
-            )
-            .await?
+            authed_get(&client, &base, &token, &format!("/v1/evidence/{id}/trace")).await?
         }
         "proof.staleness" => {
             let id = string_arg(&args, "id")?;
-            authed_get(
-                &client,
-                &base,
-                &token,
-                &format!("/v1/proof/{id}/staleness"),
-            )
-            .await?
+            authed_get(&client, &base, &token, &format!("/v1/proof/{id}/staleness")).await?
         }
         "runtime.pause" => authed_post(&client, &base, &token, "/v1/runtime/pause").await?,
         "runtime.resume" => authed_post(&client, &base, &token, "/v1/runtime/resume").await?,
@@ -248,10 +240,7 @@ async fn call_tool(params: &Value) -> Result<Value> {
             let session = string_arg(&args, "session")?;
             let key = string_arg(&args, "key")?;
             let reference = args.get("reference").and_then(Value::as_str);
-            let modifiers = args
-                .get("modifiers")
-                .cloned()
-                .unwrap_or_else(|| json!([]));
+            let modifiers = args.get("modifiers").cloned().unwrap_or_else(|| json!([]));
             post_action(
                 &client,
                 &base,
@@ -308,7 +297,9 @@ async fn call_tool(params: &Value) -> Result<Value> {
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!("LocalView control returned {status}: {body}"));
+        return Err(anyhow::anyhow!(
+            "LocalView control returned {status}: {body}"
+        ));
     }
     let content = if status == reqwest::StatusCode::NO_CONTENT {
         json!({"ok": true})
@@ -396,7 +387,9 @@ fn find_semantic_node<'a>(snapshot: &'a Value, reference: &str) -> Option<&'a Va
             .and_then(|children| children.iter().find_map(|child| visit(child, reference)))
     }
 
-    snapshot.get("semantic_tree").and_then(|root| visit(root, reference))
+    snapshot
+        .get("semantic_tree")
+        .and_then(|root| visit(root, reference))
 }
 
 fn tool_content(content: Value) -> Result<Value> {

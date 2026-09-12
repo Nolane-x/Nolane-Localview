@@ -112,7 +112,8 @@ impl FakeProvider {
             attributes,
         };
 
-        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache =
+            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -263,7 +264,12 @@ async fn value_preflight_accepts_only_explicit_non_password_writable_facts() {
     );
     let runtime = attached(&safe).await;
     let snapshot = safe.snapshot();
-    assert!(runtime.preflight_uia_action(session(), request(&safe, &snapshot)).await.is_ok());
+    assert!(
+        runtime
+            .preflight_uia_action(session(), request(&safe, &snapshot))
+            .await
+            .is_ok()
+    );
 
     for (is_password, is_read_only) in [
         (

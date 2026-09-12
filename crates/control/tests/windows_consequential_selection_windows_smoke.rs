@@ -3,21 +3,22 @@ mod windows_consequential_selection_windows_smoke {
     use std::{
         collections::BTreeMap,
         sync::{
+            Arc,
             atomic::{AtomicBool, Ordering},
-            mpsc, Arc,
+            mpsc,
         },
         thread,
         time::Duration,
     };
 
     use axum::{
-        body::{to_bytes, Body},
-        http::{header::AUTHORIZATION, Request, StatusCode},
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header::AUTHORIZATION},
     };
     use chrono::Utc;
     use localview_control::{
-        configure_windows_consequential_control_for_sessions,
-        configure_windows_observe_runtime_for_sessions, router, ControlState,
+        ControlState, configure_windows_consequential_control_for_sessions,
+        configure_windows_observe_runtime_for_sessions, router,
     };
     use localview_evidence::EvidenceStore;
     use localview_live_bridge::{
@@ -30,9 +31,9 @@ mod windows_consequential_selection_windows_smoke {
     };
     use localview_sessions::SessionManager;
     use localview_windows_observe_runtime::{
-        spawn_windows_uia_runtime_manager, NativeSemanticNodeMatcherV1,
-        NativeSemanticPostconditionContractV1, NativeSemanticPostconditionExpectation,
-        WindowsObserveRuntimeConfig,
+        NativeSemanticNodeMatcherV1, NativeSemanticPostconditionContractV1,
+        NativeSemanticPostconditionExpectation, WindowsObserveRuntimeConfig,
+        spawn_windows_uia_runtime_manager,
     };
     use localview_windows_uia_provider::{
         WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport,
@@ -41,16 +42,17 @@ mod windows_consequential_selection_windows_smoke {
     use tower::ServiceExt;
     use uuid::Uuid;
     use windows::{
-        core::w,
         Win32::{
             Foundation::{LPARAM, WPARAM},
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, DispatchMessageW, LB_ADDSTRING, LB_SETCURSEL, MSG,
-                PM_REMOVE, PeekMessageW, SW_SHOW, SendMessageW, SetForegroundWindow, ShowWindow,
-                TranslateMessage, CW_USEDEFAULT, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW, LB_ADDSTRING,
+                LB_SETCURSEL, MSG, PM_REMOVE, PeekMessageW, SW_SHOW, SendMessageW,
+                SetForegroundWindow, ShowWindow, TranslateMessage, WS_CHILD, WS_OVERLAPPEDWINDOW,
+                WS_VISIBLE,
             },
         },
+        core::w,
     };
 
     const SELECTION_STATE_ATTRIBUTE: &str = "windows_uia.selection_item.is_selected";
@@ -88,7 +90,8 @@ mod windows_consequential_selection_windows_smoke {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires a real interactive Windows UI Automation provider"]
-    async fn real_http_plan_confirm_selection_item_uses_fresh_selected_state_before_durable_commit() {
+    async fn real_http_plan_confirm_selection_item_uses_fresh_selected_state_before_durable_commit()
+    {
         assert!(
             std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
             "real UIA smoke must be explicitly enabled"
@@ -236,10 +239,7 @@ mod windows_consequential_selection_windows_smoke {
             expectation: NativeSemanticPostconditionExpectation::Present,
             matcher: NativeSemanticNodeMatcherV1 {
                 name: Some("Beta".into()),
-                attributes: BTreeMap::from([(
-                    SELECTION_STATE_ATTRIBUTE.into(),
-                    "true".into(),
-                )]),
+                attributes: BTreeMap::from([(SELECTION_STATE_ATTRIBUTE.into(), "true".into())]),
                 ..Default::default()
             },
         }
@@ -358,7 +358,10 @@ mod windows_consequential_selection_windows_smoke {
             .latest_action_postcondition_receipt(action_id)
             .await
             .expect("SelectionItem commit must retain a postcondition receipt");
-        assert_eq!(receipt.verdict, ActionPostconditionVerdict::VerifiedExpected);
+        assert_eq!(
+            receipt.verdict,
+            ActionPostconditionVerdict::VerifiedExpected
+        );
         assert_ne!(
             receipt.observation_snapshot_cut_ref, precondition_cut,
             "SelectionItem verification must use a fresh post-dispatch observation cut"

@@ -34,7 +34,12 @@ fn w02_element_recreation_can_measure_aba_within_one_provider_incarnation() {
     })
     .expect("W02 element ABA is meaningful inside one live provider incarnation");
 
-    assert!(record.observation.eligible_metrics.contains(&LabMetricKind::Piaer));
+    assert!(
+        record
+            .observation
+            .eligible_metrics
+            .contains(&LabMetricKind::Piaer)
+    );
     assert!(record.observation.failure_flags.is_empty());
     assert_eq!(
         record.result_evidence,

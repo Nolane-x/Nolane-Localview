@@ -14,9 +14,7 @@ use localview_windows_observe_runtime::{
     WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
     WindowsObserveSubscriptionLineage,
 };
-use localview_windows_uia_provider::{
-    WindowsUiaEvent, WindowsUiaEventDrain, WindowsUiaEventKind,
-};
+use localview_windows_uia_provider::{WindowsUiaEvent, WindowsUiaEventDrain, WindowsUiaEventKind};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -53,7 +51,8 @@ impl Provider {
     }
 
     fn snapshot_revision(&self, sequence: u64, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
-        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache =
+            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -87,7 +86,10 @@ impl WindowsObserveProvider for Provider {
         self.provider.clone()
     }
 
-    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
+    fn attach(
+        &self,
+        _selection: UserSelectedWindowTarget,
+    ) -> Result<Self::Attachment, Self::Error> {
         Ok(Attachment(self.target.clone()))
     }
 
@@ -107,7 +109,10 @@ impl WindowsObserveProvider for Provider {
         }))
     }
 
-    fn subscription_lineage(&self, subscription: &Self::Subscription) -> WindowsObserveSubscriptionLineage {
+    fn subscription_lineage(
+        &self,
+        subscription: &Self::Subscription,
+    ) -> WindowsObserveSubscriptionLineage {
         subscription.0.clone()
     }
 
@@ -182,13 +187,19 @@ async fn accepted_callback_under_opaque_ordering_forces_one_reconciliation_snaps
         )
         .await
         .unwrap();
-    assert_eq!(attached.event_continuity, EventContinuityState::OrderingOpaque);
+    assert_eq!(
+        attached.event_continuity,
+        EventContinuityState::OrderingOpaque
+    );
     assert_eq!(provider.snapshots(), 1, "attach owns one baseline snapshot");
 
     let outcome = manager.drain_once(session_id).await.unwrap();
 
     assert_eq!(outcome.report.ingest.accepted, 1);
-    assert_eq!(outcome.report.continuity, EventContinuityState::OrderingOpaque);
+    assert_eq!(
+        outcome.report.continuity,
+        EventContinuityState::OrderingOpaque
+    );
     assert!(
         outcome.reconciliation_performed,
         "opaque best-effort callbacks cannot keep the pre-event snapshot authoritative"
@@ -197,9 +208,16 @@ async fn accepted_callback_under_opaque_ordering_forces_one_reconciliation_snaps
         outcome.status.current_snapshot_completeness,
         Some(ReconciliationCompleteness::Established)
     );
-    assert_eq!(provider.snapshots(), 2, "one opaque callback causes exactly one fresh snapshot");
+    assert_eq!(
+        provider.snapshots(),
+        2,
+        "one opaque callback causes exactly one fresh snapshot"
+    );
 
     let quiet = manager.drain_once(session_id).await.unwrap();
-    assert!(!quiet.reconciliation_performed, "no new callback means no global polling loop");
+    assert!(
+        !quiet.reconciliation_performed,
+        "no new callback means no global polling loop"
+    );
     assert_eq!(provider.snapshots(), 2);
 }

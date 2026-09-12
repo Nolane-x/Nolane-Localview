@@ -6,7 +6,10 @@ fn source(path: &str) -> String {
 }
 
 fn without_whitespace(value: &str) -> String {
-    value.chars().filter(|character| !character.is_whitespace()).collect()
+    value
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
 }
 
 #[test]

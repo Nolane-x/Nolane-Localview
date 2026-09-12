@@ -6,11 +6,11 @@ use std::{
 };
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use localview_native_provider::UserSelectedWindowTarget;
 use localview_protocol::SessionId;
@@ -22,8 +22,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    windows_consequential::release_windows_consequential_control_session_for_sessions,
-    ControlState,
+    ControlState, windows_consequential::release_windows_consequential_control_session_for_sessions,
 };
 
 #[derive(Debug)]

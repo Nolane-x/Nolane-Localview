@@ -1,8 +1,6 @@
 use std::convert::Infallible;
 
-use localview_live_bridge::{
-    ConsequentialPostconditionEvidence, ConsequentialPostconditionStatus,
-};
+use localview_live_bridge::{ConsequentialPostconditionEvidence, ConsequentialPostconditionStatus};
 use localview_native_provider::NativeSemanticSnapshotRevision;
 use localview_postcondition_contracts::PostconditionContractRegistry;
 pub use localview_postcondition_contracts::{

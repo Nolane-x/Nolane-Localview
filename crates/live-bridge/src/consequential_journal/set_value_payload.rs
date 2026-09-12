@@ -15,8 +15,8 @@ use zeroize::Zeroizing;
 use crate::{CanonicalActionOperation, CanonicalQueuedAction};
 
 use super::{
-    recovery_state_for, ConsequentialJournal, ConsequentialJournalError,
-    ConsequentialJournalTransition, ConsequentialRecoveryState,
+    ConsequentialJournal, ConsequentialJournalError, ConsequentialJournalTransition,
+    ConsequentialRecoveryState, recovery_state_for,
 };
 
 const SET_VALUE_COMMITMENT_DOMAIN: &[u8] = b"localview:set-value-payload:v1\0";
@@ -181,14 +181,8 @@ impl ConsequentialJournal {
                 message: format!("SetValue payload length could not be represented: {error}"),
             }
         })?;
-        let commitment_digest = compute_commitment(
-            key,
-            action_id,
-            payload_ref,
-            mode,
-            payload_utf8_len,
-            payload,
-        )?;
+        let commitment_digest =
+            compute_commitment(key, action_id, payload_ref, mode, payload_utf8_len, payload)?;
         let binding = DurableSetValuePayloadBinding {
             action_id,
             intent_journal_sequence: intent_entry.journal_sequence,
@@ -314,10 +308,7 @@ fn set_value_payload_binding_path(journal_path: &Path, action_id: Uuid) -> PathB
     ))
 }
 
-fn write_binding_create_new(
-    path: &Path,
-    encoded: &[u8],
-) -> Result<(), ConsequentialJournalError> {
+fn write_binding_create_new(path: &Path, encoded: &[u8]) -> Result<(), ConsequentialJournalError> {
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)

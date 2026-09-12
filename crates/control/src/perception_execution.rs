@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use localview_engine::EngineDecision;
 use localview_live_analysis::LiveDiagnosis;
@@ -14,12 +14,12 @@ use localview_protocol::{PageSnapshot, SessionId};
 use serde::Serialize;
 
 use crate::{
-    fresh_snapshot::{acquire_fresh_semantic_snapshot, FreshSnapshotError},
-    perception::{
-        authorized, build_live_perception_plan, denied, plan_error_response,
-        LivePerceptionPlanRequest, LivePerceptionPlanResponse,
-    },
     ControlState,
+    fresh_snapshot::{FreshSnapshotError, acquire_fresh_semantic_snapshot},
+    perception::{
+        LivePerceptionPlanRequest, LivePerceptionPlanResponse, authorized,
+        build_live_perception_plan, denied, plan_error_response,
+    },
 };
 
 #[derive(Debug, Serialize)]

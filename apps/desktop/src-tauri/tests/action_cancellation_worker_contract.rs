@@ -101,7 +101,11 @@ fn post_execution_transport_retries_never_execute_the_action_twice() {
     assert!(process.contains("entry.payload = await execute(action);"));
     assert!(process.contains("finally {"));
     assert!(process.contains("entry.executed = true;"));
-    assert!(process.contains("await complete(invoke, action, entry.ok, entry.payload, entry.actionError);"));
+    assert!(
+        process.contains(
+            "await complete(invoke, action, entry.ok, entry.payload, entry.actionError);"
+        )
+    );
 }
 
 #[test]

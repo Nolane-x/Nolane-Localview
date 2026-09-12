@@ -40,9 +40,7 @@ fn desktop_manages_one_shared_surface_owner_registry() {
         "desktop must manage exactly one shared owner registry for preview/workspace surfaces"
     );
     assert_eq!(
-        desktop
-            .matches("DesktopSurfaceRegistry::default()")
-            .count(),
+        desktop.matches("DesktopSurfaceRegistry::default()").count(),
         1,
         "desktop must not create duplicate owner registries"
     );

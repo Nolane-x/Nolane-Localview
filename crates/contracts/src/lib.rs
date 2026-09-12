@@ -8,7 +8,10 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ContractStrength { Hard, Soft }
+pub enum ContractStrength {
+    Hard,
+    Soft,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -33,7 +36,14 @@ pub struct ContractScope {
 }
 
 impl ContractScope {
-    pub fn global() -> Self { Self { routes: Vec::new(), regions: Vec::new(), personas: Vec::new(), viewports: Vec::new() } }
+    pub fn global() -> Self {
+        Self {
+            routes: Vec::new(),
+            regions: Vec::new(),
+            personas: Vec::new(),
+            viewports: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,7 +90,12 @@ pub struct RuntimeFacts {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ContractVerdict { Pass, Fail, Excepted, Unknown }
+pub enum ContractVerdict {
+    Pass,
+    Fail,
+    Excepted,
+    Unknown,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContractResult {
@@ -96,19 +111,34 @@ pub struct ContractRegistry {
 }
 
 impl ContractRegistry {
-    pub fn insert(&mut self, contract: UxContract) { self.contracts.insert(contract.id.clone(), contract); }
+    pub fn insert(&mut self, contract: UxContract) {
+        self.contracts.insert(contract.id.clone(), contract);
+    }
 
-    pub fn get(&self, id: &str) -> Option<&UxContract> { self.contracts.get(id) }
+    pub fn get(&self, id: &str) -> Option<&UxContract> {
+        self.contracts.get(id)
+    }
 
     pub fn effective_contract(&self, id: &str) -> Result<UxContract, ContractCompileError> {
-        let mut current = self.contracts.get(id).cloned().ok_or_else(|| ContractCompileError::MissingContract(id.into()))?;
+        let mut current = self
+            .contracts
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ContractCompileError::MissingContract(id.into()))?;
         let mut visited = BTreeSet::new();
         visited.insert(current.id.clone());
         while let Some(parent_id) = current.inherited_from.clone() {
-            if !visited.insert(parent_id.clone()) { return Err(ContractCompileError::InheritanceCycle(parent_id)); }
-            let parent = self.contracts.get(&parent_id).ok_or_else(|| ContractCompileError::MissingParent(parent_id.clone()))?;
+            if !visited.insert(parent_id.clone()) {
+                return Err(ContractCompileError::InheritanceCycle(parent_id));
+            }
+            let parent = self
+                .contracts
+                .get(&parent_id)
+                .ok_or_else(|| ContractCompileError::MissingParent(parent_id.clone()))?;
             current.scope = merge_scope(&parent.scope, &current.scope);
-            if current.provenance.is_empty() { current.provenance = parent.provenance.clone(); }
+            if current.provenance.is_empty() {
+                current.provenance = parent.provenance.clone();
+            }
             current.inherited_from = parent.inherited_from.clone();
         }
         Ok(current)
@@ -119,8 +149,14 @@ impl ContractRegistry {
         let mut conflicts = Vec::new();
         for (index, left) in contracts.iter().enumerate() {
             for right in contracts.iter().skip(index + 1) {
-                if left.scope == right.scope && predicates_conflict(&left.predicate, &right.predicate) {
-                    conflicts.push(ContractConflict { left: left.id.clone(), right: right.id.clone(), reason: "same scope contains incompatible predicates".into() });
+                if left.scope == right.scope
+                    && predicates_conflict(&left.predicate, &right.predicate)
+                {
+                    conflicts.push(ContractConflict {
+                        left: left.id.clone(),
+                        right: right.id.clone(),
+                        reason: "same scope contains incompatible predicates".into(),
+                    });
                 }
             }
         }
@@ -129,10 +165,18 @@ impl ContractRegistry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ContractCompileError { MissingContract(String), MissingParent(String), InheritanceCycle(String) }
+pub enum ContractCompileError {
+    MissingContract(String),
+    MissingParent(String),
+    InheritanceCycle(String),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ContractConflict { pub left: String, pub right: String, pub reason: String }
+pub struct ContractConflict {
+    pub left: String,
+    pub right: String,
+    pub reason: String,
+}
 
 pub fn evaluate(
     contract: &UxContract,
@@ -141,31 +185,86 @@ pub fn evaluate(
     evidence_ids: Vec<EvidenceId>,
 ) -> ContractResult {
     if exception.is_some_and(|item| item.contract_id == contract.id) {
-        return ContractResult { contract_id: contract.id.clone(), verdict: ContractVerdict::Excepted, explanation: "approved exception applies".into(), evidence_ids };
+        return ContractResult {
+            contract_id: contract.id.clone(),
+            verdict: ContractVerdict::Excepted,
+            explanation: "approved exception applies".into(),
+            evidence_ids,
+        };
     }
     let (verdict, explanation) = match &contract.predicate {
-        ContractPredicate::Exists { selector } => bool_result(facts.selectors.contains(selector), format!("selector {selector} exists"), format!("selector {selector} missing")),
-        ContractPredicate::NotExists { selector } => bool_result(!facts.selectors.contains(selector), format!("selector {selector} absent"), format!("selector {selector} unexpectedly exists")),
+        ContractPredicate::Exists { selector } => bool_result(
+            facts.selectors.contains(selector),
+            format!("selector {selector} exists"),
+            format!("selector {selector} missing"),
+        ),
+        ContractPredicate::NotExists { selector } => bool_result(
+            !facts.selectors.contains(selector),
+            format!("selector {selector} absent"),
+            format!("selector {selector} unexpectedly exists"),
+        ),
         ContractPredicate::MetricAtMost { metric, max } => match facts.metrics.get(metric) {
-            Some(value) => bool_result(*value <= *max, format!("{metric}={value} <= {max}"), format!("{metric}={value} > {max}")),
-            None => (ContractVerdict::Unknown, format!("metric {metric} unavailable")),
+            Some(value) => bool_result(
+                *value <= *max,
+                format!("{metric}={value} <= {max}"),
+                format!("{metric}={value} > {max}"),
+            ),
+            None => (
+                ContractVerdict::Unknown,
+                format!("metric {metric} unavailable"),
+            ),
         },
         ContractPredicate::MetricAtLeast { metric, min } => match facts.metrics.get(metric) {
-            Some(value) => bool_result(*value >= *min, format!("{metric}={value} >= {min}"), format!("{metric}={value} < {min}")),
-            None => (ContractVerdict::Unknown, format!("metric {metric} unavailable")),
+            Some(value) => bool_result(
+                *value >= *min,
+                format!("{metric}={value} >= {min}"),
+                format!("{metric}={value} < {min}"),
+            ),
+            None => (
+                ContractVerdict::Unknown,
+                format!("metric {metric} unavailable"),
+            ),
         },
         ContractPredicate::Equals { key, value } => match facts.values.get(key) {
-            Some(actual) => bool_result(actual == value, format!("{key} matches contract value"), format!("{key} differs from contract value")),
+            Some(actual) => bool_result(
+                actual == value,
+                format!("{key} matches contract value"),
+                format!("{key} differs from contract value"),
+            ),
             None => (ContractVerdict::Unknown, format!("value {key} unavailable")),
         },
-        ContractPredicate::NoIssueCode { code } => bool_result(!facts.issue_codes.contains(code), format!("issue {code} absent"), format!("issue {code} present")),
-        ContractPredicate::EveryInteractiveNamed => bool_result(facts.unnamed_interactive_count == 0, "all interactive elements have accessible names".into(), format!("{} interactive element(s) are unnamed", facts.unnamed_interactive_count)),
+        ContractPredicate::NoIssueCode { code } => bool_result(
+            !facts.issue_codes.contains(code),
+            format!("issue {code} absent"),
+            format!("issue {code} present"),
+        ),
+        ContractPredicate::EveryInteractiveNamed => bool_result(
+            facts.unnamed_interactive_count == 0,
+            "all interactive elements have accessible names".into(),
+            format!(
+                "{} interactive element(s) are unnamed",
+                facts.unnamed_interactive_count
+            ),
+        ),
     };
-    ContractResult { contract_id: contract.id.clone(), verdict, explanation, evidence_ids }
+    ContractResult {
+        contract_id: contract.id.clone(),
+        verdict,
+        explanation,
+        evidence_ids,
+    }
 }
 
-fn bool_result(pass: bool, pass_message: String, fail_message: String) -> (ContractVerdict, String) {
-    if pass { (ContractVerdict::Pass, pass_message) } else { (ContractVerdict::Fail, fail_message) }
+fn bool_result(
+    pass: bool,
+    pass_message: String,
+    fail_message: String,
+) -> (ContractVerdict, String) {
+    if pass {
+        (ContractVerdict::Pass, pass_message)
+    } else {
+        (ContractVerdict::Fail, fail_message)
+    }
 }
 
 fn merge_scope(parent: &ContractScope, child: &ContractScope) -> ContractScope {
@@ -177,15 +276,36 @@ fn merge_scope(parent: &ContractScope, child: &ContractScope) -> ContractScope {
     }
 }
 
-fn choose(parent: &[String], child: &[String]) -> Vec<String> { if child.is_empty() { parent.to_vec() } else { child.to_vec() } }
+fn choose(parent: &[String], child: &[String]) -> Vec<String> {
+    if child.is_empty() {
+        parent.to_vec()
+    } else {
+        child.to_vec()
+    }
+}
 
 fn predicates_conflict(left: &ContractPredicate, right: &ContractPredicate) -> bool {
     match (left, right) {
-        (ContractPredicate::Exists { selector: a }, ContractPredicate::NotExists { selector: b })
-        | (ContractPredicate::NotExists { selector: a }, ContractPredicate::Exists { selector: b }) => a == b,
-        (ContractPredicate::MetricAtMost { metric: a, max }, ContractPredicate::MetricAtLeast { metric: b, min })
-        | (ContractPredicate::MetricAtLeast { metric: a, min }, ContractPredicate::MetricAtMost { metric: b, max }) => a == b && min > max,
-        (ContractPredicate::Equals { key: a, value: av }, ContractPredicate::Equals { key: b, value: bv }) => a == b && av != bv,
+        (
+            ContractPredicate::Exists { selector: a },
+            ContractPredicate::NotExists { selector: b },
+        )
+        | (
+            ContractPredicate::NotExists { selector: a },
+            ContractPredicate::Exists { selector: b },
+        ) => a == b,
+        (
+            ContractPredicate::MetricAtMost { metric: a, max },
+            ContractPredicate::MetricAtLeast { metric: b, min },
+        )
+        | (
+            ContractPredicate::MetricAtLeast { metric: a, min },
+            ContractPredicate::MetricAtMost { metric: b, max },
+        ) => a == b && min > max,
+        (
+            ContractPredicate::Equals { key: a, value: av },
+            ContractPredicate::Equals { key: b, value: bv },
+        ) => a == b && av != bv,
         _ => false,
     }
 }
@@ -196,17 +316,57 @@ mod tests {
 
     #[test]
     fn hard_metric_contract_fails_deterministically() {
-        let contract = UxContract { id: "perf.lcp".into(), title: "LCP budget".into(), category: ContractCategory::Performance, strength: ContractStrength::Hard, scope: ContractScope::global(), predicate: ContractPredicate::MetricAtMost { metric: "lcp_ms".into(), max: 2500.0 }, provenance: "project policy".into(), inherited_from: None };
-        let facts = RuntimeFacts { metrics: BTreeMap::from([("lcp_ms".into(), 3100.0)]), ..Default::default() };
-        assert_eq!(evaluate(&contract, &facts, None, vec![]).verdict, ContractVerdict::Fail);
+        let contract = UxContract {
+            id: "perf.lcp".into(),
+            title: "LCP budget".into(),
+            category: ContractCategory::Performance,
+            strength: ContractStrength::Hard,
+            scope: ContractScope::global(),
+            predicate: ContractPredicate::MetricAtMost {
+                metric: "lcp_ms".into(),
+                max: 2500.0,
+            },
+            provenance: "project policy".into(),
+            inherited_from: None,
+        };
+        let facts = RuntimeFacts {
+            metrics: BTreeMap::from([("lcp_ms".into(), 3100.0)]),
+            ..Default::default()
+        };
+        assert_eq!(
+            evaluate(&contract, &facts, None, vec![]).verdict,
+            ContractVerdict::Fail
+        );
     }
 
     #[test]
     fn registry_detects_simple_exists_conflict() {
         let scope = ContractScope::global();
         let mut registry = ContractRegistry::default();
-        registry.insert(UxContract { id: "a".into(), title: "a".into(), category: ContractCategory::Layout, strength: ContractStrength::Hard, scope: scope.clone(), predicate: ContractPredicate::Exists { selector: "#hero".into() }, provenance: "test".into(), inherited_from: None });
-        registry.insert(UxContract { id: "b".into(), title: "b".into(), category: ContractCategory::Layout, strength: ContractStrength::Hard, scope, predicate: ContractPredicate::NotExists { selector: "#hero".into() }, provenance: "test".into(), inherited_from: None });
+        registry.insert(UxContract {
+            id: "a".into(),
+            title: "a".into(),
+            category: ContractCategory::Layout,
+            strength: ContractStrength::Hard,
+            scope: scope.clone(),
+            predicate: ContractPredicate::Exists {
+                selector: "#hero".into(),
+            },
+            provenance: "test".into(),
+            inherited_from: None,
+        });
+        registry.insert(UxContract {
+            id: "b".into(),
+            title: "b".into(),
+            category: ContractCategory::Layout,
+            strength: ContractStrength::Hard,
+            scope,
+            predicate: ContractPredicate::NotExists {
+                selector: "#hero".into(),
+            },
+            provenance: "test".into(),
+            inherited_from: None,
+        });
         assert_eq!(registry.conflicts().len(), 1);
     }
 }

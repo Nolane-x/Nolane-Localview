@@ -53,7 +53,10 @@ fn provider_verification_request_keeps_expected_value_process_local_and_cut_sepa
     assert_eq!(request.element_ref, element);
     assert_eq!(request.observation_cut_ref, "cut:after-dispatch:fresh");
     assert_eq!(request.expected_utf8_len(), sentinel.len());
-    assert_ne!(request.element_ref.acquisition_cut_ref, request.observation_cut_ref);
+    assert_ne!(
+        request.element_ref.acquisition_cut_ref,
+        request.observation_cut_ref
+    );
     assert!(
         !format!("{request:?}").contains(sentinel),
         "provider verification Debug must never expose expected plaintext"

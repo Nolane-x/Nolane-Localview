@@ -38,10 +38,12 @@ fn all_equivalent_vectors_measure_crdr_without_minting_a_divergence() {
     );
     assert_eq!(record.first_divergence_vector_id, None);
     assert_eq!(record.observations.len(), 2);
-    assert!(record
-        .observations
-        .iter()
-        .all(|observation| observation.failure_flags.is_empty()));
+    assert!(
+        record
+            .observations
+            .iter()
+            .all(|observation| observation.failure_flags.is_empty())
+    );
 
     let metrics = reduce_metric_observations(&record.observations).expect("reduce CRDR");
     let crdr = metrics.get(LabMetricKind::Crdr).expect("CRDR present");

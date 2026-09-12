@@ -4,9 +4,7 @@ use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
     ConsequentialJournal, ConsequentialRecoveryState,
 };
-use localview_protocol::{
-    PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
-};
+use localview_protocol::{PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use uuid::Uuid;
 
 fn journal_path() -> PathBuf {
@@ -26,9 +24,7 @@ fn envelope(label: &str) -> CanonicalActionEnvelope {
             acting_principal_ref: PrincipalRef::from(format!("principal:executor:{label}")),
             authorization_revision: format!("auth:{label}:v1"),
             precondition_snapshot_cut_ref: format!("cut:{label}:before"),
-            provider_incarnation_ref: ProviderIncarnationRef::from(format!(
-                "provider:{label}:1"
-            )),
+            provider_incarnation_ref: ProviderIncarnationRef::from(format!("provider:{label}:1")),
             target_incarnation_ref: TargetIncarnationRef::from(format!("target:{label}:1")),
             risk_class: ActionRiskClass::ExternalSideEffect,
             idempotency_class: ActionIdempotencyClass::Irreversible,
@@ -45,7 +41,10 @@ async fn reopened_journal_inventory_is_one_entry_per_action_in_latest_sequence_o
 
     let journal = ConsequentialJournal::open(&path).await.unwrap();
     let first_admitted = journal.record_intent_admitted(first.clone()).await.unwrap();
-    let second_admitted = journal.record_intent_admitted(second.clone()).await.unwrap();
+    let second_admitted = journal
+        .record_intent_admitted(second.clone())
+        .await
+        .unwrap();
     let first_authorized = journal
         .record_authorization(
             first.transport_action_id,
@@ -64,7 +63,10 @@ async fn reopened_journal_inventory_is_one_entry_per_action_in_latest_sequence_o
 
     assert_eq!(inventory.len(), 2);
     assert_eq!(inventory[0].action_id, second.transport_action_id);
-    assert_eq!(inventory[0].recovery_state, ConsequentialRecoveryState::Admitted);
+    assert_eq!(
+        inventory[0].recovery_state,
+        ConsequentialRecoveryState::Admitted
+    );
     assert_eq!(
         inventory[0].latest_journal_sequence,
         second_admitted.journal_sequence

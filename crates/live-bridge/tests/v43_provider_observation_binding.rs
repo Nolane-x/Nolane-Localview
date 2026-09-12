@@ -124,9 +124,16 @@ async fn reconciliation_establishes_current_snapshot_without_upgrading_opaque_ev
         })
         .await;
 
-    assert!(bridge.record_reconciliation(session_id, receipt(provider, target)).await);
+    assert!(
+        bridge
+            .record_reconciliation(session_id, receipt(provider, target))
+            .await
+    );
     let status = bridge.observation_status(session_id).await.unwrap();
-    assert_eq!(status.event_continuity, EventContinuityState::OrderingOpaque);
+    assert_eq!(
+        status.event_continuity,
+        EventContinuityState::OrderingOpaque
+    );
     assert_eq!(
         status.current_snapshot_completeness,
         Some(ReconciliationCompleteness::Established)

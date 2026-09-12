@@ -148,7 +148,11 @@ pub fn validate_png(bytes: &[u8]) -> Result<(), NativeCaptureError> {
 pub fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), NativeCaptureError> {
     validate_png(bytes)?;
     let width = u32::from_be_bytes(bytes[16..20].try_into().expect("validated PNG width slice"));
-    let height = u32::from_be_bytes(bytes[20..24].try_into().expect("validated PNG height slice"));
+    let height = u32::from_be_bytes(
+        bytes[20..24]
+            .try_into()
+            .expect("validated PNG height slice"),
+    );
     Ok((width, height))
 }
 

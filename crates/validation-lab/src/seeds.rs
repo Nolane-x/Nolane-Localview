@@ -45,10 +45,7 @@ struct CanonicalSeedCatalog<'a> {
 }
 
 impl LabSeedCatalog {
-    pub fn new(
-        corpus_revision: impl Into<String>,
-        seeds: Vec<LabSeed>,
-    ) -> Result<Self, LabError> {
+    pub fn new(corpus_revision: impl Into<String>, seeds: Vec<LabSeed>) -> Result<Self, LabError> {
         let corpus_revision = corpus_revision.into();
         require_authority_field("corpus_revision", &corpus_revision)?;
 

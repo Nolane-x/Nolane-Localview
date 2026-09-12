@@ -7,7 +7,8 @@ use localview_native_provider::{
 use localview_postcondition_contracts::{
     NativeSemanticPostconditionEvaluation, PayloadEqualityModeV1,
     PayloadEqualityPostconditionContractError, PayloadEqualityPostconditionContractV1,
-    PostconditionContractRegistry, PostconditionContractRegistryError, RegisteredPostconditionContract,
+    PostconditionContractRegistry, PostconditionContractRegistryError,
+    RegisteredPostconditionContract,
 };
 use localview_protocol::{
     ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef,
@@ -16,7 +17,8 @@ use localview_protocol::{
 
 const PAYLOAD_REF: &str = "8bdc6fd9-77dc-4e4c-a3ae-df895d02584d";
 
-fn complete_snapshot() -> std::sync::Arc<localview_native_provider::NativeSemanticSnapshotRevision> {
+fn complete_snapshot() -> std::sync::Arc<localview_native_provider::NativeSemanticSnapshotRevision>
+{
     let provider = ProviderIncarnationRef::from("provider:payload-equality:test");
     let target = TargetIncarnationRef::from("target:payload-equality:test");
     let cut = "cut:payload-equality:1".to_owned();

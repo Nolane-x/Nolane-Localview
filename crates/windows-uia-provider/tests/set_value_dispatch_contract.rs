@@ -12,7 +12,8 @@ fn request_with(
     mode: SetValueMode,
     secret: Vec<u8>,
 ) -> Result<WindowsUiaSetValueDispatchRequest, WindowsUiaSetValueDispatchRequestError> {
-    let provider = ProviderIncarnationRef::from("provider:windows-uia:set-value-contract".to_string());
+    let provider =
+        ProviderIncarnationRef::from("provider:windows-uia:set-value-contract".to_string());
     let target = TargetIncarnationRef::from("target:windows-uia:set-value-contract".to_string());
     let element_ref = provider_element_ref_from_runtime_id(
         provider.clone(),
@@ -78,7 +79,8 @@ fn clear_value_accepts_only_an_empty_process_local_payload() {
 
 #[test]
 fn request_rejects_nil_payload_identity_before_worker_dispatch() {
-    let provider = ProviderIncarnationRef::from("provider:windows-uia:set-value-contract".to_string());
+    let provider =
+        ProviderIncarnationRef::from("provider:windows-uia:set-value-contract".to_string());
     let target = TargetIncarnationRef::from("target:windows-uia:set-value-contract".to_string());
     let element_ref = provider_element_ref_from_runtime_id(
         provider.clone(),
@@ -108,5 +110,8 @@ fn request_rejects_nil_payload_identity_before_worker_dispatch() {
     )
     .unwrap_err();
 
-    assert_eq!(error, WindowsUiaSetValueDispatchRequestError::InvalidPayloadRef);
+    assert_eq!(
+        error,
+        WindowsUiaSetValueDispatchRequestError::InvalidPayloadRef
+    );
 }

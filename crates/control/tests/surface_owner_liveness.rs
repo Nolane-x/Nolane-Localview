@@ -1,24 +1,25 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
 use localview_control::{
-    configure_surface_recovery_journal_for_sessions,
-    reap_expired_surface_owner_resources_for_sessions_at, router, ControlState,
-    SurfaceRecoveryJournal,
+    ControlState, SurfaceRecoveryJournal, configure_surface_recovery_journal_for_sessions,
+    reap_expired_surface_owner_resources_for_sessions_at, router,
 };
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde::Deserialize;
 use serde_json::Value;
@@ -200,7 +201,11 @@ async fn heartbeat_requires_the_exact_current_boot_owner_proof() {
         proof(registration),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "current proof must refresh liveness");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "current proof must refresh liveness"
+    );
 
     let stale = Registration {
         owner_lease_id: Uuid::new_v4(),
@@ -303,8 +308,7 @@ fn daemon_runs_surface_owner_reaper_on_five_second_interval() {
     let daemon = include_str!("../../../apps/daemon/src/main.rs");
 
     assert!(
-        daemon.contains("SURFACE_OWNER_REAP_INTERVAL")
-            && daemon.contains("Duration::from_secs(5)"),
+        daemon.contains("SURFACE_OWNER_REAP_INTERVAL") && daemon.contains("Duration::from_secs(5)"),
         "daemon must run the owner reaper on a bounded five-second interval"
     );
     assert!(

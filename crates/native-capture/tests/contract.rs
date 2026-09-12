@@ -1,7 +1,7 @@
 use localview_capture::CaptureTarget;
 use localview_native_capture::{
-    png_dimensions, validate_png, CaptureRequest, NativeCaptureBackend, NativeCaptureError,
-    ViewportMeta, MAX_PNG_BYTES,
+    CaptureRequest, MAX_PNG_BYTES, NativeCaptureBackend, NativeCaptureError, ViewportMeta,
+    png_dimensions, validate_png,
 };
 
 #[test]

@@ -1,8 +1,8 @@
 #![cfg(windows)]
 
 use localview_windows_uia_provider::{
-    WindowsUiaAttachment, WindowsUiaVerifiedInputRequest, WindowsUiaWorker,
-    WindowsUiaWorkerError, WindowsVerifiedInputBoundaryReceipt,
+    WindowsUiaAttachment, WindowsUiaVerifiedInputRequest, WindowsUiaWorker, WindowsUiaWorkerError,
+    WindowsVerifiedInputBoundaryReceipt,
 };
 
 #[test]

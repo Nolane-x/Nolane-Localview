@@ -41,7 +41,11 @@ fn l4_adapter_reuses_state_space_compiler_and_preserves_exact_bound_provenance()
     assert_eq!(adapted.executed_state_count, expected.states.len() as u64);
     assert_eq!(
         adapted.state_keys,
-        expected.states.iter().map(|state| state.key()).collect::<Vec<_>>()
+        expected
+            .states
+            .iter()
+            .map(|state| state.key())
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         adapted.total_unconstrained_combinations,
@@ -70,5 +74,8 @@ fn l4_adapter_rejects_declared_bound_drift_from_compiler_plan() {
 fn l4_adapter_rejects_zero_bound_instead_of_inheriting_compiler_minimum_one() {
     let error = adapt_bounded_state_space(&plan(0), 0).expect_err("zero bound must fail closed");
 
-    assert_eq!(error, LabError::InvalidStateSpaceBound { declared_bound: 0 });
+    assert_eq!(
+        error,
+        LabError::InvalidStateSpaceBound { declared_bound: 0 }
+    );
 }

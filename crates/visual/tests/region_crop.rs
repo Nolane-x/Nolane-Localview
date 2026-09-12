@@ -1,5 +1,7 @@
 use localview_protocol::Rect;
-use localview_visual::{crop_png_css_rect, decode_png_rgba, encode_png_rgba, RgbaImage, VisualError};
+use localview_visual::{
+    RgbaImage, VisualError, crop_png_css_rect, decode_png_rgba, encode_png_rgba,
+};
 
 fn source_image() -> RgbaImage {
     let mut data = Vec::new();

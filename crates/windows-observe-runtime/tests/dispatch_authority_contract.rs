@@ -10,16 +10,19 @@ use localview_protocol::{
     ProviderElementRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef, TransportResult,
 };
 use localview_windows_observe_runtime::{
-    validate_uia_dispatch_authority, WindowsUiaActionPreflightReceipt,
-    WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
-    WindowsUiaDispatchAuthorityError, WindowsUiaDispatchRevalidationReceipt,
+    WindowsUiaActionPreflightReceipt, WindowsUiaAuthorizationRevalidationReceipt,
+    WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchAuthorityError,
+    WindowsUiaDispatchRevalidationReceipt, validate_uia_dispatch_authority,
 };
 use localview_windows_uia_provider::{WindowsUiaElementLeaseReceipt, WindowsUiaPattern};
 use thiserror::Error;
 use uuid::Uuid;
 
 fn journal_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("localview-windows-{label}-{}.jsonl", Uuid::new_v4()))
+    std::env::temp_dir().join(format!(
+        "localview-windows-{label}-{}.jsonl",
+        Uuid::new_v4()
+    ))
 }
 
 fn session() -> SessionId {
@@ -151,7 +154,10 @@ async fn exact_canonical_authority_is_revalidated_and_durably_recorded_before_di
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
-    journal.record_intent_operation_bound(&queued).await.unwrap();
+    journal
+        .record_intent_operation_bound(&queued)
+        .await
+        .unwrap();
     journal
         .record_authorization(
             queued.action.id,
@@ -189,7 +195,11 @@ async fn exact_canonical_authority_is_revalidated_and_durably_recorded_before_di
     ));
 
     let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(format!("{}.operation-{}.json", path.display(), queued.action.id));
+    let _ = std::fs::remove_file(format!(
+        "{}.operation-{}.json",
+        path.display(),
+        queued.action.id
+    ));
 }
 
 #[tokio::test]
@@ -208,7 +218,10 @@ async fn principal_substitution_fails_before_journal_revalidation_is_appended() 
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
-    journal.record_intent_operation_bound(&queued).await.unwrap();
+    journal
+        .record_intent_operation_bound(&queued)
+        .await
+        .unwrap();
 
     let mut forged = revalidator_for(queued.action.id, &metadata);
     forged.receipt.acting_principal_ref = PrincipalRef::from("principal:acting:forged");
@@ -231,7 +244,11 @@ async fn principal_substitution_fails_before_journal_revalidation_is_appended() 
     assert_eq!(journal.entries_for(queued.action.id).await.len(), 1);
 
     let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(format!("{}.operation-{}.json", path.display(), queued.action.id));
+    let _ = std::fs::remove_file(format!(
+        "{}.operation-{}.json",
+        path.display(),
+        queued.action.id
+    ));
 }
 
 #[tokio::test]
@@ -250,7 +267,10 @@ async fn previously_linearized_action_cannot_be_reauthorized_for_blind_redispatc
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
-    journal.record_intent_operation_bound(&queued).await.unwrap();
+    journal
+        .record_intent_operation_bound(&queued)
+        .await
+        .unwrap();
     let authorized = journal
         .record_authorization(
             queued.action.id,
@@ -304,5 +324,9 @@ async fn previously_linearized_action_cannot_be_reauthorized_for_blind_redispatc
     assert_eq!(journal.entries_for(queued.action.id).await.len(), 4);
 
     let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(format!("{}.operation-{}.json", path.display(), queued.action.id));
+    let _ = std::fs::remove_file(format!(
+        "{}.operation-{}.json",
+        path.display(),
+        queued.action.id
+    ));
 }

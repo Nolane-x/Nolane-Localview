@@ -16,9 +16,7 @@ fn projected_admission_is_dimension_specific_and_exact() {
     ledger
         .synchronize(RetainedResourceKind::CaptureStorage, 90)
         .unwrap();
-    ledger
-        .synchronize(RetainedResourceKind::Cache, 25)
-        .unwrap();
+    ledger.synchronize(RetainedResourceKind::Cache, 25).unwrap();
     ledger
         .admit_projected(RetainedResourceKind::CaptureStorage, 100)
         .unwrap();
@@ -40,9 +38,11 @@ fn synchronize_records_over_limit_reality_before_returning_violation() {
         .unwrap_err();
     assert_eq!(violation.projected_or_observed_bytes, 41);
     assert_eq!(ledger.usage().cache_bytes, 41);
-    assert!(ledger
-        .admit_projected(RetainedResourceKind::Cache, 40)
-        .is_err());
+    assert!(
+        ledger
+            .admit_projected(RetainedResourceKind::Cache, 40)
+            .is_err()
+    );
 }
 
 #[test]
@@ -51,9 +51,11 @@ fn failed_projected_admission_does_not_mutate_usage() {
     ledger
         .synchronize(RetainedResourceKind::CaptureStorage, 7)
         .unwrap();
-    assert!(ledger
-        .admit_projected(RetainedResourceKind::CaptureStorage, 101)
-        .is_err());
+    assert!(
+        ledger
+            .admit_projected(RetainedResourceKind::CaptureStorage, 101)
+            .is_err()
+    );
     assert_eq!(ledger.usage().capture_storage_bytes, 7);
 }
 
@@ -69,14 +71,18 @@ fn clones_share_authority_state() {
 
 #[test]
 fn zero_limit_budget_is_rejected() {
-    assert!(RetainedResourceLedger::new(RetainedResourceBudget {
-        capture_storage_bytes: 0,
-        cache_bytes: 1,
-    })
-    .is_err());
-    assert!(RetainedResourceLedger::new(RetainedResourceBudget {
-        capture_storage_bytes: 1,
-        cache_bytes: 0,
-    })
-    .is_err());
+    assert!(
+        RetainedResourceLedger::new(RetainedResourceBudget {
+            capture_storage_bytes: 0,
+            cache_bytes: 1,
+        })
+        .is_err()
+    );
+    assert!(
+        RetainedResourceLedger::new(RetainedResourceBudget {
+            capture_storage_bytes: 1,
+            cache_bytes: 0,
+        })
+        .is_err()
+    );
 }

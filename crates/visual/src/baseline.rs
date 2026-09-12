@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use localview_protocol::{Rect, SessionId};
 
-use crate::{RgbaImage, VisualError, MAX_DECODED_IMAGE_BYTES};
+use crate::{MAX_DECODED_IMAGE_BYTES, RgbaImage, VisualError};
 
 impl RgbaImage {
     /// Crops one viewport-relative CSS rectangle directly from an already decoded
@@ -209,10 +209,7 @@ impl VisualBaselineCache {
             return Ok(None);
         }
 
-        let existing_bytes = self
-            .entries
-            .get(&session_id)
-            .map_or(0, |entry| entry.bytes);
+        let existing_bytes = self.entries.get(&session_id).map_or(0, |entry| entry.bytes);
         let mut projected_bytes = self
             .used_bytes
             .checked_sub(existing_bytes)
@@ -229,13 +226,10 @@ impl VisualBaselineCache {
             .entries
             .iter()
             .filter(|(candidate_session, _)| **candidate_session != session_id)
-            .map(|(candidate_session, entry)| {
-                (entry.touched_at, *candidate_session, entry.bytes)
-            })
+            .map(|(candidate_session, entry)| (entry.touched_at, *candidate_session, entry.bytes))
             .collect();
-        eviction_candidates.sort_by_key(|(touched_at, candidate_session, _)| {
-            (*touched_at, *candidate_session)
-        });
+        eviction_candidates
+            .sort_by_key(|(touched_at, candidate_session, _)| (*touched_at, *candidate_session));
 
         for (_, _, bytes) in eviction_candidates {
             if projected_bytes <= self.byte_budget && projected_entries <= self.max_entries {
@@ -323,9 +317,7 @@ mod retained_projection_tests {
         let cache = VisualBaselineCache::new(16, 2).unwrap();
         let session = SessionId::from_u128(100);
         assert_eq!(
-            cache
-                .projected_used_bytes_after_insert(session, 4)
-                .unwrap(),
+            cache.projected_used_bytes_after_insert(session, 4).unwrap(),
             Some(4)
         );
     }
@@ -335,9 +327,7 @@ mod retained_projection_tests {
         let cache = VisualBaselineCache::new(4, 2).unwrap();
         let session = SessionId::from_u128(101);
         assert_eq!(
-            cache
-                .projected_used_bytes_after_insert(session, 8)
-                .unwrap(),
+            cache.projected_used_bytes_after_insert(session, 8).unwrap(),
             None
         );
     }
@@ -351,9 +341,7 @@ mod retained_projection_tests {
             .unwrap();
         assert_eq!(cache.used_bytes(), 4);
         assert_eq!(
-            cache
-                .projected_used_bytes_after_insert(session, 8)
-                .unwrap(),
+            cache.projected_used_bytes_after_insert(session, 8).unwrap(),
             Some(8)
         );
     }
@@ -403,9 +391,7 @@ mod retained_projection_tests {
             .collect();
 
         assert_eq!(
-            cache
-                .projected_used_bytes_after_insert(third, 4)
-                .unwrap(),
+            cache.projected_used_bytes_after_insert(third, 4).unwrap(),
             Some(8)
         );
 

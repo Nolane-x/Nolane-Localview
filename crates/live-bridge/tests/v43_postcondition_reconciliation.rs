@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use localview_live_bridge::{
-    reconcile_consequential_postconditions, ActionEnvelopeMetadata, ActionIdempotencyClass,
-    ActionRiskClass, CanonicalActionEnvelope, ConsequentialJournal, ConsequentialJournalError,
-    ConsequentialPostconditionEvidence, ConsequentialPostconditionReconciliationReceipt,
-    ConsequentialPostconditionStatus, ConsequentialReconciliationError,
-    ConsequentialRecoveryState, DispatchExecutionPermit, DispatchLinearizationReceipt,
-    DispatchPreparationReceipt, LiveBridge, ProviderObservationBinding,
+    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
+    ConsequentialJournal, ConsequentialJournalError, ConsequentialPostconditionEvidence,
+    ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
+    ConsequentialReconciliationError, ConsequentialRecoveryState, DispatchExecutionPermit,
+    DispatchLinearizationReceipt, DispatchPreparationReceipt, LiveBridge,
+    ProviderObservationBinding, reconcile_consequential_postconditions,
 };
 use localview_protocol::{
     DispatchResult, EventContinuityState, PrincipalRef, ProviderIncarnationRef,
@@ -33,7 +33,10 @@ fn envelope(expected: &[&str]) -> CanonicalActionEnvelope {
             target_incarnation_ref: TargetIncarnationRef::from("target:window:1"),
             risk_class: ActionRiskClass::ReversibleUiState,
             idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
-            expected_postcondition_contract_refs: expected.iter().map(|value| (*value).into()).collect(),
+            expected_postcondition_contract_refs: expected
+                .iter()
+                .map(|value| (*value).into())
+                .collect(),
         },
     }
 }
@@ -55,7 +58,10 @@ async fn dispatch_once(
     journal: &ConsequentialJournal,
     action: &CanonicalActionEnvelope,
 ) -> DispatchExecutionPermit {
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let authorized = journal
         .record_authorization(
             action.transport_action_id,
@@ -75,10 +81,7 @@ async fn dispatch_once(
     journal.begin_dispatch(capability).await.unwrap()
 }
 
-async fn linearize_dispatch(
-    journal: &ConsequentialJournal,
-    action: &CanonicalActionEnvelope,
-) {
+async fn linearize_dispatch(journal: &ConsequentialJournal, action: &CanonicalActionEnvelope) {
     let permit = dispatch_once(journal, action).await;
     journal
         .record_dispatch_linearized(
@@ -135,9 +138,11 @@ async fn typed_evidence(
         observed_digest: format!("digest:{receipt_id}"),
         incompleteness_debt: Vec::new(),
     };
-    assert!(bridge
-        .record_reconciliation(action.session_id, snapshot.clone())
-        .await);
+    assert!(
+        bridge
+            .record_reconciliation(action.session_id, snapshot.clone())
+            .await
+    );
     let observation_receipt = journal
         .complete_postcondition_observation(observation, snapshot)
         .await
@@ -185,10 +190,12 @@ async fn only_complete_exact_fresh_postcondition_set_can_reach_verified_uncommit
         journal.recovery_state(action.transport_action_id).await,
         Some(ConsequentialRecoveryState::VerifiedUncommitted)
     );
-    assert!(!journal
-        .requires_reconciliation(action.transport_action_id)
-        .await
-        .unwrap());
+    assert!(
+        !journal
+            .requires_reconciliation(action.transport_action_id)
+            .await
+            .unwrap()
+    );
 
     journal
         .record_committed(action.transport_action_id)
@@ -227,10 +234,12 @@ async fn incomplete_reconciliation_stays_fail_closed_and_can_be_reconciled_again
         journal.recovery_state(action.transport_action_id).await,
         Some(ConsequentialRecoveryState::OutcomeObservedUnverified)
     );
-    assert!(journal
-        .requires_reconciliation(action.transport_action_id)
-        .await
-        .unwrap());
+    assert!(
+        journal
+            .requires_reconciliation(action.transport_action_id)
+            .await
+            .unwrap()
+    );
 
     let second_receipt = typed_evidence(
         &bridge,

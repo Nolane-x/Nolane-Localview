@@ -1,14 +1,14 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{LiveBridge, NativeExecutorAction};
 use localview_observation::ObservationBus;
@@ -46,9 +46,7 @@ fn discovered(port: u16) -> DiscoveredServer {
 
 async fn test_state() -> (ControlState, Uuid) {
     let sessions = Arc::new(SessionManager::new(Duration::from_secs(2)));
-    let reconcile = sessions
-        .reconcile(vec![discovered(5273)], Utc::now())
-        .await;
+    let reconcile = sessions.reconcile(vec![discovered(5273)], Utc::now()).await;
     let session_id = reconcile.created[0];
     let state = ControlState {
         token: Arc::from("test-token"),
@@ -106,7 +104,12 @@ async fn exact_cancellation_lookup_is_not_truncated_by_signal_batching() {
     let (state, session_id) = test_state().await;
     let mut requests = Vec::new();
     for _ in 0..40 {
-        requests.push(state.live.enqueue_native_executor(session_id, action()).await);
+        requests.push(
+            state
+                .live
+                .enqueue_native_executor(session_id, action())
+                .await,
+        );
     }
 
     for _ in 0..5 {
@@ -150,7 +153,10 @@ async fn exact_cancellation_lookup_is_not_truncated_by_signal_batching() {
 #[tokio::test]
 async fn accepted_cancellation_fences_result_before_acknowledgement() {
     let (state, session_id) = test_state().await;
-    let request = state.live.enqueue_native_executor(session_id, action()).await;
+    let request = state
+        .live
+        .enqueue_native_executor(session_id, action())
+        .await;
 
     let (dispatch_status, dispatch_body) = send(
         state.clone(),

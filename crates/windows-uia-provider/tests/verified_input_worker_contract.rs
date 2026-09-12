@@ -1,8 +1,8 @@
 use localview_windows_uia_provider::{
-    execute_windows_verified_input_boundary, WindowsInputInsertRawResult,
-    WindowsKeyTransition, WindowsKeyboardStateSnapshot, WindowsUiaDispatchContextObservation,
-    WindowsUiaDispatchContextRequirements, WindowsVerifiedInputBoundaryError,
-    WindowsVerifiedInputEnvironment, WindowsVerifiedKeyEvent, WindowsVerifiedKeyboardBatch,
+    WindowsInputInsertRawResult, WindowsKeyTransition, WindowsKeyboardStateSnapshot,
+    WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextRequirements,
+    WindowsVerifiedInputBoundaryError, WindowsVerifiedInputEnvironment, WindowsVerifiedKeyEvent,
+    WindowsVerifiedKeyboardBatch, execute_windows_verified_input_boundary,
 };
 
 #[derive(Debug)]
@@ -40,8 +40,14 @@ impl WindowsVerifiedInputEnvironment for FakeEnvironment {
 
 fn batch() -> WindowsVerifiedKeyboardBatch {
     WindowsVerifiedKeyboardBatch::new(vec![
-        WindowsVerifiedKeyEvent { virtual_key: 0x41, transition: WindowsKeyTransition::KeyDown },
-        WindowsVerifiedKeyEvent { virtual_key: 0x41, transition: WindowsKeyTransition::KeyUp },
+        WindowsVerifiedKeyEvent {
+            virtual_key: 0x41,
+            transition: WindowsKeyTransition::KeyDown,
+        },
+        WindowsVerifiedKeyEvent {
+            virtual_key: 0x41,
+            transition: WindowsKeyTransition::KeyUp,
+        },
     ])
     .unwrap()
 }
@@ -91,7 +97,10 @@ fn foreground_mismatch_blocks_before_keyboard_snapshot_or_insertion() {
     let error = execute_windows_verified_input_boundary(requirements(), &batch(), &mut env)
         .expect_err("stolen foreground must block final input boundary");
 
-    assert!(matches!(error, WindowsVerifiedInputBoundaryError::ContextBlocked(_)));
+    assert!(matches!(
+        error,
+        WindowsVerifiedInputBoundaryError::ContextBlocked(_)
+    ));
     assert_eq!(env.calls, vec!["context"]);
 }
 
@@ -109,10 +118,7 @@ fn conflicting_modifier_blocks_before_platform_insertion() {
     let error = execute_windows_verified_input_boundary(requirements(), &batch(), &mut env)
         .expect_err("held human modifier must block platform insertion");
 
-    assert_eq!(
-        error,
-        WindowsVerifiedInputBoundaryError::InputStateConflict,
-    );
+    assert_eq!(error, WindowsVerifiedInputBoundaryError::InputStateConflict,);
     assert_eq!(env.calls, vec!["context", "keyboard"]);
 }
 

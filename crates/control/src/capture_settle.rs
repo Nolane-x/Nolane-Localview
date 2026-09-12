@@ -1,21 +1,21 @@
 use std::time::Duration;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use chrono::Utc;
-use localview_capture::{evaluate_settle, SettleObservation, StableCapturePolicy};
+use localview_capture::{SettleObservation, StableCapturePolicy, evaluate_settle};
 use localview_live_bridge::{
     BridgeActionKind, BridgeActionResult, ObserverEvent, ObserverEventKind,
 };
 use localview_protocol::SessionId;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
 use crate::ControlState;
@@ -373,7 +373,9 @@ fn settle_observation(
                 update_latest(&mut latest_dom_mutation_at_unix_ms, captured_at)
             }
             ObserverEventKind::Layout => update_latest(&mut latest_layout_at_unix_ms, captured_at),
-            ObserverEventKind::Network => update_latest(&mut latest_network_at_unix_ms, captured_at),
+            ObserverEventKind::Network => {
+                update_latest(&mut latest_network_at_unix_ms, captured_at)
+            }
             ObserverEventKind::SemanticSnapshot
             | ObserverEventKind::Route
             | ObserverEventKind::Focus

@@ -5,8 +5,8 @@ mod base;
 
 pub use base::{
     BridgeAction, BridgeActionKind, BridgeActionResult, CompletionOrigin, IngestReport,
-    NativeExecutorAction, NativeExecutorRequest, NativeExecutorResult, ObserverBatch, ObserverEvent,
-    ObserverEventKind, PrivateBridgeAction, PrivateCaptureActionData,
+    NativeExecutorAction, NativeExecutorRequest, NativeExecutorResult, ObserverBatch,
+    ObserverEvent, ObserverEventKind, PrivateBridgeAction, PrivateCaptureActionData,
 };
 
 use std::{
@@ -336,11 +336,17 @@ impl LiveBridge {
         action: BridgeActionKind,
     ) -> BridgeAction {
         if action.is_internal_capture_action() {
-            return self.base.enqueue_action(session_id, reference, action).await;
+            return self
+                .base
+                .enqueue_action(session_id, reference, action)
+                .await;
         }
 
         let mut authority = self.action_cancellation.lock().await;
-        let action = self.base.enqueue_action(session_id, reference, action).await;
+        let action = self
+            .base
+            .enqueue_action(session_id, reference, action)
+            .await;
         authority.record_enqueued(&action, self.action_capacity);
         action
     }
@@ -568,11 +574,7 @@ impl LiveBridge {
 
         for request in cancelled {
             let _ = self
-                .settle_cancelled_origin(
-                    session_id,
-                    request.id,
-                    "cancelled before native dispatch",
-                )
+                .settle_cancelled_origin(session_id, request.id, "cancelled before native dispatch")
                 .await;
         }
         authority.prune_cancelled_tombstones();

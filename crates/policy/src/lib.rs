@@ -34,7 +34,11 @@ pub struct ProjectPolicy {
 impl Default for ProjectPolicy {
     fn default() -> Self {
         Self {
-            allowed: BTreeSet::from([Permission::Observe, Permission::Interact, Permission::Capture]),
+            allowed: BTreeSet::from([
+                Permission::Observe,
+                Permission::Interact,
+                Permission::Capture,
+            ]),
             denied_routes: Vec::new(),
             protected_selectors: Vec::new(),
             allowed_external_hosts: BTreeSet::new(),
@@ -69,7 +73,11 @@ pub struct ActionIntent {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PolicyDecision { Allow, Deny, RequireConfirmation }
+pub enum PolicyDecision {
+    Allow,
+    Deny,
+    RequireConfirmation,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicyResult {
@@ -83,12 +91,18 @@ pub fn authorize(intent: &ActionIntent, policy: &ProjectPolicy) -> PolicyResult 
         reasons.push(format!("permission {:?} is not granted", intent.permission));
     }
     if intent.route.as_ref().is_some_and(|route| {
-        policy.denied_routes.iter().any(|prefix| route.starts_with(prefix))
+        policy
+            .denied_routes
+            .iter()
+            .any(|prefix| route.starts_with(prefix))
     }) {
         reasons.push("route is denied by project policy".into());
     }
     if intent.selector.as_ref().is_some_and(|selector| {
-        policy.protected_selectors.iter().any(|protected| selector == protected)
+        policy
+            .protected_selectors
+            .iter()
+            .any(|protected| selector == protected)
     }) {
         reasons.push("target is protected by project policy".into());
     }
@@ -98,7 +112,10 @@ pub fn authorize(intent: &ActionIntent, policy: &ProjectPolicy) -> PolicyResult 
         }
     }
     if !reasons.is_empty() {
-        return PolicyResult { decision: PolicyDecision::Deny, reasons };
+        return PolicyResult {
+            decision: PolicyDecision::Deny,
+            reasons,
+        };
     }
     if policy.require_confirmation_for.contains(&intent.class) {
         return PolicyResult {
@@ -106,7 +123,10 @@ pub fn authorize(intent: &ActionIntent, policy: &ProjectPolicy) -> PolicyResult 
             reasons: vec!["intent class requires explicit confirmation".into()],
         };
     }
-    PolicyResult { decision: PolicyDecision::Allow, reasons }
+    PolicyResult {
+        decision: PolicyDecision::Allow,
+        reasons,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -142,11 +162,19 @@ pub struct Persona {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum TextDirection { Ltr, Rtl }
+pub enum TextDirection {
+    Ltr,
+    Rtl,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum InputMode { Mouse, Touch, Keyboard, Mixed }
+pub enum InputMode {
+    Mouse,
+    Touch,
+    Keyboard,
+    Mixed,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersonaDrift {
@@ -156,20 +184,42 @@ pub struct PersonaDrift {
 
 pub fn persona_drift(before: &Persona, after: &Persona) -> PersonaDrift {
     let mut changed = Vec::new();
-    if before.locale != after.locale { changed.push("locale".into()); }
-    if before.direction != after.direction { changed.push("direction".into()); }
-    if before.viewport != after.viewport { changed.push("viewport".into()); }
-    if before.reduced_motion != after.reduced_motion { changed.push("reduced_motion".into()); }
-    if before.input_mode != after.input_mode { changed.push("input_mode".into()); }
-    if before.runtime_state != after.runtime_state { changed.push("runtime_state".into()); }
+    if before.locale != after.locale {
+        changed.push("locale".into());
+    }
+    if before.direction != after.direction {
+        changed.push("direction".into());
+    }
+    if before.viewport != after.viewport {
+        changed.push("viewport".into());
+    }
+    if before.reduced_motion != after.reduced_motion {
+        changed.push("reduced_motion".into());
+    }
+    if before.input_mode != after.input_mode {
+        changed.push("input_mode".into());
+    }
+    if before.runtime_state != after.runtime_state {
+        changed.push("runtime_state".into());
+    }
     let security_sensitive = before.secret_fields != after.secret_fields
-        || changed.iter().any(|field| after.secret_fields.contains(field));
-    PersonaDrift { changed_fields: changed, security_sensitive }
+        || changed
+            .iter()
+            .any(|field| after.secret_fields.contains(field));
+    PersonaDrift {
+        changed_fields: changed,
+        security_sensitive,
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
-pub enum PluginTrust { BuiltIn, SignedLocal, SignedThirdParty, Untrusted }
+pub enum PluginTrust {
+    BuiltIn,
+    SignedLocal,
+    SignedThirdParty,
+    Untrusted,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginManifest {
@@ -189,7 +239,9 @@ pub fn plugin_allowed(manifest: &PluginManifest, policy: &ProjectPolicy) -> Poli
     if !ungranted.is_empty() {
         return PolicyResult {
             decision: PolicyDecision::Deny,
-            reasons: vec![format!("plugin requests ungranted permissions: {ungranted:?}")],
+            reasons: vec![format!(
+                "plugin requests ungranted permissions: {ungranted:?}"
+            )],
         };
     }
     if manifest.trust == PluginTrust::Untrusted
@@ -200,7 +252,10 @@ pub fn plugin_allowed(manifest: &PluginManifest, policy: &ProjectPolicy) -> Poli
             reasons: vec!["untrusted plugins must be analyzer-only and offline".into()],
         };
     }
-    PolicyResult { decision: PolicyDecision::Allow, reasons: Vec::new() }
+    PolicyResult {
+        decision: PolicyDecision::Allow,
+        reasons: Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

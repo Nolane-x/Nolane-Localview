@@ -33,8 +33,14 @@ fn w07_requires_final_foreground_mismatch_to_block_all_insertion() {
         },
     ))
     .unwrap();
-    assert_eq!(clean.result_evidence, Some(ResultEvidence::RealProviderIntegrationPass));
-    assert_eq!(clean.observation.eligible_metrics, BTreeSet::from([LabMetricKind::Rpomr]));
+    assert_eq!(
+        clean.result_evidence,
+        Some(ResultEvidence::RealProviderIntegrationPass)
+    );
+    assert_eq!(
+        clean.observation.eligible_metrics,
+        BTreeSet::from([LabMetricKind::Rpomr])
+    );
 
     let unsafe_case = adapt_real_provider_case(input(
         "W07-unsafe",
@@ -44,7 +50,10 @@ fn w07_requires_final_foreground_mismatch_to_block_all_insertion() {
         },
     ))
     .unwrap();
-    assert_eq!(unsafe_case.result_evidence, Some(ResultEvidence::CounterexampleFound));
+    assert_eq!(
+        unsafe_case.result_evidence,
+        Some(ResultEvidence::CounterexampleFound)
+    );
 }
 
 #[test]
@@ -59,8 +68,14 @@ fn w08_partial_dispatch_must_preserve_unknown_and_deny_blind_retry() {
         },
     ))
     .unwrap();
-    assert_eq!(clean.result_evidence, Some(ResultEvidence::RealProviderIntegrationPass));
-    assert_eq!(clean.observation.eligible_metrics, BTreeSet::from([LabMetricKind::Rpomr]));
+    assert_eq!(
+        clean.result_evidence,
+        Some(ResultEvidence::RealProviderIntegrationPass)
+    );
+    assert_eq!(
+        clean.observation.eligible_metrics,
+        BTreeSet::from([LabMetricKind::Rpomr])
+    );
 
     for (unknown_outcome_preserved, blind_retry_authorized) in [(false, false), (true, true)] {
         let unsafe_case = adapt_real_provider_case(input(
@@ -73,7 +88,10 @@ fn w08_partial_dispatch_must_preserve_unknown_and_deny_blind_retry() {
             },
         ))
         .unwrap();
-        assert_eq!(unsafe_case.result_evidence, Some(ResultEvidence::CounterexampleFound));
+        assert_eq!(
+            unsafe_case.result_evidence,
+            Some(ResultEvidence::CounterexampleFound)
+        );
     }
 }
 
@@ -88,8 +106,14 @@ fn w09_conflicting_modifier_requires_pre_dispatch_block() {
         },
     ))
     .unwrap();
-    assert_eq!(clean.result_evidence, Some(ResultEvidence::RealProviderIntegrationPass));
-    assert_eq!(clean.observation.eligible_metrics, BTreeSet::from([LabMetricKind::Rpomr]));
+    assert_eq!(
+        clean.result_evidence,
+        Some(ResultEvidence::RealProviderIntegrationPass)
+    );
+    assert_eq!(
+        clean.observation.eligible_metrics,
+        BTreeSet::from([LabMetricKind::Rpomr])
+    );
 
     let unsafe_case = adapt_real_provider_case(input(
         "W09-unsafe",
@@ -100,5 +124,8 @@ fn w09_conflicting_modifier_requires_pre_dispatch_block() {
         },
     ))
     .unwrap();
-    assert_eq!(unsafe_case.result_evidence, Some(ResultEvidence::CounterexampleFound));
+    assert_eq!(
+        unsafe_case.result_evidence,
+        Some(ResultEvidence::CounterexampleFound)
+    );
 }

@@ -1,18 +1,15 @@
 use std::{
-    sync::{
-        atomic::AtomicBool,
-        Arc,
-    },
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
 };
 use chrono::Utc;
 use localview_capture::StableCapturePolicy;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{BridgeActionKind, BridgeActionResult, LiveBridge};
 use localview_observation::ObservationBus;
@@ -98,7 +95,11 @@ async fn get(state: ControlState, uri: String, authorized: bool) -> (StatusCode,
         builder = builder.header(header::AUTHORIZATION, "Bearer test-token");
     }
     let response = router(state)
-        .oneshot(builder.body(Body::empty()).expect("visual state GET request"))
+        .oneshot(
+            builder
+                .body(Body::empty())
+                .expect("visual state GET request"),
+        )
         .await
         .expect("control router response");
     let status = response.status();
@@ -337,7 +338,9 @@ async fn public_action_drain_cannot_observe_or_steal_internal_capture_actions() 
     )
     .await;
     assert_eq!(internal_status, StatusCode::OK);
-    let internal = internal_body.as_array().expect("internal capture action array");
+    let internal = internal_body
+        .as_array()
+        .expect("internal capture action array");
     assert_eq!(internal.len(), 2);
     assert_eq!(internal[0]["id"], freeze.id.to_string());
     assert_eq!(internal[1]["id"], restore.id.to_string());

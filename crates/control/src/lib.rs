@@ -28,11 +28,9 @@ use axum::Router;
 
 #[doc(hidden)]
 pub use chromium_runtime::configure_chromium_executor_for_sessions;
-#[doc(hidden)]
-pub use native_executor::{
-    wait_for_native_executor_result_with_timeout, NativeExecutorWaitError,
-};
 pub use localview_resource_governor::RuntimeResourceGovernor;
+#[doc(hidden)]
+pub use native_executor::{NativeExecutorWaitError, wait_for_native_executor_result_with_timeout};
 pub use resource_runtime::{
     release_surface_resource_session_for_sessions, runtime_resource_governor_for_sessions,
 };
@@ -45,8 +43,8 @@ pub use surface_liveness::{
     reap_expired_surface_owner_resources_for_sessions_at,
 };
 pub use surface_recovery::{
-    configure_surface_recovery_journal_for_sessions, SurfaceRecoveryError, SurfaceRecoveryJournal,
-    SurfaceRecoveryKey, SURFACE_RECOVERY_JOURNAL_FILE,
+    SURFACE_RECOVERY_JOURNAL_FILE, SurfaceRecoveryError, SurfaceRecoveryJournal,
+    SurfaceRecoveryKey, configure_surface_recovery_journal_for_sessions,
 };
 pub use windows_consequential::{
     configure_windows_consequential_control_for_sessions,

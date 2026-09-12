@@ -11,9 +11,17 @@ use serde::Serialize;
 use serde_json::Value;
 
 #[derive(Parser)]
-#[command(name = "localview", version, about = "AI-native localhost visual runtime")]
+#[command(
+    name = "localview",
+    version,
+    about = "AI-native localhost visual runtime"
+)]
 struct Cli {
-    #[arg(long, env = "LOCALVIEW_CONTROL", default_value = "http://127.0.0.1:45454")]
+    #[arg(
+        long,
+        env = "LOCALVIEW_CONTROL",
+        default_value = "http://127.0.0.1:45454"
+    )]
     control: String,
     #[command(subcommand)]
     command: Command,
@@ -23,8 +31,12 @@ struct Cli {
 enum Command {
     Status,
     Sessions,
-    Show { session: SessionId },
-    ProjectState { session: Option<SessionId> },
+    Show {
+        session: SessionId,
+    },
+    ProjectState {
+        session: Option<SessionId>,
+    },
     Pause,
     Resume,
     Observer {
@@ -32,20 +44,39 @@ enum Command {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
-    Analyze { session: Option<SessionId> },
-    Diagnose { session: Option<SessionId> },
-    Verify { session: Option<SessionId> },
-    Coverage { session: Option<SessionId> },
-    Proof { session: Option<SessionId> },
+    Analyze {
+        session: Option<SessionId>,
+    },
+    Diagnose {
+        session: Option<SessionId>,
+    },
+    Verify {
+        session: Option<SessionId>,
+    },
+    Coverage {
+        session: Option<SessionId>,
+    },
+    Proof {
+        session: Option<SessionId>,
+    },
     Evidence {
         session: Option<SessionId>,
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
-    EvidenceGet { evidence_id: String },
-    EvidenceTrace { evidence_id: String },
-    ProofStaleness { evidence_id: String },
-    Click { session: SessionId, reference: String },
+    EvidenceGet {
+        evidence_id: String,
+    },
+    EvidenceTrace {
+        evidence_id: String,
+    },
+    ProofStaleness {
+        evidence_id: String,
+    },
+    Click {
+        session: SessionId,
+        reference: String,
+    },
     Type {
         session: SessionId,
         reference: String,
@@ -61,9 +92,18 @@ enum Command {
         #[arg(long = "modifier")]
         modifiers: Vec<String>,
     },
-    Scroll { session: SessionId, x: f64, y: f64 },
-    Focus { session: SessionId, reference: String },
-    Snapshot { session: SessionId },
+    Scroll {
+        session: SessionId,
+        x: f64,
+        y: f64,
+    },
+    Focus {
+        session: SessionId,
+        reference: String,
+    },
+    Snapshot {
+        session: SessionId,
+    },
     ActionResults {
         session: SessionId,
         #[arg(long, default_value_t = 100)]
@@ -120,14 +160,11 @@ async fn main() -> Result<()> {
             }
         }
         Command::Show { session } => {
-            let value: Session = authed_get(
-                &client,
-                &cli.control,
-                &format!("/v1/sessions/{session}"),
-            )
-            .await?
-            .json()
-            .await?;
+            let value: Session =
+                authed_get(&client, &cli.control, &format!("/v1/sessions/{session}"))
+                    .await?
+                    .json()
+                    .await?;
             print_json(&value)?;
         }
         Command::ProjectState { session } => {
@@ -191,7 +228,12 @@ async fn main() -> Result<()> {
             print_json(&evidence[start..])?;
         }
         Command::EvidenceGet { evidence_id } => {
-            print_path(&client, &cli.control, &format!("/v1/evidence/{evidence_id}")).await?;
+            print_path(
+                &client,
+                &cli.control,
+                &format!("/v1/evidence/{evidence_id}"),
+            )
+            .await?;
         }
         Command::EvidenceTrace { evidence_id } => {
             print_path(
@@ -210,8 +252,14 @@ async fn main() -> Result<()> {
             .await?;
         }
         Command::Click { session, reference } => {
-            queue_action(&client, &cli.control, session, Some(reference), BridgeActionKind::Click)
-                .await?;
+            queue_action(
+                &client,
+                &cli.control,
+                session,
+                Some(reference),
+                BridgeActionKind::Click,
+            )
+            .await?;
         }
         Command::Type {
             session,
@@ -312,7 +360,10 @@ async fn resolve_session(
     if let Some(session) = requested {
         return Ok(session);
     }
-    let sessions: Vec<Session> = authed_get(client, base, "/v1/sessions").await?.json().await?;
+    let sessions: Vec<Session> = authed_get(client, base, "/v1/sessions")
+        .await?
+        .json()
+        .await?;
     match sessions.as_slice() {
         [] => Err(anyhow::anyhow!("no LocalView sessions are active")),
         [session] => Ok(session.id),
@@ -387,7 +438,12 @@ async fn read_token() -> Result<String> {
     let path = state_dir()?.join("control.token");
     Ok(tokio::fs::read_to_string(&path)
         .await
-        .with_context(|| format!("cannot read {} — is localview-daemon running?", path.display()))?
+        .with_context(|| {
+            format!(
+                "cannot read {} — is localview-daemon running?",
+                path.display()
+            )
+        })?
         .trim()
         .to_owned())
 }

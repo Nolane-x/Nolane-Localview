@@ -1,18 +1,20 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::{EvidenceKind, EvidenceStore, UncertaintyClass};
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -110,7 +112,13 @@ fn visual_payload(revision: &str, route: &str) -> Value {
     })
 }
 
-fn diff_payload(mode: &str, ratio: f64, revision: &str, route: &str, parents: Vec<String>) -> Value {
+fn diff_payload(
+    mode: &str,
+    ratio: f64,
+    revision: &str,
+    route: &str,
+    parents: Vec<String>,
+) -> Value {
     serde_json::json!({
         "route": route,
         "viewport": viewport(),
@@ -122,7 +130,12 @@ fn diff_payload(mode: &str, ratio: f64, revision: &str, route: &str, parents: Ve
     })
 }
 
-async fn create_visual_parent(state: ControlState, session_id: Uuid, revision: &str, route: &str) -> String {
+async fn create_visual_parent(
+    state: ControlState,
+    session_id: Uuid,
+    revision: &str,
+    route: &str,
+) -> String {
     let (status, body) = send(
         state,
         Method::POST,
@@ -243,7 +256,13 @@ async fn diff_authority_rejects_incoherent_modes_and_uncorrelated_visual_parents
     let cases = [
         diff_payload("unchanged", 0.1, "rev-a", route, vec![]),
         diff_payload("regions", 0.2, "rev-a", route, vec![]),
-        diff_payload("viewport", 0.2, "rev-a", route, vec![Uuid::new_v4().to_string()]),
+        diff_payload(
+            "viewport",
+            0.2,
+            "rev-a",
+            route,
+            vec![Uuid::new_v4().to_string()],
+        ),
         diff_payload("viewport", 0.2, "rev-b", route, vec![parent.clone()]),
         diff_payload(
             "viewport",
@@ -268,7 +287,10 @@ async fn diff_authority_rejects_incoherent_modes_and_uncorrelated_visual_parents
 
     let recent = evidence.recent_for_session(session_id, 20).await;
     assert_eq!(
-        recent.iter().filter(|item| item.kind == EvidenceKind::Contract).count(),
+        recent
+            .iter()
+            .filter(|item| item.kind == EvidenceKind::Contract)
+            .count(),
         0
     );
 }

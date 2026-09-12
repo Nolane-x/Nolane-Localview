@@ -22,10 +22,10 @@ use localview_windows_observe_runtime::{
     WindowsObserveActionLeaseProvider, WindowsObserveDispatchContextProvider,
     WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
     WindowsObserveSubscriptionLineage, WindowsUiaAuthorizationRevalidationReceipt,
-    WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchExecutor, WindowsUiaPostconditionVerifier,
-    WindowsUiaProviderExecutionReceipt, WindowsUiaProviderExecutionRequest,
-    WindowsUiaVerifiedActionTarget, WindowsUiaVerifiedExecutionOutcome,
-    execute_verified_canonical_uia_action,
+    WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchExecutor,
+    WindowsUiaPostconditionVerifier, WindowsUiaProviderExecutionReceipt,
+    WindowsUiaProviderExecutionRequest, WindowsUiaVerifiedActionTarget,
+    WindowsUiaVerifiedExecutionOutcome, execute_verified_canonical_uia_action,
 };
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaBoundDispatchContextReceipt,
@@ -63,7 +63,9 @@ struct FakeProvider {
 impl FakeProvider {
     fn new() -> Self {
         Self {
-            provider: ProviderIncarnationRef::from("provider:windows-uia:verified-action-coordinator"),
+            provider: ProviderIncarnationRef::from(
+                "provider:windows-uia:verified-action-coordinator",
+            ),
             target: TargetIncarnationRef::from("target:windows:verified-action-coordinator"),
             state: Arc::new(Mutex::new(FakeProviderState::default())),
         }
@@ -353,7 +355,10 @@ impl WindowsUiaPostconditionVerifier for FakeVerifier {
             .map(|contract_ref| ConsequentialPostconditionEvidence {
                 contract_ref: contract_ref.clone(),
                 status: ConsequentialPostconditionStatus::VerifiedPass,
-                receipt_ref: format!("verified-action:{}:{contract_ref}", snapshot.snapshot_cut_ref()),
+                receipt_ref: format!(
+                    "verified-action:{}:{contract_ref}",
+                    snapshot.snapshot_cut_ref()
+                ),
             })
             .collect())
     }
@@ -371,7 +376,10 @@ fn selection() -> UserSelectedWindowTarget {
     }
 }
 
-fn authority(provider: &FakeProvider, snapshot: &NativeSemanticSnapshotRevision) -> ActionEnvelopeMetadata {
+fn authority(
+    provider: &FakeProvider,
+    snapshot: &NativeSemanticSnapshotRevision,
+) -> ActionEnvelopeMetadata {
     ActionEnvelopeMetadata {
         decision_principal_ref: PrincipalRef::from("principal:decision:verified-action"),
         acting_principal_ref: PrincipalRef::from("principal:acting:verified-action"),
@@ -416,7 +424,10 @@ async fn one_call_coordinator_closes_exact_canonical_action_through_verified_com
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
-    journal.record_intent_operation_bound(&queued).await.unwrap();
+    journal
+        .record_intent_operation_bound(&queued)
+        .await
+        .unwrap();
 
     let authorization = FakeAuthorizationRevalidator::default();
     let executor = FakeExecutor::default();

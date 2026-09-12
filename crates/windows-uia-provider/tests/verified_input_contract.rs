@@ -1,8 +1,8 @@
 use localview_windows_uia_provider::{
-    classify_windows_input_insertion, evaluate_windows_keyboard_state,
     WindowsInputDispatchBlocker, WindowsInputInsertionClass, WindowsKeyTransition,
     WindowsKeyboardStateSnapshot, WindowsVerifiedKeyEvent, WindowsVerifiedKeyboardBatch,
-    WindowsVerifiedKeyboardBatchError,
+    WindowsVerifiedKeyboardBatchError, classify_windows_input_insertion,
+    evaluate_windows_keyboard_state,
 };
 
 fn key(virtual_key: u16, transition: WindowsKeyTransition) -> WindowsVerifiedKeyEvent {
@@ -64,11 +64,26 @@ fn held_human_modifiers_fail_closed_without_normalization() {
     assert_eq!(evaluate_windows_keyboard_state(&neutral_state()), Ok(()));
 
     for mut state in [
-        WindowsKeyboardStateSnapshot { shift_down: true, ..neutral_state() },
-        WindowsKeyboardStateSnapshot { control_down: true, ..neutral_state() },
-        WindowsKeyboardStateSnapshot { alt_down: true, ..neutral_state() },
-        WindowsKeyboardStateSnapshot { left_windows_down: true, ..neutral_state() },
-        WindowsKeyboardStateSnapshot { right_windows_down: true, ..neutral_state() },
+        WindowsKeyboardStateSnapshot {
+            shift_down: true,
+            ..neutral_state()
+        },
+        WindowsKeyboardStateSnapshot {
+            control_down: true,
+            ..neutral_state()
+        },
+        WindowsKeyboardStateSnapshot {
+            alt_down: true,
+            ..neutral_state()
+        },
+        WindowsKeyboardStateSnapshot {
+            left_windows_down: true,
+            ..neutral_state()
+        },
+        WindowsKeyboardStateSnapshot {
+            right_windows_down: true,
+            ..neutral_state()
+        },
     ] {
         assert_eq!(
             evaluate_windows_keyboard_state(&state),

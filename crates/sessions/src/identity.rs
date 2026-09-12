@@ -45,9 +45,7 @@ pub enum SessionLineageAnchorV1 {
     },
 }
 
-#[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord,
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionServerKind {
     FrontendDevServer,
@@ -153,7 +151,9 @@ enum RegistryLoadError {
 enum RegistryCommitError {
     #[error("session identity registry serialization failed: {0}")]
     Serialization(String),
-    #[error("session identity registry commit would exceed {MAX_SESSION_IDENTITY_REGISTRY_BYTES} bytes")]
+    #[error(
+        "session identity registry commit would exceed {MAX_SESSION_IDENTITY_REGISTRY_BYTES} bytes"
+    )]
     TooLarge,
     #[error("session identity registry commit I/O failed: {0}")]
     Io(String),
@@ -230,10 +230,8 @@ impl SessionIdentityResolver {
 
         let path = self.registry_path.clone();
         let records_for_commit = next_records.clone();
-        let committed = tokio::task::spawn_blocking(move || {
-            commit_registry(&path, &records_for_commit)
-        })
-        .await;
+        let committed =
+            tokio::task::spawn_blocking(move || commit_registry(&path, &records_for_commit)).await;
 
         match committed {
             Ok(Ok(())) => {
@@ -314,9 +312,7 @@ pub fn session_lineage(
     }))
 }
 
-fn load_registry(
-    path: &Path,
-) -> Result<BTreeMap<SessionLineage, SessionId>, RegistryLoadError> {
+fn load_registry(path: &Path) -> Result<BTreeMap<SessionLineage, SessionId>, RegistryLoadError> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -354,9 +350,9 @@ fn load_registry(
     let registry: SessionIdentityRegistryFile = serde_json::from_value(value)
         .map_err(|error| RegistryLoadError::InvalidJson(error.to_string()))?;
     if registry.schema_version != 1 {
-        return Err(RegistryLoadError::UnsupportedSchemaVersion(
-            u64::from(registry.schema_version),
-        ));
+        return Err(RegistryLoadError::UnsupportedSchemaVersion(u64::from(
+            registry.schema_version,
+        )));
     }
 
     validate_records(registry.records)
@@ -386,8 +382,8 @@ fn commit_registry(
         std::fs::create_dir_all(parent)
             .map_err(|error| RegistryCommitError::Io(error.to_string()))?;
     }
-    let mut file = AtomicWriteFile::open(path)
-        .map_err(|error| RegistryCommitError::Io(error.to_string()))?;
+    let mut file =
+        AtomicWriteFile::open(path).map_err(|error| RegistryCommitError::Io(error.to_string()))?;
     file.write_all(&bytes)
         .map_err(|error| RegistryCommitError::Io(error.to_string()))?;
     file.sync_all()
@@ -461,7 +457,8 @@ fn validate_canonical_lineage(lineage: &SessionLineage) -> Result<(), RegistryLo
 fn fresh_session_id(records: &BTreeMap<SessionLineage, SessionId>) -> SessionId {
     loop {
         let candidate = Uuid::new_v4();
-        if candidate != Uuid::nil() && !records.values().any(|session_id| *session_id == candidate) {
+        if candidate != Uuid::nil() && !records.values().any(|session_id| *session_id == candidate)
+        {
             return candidate;
         }
     }
@@ -548,11 +545,7 @@ fn normalize_unix_path(raw: &str) -> Result<String, SessionIdentityError> {
     }
 
     let joined = components.join("/");
-    Ok(if rooted {
-        format!("/{joined}")
-    } else {
-        joined
-    })
+    Ok(if rooted { format!("/{joined}") } else { joined })
 }
 
 fn normalize_windows_path(raw: &str) -> Result<String, SessionIdentityError> {
@@ -607,13 +600,11 @@ mod tests {
 
     #[test]
     fn windows_normalization_is_separator_and_case_stable() {
-        let backslash = normalize_project_path_for_flavor(
-            r"C:\\Users\\Dev\\App\\",
-            PathFlavor::Windows,
-        )
-        .unwrap();
-        let slash = normalize_project_path_for_flavor("c:/users/dev/app", PathFlavor::Windows)
-            .unwrap();
+        let backslash =
+            normalize_project_path_for_flavor(r"C:\\Users\\Dev\\App\\", PathFlavor::Windows)
+                .unwrap();
+        let slash =
+            normalize_project_path_for_flavor("c:/users/dev/app", PathFlavor::Windows).unwrap();
         assert_eq!(backslash, "c:/users/dev/app");
         assert_eq!(backslash, slash);
     }

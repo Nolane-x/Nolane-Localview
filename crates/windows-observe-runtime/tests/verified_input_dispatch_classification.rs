@@ -5,7 +5,11 @@ use localview_windows_uia_provider::{
     WindowsVerifiedInputBoundaryReceipt,
 };
 
-fn receipt(class: WindowsInputInsertionClass, requested: u32, inserted: u32) -> WindowsVerifiedInputBoundaryReceipt {
+fn receipt(
+    class: WindowsInputInsertionClass,
+    requested: u32,
+    inserted: u32,
+) -> WindowsVerifiedInputBoundaryReceipt {
     WindowsVerifiedInputBoundaryReceipt {
         dispatch_context: WindowsUiaDispatchContextObservation {
             target_window_handle: 100,

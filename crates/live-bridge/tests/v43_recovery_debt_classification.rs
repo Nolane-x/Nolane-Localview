@@ -1,6 +1,4 @@
-use localview_live_bridge::{
-    ConsequentialRecoveryDebtDisposition, ConsequentialRecoveryState,
-};
+use localview_live_bridge::{ConsequentialRecoveryDebtDisposition, ConsequentialRecoveryState};
 
 #[test]
 fn durable_recovery_states_have_fail_closed_debt_dispositions() {
@@ -32,6 +30,10 @@ fn durable_recovery_states_have_fail_closed_debt_dispositions() {
     ];
 
     for (state, expected) in cases {
-        assert_eq!(state.recovery_debt_disposition(), expected, "state={state:?}");
+        assert_eq!(
+            state.recovery_debt_disposition(),
+            expected,
+            "state={state:?}"
+        );
     }
 }

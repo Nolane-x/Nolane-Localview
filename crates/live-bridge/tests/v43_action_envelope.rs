@@ -110,10 +110,7 @@ async fn canonical_action_rejects_provider_or_target_incarnation_mismatch_before
             session_id,
             Some("@send".into()),
             BridgeActionKind::Click,
-            metadata(
-                provider,
-                TargetIncarnationRef::from("target:webview:stale"),
-            ),
+            metadata(provider, TargetIncarnationRef::from("target:webview:stale")),
         )
         .await
         .unwrap_err();
@@ -277,13 +274,7 @@ async fn canonical_envelope_is_immutable_evidence_after_provider_reincarnation()
     let old_provider = ProviderIncarnationRef::from("provider:webview:old");
     let target = TargetIncarnationRef::from("target:webview:1");
 
-    bind_provider(
-        &bridge,
-        session_id,
-        old_provider.clone(),
-        target.clone(),
-    )
-    .await;
+    bind_provider(&bridge, session_id, old_provider.clone(), target.clone()).await;
 
     let queued = bridge
         .enqueue_canonical_action(

@@ -1,16 +1,16 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
     body::Body,
-    http::{header::AUTHORIZATION, Request, StatusCode},
+    http::{Request, StatusCode, header::AUTHORIZATION},
 };
 use chrono::Utc;
 use localview_control::{
-    configure_windows_consequential_control_for_sessions,
-    configure_windows_observe_runtime_for_sessions, router, ControlState,
+    ControlState, configure_windows_consequential_control_for_sessions,
+    configure_windows_observe_runtime_for_sessions, router,
 };
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
@@ -64,8 +64,7 @@ async fn fixture() -> (axum::Router, Uuid) {
 }
 
 fn valid_contract() -> String {
-    "lvpc:native-semantic:v1:{\"expectation\":\"present\",\"matcher\":{\"name\":\"Done\"}}"
-        .into()
+    "lvpc:native-semantic:v1:{\"expectation\":\"present\",\"matcher\":{\"name\":\"Done\"}}".into()
 }
 
 fn element_ref_json() -> serde_json::Value {

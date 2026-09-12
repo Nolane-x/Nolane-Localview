@@ -62,7 +62,9 @@ fn progressive_target_capture_reuses_one_shared_native_transaction_and_binds_liv
     assert!(live < crop);
     assert!(crop < persist);
     assert_eq!(
-        command.matches("capture_redacted_viewport_after_gate(").count(),
+        command
+            .matches("capture_redacted_viewport_after_gate(")
+            .count(),
         1,
         "progressive target capture must acquire native pixels once"
     );
@@ -158,6 +160,10 @@ fn progressive_target_capture_never_widens_missing_component_or_section_requests
 
     assert!(select < reject);
     assert!(reject < map);
-    assert!(!command.contains("ProgressiveTargetKind::Component => RequestedCaptureTarget::Viewport"));
-    assert!(!command.contains("ProgressiveTargetKind::Section => RequestedCaptureTarget::Viewport"));
+    assert!(
+        !command.contains("ProgressiveTargetKind::Component => RequestedCaptureTarget::Viewport")
+    );
+    assert!(
+        !command.contains("ProgressiveTargetKind::Section => RequestedCaptureTarget::Viewport")
+    );
 }

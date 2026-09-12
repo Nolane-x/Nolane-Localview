@@ -7,8 +7,8 @@ use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
 use tauri::webview::PlatformWebview;
 
 use crate::{
-    build_frame, validate_frame_size, CaptureCompletion, CaptureRequest, NativeCaptureBackend,
-    NativeCaptureError,
+    CaptureCompletion, CaptureRequest, NativeCaptureBackend, NativeCaptureError, build_frame,
+    validate_frame_size,
 };
 
 pub(crate) fn capture(

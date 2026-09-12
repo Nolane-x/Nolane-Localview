@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::surface_registry::{
-    primary_owner_instance_id, DesktopSurfaceIdentity, DesktopSurfaceVisibility,
+    DesktopSurfaceIdentity, DesktopSurfaceVisibility, primary_owner_instance_id,
 };
 
 const SURFACE_RESOURCE_BASE: &str = "http://127.0.0.1:45454";
@@ -309,7 +309,9 @@ async fn update_surface_visibility_once(
     proof: SurfaceOwnerRegistration,
 ) -> Result<(), SurfaceControlError> {
     if identity.owner_instance_id != proof.owner_instance_id {
-        return Err(SurfaceControlError::local("surface identity/owner mismatch"));
+        return Err(SurfaceControlError::local(
+            "surface identity/owner mismatch",
+        ));
     }
     let request = SurfaceVisibilityRequest {
         session_id: identity.session_id,
@@ -330,7 +332,9 @@ async fn reattach_surface_once(
     proof: SurfaceOwnerRegistration,
 ) -> Result<(), SurfaceControlError> {
     if identity.owner_instance_id != proof.owner_instance_id {
-        return Err(SurfaceControlError::local("surface identity/owner mismatch"));
+        return Err(SurfaceControlError::local(
+            "surface identity/owner mismatch",
+        ));
     }
     let request = SurfaceReattachRequest {
         session_id: identity.session_id,
@@ -365,8 +369,9 @@ async fn exact_identity_owner(
 }
 
 fn surface_owner() -> Result<&'static DesktopSurfaceOwner, String> {
-    let owner_instance_id = primary_owner_instance_id()
-        .ok_or_else(|| "desktop surface owner is unavailable before registry startup".to_string())?;
+    let owner_instance_id = primary_owner_instance_id().ok_or_else(|| {
+        "desktop surface owner is unavailable before registry startup".to_string()
+    })?;
     let owner = SURFACE_OWNER.get_or_init(|| DesktopSurfaceOwner::new(owner_instance_id));
     if owner.owner_instance_id != owner_instance_id {
         return Err("desktop surface owner does not match primary registry".into());
@@ -402,14 +407,12 @@ async fn heartbeat_surface_owner_once(owner: &DesktopSurfaceOwner) -> Result<(),
         boot_epoch: proof.boot_epoch,
         owner_lease_id: proof.owner_lease_id,
     };
-    post_surface(
-        "/v1/runtime/resources/surfaces/owners/heartbeat",
-        &request,
-    )
-    .await
+    post_surface("/v1/runtime/resources/surfaces/owners/heartbeat", &request).await
 }
 
-async fn register_surface_owner(owner_instance_id: Uuid) -> Result<SurfaceOwnerRegistration, String> {
+async fn register_surface_owner(
+    owner_instance_id: Uuid,
+) -> Result<SurfaceOwnerRegistration, String> {
     let request = SurfaceOwnerRegisterRequest { owner_instance_id };
     let token = super::super::read_token().await?;
     let registration = super::super::control_client()?

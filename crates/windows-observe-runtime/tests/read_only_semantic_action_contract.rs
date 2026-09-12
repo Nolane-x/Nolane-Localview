@@ -84,18 +84,22 @@ impl FakeProvider {
     }
 
     fn push_gap_drain(&self) {
-        self.state.lock().unwrap().drains.push_back(WindowsUiaEventDrain {
-            events: vec![WindowsUiaEvent {
-                sequence: 4,
-                captured_at: chrono::Utc::now(),
-                provider_incarnation_ref: self.provider.clone(),
-                target_incarnation_ref: self.target.clone(),
-                kind: localview_windows_uia_provider::WindowsUiaEventKind::FocusChanged,
-                element_ref: None,
-            }],
-            dropped_before_drain: 3,
-            latest_sequence: 4,
-        });
+        self.state
+            .lock()
+            .unwrap()
+            .drains
+            .push_back(WindowsUiaEventDrain {
+                events: vec![WindowsUiaEvent {
+                    sequence: 4,
+                    captured_at: chrono::Utc::now(),
+                    provider_incarnation_ref: self.provider.clone(),
+                    target_incarnation_ref: self.target.clone(),
+                    kind: localview_windows_uia_provider::WindowsUiaEventKind::FocusChanged,
+                    element_ref: None,
+                }],
+                dropped_before_drain: 3,
+                latest_sequence: 4,
+            });
     }
 
     fn make_next_snapshot_incomplete(&self) {
@@ -149,7 +153,8 @@ impl FakeProvider {
                 incomplete: false,
             }
         };
-        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache =
+            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -328,7 +333,11 @@ async fn exact_current_snapshot_read_returns_normalized_node_without_provider_or
     assert_eq!(receipt.cache_revision_ref, snapshot.cache_revision_ref());
     assert_eq!(receipt.observed_digest, snapshot.observed_digest());
     assert_eq!(receipt.node, snapshot.nodes()[0]);
-    assert_eq!(provider.counts(), before, "pure read must not call provider or refresh UIA");
+    assert_eq!(
+        provider.counts(),
+        before,
+        "pure read must not call provider or refresh UIA"
+    );
     assert!(bridge.take_public_actions(session(), 8).await.is_empty());
 }
 
@@ -343,12 +352,16 @@ async fn read_requires_observe_only_pure_read_canonical_authority() {
     let mut wrong_risk = request(&provider, &snapshot);
     wrong_risk.authority.risk_class = ActionRiskClass::ReversibleUiState;
     assert!(matches!(
-        manager.read_semantic(session(), wrong_risk).await.unwrap_err(),
+        manager
+            .read_semantic(session(), wrong_risk)
+            .await
+            .unwrap_err(),
         WindowsSemanticReadError::ObserveOnlyRiskRequired
     ));
 
     let mut wrong_idempotency = request(&provider, &snapshot);
-    wrong_idempotency.authority.idempotency_class = ActionIdempotencyClass::IdempotentByObservedState;
+    wrong_idempotency.authority.idempotency_class =
+        ActionIdempotencyClass::IdempotentByObservedState;
     assert!(matches!(
         manager
             .read_semantic(session(), wrong_idempotency)
@@ -371,7 +384,10 @@ async fn stale_snapshot_cut_and_stale_element_are_rejected_after_reconciliation(
     let outcome = manager.drain_once(session()).await.unwrap();
     assert!(outcome.reconciliation_performed);
     let current_snapshot = provider.latest_snapshot();
-    assert_ne!(old_snapshot.snapshot_cut_ref(), current_snapshot.snapshot_cut_ref());
+    assert_ne!(
+        old_snapshot.snapshot_cut_ref(),
+        current_snapshot.snapshot_cut_ref()
+    );
 
     assert!(matches!(
         manager
@@ -404,15 +420,23 @@ async fn provider_or_target_authority_mismatch_reuses_canonical_binding_errors()
     wrong_provider.authority.provider_incarnation_ref =
         ProviderIncarnationRef::from("provider:windows-uia:stale");
     assert_eq!(
-        manager.read_semantic(session(), wrong_provider).await.unwrap_err(),
-        WindowsSemanticReadError::Authority(ActionEnvelopeBindingError::ProviderIncarnationMismatch)
+        manager
+            .read_semantic(session(), wrong_provider)
+            .await
+            .unwrap_err(),
+        WindowsSemanticReadError::Authority(
+            ActionEnvelopeBindingError::ProviderIncarnationMismatch
+        )
     );
 
     let mut wrong_target = request(&provider, &snapshot);
     wrong_target.authority.target_incarnation_ref =
         TargetIncarnationRef::from("target:windows:stale");
     assert_eq!(
-        manager.read_semantic(session(), wrong_target).await.unwrap_err(),
+        manager
+            .read_semantic(session(), wrong_target)
+            .await
+            .unwrap_err(),
         WindowsSemanticReadError::Authority(ActionEnvelopeBindingError::TargetIncarnationMismatch)
     );
 }
@@ -425,7 +449,10 @@ async fn incomplete_snapshot_cannot_silently_authorize_a_semantic_read() {
     let manager = manager(provider.clone(), bridge);
     manager.attach(session(), selection()).await.unwrap();
     let snapshot = provider.latest_snapshot();
-    assert_eq!(snapshot.completeness(), ReconciliationCompleteness::Incomplete);
+    assert_eq!(
+        snapshot.completeness(),
+        ReconciliationCompleteness::Incomplete
+    );
 
     assert!(matches!(
         manager

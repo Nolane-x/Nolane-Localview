@@ -24,8 +24,8 @@ mod windows_smoke {
             Foundation::{LPARAM, WPARAM},
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW, LB_ADDSTRING,
-                MSG, PM_REMOVE, PeekMessageW, SW_SHOW, SendMessageW, ShowWindow, TranslateMessage,
+                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW, LB_ADDSTRING, MSG,
+                PM_REMOVE, PeekMessageW, SW_SHOW, SendMessageW, ShowWindow, TranslateMessage,
                 WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
@@ -198,6 +198,8 @@ mod windows_smoke {
         assert_eq!(receipt.dispatch_result, DispatchResult::DispatchedFull);
 
         stop.store(true, Ordering::Release);
-        ui_thread.join().expect("join SelectionItem fixture UI thread");
+        ui_thread
+            .join()
+            .expect("join SelectionItem fixture UI thread");
     }
 }

@@ -18,9 +18,7 @@ use localview_windows_observe_runtime::{
     WindowsObserveProvider, WindowsObserveResourceAccounting, WindowsObserveRuntimeConfig,
     WindowsObserveRuntimeError, WindowsObserveRuntimeManager, WindowsObserveSubscriptionLineage,
 };
-use localview_windows_uia_provider::{
-    WindowsUiaEvent, WindowsUiaEventDrain, WindowsUiaEventKind,
-};
+use localview_windows_uia_provider::{WindowsUiaEvent, WindowsUiaEventDrain, WindowsUiaEventKind};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -277,11 +275,7 @@ async fn accounting_tracks_initial_snapshot_bounded_drains_drops_and_reconciliat
             latest_sequence: 4,
         });
     }
-    let manager = manager(
-        provider.clone(),
-        bridge,
-        RuntimeResourceGovernor::default(),
-    );
+    let manager = manager(provider.clone(), bridge, RuntimeResourceGovernor::default());
 
     manager.attach(session(), selection()).await.unwrap();
     let opaque = manager.drain_once(session()).await.unwrap();
@@ -311,7 +305,8 @@ async fn accounting_tracks_initial_snapshot_bounded_drains_drops_and_reconciliat
 }
 
 #[tokio::test]
-async fn reconciliation_resource_denial_preserves_gap_debt_and_attachment_until_pressure_recovers() {
+async fn reconciliation_resource_denial_preserves_gap_debt_and_attachment_until_pressure_recovers()
+{
     let bridge = LiveBridge::new(64, 8);
     let provider = FakeProvider::new(vec![]);
     {

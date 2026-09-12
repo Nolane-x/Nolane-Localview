@@ -119,5 +119,8 @@ fn empty_comparison_profile_is_rejected_before_observation_authority_is_minted()
     )
     .unwrap_err();
 
-    assert_eq!(error.to_string(), "authority field comparison_profile_revision cannot be empty");
+    assert_eq!(
+        error.to_string(),
+        "authority field comparison_profile_revision cannot be empty"
+    );
 }

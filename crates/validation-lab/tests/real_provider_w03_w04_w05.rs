@@ -53,7 +53,10 @@ fn w03_requires_blocked_placeholder_and_fresh_realized_cut_without_synthetic_met
         },
     ))
     .unwrap();
-    assert_eq!(stale.result_evidence, Some(ResultEvidence::CounterexampleFound));
+    assert_eq!(
+        stale.result_evidence,
+        Some(ResultEvidence::CounterexampleFound)
+    );
     assert!(stale.observation.failure_flags.is_empty());
     assert_eq!(
         stale.observation.eligible_metrics,
@@ -138,8 +141,18 @@ fn w05_requires_bounded_poison_nonreuse_and_reacquire_without_fake_uobrr_or_cbfr
         poisoned_reuse.result_evidence,
         Some(ResultEvidence::CounterexampleFound)
     );
-    assert!(!poisoned_reuse.observation.eligible_metrics.contains(&LabMetricKind::Uobrr));
-    assert!(!poisoned_reuse.observation.eligible_metrics.contains(&LabMetricKind::Cbfr));
+    assert!(
+        !poisoned_reuse
+            .observation
+            .eligible_metrics
+            .contains(&LabMetricKind::Uobrr)
+    );
+    assert!(
+        !poisoned_reuse
+            .observation
+            .eligible_metrics
+            .contains(&LabMetricKind::Cbfr)
+    );
     assert!(poisoned_reuse.observation.failure_flags.is_empty());
 
     let stale_authority = adapt_real_provider_case(input(

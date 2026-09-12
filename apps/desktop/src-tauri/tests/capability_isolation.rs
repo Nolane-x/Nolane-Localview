@@ -72,10 +72,7 @@ fn remote_surface_capability_is_loopback_only() {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        urls,
-        vec!["http://localhost:*/*", "http://127.0.0.1:*/*"]
-    );
+    assert_eq!(urls, vec!["http://localhost:*/*", "http://127.0.0.1:*/*"]);
     assert!(urls.iter().all(|url| {
         url.starts_with("http://localhost:") || url.starts_with("http://127.0.0.1:")
     }));

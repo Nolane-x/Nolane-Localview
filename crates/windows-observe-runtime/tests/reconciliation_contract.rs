@@ -7,12 +7,8 @@ use localview_protocol::{
     EventContinuityState, ProviderIncarnationRef, ReconciliationCompleteness, SessionId,
     TargetIncarnationRef,
 };
-use localview_windows_observe_runtime::{
-    WindowsObserveBridgeBinding, WindowsObserveBridgeError,
-};
-use localview_windows_uia_provider::{
-    WindowsUiaEvent, WindowsUiaEventDrain, WindowsUiaEventKind,
-};
+use localview_windows_observe_runtime::{WindowsObserveBridgeBinding, WindowsObserveBridgeError};
+use localview_windows_uia_provider::{WindowsUiaEvent, WindowsUiaEventDrain, WindowsUiaEventKind};
 use uuid::Uuid;
 
 fn provider() -> ProviderIncarnationRef {
@@ -27,7 +23,9 @@ fn session() -> SessionId {
     Uuid::from_u128(0x43)
 }
 
-fn snapshot(sequence: u64) -> std::sync::Arc<localview_native_provider::NativeSemanticSnapshotRevision> {
+fn snapshot(
+    sequence: u64,
+) -> std::sync::Arc<localview_native_provider::NativeSemanticSnapshotRevision> {
     let mut cache = SemanticSnapshotCache::for_lineage(provider(), target());
     cache
         .publish(NativeSemanticSnapshotDraft {
@@ -61,7 +59,10 @@ async fn binding_starts_windows_uia_at_opaque_ordering_and_exact_sequence_baseli
 
     assert_eq!(status.generation, 7);
     assert_eq!(status.last_seq, Some(41));
-    assert_eq!(status.event_continuity, EventContinuityState::OrderingOpaque);
+    assert_eq!(
+        status.event_continuity,
+        EventContinuityState::OrderingOpaque
+    );
     assert_eq!(status.provider_incarnation_ref, provider());
     assert_eq!(status.target_incarnation_ref, target());
 }
@@ -122,7 +123,9 @@ async fn bounded_buffer_drop_becomes_explicit_livebridge_gap_and_preserves_callb
         .unwrap();
 
     assert_eq!(report.continuity, EventContinuityState::GapDetected);
-    let gap = report.gap.expect("dropped UIA events must become a continuity gap");
+    let gap = report
+        .gap
+        .expect("dropped UIA events must become a continuity gap");
     assert_eq!(gap.expected_sequence, 1);
     assert_eq!(gap.observed_sequence, 3);
 

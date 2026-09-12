@@ -13,14 +13,21 @@ fn source(path: &str) -> String {
 }
 
 fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-    let start = source.find(start).unwrap_or_else(|| panic!("missing start marker {start}"));
+    let start = source
+        .find(start)
+        .unwrap_or_else(|| panic!("missing start marker {start}"));
     let tail = &source[start..];
-    let end = tail.find(end).unwrap_or_else(|| panic!("missing end marker {end}"));
+    let end = tail
+        .find(end)
+        .unwrap_or_else(|| panic!("missing end marker {end}"));
     &tail[..end]
 }
 
 fn compact(value: &str) -> String {
-    value.chars().filter(|character| !character.is_whitespace()).collect()
+    value
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
 }
 
 fn assert_activation_close_is_fail_closed(section: &str, close_call: &str, owner_name: &str) {
@@ -40,7 +47,9 @@ fn assert_activation_close_is_fail_closed(section: &str, close_call: &str, owner
         activation.contains(&propagated_close) || activation.contains(&explicit_close_error),
         "{owner_name} activation rollback must fail closed when the physical surface cannot close"
     );
-    let close = activation.find(close_call).expect("platform close in activation rollback");
+    let close = activation
+        .find(close_call)
+        .expect("platform close in activation rollback");
     let owner_cleanup = activation
         .find("record_closed(")
         .expect("owner cleanup in activation rollback");
@@ -98,11 +107,7 @@ fn preview_activation_rollback_preserves_owner_truth_when_platform_close_fails()
 #[test]
 fn workspace_activation_rollback_preserves_owner_truth_when_platform_close_fails() {
     let workspace = source("workspace_surface.rs");
-    let open = between(
-        &workspace,
-        "async fn open_native(",
-        "fn set_native_bounds(",
-    );
+    let open = between(&workspace, "async fn open_native(", "fn set_native_bounds(");
     assert_activation_close_is_fail_closed(open, "webview.close()", "workspace child");
 }
 
@@ -120,11 +125,7 @@ fn preview_record_created_rollback_preserves_pending_authority_when_platform_clo
 #[test]
 fn workspace_record_created_rollback_preserves_pending_authority_when_platform_close_fails() {
     let workspace = source("workspace_surface.rs");
-    let open = between(
-        &workspace,
-        "async fn open_native(",
-        "fn set_native_bounds(",
-    );
+    let open = between(&workspace, "async fn open_native(", "fn set_native_bounds(");
     assert_record_created_close_is_fail_closed(open, "webview.close()", "workspace child");
 }
 
@@ -137,8 +138,14 @@ fn repeated_preview_and_workspace_owner_cycles_return_to_registry_baseline() {
 
     for cycle in 0..32 {
         for (kind, label) in [
-            (DesktopSurfaceKind::PreviewWindow, "preview-cleanup-contract"),
-            (DesktopSurfaceKind::WorkspaceChild, "workspace-cleanup-contract"),
+            (
+                DesktopSurfaceKind::PreviewWindow,
+                "preview-cleanup-contract",
+            ),
+            (
+                DesktopSurfaceKind::WorkspaceChild,
+                "workspace-cleanup-contract",
+            ),
         ] {
             let identity = registry.next_identity(session_id, kind, label);
             assert_eq!(identity.incarnation, cycle + 1);

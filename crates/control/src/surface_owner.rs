@@ -244,12 +244,9 @@ mod tests {
             owner_lease_id: registration.owner_lease_id,
         };
 
-        let guard = pin_surface_owner_for_sessions_at(
-            &sessions,
-            proof,
-            start + Duration::from_secs(1),
-        )
-        .expect("current owner operation must acquire a liveness pin");
+        let guard =
+            pin_surface_owner_for_sessions_at(&sessions, proof, start + Duration::from_secs(1))
+                .expect("current owner operation must acquire a liveness pin");
         let expired_at = start + Duration::from_secs(16);
 
         assert!(

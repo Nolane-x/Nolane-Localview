@@ -26,7 +26,10 @@ fn freshness_and_reconciliation_failures_are_typed_and_conservative() {
         logical_sequence: 501,
     })
     .unwrap();
-    assert_eq!(false_fresh.result_evidence, ResultEvidence::CounterexampleFound);
+    assert_eq!(
+        false_fresh.result_evidence,
+        ResultEvidence::CounterexampleFound
+    );
     assert_eq!(
         false_fresh.observation.eligible_metrics,
         BTreeSet::from([LabMetricKind::Eoffr])
@@ -133,7 +136,8 @@ fn provider_aba_escape_requires_real_reincarnation_and_is_counted_once() {
     .unwrap();
     assert!(rejected.observation.failure_flags.is_empty());
 
-    let snapshot = reduce_metric_observations(&[escaped.observation, rejected.observation]).unwrap();
+    let snapshot =
+        reduce_metric_observations(&[escaped.observation, rejected.observation]).unwrap();
     let piaer = snapshot.get(LabMetricKind::Piaer).unwrap();
     assert_eq!((piaer.numerator, piaer.denominator), (1, 2));
 

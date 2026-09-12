@@ -1,6 +1,6 @@
 use localview_token_budget::{
-    evaluate_perception_budget, BudgetDimension, BudgetEscalationReason,
-    PerceptionBudgetContract, PerceptionBudgetDecisionStatus, PerceptionBudgetUsage,
+    BudgetDimension, BudgetEscalationReason, PerceptionBudgetContract,
+    PerceptionBudgetDecisionStatus, PerceptionBudgetUsage, evaluate_perception_budget,
 };
 
 fn contract() -> PerceptionBudgetContract {
@@ -23,7 +23,10 @@ fn usage_inside_all_four_dimensions_is_admitted_without_escalation() {
 
     let decision = evaluate_perception_budget(&contract(), &usage, None).unwrap();
 
-    assert_eq!(decision.status, PerceptionBudgetDecisionStatus::WithinBudget);
+    assert_eq!(
+        decision.status,
+        PerceptionBudgetDecisionStatus::WithinBudget
+    );
     assert!(decision.exceeded.is_empty());
     assert_eq!(decision.budget_escalation_reason, None);
     assert_eq!(decision.usage, usage);

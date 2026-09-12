@@ -1,22 +1,24 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::{
     EvidenceDraft, EvidenceKind, EvidenceStore, Provenance, UncertaintyClass,
 };
 use localview_live_bridge::{BridgeActionKind, BridgeActionResult, LiveBridge};
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -253,8 +255,7 @@ async fn arbitrary_retained_semantic_and_layout_evidence_cannot_suppress_require
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        body["plan"]["actions"][0]["action"]["kind"],
-        "semantic_snapshot",
+        body["plan"]["actions"][0]["action"]["kind"], "semantic_snapshot",
         "retained evidence without native snapshot provenance must not become perception authority"
     );
 }

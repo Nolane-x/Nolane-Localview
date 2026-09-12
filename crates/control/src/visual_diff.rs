@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use chrono::{TimeZone, Utc};
 use localview_evidence::{EvidenceDraft, EvidenceKind, Provenance, UncertaintyClass};
@@ -182,12 +182,17 @@ async fn parents_are_correlated(
         if parent.kind != EvidenceKind::Visual
             || parent.session_id != session_id
             || parent.provenance.revision != request.revision
-            || parent.payload.get("target").and_then(|value| value.as_str()) != Some(expected_target)
+            || parent
+                .payload
+                .get("target")
+                .and_then(|value| value.as_str())
+                != Some(expected_target)
         {
             return false;
         }
 
-        let Some(parent_route) = parent.payload.get("route").and_then(|value| value.as_str()) else {
+        let Some(parent_route) = parent.payload.get("route").and_then(|value| value.as_str())
+        else {
             return false;
         };
         if canonical_loopback_route(parent_route).as_deref() != Some(canonical_route) {
@@ -197,7 +202,8 @@ async fn parents_are_correlated(
         let Some(parent_viewport) = parent.payload.get("viewport") else {
             return false;
         };
-        let Ok(parent_viewport) = serde_json::from_value::<VisualViewport>(parent_viewport.clone()) else {
+        let Ok(parent_viewport) = serde_json::from_value::<VisualViewport>(parent_viewport.clone())
+        else {
             return false;
         };
         if parent_viewport != request.viewport {
@@ -228,11 +234,16 @@ async fn ingest_visual_diff_evidence(
     let Some(canonical_route) = canonical_loopback_route(&request.route) else {
         return bad_request();
     };
-    if request.captured_at_unix_ms < 0 || !valid_viewport(&request.viewport) || !coherent_shape(&request)
+    if request.captured_at_unix_ms < 0
+        || !valid_viewport(&request.viewport)
+        || !coherent_shape(&request)
     {
         return bad_request();
     }
-    let Some(captured_at) = Utc.timestamp_millis_opt(request.captured_at_unix_ms).single() else {
+    let Some(captured_at) = Utc
+        .timestamp_millis_opt(request.captured_at_unix_ms)
+        .single()
+    else {
         return bad_request();
     };
     if !parents_are_correlated(&state, id, &request, &canonical_route).await {

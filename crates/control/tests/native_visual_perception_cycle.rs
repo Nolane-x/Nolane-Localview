@@ -1,20 +1,22 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{LiveBridge, ObserverBatch, ObserverEvent, ObserverEventKind};
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -262,7 +264,10 @@ async fn region_capture_executes_through_native_bridge_uses_actual_usage_and_rep
         body["steps"][0]["plan"]["actions"][0]["action"]["kind"],
         "region_capture"
     );
-    assert_eq!(body["steps"][0]["execution"]["kind"], "native_visual_packet");
+    assert_eq!(
+        body["steps"][0]["execution"]["kind"],
+        "native_visual_packet"
+    );
     assert_eq!(body["usage"]["text_tokens"], 77);
     assert_eq!(body["usage"]["image_regions"], 1);
     assert_eq!(body["usage"]["chromium_spawns"], 0);
@@ -322,8 +327,5 @@ async fn native_result_without_correlated_visual_evidence_is_rejected_by_executo
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["error"], "native_visual_executor_failed");
-    assert_eq!(
-        body["reason"],
-        "native visual evidence correlation failed"
-    );
+    assert_eq!(body["reason"], "native visual evidence correlation failed");
 }

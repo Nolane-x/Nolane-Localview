@@ -4,17 +4,14 @@ use tauri::webview::PlatformWebview;
 use webview2_com::{
     CapturePreviewCompletedHandler,
     Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2, ICoreWebView2_15, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, ICoreWebView2, ICoreWebView2_15,
     },
 };
-use windows::{
-    core::Interface,
-    Win32::UI::Shell::SHCreateMemStream,
-};
+use windows::{Win32::UI::Shell::SHCreateMemStream, core::Interface};
 
 use crate::{
-    build_frame, CaptureCompletion, CaptureRequest, NativeCaptureBackend, NativeCaptureError,
-    MAX_PNG_BYTES,
+    CaptureCompletion, CaptureRequest, MAX_PNG_BYTES, NativeCaptureBackend, NativeCaptureError,
+    build_frame,
 };
 
 type CompletionState = Arc<Mutex<Option<(CaptureCompletion, CaptureRequest)>>>;
@@ -69,10 +66,7 @@ pub(crate) fn capture_core(
     let read_stream = match unsafe { write_stream.Clone() } {
         Ok(stream) => stream,
         Err(error) => {
-            finish(
-                &state,
-                Err(NativeCaptureError::Platform(error.to_string())),
-            );
+            finish(&state, Err(NativeCaptureError::Platform(error.to_string())));
             return;
         }
     };
@@ -147,9 +141,6 @@ pub(crate) fn capture_core(
     };
 
     if let Err(error) = start_result {
-        finish(
-            &state,
-            Err(NativeCaptureError::Platform(error.to_string())),
-        );
+        finish(&state, Err(NativeCaptureError::Platform(error.to_string())));
     }
 }

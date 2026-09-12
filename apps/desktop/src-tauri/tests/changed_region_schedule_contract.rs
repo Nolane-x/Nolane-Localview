@@ -58,7 +58,9 @@ fn changed_region_capture_is_registered_bounded_and_shares_the_redacted_native_t
         .unwrap_or(module.len());
     let changed = &module[changed_start..changed_end];
     assert_eq!(
-        changed.matches("capture_redacted_viewport_after_gate(").count(),
+        changed
+            .matches("capture_redacted_viewport_after_gate(")
+            .count(),
         1,
         "changed scheduling must acquire native pixels once per transaction"
     );

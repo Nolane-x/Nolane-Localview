@@ -1,18 +1,20 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{BridgeActionKind, LiveBridge};
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -141,7 +143,11 @@ async fn queued_cancel_is_terminal_idempotent_and_session_scoped() {
         .await;
 
     let (wrong_status, wrong_body) = cancel(state.clone(), other, action.id).await;
-    assert_eq!(wrong_status, StatusCode::NOT_FOUND, "cross-session: {wrong_body}");
+    assert_eq!(
+        wrong_status,
+        StatusCode::NOT_FOUND,
+        "cross-session: {wrong_body}"
+    );
     assert_eq!(wrong_body["error"], "action_not_found");
 
     let (status, body) = cancel(state.clone(), owner, action.id).await;
@@ -191,10 +197,7 @@ async fn inflight_cancel_exposes_exact_signal_and_acknowledges_cooperatively() {
     let (exact_status, exact_body) = send(
         state.clone(),
         Method::GET,
-        format!(
-            "/v1/sessions/{owner}/actions/cancellations/{}",
-            action.id
-        ),
+        format!("/v1/sessions/{owner}/actions/cancellations/{}", action.id),
         None,
     )
     .await;
@@ -228,10 +231,7 @@ async fn inflight_cancel_exposes_exact_signal_and_acknowledges_cooperatively() {
     let (after_status, after_body) = send(
         state,
         Method::GET,
-        format!(
-            "/v1/sessions/{owner}/actions/cancellations/{}",
-            action.id
-        ),
+        format!("/v1/sessions/{owner}/actions/cancellations/{}", action.id),
         None,
     )
     .await;
@@ -272,7 +272,11 @@ async fn cancelled_result_is_fenced_before_any_action_evidence_is_inserted() {
         })),
     )
     .await;
-    assert_eq!(late_status, StatusCode::CONFLICT, "late result: {late_body}");
+    assert_eq!(
+        late_status,
+        StatusCode::CONFLICT,
+        "late result: {late_body}"
+    );
     assert_eq!(late_body["error"], "action_result_without_inflight_origin");
     assert_eq!(
         state.evidence.recent_for_session(owner, 128).await.len(),

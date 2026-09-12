@@ -63,7 +63,9 @@ struct FakeProvider {
 impl FakeProvider {
     fn new() -> Self {
         Self {
-            provider: ProviderIncarnationRef::from("provider:windows-uia:dispatch-operation-receipt"),
+            provider: ProviderIncarnationRef::from(
+                "provider:windows-uia:dispatch-operation-receipt",
+            ),
             target: TargetIncarnationRef::from("target:windows:dispatch-operation-receipt"),
             state: Arc::new(Mutex::new(FakeProviderState::default())),
         }
@@ -344,7 +346,9 @@ fn authority(
         target_incarnation_ref: provider.target.clone(),
         risk_class: ActionRiskClass::ReversibleUiState,
         idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
-        expected_postcondition_contract_refs: vec!["postcondition:dispatch-operation-receipt".into()],
+        expected_postcondition_contract_refs: vec![
+            "postcondition:dispatch-operation-receipt".into(),
+        ],
     }
 }
 

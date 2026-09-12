@@ -43,9 +43,7 @@ pub use metrics::{
     LabFailureFlag, LabMetricKind, LabMetricValue, LabObservation, MetricSnapshot, MetricStatus,
     SilentUnsoundnessGateStatus, evaluate_silent_unsoundness_gate, reduce_metric_observations,
 };
-pub use mutation_adapter::{
-    MutationLabRecord, MutationNotMeasuredReason, adapt_mutation_outcome,
-};
+pub use mutation_adapter::{MutationLabRecord, MutationNotMeasuredReason, adapt_mutation_outcome};
 pub use preregistration::{
     CampaignLayer, LabPreregistration, PersistedPreregistrationReceipt, PreparedPreregistration,
     PreregistrationReceiptProjection, ProviderCampaignKind, ValidatedPreregistrationReceipt,

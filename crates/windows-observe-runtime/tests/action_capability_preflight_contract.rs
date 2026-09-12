@@ -127,7 +127,8 @@ impl FakeProvider {
             },
             incomplete: self.incomplete,
         };
-        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache =
+            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -269,9 +270,7 @@ fn request(
     }
 }
 
-async fn attached(
-    provider: &FakeProvider,
-) -> WindowsObserveRuntimeManager<FakeProvider> {
+async fn attached(provider: &FakeProvider) -> WindowsObserveRuntimeManager<FakeProvider> {
     let runtime = build_manager(provider.clone());
     runtime.attach(session(), selection()).await.unwrap();
     runtime
@@ -298,7 +297,11 @@ async fn supported_exact_current_realized_evidence_yields_preflight_without_prov
     assert_eq!(receipt.observed_digest, snapshot.observed_digest());
     assert_eq!(receipt.element_ref, snapshot.nodes()[0].element_ref);
     assert_eq!(receipt.required_pattern, WindowsUiaPattern::Toggle);
-    assert_eq!(provider.counts(), before, "preflight must not call provider");
+    assert_eq!(
+        provider.counts(),
+        before,
+        "preflight must not call provider"
+    );
 }
 
 #[tokio::test]
@@ -317,7 +320,8 @@ async fn unsupported_unknown_and_unrealized_capability_states_fail_closed() {
             },
         ),
     ] {
-        let provider = FakeProvider::new(support, ProviderElementRealization::RealizedCurrent, false);
+        let provider =
+            FakeProvider::new(support, ProviderElementRealization::RealizedCurrent, false);
         let runtime = attached(&provider).await;
         let snapshot = provider.snapshot();
         assert_eq!(
@@ -417,10 +421,7 @@ async fn stale_cut_incomplete_snapshot_unknown_element_and_wrong_lineage_fail_cl
     let incomplete_snapshot = incomplete.snapshot();
     assert_eq!(
         incomplete_runtime
-            .preflight_uia_action(
-                session(),
-                request(&incomplete, &incomplete_snapshot),
-            )
+            .preflight_uia_action(session(), request(&incomplete, &incomplete_snapshot),)
             .await
             .unwrap_err(),
         WindowsUiaActionPreflightError::SnapshotIncomplete

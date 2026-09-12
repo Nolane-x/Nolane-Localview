@@ -7,7 +7,10 @@ use uuid::Uuid;
 
 #[test]
 fn set_value_is_a_distinct_payload_free_canonical_operation() {
-    assert_eq!(format!("{:?}", CanonicalActionOperation::SetValue), "SetValue");
+    assert_eq!(
+        format!("{:?}", CanonicalActionOperation::SetValue),
+        "SetValue"
+    );
     assert_eq!(
         CanonicalActionOperation::from_bridge_action_kind(&BridgeActionKind::TypeText {
             text: "caller-secret".into(),

@@ -1,19 +1,14 @@
 use std::{
-    sync::{
-        atomic::AtomicBool,
-        Arc,
-    },
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
     body::Body,
-    http::{header::AUTHORIZATION, Request, StatusCode},
+    http::{Request, StatusCode, header::AUTHORIZATION},
 };
 use chrono::Utc;
-use localview_control::{
-    configure_windows_observe_runtime_for_sessions, router, ControlState,
-};
+use localview_control::{ControlState, configure_windows_observe_runtime_for_sessions, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;

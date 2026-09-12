@@ -6,14 +6,21 @@ fn desktop_source() -> String {
 }
 
 fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-    let start = source.find(start).unwrap_or_else(|| panic!("missing start marker {start}"));
+    let start = source
+        .find(start)
+        .unwrap_or_else(|| panic!("missing start marker {start}"));
     let tail = &source[start..];
-    let end = tail.find(end).unwrap_or_else(|| panic!("missing end marker {end}"));
+    let end = tail
+        .find(end)
+        .unwrap_or_else(|| panic!("missing end marker {end}"));
     &tail[..end]
 }
 
 fn without_layout_whitespace(value: &str) -> String {
-    value.chars().filter(|character| !character.is_whitespace()).collect()
+    value
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
 }
 
 fn assert_in_order(haystack: &str, needles: &[&str]) {
@@ -31,7 +38,11 @@ fn assert_in_order(haystack: &str, needles: &[&str]) {
 #[test]
 fn existing_preview_show_reconciles_exact_owner_then_central_visibility() {
     let source = desktop_source();
-    let open = between(&source, "async fn open_preview(", "async fn preview_ingest(");
+    let open = between(
+        &source,
+        "async fn open_preview(",
+        "async fn preview_ingest(",
+    );
 
     assert!(
         open.contains("DesktopSurfaceRegistry"),
@@ -53,7 +64,11 @@ fn existing_preview_show_reconciles_exact_owner_then_central_visibility() {
 #[test]
 fn new_preview_is_admitted_before_build_then_recorded_and_activated() {
     let source = desktop_source();
-    let open = between(&source, "async fn open_preview(", "async fn preview_ingest(");
+    let open = between(
+        &source,
+        "async fn open_preview(",
+        "async fn preview_ingest(",
+    );
 
     assert_in_order(
         open,
@@ -76,7 +91,11 @@ fn new_preview_is_admitted_before_build_then_recorded_and_activated() {
 #[test]
 fn preview_activation_failure_closes_platform_owner_before_local_cleanup() {
     let source = desktop_source();
-    let open = between(&source, "async fn open_preview(", "async fn preview_ingest(");
+    let open = between(
+        &source,
+        "async fn open_preview(",
+        "async fn preview_ingest(",
+    );
     let activation = open
         .find("activate_surface(")
         .map(|index| &open[index..])

@@ -57,7 +57,10 @@ impl SurfaceRecoveryKey {
         if self.session_id.is_nil()
             || self.owner_instance_id.is_nil()
             || self.incarnation == 0
-            || !matches!(self.surface_kind.as_str(), "preview_window" | "workspace_child")
+            || !matches!(
+                self.surface_kind.as_str(),
+                "preview_window" | "workspace_child"
+            )
             || self.label.is_empty()
             || self.label.len() > 160
             || self.label.chars().any(char::is_control)
@@ -168,8 +171,7 @@ impl SurfaceRecoveryJournal {
             return Err(SurfaceRecoveryError::JournalFull);
         }
 
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|_| SurfaceRecoveryError::CorruptJournal)?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| SurfaceRecoveryError::CorruptJournal)?;
         let mut outstanding = BTreeSet::new();
         let mut event_count = 0usize;
         for line in text.lines() {

@@ -44,7 +44,8 @@ mod windows_consequential_set_value_windows_smoke {
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE,
-                PeekMessageW, SW_SHOW, ShowWindow, TranslateMessage, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+                PeekMessageW, SW_SHOW, ShowWindow, TranslateMessage, WS_OVERLAPPEDWINDOW,
+                WS_VISIBLE,
             },
         },
         core::w,
@@ -87,7 +88,9 @@ mod windows_consequential_set_value_windows_smoke {
 
     fn assert_artifact_private(bytes: &[u8], label: &str) {
         assert!(
-            !bytes.windows(SENTINEL.len()).any(|window| window == SENTINEL.as_bytes()),
+            !bytes
+                .windows(SENTINEL.len())
+                .any(|window| window == SENTINEL.as_bytes()),
             "{label} must never persist SetValue plaintext"
         );
     }
@@ -244,7 +247,10 @@ mod windows_consequential_set_value_windows_smoke {
             .await
             .expect("run SetValue plan request");
         let (status, body) = response_body(response).await;
-        assert!(!body.contains(SENTINEL), "fail-closed response must remain private");
+        assert!(
+            !body.contains(SENTINEL),
+            "fail-closed response must remain private"
+        );
         assert_eq!(
             status,
             StatusCode::CREATED,
@@ -252,7 +258,8 @@ mod windows_consequential_set_value_windows_smoke {
         );
         assert!(!body.contains("commitment_digest"));
 
-        let plan: serde_json::Value = serde_json::from_str(&body).expect("decode SetValue plan metadata");
+        let plan: serde_json::Value =
+            serde_json::from_str(&body).expect("decode SetValue plan metadata");
         assert_eq!(plan["operation"], "set_value");
         assert_eq!(plan["risk_class"], "s4_destructive_or_irreversible");
         assert_eq!(plan["idempotency_class"], "irreversible");
@@ -283,7 +290,9 @@ mod windows_consequential_set_value_windows_smoke {
             .set_value_payload_binding(action_id)
             .await
             .unwrap()
-            .expect("SetValue plan must durably persist opaque payload binding before confirmation");
+            .expect(
+                "SetValue plan must durably persist opaque payload binding before confirmation",
+            );
         assert_eq!(binding.action_id, action_id);
         assert_eq!(binding.mode, SetValueMode::ReplaceValue);
         assert_eq!(binding.payload_utf8_len, SENTINEL.len() as u64);
@@ -353,7 +362,9 @@ mod windows_consequential_set_value_windows_smoke {
             .expect("release SetValue control runtime");
         configure_windows_observe_runtime_for_sessions(&sessions, None);
         stop.store(true, Ordering::Release);
-        ui_thread.join().expect("join SetValue HTTP fixture UI thread");
+        ui_thread
+            .join()
+            .expect("join SetValue HTTP fixture UI thread");
 
         let _ = fs::remove_file(operation_path);
         let _ = fs::remove_file(payload_path);

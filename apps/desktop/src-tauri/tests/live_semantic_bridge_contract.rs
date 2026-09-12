@@ -65,7 +65,10 @@ fn preview_action_drain_prioritizes_private_capture_actions_over_public_backlog(
         .map(|offset| offset + internal)
         .expect("managed preview must still drain normal public actions");
 
-    assert!(internal < public, "capture actions must be fetched before public actions");
+    assert!(
+        internal < public,
+        "capture actions must be fetched before public actions"
+    );
     assert!(source.contains("internal_actions"));
     assert!(source.contains("public_actions"));
 }

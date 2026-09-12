@@ -114,7 +114,9 @@ pub enum WindowsUiaVerifiedExecutionError {
     Commit { message: String },
     #[error("durable postcondition receipt is missing for consequential action {action_id}")]
     DurablePostconditionReceiptMissing { action_id: Uuid },
-    #[error("durable postcondition receipt is not VerifiedExpected for consequential action {action_id}")]
+    #[error(
+        "durable postcondition receipt is not VerifiedExpected for consequential action {action_id}"
+    )]
     DurablePostconditionReceiptNotVerified { action_id: Uuid },
     #[error("unexpected recovery state after durable dispatch evidence: {state:?}")]
     UnexpectedRecoveryState {
@@ -347,9 +349,7 @@ where
         | Some(ConsequentialRecoveryState::PossiblyDispatched)
         | Some(ConsequentialRecoveryState::OutcomeObservedUnverified) => {}
         other => {
-            return Err(WindowsUiaVerifiedExecutionError::UnexpectedRecoveryState {
-                state: other,
-            });
+            return Err(WindowsUiaVerifiedExecutionError::UnexpectedRecoveryState { state: other });
         }
     }
 
@@ -426,12 +426,14 @@ where
                 message: error.to_string(),
             }
         })?;
-        return Ok(WindowsUiaConsequentialRecoveryOutcome::ReconciledCommitted {
-            action_id,
-            world_outcome: reconciliation.world_outcome,
-            reconciliation_journal_sequence,
-            commit_journal_sequence: commit.journal_sequence,
-        });
+        return Ok(
+            WindowsUiaConsequentialRecoveryOutcome::ReconciledCommitted {
+                action_id,
+                world_outcome: reconciliation.world_outcome,
+                reconciliation_journal_sequence,
+                commit_journal_sequence: commit.journal_sequence,
+            },
+        );
     }
 
     Ok(

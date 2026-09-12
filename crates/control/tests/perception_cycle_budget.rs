@@ -1,23 +1,25 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{
     BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch, ObserverEvent,
     ObserverEventKind,
 };
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -104,11 +106,7 @@ fn raw_snapshot_payload() -> Value {
     })
 }
 
-async fn post_json(
-    state: ControlState,
-    uri: String,
-    body: Value,
-) -> (StatusCode, Value) {
+async fn post_json(state: ControlState, uri: String, body: Value) -> (StatusCode, Value) {
     let response = router(state)
         .oneshot(
             Request::builder()
@@ -268,7 +266,11 @@ async fn post_execution_latency_overrun_is_rechecked_with_planner_owned_reason()
             .as_array()
             .is_some_and(|items| items.iter().any(|item| item == "latency_ms"))
     );
-    assert!(body["usage"]["latency_ms"].as_u64().is_some_and(|value| value > 1));
+    assert!(
+        body["usage"]["latency_ms"]
+            .as_u64()
+            .is_some_and(|value| value > 1)
+    );
 
     let step_decision = &body["steps"][0]["post_execution_budget_decision"];
     assert_eq!(step_decision["status"], body["budget_decision"]["status"]);
@@ -277,9 +279,18 @@ async fn post_execution_latency_overrun_is_rechecked_with_planner_owned_reason()
         step_decision["budget_escalation_reason"],
         body["budget_decision"]["budget_escalation_reason"]
     );
-    assert_eq!(step_decision["exceeded"], body["budget_decision"]["exceeded"]);
-    assert_eq!(step_decision["usage"]["text_tokens"], body["usage"]["text_tokens"]);
-    assert_eq!(step_decision["usage"]["image_regions"], body["usage"]["image_regions"]);
+    assert_eq!(
+        step_decision["exceeded"],
+        body["budget_decision"]["exceeded"]
+    );
+    assert_eq!(
+        step_decision["usage"]["text_tokens"],
+        body["usage"]["text_tokens"]
+    );
+    assert_eq!(
+        step_decision["usage"]["image_regions"],
+        body["usage"]["image_regions"]
+    );
     assert_eq!(
         step_decision["usage"]["chromium_spawns"],
         body["usage"]["chromium_spawns"]

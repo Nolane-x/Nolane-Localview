@@ -114,7 +114,10 @@ impl WindowsObserveProvider for FakeProvider {
         self.provider.clone()
     }
 
-    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
+    fn attach(
+        &self,
+        _selection: UserSelectedWindowTarget,
+    ) -> Result<Self::Attachment, Self::Error> {
         Ok(FakeAttachment(self.target.clone()))
     }
 
@@ -254,7 +257,10 @@ async fn recovery_plan_is_exact_attachment_bound_ordered_classified_and_side_eff
         provider.provider.clone(),
         provider.target.clone(),
     );
-    journal.record_intent_admitted(prepared.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(prepared.clone())
+        .await
+        .unwrap();
     let authorization = journal
         .record_authorization(
             prepared.transport_action_id,
@@ -323,7 +329,10 @@ async fn recovery_plan_is_exact_attachment_bound_ordered_classified_and_side_eff
     assert_eq!(plan.provider_incarnation_ref, provider.provider);
     assert_eq!(plan.target_incarnation_ref, provider.target);
     assert_eq!(plan.entries.len(), 2);
-    assert_eq!(plan.entries[0].action_id, not_dispatched.transport_action_id);
+    assert_eq!(
+        plan.entries[0].action_id,
+        not_dispatched.transport_action_id
+    );
     assert_eq!(
         plan.entries[0].recovery_state,
         ConsequentialRecoveryState::AuthorizedNotDispatched

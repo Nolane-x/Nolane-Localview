@@ -187,9 +187,7 @@ impl Default for SnapshotBudget {
     }
 }
 
-#[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum SnapshotBudgetLimit {
     Nodes,
@@ -237,11 +235,7 @@ impl SnapshotBudgetGuard {
         if depth > self.budget.max_depth {
             violated.push(SnapshotBudgetLimit::Depth);
         }
-        if self
-            .properties_read
-            .saturating_add(properties_to_read)
-            > self.budget.max_properties
-        {
+        if self.properties_read.saturating_add(properties_to_read) > self.budget.max_properties {
             violated.push(SnapshotBudgetLimit::Properties);
         }
 

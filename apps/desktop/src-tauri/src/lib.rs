@@ -6,7 +6,7 @@ pub mod workspace_surface;
 
 use std::path::PathBuf;
 
-use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
+use localview_instrumentation::{InstrumentationConfig, bootstrap_script};
 use localview_live_bridge::{
     ActionCancellationSignal, BridgeAction, BridgeActionResult, IngestReport, ObserverBatch,
     ObserverEvent, PrivateBridgeAction,
@@ -163,12 +163,11 @@ async fn open_preview(
     let session = session_id.parse::<SessionId>().map_err(err)?;
     let label = preview_label(session);
     if let Some(window) = app.get_webview_window(&label) {
-        let current = registry.current(
-            session,
-            DesktopSurfaceKind::PreviewWindow,
-            &label,
-        )
-        .ok_or_else(|| "preview platform window exists without desktop owner truth".to_string())?;
+        let current = registry
+            .current(session, DesktopSurfaceKind::PreviewWindow, &label)
+            .ok_or_else(|| {
+                "preview platform window exists without desktop owner truth".to_string()
+            })?;
         window.show().map_err(err)?;
         registry
             .set_visibility(&current.identity, DesktopSurfaceVisibility::Visible)
@@ -194,11 +193,8 @@ async fn open_preview(
         return Err("LocalView preview refuses non-loopback top-level navigation".into());
     }
 
-    let identity = registry.next_identity(
-        session,
-        DesktopSurfaceKind::PreviewWindow,
-        label.clone(),
-    );
+    let identity =
+        registry.next_identity(session, DesktopSurfaceKind::PreviewWindow, label.clone());
     let reservation = workspace_surface::surface_resource::reserve_surface(session).await?;
     let initialization_script = format!(
         "{}\n{}",
@@ -228,10 +224,8 @@ async fn open_preview(
         }
     };
 
-    if let Err(error) = registry.record_created(
-        identity.clone(),
-        DesktopSurfaceVisibility::Visible,
-    ) {
+    if let Err(error) = registry.record_created(identity.clone(), DesktopSurfaceVisibility::Visible)
+    {
         if let Err(close_error) = window.close() {
             return Err(format!(
                 "{}; failed to close preview window after owner-record failure: {close_error}",
@@ -273,14 +267,15 @@ fn install_preview_surface_destroyed_reconciler(
         if !matches!(event, tauri::WindowEvent::Destroyed) {
             return;
         }
-        let registry = app
-            .state::<workspace_surface::surface_registry::DesktopSurfaceRegistry>();
+        let registry = app.state::<workspace_surface::surface_registry::DesktopSurfaceRegistry>();
         if registry.record_closed(&identity).is_err() {
             return;
         }
         let identity = identity.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = workspace_surface::surface_resource::release_surface(&identity).await {
+            if let Err(error) =
+                workspace_surface::surface_resource::release_surface(&identity).await
+            {
                 eprintln!("LocalView preview surface release failed: {error}");
             }
         });
@@ -890,7 +885,8 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let _ = app.manage(visual_capture::VisualCaptureState::default());
-            let _ = app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
+            let _ =
+                app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
             native_executor_worker::spawn(app.handle().clone());
             let menu = MenuBuilder::new(app)
                 .text("show", "Open LocalView")

@@ -17,8 +17,7 @@ use localview_windows_observe_runtime::{
     WindowsObserveSubscriptionLineage,
 };
 use localview_windows_uia_provider::{
-    WindowsUiaActionCapabilities, WindowsUiaEventDrain, WindowsUiaPattern,
-    WindowsUiaPatternSupport,
+    WindowsUiaActionCapabilities, WindowsUiaEventDrain, WindowsUiaPattern, WindowsUiaPatternSupport,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -74,7 +73,10 @@ impl Provider {
 
     fn semantic_node(&self, cut: &str) -> NativeSemanticNodeObservation {
         let mut capabilities = WindowsUiaActionCapabilities::default();
-        capabilities.record(WindowsUiaPattern::Invoke, WindowsUiaPatternSupport::Supported);
+        capabilities.record(
+            WindowsUiaPattern::Invoke,
+            WindowsUiaPatternSupport::Supported,
+        );
         let mut attributes = BTreeMap::new();
         capabilities.write_attributes(&mut attributes);
 
@@ -175,7 +177,10 @@ impl WindowsObserveProvider for Provider {
         self.provider.clone()
     }
 
-    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
+    fn attach(
+        &self,
+        _selection: UserSelectedWindowTarget,
+    ) -> Result<Self::Attachment, Self::Error> {
         Ok(Attachment(self.target.clone()))
     }
 
@@ -310,10 +315,12 @@ async fn stale_requested_element_is_rejected_before_any_provider_refresh() {
     let (provider, runtime, before, mut previous_element_ref) = fixture(session_id).await;
     previous_element_ref.acquisition_cut_ref = "cut:stale:caller".into();
 
-    assert!(runtime
-        .refresh_uia_action_evidence(session_id, previous_element_ref)
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .refresh_uia_action_evidence(session_id, previous_element_ref)
+            .await
+            .is_err()
+    );
     assert_eq!(provider.snapshot_count(), 1);
     assert_eq!(
         runtime
@@ -331,10 +338,12 @@ async fn missing_element_fails_binding_but_preserves_the_fresh_complete_world_re
     let (provider, runtime, before, previous_element_ref) = fixture(session_id).await;
     provider.set_fresh_mode(FreshSnapshotMode::Missing);
 
-    assert!(runtime
-        .refresh_uia_action_evidence(session_id, previous_element_ref)
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .refresh_uia_action_evidence(session_id, previous_element_ref)
+            .await
+            .is_err()
+    );
     assert_eq!(provider.snapshot_count(), 2);
 
     let current = runtime.current_semantic_snapshot(session_id).await.unwrap();
@@ -359,10 +368,12 @@ async fn duplicate_provider_identity_fails_binding_but_preserves_the_fresh_revis
     let (provider, runtime, before, previous_element_ref) = fixture(session_id).await;
     provider.set_fresh_mode(FreshSnapshotMode::Duplicate);
 
-    assert!(runtime
-        .refresh_uia_action_evidence(session_id, previous_element_ref)
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .refresh_uia_action_evidence(session_id, previous_element_ref)
+            .await
+            .is_err()
+    );
 
     let current = runtime.current_semantic_snapshot(session_id).await.unwrap();
     assert_ne!(current.snapshot_cut_ref(), before.snapshot_cut_ref());
@@ -379,10 +390,12 @@ async fn incomplete_fresh_snapshot_is_published_as_current_evidence_but_never_au
     let (provider, runtime, before, previous_element_ref) = fixture(session_id).await;
     provider.set_fresh_mode(FreshSnapshotMode::Incomplete);
 
-    assert!(runtime
-        .refresh_uia_action_evidence(session_id, previous_element_ref)
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .refresh_uia_action_evidence(session_id, previous_element_ref)
+            .await
+            .is_err()
+    );
 
     let current = runtime.current_semantic_snapshot(session_id).await.unwrap();
     assert_ne!(current.snapshot_cut_ref(), before.snapshot_cut_ref());

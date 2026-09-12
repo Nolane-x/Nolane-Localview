@@ -44,7 +44,16 @@ fn region_capture_restores_then_redacts_then_crops_before_persistence() {
         .find("persist_and_register")
         .expect("capture transaction must persist/register evidence");
 
-    assert!(restore < redact, "visual restoration must happen before pixel processing");
-    assert!(redact < crop, "private redaction must happen before region cropping");
-    assert!(crop < persist, "target processing must happen before persistence");
+    assert!(
+        restore < redact,
+        "visual restoration must happen before pixel processing"
+    );
+    assert!(
+        redact < crop,
+        "private redaction must happen before region cropping"
+    );
+    assert!(
+        crop < persist,
+        "target processing must happen before persistence"
+    );
 }

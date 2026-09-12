@@ -7,9 +7,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    seal_uia_dispatch, WindowsObserveDispatchContextProvider, WindowsObserveRuntimeManager,
+    WindowsObserveDispatchContextProvider, WindowsObserveRuntimeManager,
     WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchSealError, WindowsUiaDispatchSealReceipt,
-    WindowsUiaDispatchSealRequest,
+    WindowsUiaDispatchSealRequest, seal_uia_dispatch,
 };
 
 /// Inputs for the final Windows data-only boundary before a future executor may
@@ -67,7 +67,9 @@ pub enum WindowsUiaPreparedDispatchError {
     CanonicalEnvelopeChangedAfterPrepare,
     #[error("Windows UIA canonical action is stale after durable PREPARED")]
     CanonicalEnvelopeStaleAfterPrepare,
-    #[error("Windows UIA journal left DispatchPrepared before the prepared capability could be returned: {state:?}")]
+    #[error(
+        "Windows UIA journal left DispatchPrepared before the prepared capability could be returned: {state:?}"
+    )]
     JournalStateChangedAfterPrepare {
         state: Option<ConsequentialRecoveryState>,
     },
@@ -114,7 +116,10 @@ where
 
     let metadata = &sealed.authority.authority;
     let preparation = DispatchPreparationReceipt {
-        receipt_ref: format!("windows-uia:dispatch-prepared:{action_id}:{}", Uuid::new_v4()),
+        receipt_ref: format!(
+            "windows-uia:dispatch-prepared:{action_id}:{}",
+            Uuid::new_v4()
+        ),
         authorization_journal_sequence: sealed.authority.authorization_journal_sequence,
         precondition_snapshot_cut_ref: metadata.precondition_snapshot_cut_ref.clone(),
         provider_incarnation_ref: metadata.provider_incarnation_ref.clone(),
@@ -124,12 +129,15 @@ where
     let admission = journal
         .record_dispatch_prepared(action_id, preparation.clone())
         .await
-        .map_err(|error| WindowsUiaPreparedDispatchError::JournalWriteFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(
+            |error| WindowsUiaPreparedDispatchError::JournalWriteFailed {
+                message: error.to_string(),
+            },
+        )?;
 
     match &admission.entry().transition {
-        ConsequentialJournalTransition::DispatchPrepared { receipt } if receipt == &preparation => {}
+        ConsequentialJournalTransition::DispatchPrepared { receipt } if receipt == &preparation => {
+        }
         _ => return Err(WindowsUiaPreparedDispatchError::PreparationEntryMismatch),
     }
     let preparation_journal_sequence = admission.entry().journal_sequence;

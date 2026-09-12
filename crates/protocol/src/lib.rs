@@ -4,10 +4,10 @@ mod correctness;
 
 pub use correctness::*;
 
-use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use std::collections::BTreeMap;
 use url::Url;
 use uuid::Uuid;
 
@@ -39,7 +39,10 @@ pub enum ServerKind {
 
 impl ServerKind {
     pub fn visual_candidate(self) -> bool {
-        matches!(self, Self::FrontendDevServer | Self::Storybook | Self::StaticSite)
+        matches!(
+            self,
+            Self::FrontendDevServer | Self::Storybook | Self::StaticSite
+        )
     }
 }
 
@@ -55,13 +58,25 @@ pub struct Classification {
 
 impl Default for Classification {
     fn default() -> Self {
-        Self { kind: ServerKind::UnknownHttp, confidence: 0.0, framework: None, title: None, hmr_detected: false, evidence: SmallVec::new() }
+        Self {
+            kind: ServerKind::UnknownHttp,
+            confidence: 0.0,
+            framework: None,
+            title: None,
+            hmr_detected: false,
+            evidence: SmallVec::new(),
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SessionStatus { Active, Disconnected, Hidden, Closed }
+pub enum SessionStatus {
+    Active,
+    Disconnected,
+    Hidden,
+    Closed,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Session {
@@ -102,7 +117,12 @@ pub struct DiscoveredServer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Rect { pub x: f64, pub y: f64, pub width: f64, pub height: f64 }
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ViewportMeta {
@@ -125,7 +145,12 @@ pub struct SemanticNode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SourceLocation { pub file: String, pub line: u32, pub column: Option<u32>, pub component: Option<String> }
+pub struct SourceLocation {
+    pub file: String,
+    pub line: u32,
+    pub column: Option<u32>,
+    pub component: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PageSnapshot {
@@ -139,10 +164,20 @@ pub struct PageSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConsoleIssue { pub level: String, pub message: String, pub source: Option<String>, pub count: u32 }
+pub struct ConsoleIssue {
+    pub level: String,
+    pub message: String,
+    pub source: Option<String>,
+    pub count: u32,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NetworkIssue { pub method: String, pub url: String, pub status: Option<u16>, pub error: Option<String> }
+pub struct NetworkIssue {
+    pub method: String,
+    pub url: String,
+    pub status: Option<u16>,
+    pub error: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StateDiff {
@@ -157,36 +192,83 @@ pub struct StateDiff {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct LayoutChange { pub reference: ElementRef, pub before: Option<Rect>, pub after: Option<Rect> }
+pub struct LayoutChange {
+    pub reference: ElementRef,
+    pub before: Option<Rect>,
+    pub after: Option<Rect>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ObservationEvent {
-    ServerDetected { session_id: SessionId, endpoint: Endpoint },
-    ServerDisconnected { session_id: SessionId },
-    ServerReconnected { session_id: SessionId },
-    DomChanged { session_id: SessionId, refs: Vec<ElementRef> },
-    LayoutChanged { session_id: SessionId, refs: Vec<ElementRef> },
-    RouteChanged { session_id: SessionId, route: String },
-    ConsoleIssue { session_id: SessionId, issue: ConsoleIssue },
-    NetworkIssue { session_id: SessionId, issue: NetworkIssue },
-    HmrStarted { session_id: SessionId },
-    HmrSettled { session_id: SessionId },
+    ServerDetected {
+        session_id: SessionId,
+        endpoint: Endpoint,
+    },
+    ServerDisconnected {
+        session_id: SessionId,
+    },
+    ServerReconnected {
+        session_id: SessionId,
+    },
+    DomChanged {
+        session_id: SessionId,
+        refs: Vec<ElementRef>,
+    },
+    LayoutChanged {
+        session_id: SessionId,
+        refs: Vec<ElementRef>,
+    },
+    RouteChanged {
+        session_id: SessionId,
+        route: String,
+    },
+    ConsoleIssue {
+        session_id: SessionId,
+        issue: ConsoleIssue,
+    },
+    NetworkIssue {
+        session_id: SessionId,
+        issue: NetworkIssue,
+    },
+    HmrStarted {
+        session_id: SessionId,
+    },
+    HmrSettled {
+        session_id: SessionId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
-pub enum Capability { Observe, Interact, Test, Advanced }
+pub enum Capability {
+    Observe,
+    Interact,
+    Test,
+    Advanced,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TokenBudget { pub max_tokens: usize, pub detail: DetailLevel }
+pub struct TokenBudget {
+    pub max_tokens: usize,
+    pub detail: DetailLevel,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum DetailLevel { Minimal, Normal, Deep }
+pub enum DetailLevel {
+    Minimal,
+    Normal,
+    Deep,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Health { pub version: String, pub status: String, pub paused: bool, pub sessions: usize }
+pub struct Health {
+    pub version: String,
+    pub status: String,
+    pub paused: bool,
+    pub sessions: usize,
+}
 
 #[cfg(test)]
 mod tests {

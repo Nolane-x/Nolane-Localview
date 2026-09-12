@@ -209,11 +209,7 @@ pub fn evaluate(sample: &ResourceSample, budget: &ResourceBudget) -> GovernorDec
 
 fn ratio(value: f32, limit: f32) -> f32 {
     if limit <= 0.0 {
-        if value > 0.0 {
-            f32::INFINITY
-        } else {
-            0.0
-        }
+        if value > 0.0 { f32::INFINITY } else { 0.0 }
     } else {
         value / limit
     }
@@ -442,9 +438,11 @@ impl RuntimeResourceGovernor {
     pub fn release_session(&self, session_id: &str) -> usize {
         let mut state = lock(&self.inner);
         let before = state.reservations.len();
-        state.reservations.retain(|(reserved_session, _), reservation| {
-            matches!(reservation, ReservationState::Live(_)) || reserved_session != session_id
-        });
+        state
+            .reservations
+            .retain(|(reserved_session, _), reservation| {
+                matches!(reservation, ReservationState::Live(_)) || reserved_session != session_id
+            });
         before.saturating_sub(state.reservations.len())
     }
 
@@ -536,9 +534,7 @@ impl RuntimeResourceGovernor {
             Some(ReservationState::Live(LiveResourceState::NativeSurface {
                 identity: current,
                 ..
-            })) => {
-                kind == LiveResourceKind::NativeSurface && surface_identity == Some(current)
-            }
+            })) => kind == LiveResourceKind::NativeSurface && surface_identity == Some(current),
             _ => false,
         };
         if should_remove {
@@ -691,7 +687,10 @@ fn decision_for_state(state: &RuntimeGovernorState) -> GovernorDecision {
         .min(f32::MAX as f64) as f32;
     evaluate(
         &ResourceSample {
-            memory_mb: state.sample.memory_mb.saturating_add(state.process_memory_mb),
+            memory_mb: state
+                .sample
+                .memory_mb
+                .saturating_add(state.process_memory_mb),
             cpu_percent,
             capture_storage_mb: state.sample.capture_storage_mb,
             network_kb_per_minute: state.sample.network_kb_per_minute,

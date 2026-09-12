@@ -46,7 +46,7 @@ mod windows_consequential_expand_collapse_windows_smoke {
             Foundation::{LPARAM, WPARAM},
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CBS_DROPDOWNLIST, CB_ADDSTRING, CB_SETCURSEL, CW_USEDEFAULT, CreateWindowExW,
+                CB_ADDSTRING, CB_SETCURSEL, CBS_DROPDOWNLIST, CW_USEDEFAULT, CreateWindowExW,
                 DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, SW_SHOW,
                 SendMessageW, SetForegroundWindow, ShowWindow, TranslateMessage, WINDOW_STYLE,
                 WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
@@ -106,7 +106,8 @@ mod windows_consequential_expand_collapse_windows_smoke {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires a real interactive Windows UI Automation provider"]
-    async fn real_http_expand_then_collapse_requires_distinct_server_owned_operations_and_fresh_state() {
+    async fn real_http_expand_then_collapse_requires_distinct_server_owned_operations_and_fresh_state()
+     {
         assert!(
             std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
             "real UIA smoke must be explicitly enabled"
@@ -135,8 +136,7 @@ mod windows_consequential_expand_collapse_windows_smoke {
                     )
                     .expect("create Win32 ExpandCollapse control-path parent fixture")
                 };
-                let combo_style =
-                    WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | CBS_DROPDOWNLIST as u32);
+                let combo_style = WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | CBS_DROPDOWNLIST as u32);
                 let combo = unsafe {
                     CreateWindowExW(
                         Default::default(),
@@ -415,7 +415,10 @@ mod windows_consequential_expand_collapse_windows_smoke {
             "Collapse planning rejected unexpectedly: {collapse_plan}"
         );
         assert_eq!(collapse_plan["operation"], "collapse");
-        assert_eq!(collapse_plan["risk_class"], "s4_destructive_or_irreversible");
+        assert_eq!(
+            collapse_plan["risk_class"],
+            "s4_destructive_or_irreversible"
+        );
         assert_eq!(collapse_plan["idempotency_class"], "irreversible");
         let collapse_action_id = Uuid::parse_str(
             collapse_plan["action_id"]

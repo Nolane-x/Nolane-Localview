@@ -223,10 +223,7 @@ mod windows_consequential_toggle_windows_smoke {
             expectation: NativeSemanticPostconditionExpectation::Present,
             matcher: NativeSemanticNodeMatcherV1 {
                 name: Some("LocalView Toggle".into()),
-                attributes: BTreeMap::from([(
-                    TOGGLE_STATE_ATTRIBUTE.into(),
-                    "on".into(),
-                )]),
+                attributes: BTreeMap::from([(TOGGLE_STATE_ATTRIBUTE.into(), "on".into())]),
                 ..Default::default()
             },
         }
@@ -345,7 +342,10 @@ mod windows_consequential_toggle_windows_smoke {
             .latest_action_postcondition_receipt(action_id)
             .await
             .expect("Toggle commit must retain a postcondition receipt");
-        assert_eq!(receipt.verdict, ActionPostconditionVerdict::VerifiedExpected);
+        assert_eq!(
+            receipt.verdict,
+            ActionPostconditionVerdict::VerifiedExpected
+        );
         assert_ne!(
             receipt.observation_snapshot_cut_ref, precondition_cut,
             "Toggle verification must use a fresh post-dispatch observation cut"

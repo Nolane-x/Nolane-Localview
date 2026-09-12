@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use localview_live_bridge::{
-    reconcile_consequential_postconditions, ActionEnvelopeMetadata, ActionIdempotencyClass,
-    ActionRiskClass, CanonicalActionEnvelope, ConsequentialJournal, ConsequentialJournalError,
-    ConsequentialPostconditionEvidence, ConsequentialPostconditionReconciliationReceipt,
-    ConsequentialPostconditionStatus, ConsequentialReconciliationError,
-    ConsequentialRecoveryState, DispatchLinearizationReceipt, DispatchPreparationReceipt,
-    LiveBridge, ProviderObservationBinding,
+    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
+    ConsequentialJournal, ConsequentialJournalError, ConsequentialPostconditionEvidence,
+    ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
+    ConsequentialReconciliationError, ConsequentialRecoveryState, DispatchLinearizationReceipt,
+    DispatchPreparationReceipt, LiveBridge, ProviderObservationBinding,
+    reconcile_consequential_postconditions,
 };
 use localview_protocol::{
     DispatchResult, EventContinuityState, PrincipalRef, ProviderIncarnationRef,
@@ -33,13 +33,19 @@ fn action(expected: &[&str]) -> CanonicalActionEnvelope {
             target_incarnation_ref: TargetIncarnationRef::from("target:window:recovery:1"),
             risk_class: ActionRiskClass::ReversibleUiState,
             idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
-            expected_postcondition_contract_refs: expected.iter().map(|value| (*value).into()).collect(),
+            expected_postcondition_contract_refs: expected
+                .iter()
+                .map(|value| (*value).into())
+                .collect(),
         },
     }
 }
 
 async fn linearize(journal: &ConsequentialJournal, action: &CanonicalActionEnvelope) {
-    journal.record_intent_admitted(action.clone()).await.unwrap();
+    journal
+        .record_intent_admitted(action.clone())
+        .await
+        .unwrap();
     let authorization = journal
         .record_authorization(
             action.transport_action_id,
@@ -54,7 +60,10 @@ async fn linearize(journal: &ConsequentialJournal, action: &CanonicalActionEnvel
             DispatchPreparationReceipt {
                 receipt_ref: format!("prepared:{}", authorization.journal_sequence),
                 authorization_journal_sequence: authorization.journal_sequence,
-                precondition_snapshot_cut_ref: action.metadata.precondition_snapshot_cut_ref.clone(),
+                precondition_snapshot_cut_ref: action
+                    .metadata
+                    .precondition_snapshot_cut_ref
+                    .clone(),
                 provider_incarnation_ref: action.metadata.provider_incarnation_ref.clone(),
                 target_incarnation_ref: action.metadata.target_incarnation_ref.clone(),
             },
@@ -120,9 +129,11 @@ async fn reconciliation(
         observed_digest: format!("digest:{receipt_id}"),
         incompleteness_debt: debt,
     };
-    assert!(bridge
-        .record_reconciliation(action.session_id, snapshot.clone())
-        .await);
+    assert!(
+        bridge
+            .record_reconciliation(action.session_id, snapshot.clone())
+            .await
+    );
     let observation_receipt = journal
         .complete_postcondition_observation(observation, snapshot)
         .await
@@ -180,7 +191,9 @@ async fn incomplete_reconciliation_survives_restart_and_later_exact_evidence_clo
         Some(ConsequentialRecoveryState::OutcomeObservedUnverified)
     );
     assert_eq!(
-        reopened.requires_reconciliation(action.transport_action_id).await,
+        reopened
+            .requires_reconciliation(action.transport_action_id)
+            .await,
         Some(true)
     );
 

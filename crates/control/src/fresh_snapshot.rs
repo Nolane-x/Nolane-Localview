@@ -1,17 +1,17 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
-    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use localview_live_bridge::{BridgeActionKind, BridgeActionResult};
 use localview_protocol::{PageSnapshot, Rect, SemanticNode, SessionId, SourceLocation};
 use serde_json::Value;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
 use crate::ControlState;
@@ -69,10 +69,9 @@ async fn session_fresh_semantic_snapshot(
         Err(FreshSnapshotError::Failed) => {
             bounded_error(StatusCode::BAD_GATEWAY, "fresh_semantic_snapshot_failed")
         }
-        Err(FreshSnapshotError::Invalid) => bounded_error(
-            StatusCode::BAD_GATEWAY,
-            "invalid_fresh_semantic_snapshot",
-        ),
+        Err(FreshSnapshotError::Invalid) => {
+            bounded_error(StatusCode::BAD_GATEWAY, "invalid_fresh_semantic_snapshot")
+        }
     }
 }
 
@@ -266,8 +265,7 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
     // component identity: one file may contain many components. Bind the identity to the
     // declared source line as well so only ancestors carrying the same explicit component
     // source location can corroborate ownership. Column stays diagnostic, not identity.
-    let component =
-        (origin == "data-component-source").then(|| format!("{file}:{line}"));
+    let component = (origin == "data-component-source").then(|| format!("{file}:{line}"));
 
     Some(Some(SourceLocation {
         file,

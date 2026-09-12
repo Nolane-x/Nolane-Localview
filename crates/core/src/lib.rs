@@ -1,8 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::hash_map::DefaultHasher, hash::{Hash, Hasher}, path::{Path, PathBuf}, time::Duration};
 use localview_protocol::{ListenerCandidate, ProjectIdentity};
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
@@ -29,7 +34,12 @@ impl Default for RuntimeConfig {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum AutoOpenMode { AutoOpen, Notify, Silent, Paused }
+pub enum AutoOpenMode {
+    AutoOpen,
+    Notify,
+    Silent,
+    Paused,
+}
 
 pub fn project_identity(candidate: &ListenerCandidate) -> ProjectIdentity {
     let root = candidate.cwd.as_deref().map(git_root_or_cwd);
@@ -37,7 +47,8 @@ pub fn project_identity(candidate: &ListenerCandidate) -> ProjectIdentity {
     root.as_deref().unwrap_or("").hash(&mut hasher);
     candidate.command.as_deref().unwrap_or("").hash(&mut hasher);
     let key = format!("project-{:016x}", hasher.finish());
-    let display_name = root.as_deref()
+    let display_name = root
+        .as_deref()
         .and_then(|p| Path::new(p).file_name())
         .and_then(|p| p.to_str())
         .filter(|s| !s.is_empty())
@@ -56,8 +67,12 @@ pub fn project_identity(candidate: &ListenerCandidate) -> ProjectIdentity {
 fn git_root_or_cwd(cwd: &str) -> String {
     let mut cursor = PathBuf::from(cwd);
     loop {
-        if cursor.join(".git").exists() { return cursor.to_string_lossy().into_owned(); }
-        if !cursor.pop() { break; }
+        if cursor.join(".git").exists() {
+            return cursor.to_string_lossy().into_owned();
+        }
+        if !cursor.pop() {
+            break;
+        }
     }
     cwd.to_owned()
 }
@@ -68,8 +83,19 @@ mod tests {
     use localview_protocol::Endpoint;
     #[test]
     fn stable_identity_ignores_port() {
-        let base = ListenerCandidate { endpoint: Endpoint { host:"127.0.0.1".into(), port:5173, scheme:"http".into() }, pid:Some(5), process_name:None, command:Some("vite".into()), cwd:Some("/tmp/app".into()) };
-        let mut moved = base.clone(); moved.endpoint.port = 5174;
+        let base = ListenerCandidate {
+            endpoint: Endpoint {
+                host: "127.0.0.1".into(),
+                port: 5173,
+                scheme: "http".into(),
+            },
+            pid: Some(5),
+            process_name: None,
+            command: Some("vite".into()),
+            cwd: Some("/tmp/app".into()),
+        };
+        let mut moved = base.clone();
+        moved.endpoint.port = 5174;
         assert_eq!(project_identity(&base).key, project_identity(&moved).key);
     }
 }

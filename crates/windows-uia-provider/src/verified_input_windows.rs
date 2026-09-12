@@ -5,7 +5,7 @@ use windows::Win32::{
     UI::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, GetKeyState, GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD,
-            KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CAPITAL,
+            KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CAPITAL,
             VK_CONTROL, VK_LWIN, VK_MENU, VK_NUMLOCK, VK_RWIN, VK_SCROLL, VK_SHIFT,
         },
         WindowsAndMessaging::{
@@ -84,7 +84,8 @@ pub fn observe_windows_verified_input_context(
         };
         match hwnd_to_u64(popup) {
             Some(handle)
-                if handle != target_window_handle && unsafe { IsWindowVisible(popup) }.as_bool() =>
+                if handle != target_window_handle
+                    && unsafe { IsWindowVisible(popup) }.as_bool() =>
             {
                 Some(handle)
             }
@@ -106,8 +107,8 @@ pub fn observe_windows_verified_input_context(
 
 /// Snapshot only correctness-relevant keyboard state. This never modifies or
 /// normalizes human-held keys.
-pub fn snapshot_windows_keyboard_state(
-) -> Result<WindowsKeyboardStateSnapshot, WindowsVerifiedInputBoundaryError> {
+pub fn snapshot_windows_keyboard_state()
+-> Result<WindowsKeyboardStateSnapshot, WindowsVerifiedInputBoundaryError> {
     let layout = unsafe {
         // SAFETY: thread id 0 requests the active input locale for the current
         // thread; the returned handle is used only as opaque evidence metadata.

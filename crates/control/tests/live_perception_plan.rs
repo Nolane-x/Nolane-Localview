@@ -1,20 +1,22 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{LiveBridge, ObserverBatch, ObserverEvent, ObserverEventKind};
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -133,14 +135,9 @@ async fn seed_semantic_and_layout(state: &ControlState, session_id: uuid::Uuid) 
 async fn perception_plan_requires_auth_and_a_known_session() {
     let (state, session_id) = test_state().await;
     assert_eq!(
-        post_plan(
-            state.clone(),
-            session_id,
-            false,
-            request_body(false, false),
-        )
-        .await
-        .0,
+        post_plan(state.clone(), session_id, false, request_body(false, false),)
+            .await
+            .0,
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
@@ -187,7 +184,8 @@ async fn compatibility_intent_waits_for_cheap_state_before_browser_authority() {
 }
 
 #[tokio::test]
-async fn explicit_compatibility_goal_can_derive_browser_specific_authority_after_cheap_state_is_known() {
+async fn explicit_compatibility_goal_can_derive_browser_specific_authority_after_cheap_state_is_known()
+ {
     let (state, session_id) = test_state().await;
     seed_semantic_and_layout(&state, session_id).await;
 

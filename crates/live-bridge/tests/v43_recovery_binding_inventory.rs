@@ -4,9 +4,7 @@ use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
     ConsequentialJournal, ConsequentialRecoveryState,
 };
-use localview_protocol::{
-    PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
-};
+use localview_protocol::{PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use uuid::Uuid;
 
 fn journal_path() -> PathBuf {
@@ -49,7 +47,10 @@ async fn recovery_binding_inventory_preserves_exact_durable_action_lineage() {
 
     let journal = ConsequentialJournal::open(&path).await.unwrap();
     let first_entry = journal.record_intent_admitted(first.clone()).await.unwrap();
-    let second_entry = journal.record_intent_admitted(second.clone()).await.unwrap();
+    let second_entry = journal
+        .record_intent_admitted(second.clone())
+        .await
+        .unwrap();
     drop(journal);
 
     let reopened = ConsequentialJournal::open(&path).await.unwrap();
@@ -70,13 +71,28 @@ async fn recovery_binding_inventory_preserves_exact_durable_action_lineage() {
         bindings[0].expected_postcondition_contract_refs,
         first.metadata.expected_postcondition_contract_refs
     );
-    assert_eq!(bindings[0].recovery_state, ConsequentialRecoveryState::Admitted);
-    assert_eq!(bindings[0].latest_journal_sequence, first_entry.journal_sequence);
+    assert_eq!(
+        bindings[0].recovery_state,
+        ConsequentialRecoveryState::Admitted
+    );
+    assert_eq!(
+        bindings[0].latest_journal_sequence,
+        first_entry.journal_sequence
+    );
 
     assert_eq!(bindings[1].action_id, second.transport_action_id);
-    assert_eq!(bindings[1].provider_incarnation_ref, second.metadata.provider_incarnation_ref);
-    assert_eq!(bindings[1].target_incarnation_ref, second.metadata.target_incarnation_ref);
-    assert_eq!(bindings[1].latest_journal_sequence, second_entry.journal_sequence);
+    assert_eq!(
+        bindings[1].provider_incarnation_ref,
+        second.metadata.provider_incarnation_ref
+    );
+    assert_eq!(
+        bindings[1].target_incarnation_ref,
+        second.metadata.target_incarnation_ref
+    );
+    assert_eq!(
+        bindings[1].latest_journal_sequence,
+        second_entry.journal_sequence
+    );
 
     let exact = reopened
         .recovery_bindings_for_attachment(

@@ -9,16 +9,19 @@ use localview_protocol::{
     ProviderIncarnationRef, SessionId, TargetIncarnationRef,
 };
 use localview_windows_observe_runtime::{
-    validate_uia_dispatch_authority, WindowsUiaActionPreflightReceipt,
-    WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
-    WindowsUiaDispatchAuthorityError, WindowsUiaDispatchRevalidationReceipt,
+    WindowsUiaActionPreflightReceipt, WindowsUiaAuthorizationRevalidationReceipt,
+    WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchAuthorityError,
+    WindowsUiaDispatchRevalidationReceipt, validate_uia_dispatch_authority,
 };
 use localview_windows_uia_provider::{WindowsUiaElementLeaseReceipt, WindowsUiaPattern};
 use thiserror::Error;
 use uuid::Uuid;
 
 fn path() -> PathBuf {
-    std::env::temp_dir().join(format!("localview-native-operation-{}.jsonl", Uuid::new_v4()))
+    std::env::temp_dir().join(format!(
+        "localview-native-operation-{}.jsonl",
+        Uuid::new_v4()
+    ))
 }
 
 fn session() -> SessionId {
@@ -138,7 +141,10 @@ async fn focus_intent_cannot_be_substituted_with_invoke_or_other_uia_pattern() {
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
-    journal.record_intent_operation_bound(&queued).await.unwrap();
+    journal
+        .record_intent_operation_bound(&queued)
+        .await
+        .unwrap();
 
     let error = validate_uia_dispatch_authority(
         &bridge,
@@ -200,7 +206,10 @@ async fn activate_intent_without_durable_operation_binding_fails_closed() {
     .await
     .unwrap_err();
 
-    assert_eq!(error, WindowsUiaDispatchAuthorityError::CanonicalOperationMissing);
+    assert_eq!(
+        error,
+        WindowsUiaDispatchAuthorityError::CanonicalOperationMissing
+    );
     assert_eq!(journal.entries_for(queued.action.id).await.len(), 1);
 
     let _ = std::fs::remove_file(journal_path);

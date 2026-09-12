@@ -15,7 +15,7 @@ mod macos {
 
     use localview_capture::CaptureTarget;
     use localview_native_capture::{
-        capture_wk_webview_for_gui_smoke, CaptureRequest, NativeCaptureBackend, ViewportMeta,
+        CaptureRequest, NativeCaptureBackend, ViewportMeta, capture_wk_webview_for_gui_smoke,
     };
     use localview_visual::decode_png_rgba;
     use objc2::MainThreadOnly;
@@ -120,13 +120,15 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
 
         let mut captured = None;
         assert!(
-            pump_until(Instant::now() + Duration::from_secs(8), || match rx.try_recv() {
-                Ok(result) => {
-                    captured = Some(result);
-                    true
+            pump_until(Instant::now() + Duration::from_secs(8), || {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        captured = Some(result);
+                        true
+                    }
+                    Err(mpsc::TryRecvError::Empty) => false,
+                    Err(mpsc::TryRecvError::Disconnected) => true,
                 }
-                Err(mpsc::TryRecvError::Empty) => false,
-                Err(mpsc::TryRecvError::Disconnected) => true,
             }),
             "WKWebView snapshot callback timed out"
         );

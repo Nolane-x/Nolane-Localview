@@ -1,6 +1,5 @@
 use localview_validation_lab::{
-    CanonicalArtifact, LabArtifactKind, LabArtifactState, ResearchResultClass,
-    canonical_json_bytes,
+    CanonicalArtifact, LabArtifactKind, LabArtifactState, ResearchResultClass, canonical_json_bytes,
 };
 use serde::Serialize;
 use serde_json::json;

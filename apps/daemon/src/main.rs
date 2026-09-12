@@ -7,8 +7,8 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -17,12 +17,13 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use localview_chromium::discover_chromium_executable;
 use localview_control::{
+    ControlState, SURFACE_RECOVERY_JOURNAL_FILE, SurfaceRecoveryJournal,
     configure_chromium_executor_for_sessions, configure_surface_recovery_journal_for_sessions,
     configure_windows_consequential_control_for_sessions,
     configure_windows_observe_runtime_for_sessions,
     reap_expired_surface_owner_resources_for_sessions,
-    release_windows_consequential_control_session_for_sessions, runtime_resource_governor_for_sessions,
-    ControlState, SurfaceRecoveryJournal, SURFACE_RECOVERY_JOURNAL_FILE,
+    release_windows_consequential_control_session_for_sessions,
+    runtime_resource_governor_for_sessions,
 };
 use localview_core::RuntimeConfig;
 use localview_discovery::{CommandListenerSource, DiscoveryEngine};
@@ -32,14 +33,14 @@ use localview_observation::ObservationBus;
 use localview_protocol::ObservationEvent;
 use localview_security::generate_control_token;
 use localview_sessions::{
-    SessionIdentityHealth, SessionIdentityResolver, SessionManager, SESSION_IDENTITY_REGISTRY_FILE,
-};
-use localview_windows_observe_runtime::{
-    WindowsObserveRuntimeError, WindowsUiaObserveRuntimeManager,
+    SESSION_IDENTITY_REGISTRY_FILE, SessionIdentityHealth, SessionIdentityResolver, SessionManager,
 };
 #[cfg(windows)]
 use localview_windows_observe_runtime::{
-    spawn_windows_uia_runtime_manager_with_governor, WindowsObserveRuntimeConfig,
+    WindowsObserveRuntimeConfig, spawn_windows_uia_runtime_manager_with_governor,
+};
+use localview_windows_observe_runtime::{
+    WindowsObserveRuntimeError, WindowsUiaObserveRuntimeManager,
 };
 #[cfg(windows)]
 use localview_windows_uia_provider::WindowsUiaWorkerConfig;
@@ -314,8 +315,7 @@ fn spawn_windows_observe_drain_loop(
                             warn!(%session_id, %cleanup_error, "Windows observe provider cleanup failed after drain-error detach");
                         }
                         release_windows_consequential_control_session_for_sessions(
-                            &sessions,
-                            session_id,
+                            &sessions, session_id,
                         )
                         .await;
                     }

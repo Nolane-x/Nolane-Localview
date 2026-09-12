@@ -4,23 +4,25 @@ use std::{
     env, fs,
     path::PathBuf,
     process::Command,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
 use localview_control::{
-    configure_chromium_executor_for_sessions, router, runtime_resource_governor_for_sessions,
-    ControlState,
+    ControlState, configure_chromium_executor_for_sessions, router,
+    runtime_resource_governor_for_sessions,
 };
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{LiveBridge, ObserverBatch, ObserverEvent, ObserverEventKind};
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_resource_governor::ResourceWorkKind;
 use localview_sessions::SessionManager;
 use serde_json::Value;
@@ -188,7 +190,10 @@ async fn session_cleanup_cannot_erase_a_live_chromium_process_authority() {
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    assert!(marker.is_file(), "fake Chromium must reach its live child body");
+    assert!(
+        marker.is_file(),
+        "fake Chromium must reach its live child body"
+    );
 
     let governor = runtime_resource_governor_for_sessions(&state.sessions);
     assert_eq!(

@@ -12,10 +12,9 @@ use localview_live_bridge::{
 use localview_native_provider::NativeSemanticSnapshotRevision;
 use localview_protocol::{ProviderIncarnationRef, SessionId, TargetIncarnationRef};
 use localview_windows_observe_runtime::{
-    recover_attached_consequential_debt_scoped, WindowsObserveProvider,
-    WindowsObserveRuntimeManager, WindowsUiaAttachedRecoveryDrain,
+    WindowsObserveProvider, WindowsObserveRuntimeManager, WindowsUiaAttachedRecoveryDrain,
     WindowsUiaAttachedRecoveryDrainError, WindowsUiaPostconditionVerifier,
-    WindowsUiaSemanticPostconditionVerifier,
+    WindowsUiaSemanticPostconditionVerifier, recover_attached_consequential_debt_scoped,
 };
 use uuid::Uuid;
 
@@ -70,11 +69,7 @@ impl WindowsUiaPostconditionVerifier for FailClosedWindowsPostconditionVerifier 
         expected_contract_refs: &[String],
         snapshot: &NativeSemanticSnapshotRevision,
     ) -> Result<Vec<ConsequentialPostconditionEvidence>, Self::Error> {
-        WindowsUiaSemanticPostconditionVerifier.verify(
-            action_id,
-            expected_contract_refs,
-            snapshot,
-        )
+        WindowsUiaSemanticPostconditionVerifier.verify(action_id, expected_contract_refs, snapshot)
     }
 }
 
@@ -224,10 +219,7 @@ mod tests {
     use uuid::Uuid;
 
     fn state_root() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "localview-v43-daemon-recovery-{}",
-            Uuid::new_v4()
-        ))
+        std::env::temp_dir().join(format!("localview-v43-daemon-recovery-{}", Uuid::new_v4()))
     }
 
     fn envelope() -> CanonicalActionEnvelope {
@@ -258,10 +250,15 @@ mod tests {
         let action = envelope();
         let path = root.join(super::CONSEQUENTIAL_JOURNAL_FILE);
         let journal = ConsequentialJournal::open(&path).await.unwrap();
-        let admitted = journal.record_intent_admitted(action.clone()).await.unwrap();
+        let admitted = journal
+            .record_intent_admitted(action.clone())
+            .await
+            .unwrap();
         drop(journal);
 
-        let boot = super::open_boot_consequential_recovery(&root).await.unwrap();
+        let boot = super::open_boot_consequential_recovery(&root)
+            .await
+            .unwrap();
         assert_eq!(boot.journal_path(), path.as_path());
         assert_eq!(boot.inventory().len(), 1);
         assert_eq!(boot.inventory()[0].action_id, action.transport_action_id);
@@ -291,7 +288,9 @@ mod tests {
         let root = state_root();
         assert!(!root.exists());
 
-        let boot = super::open_boot_consequential_recovery(&root).await.unwrap();
+        let boot = super::open_boot_consequential_recovery(&root)
+            .await
+            .unwrap();
         assert!(root.is_dir());
         assert!(boot.journal_path().exists());
         assert!(boot.inventory().is_empty());

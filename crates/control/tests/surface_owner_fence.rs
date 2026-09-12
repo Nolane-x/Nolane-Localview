@@ -1,22 +1,24 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
 use localview_control::{
-    configure_surface_recovery_journal_for_sessions, router, ControlState, SurfaceRecoveryJournal,
+    ControlState, SurfaceRecoveryJournal, configure_surface_recovery_journal_for_sessions, router,
 };
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde::Deserialize;
 use serde_json::Value;
@@ -101,7 +103,10 @@ async fn send(state: ControlState, uri: &str, body: Value) -> (StatusCode, Value
     (status, value)
 }
 
-async fn register_owner(state: ControlState, owner_instance_id: Uuid) -> (StatusCode, Registration) {
+async fn register_owner(
+    state: ControlState,
+    owner_instance_id: Uuid,
+) -> (StatusCode, Registration) {
     let (status, value) = send(
         state,
         "/v1/runtime/resources/surfaces/owners/register",
@@ -125,9 +130,12 @@ fn reserve_body(session_id: Uuid, request_id: &str, registration: Registration) 
         "session_id": session_id,
         "request_id": request_id,
     });
-    body.as_object_mut()
-        .expect("reserve body object")
-        .extend(owner_fields(registration).as_object().expect("owner fields").clone());
+    body.as_object_mut().expect("reserve body object").extend(
+        owner_fields(registration)
+            .as_object()
+            .expect("owner fields")
+            .clone(),
+    );
     body
 }
 
@@ -145,9 +153,12 @@ fn activate_body(
         "incarnation": incarnation,
         "visibility": "hidden",
     });
-    body.as_object_mut()
-        .expect("activate body object")
-        .extend(owner_fields(registration).as_object().expect("owner fields").clone());
+    body.as_object_mut().expect("activate body object").extend(
+        owner_fields(registration)
+            .as_object()
+            .expect("owner fields")
+            .clone(),
+    );
     body
 }
 
@@ -166,7 +177,12 @@ fn visibility_body(
     });
     body.as_object_mut()
         .expect("visibility body object")
-        .extend(owner_fields(registration).as_object().expect("owner fields").clone());
+        .extend(
+            owner_fields(registration)
+                .as_object()
+                .expect("owner fields")
+                .clone(),
+        );
     body
 }
 
@@ -177,9 +193,12 @@ fn release_body(session_id: Uuid, incarnation: u64, registration: Registration) 
         "label": "preview-owner-fence",
         "incarnation": incarnation,
     });
-    body.as_object_mut()
-        .expect("release body object")
-        .extend(owner_fields(registration).as_object().expect("owner fields").clone());
+    body.as_object_mut().expect("release body object").extend(
+        owner_fields(registration)
+            .as_object()
+            .expect("owner fields")
+            .clone(),
+    );
     body
 }
 
@@ -189,7 +208,11 @@ async fn current_boot_registration_fences_surface_reservations() {
     let owner = Uuid::new_v4();
 
     let (status, registration) = register_owner(state.clone(), owner).await;
-    assert_eq!(status, StatusCode::OK, "owner registration must be explicit");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "owner registration must be explicit"
+    );
     assert_eq!(registration.owner_instance_id, owner);
     assert!(!registration.boot_epoch.is_nil());
     assert!(!registration.owner_lease_id.is_nil());

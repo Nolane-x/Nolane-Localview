@@ -7,9 +7,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    recover_consequential_uia_action, WindowsObserveProvider, WindowsObserveRuntimeManager,
-    WindowsUiaConsequentialRecoveryOutcome, WindowsUiaPostconditionVerifier,
-    WindowsUiaVerifiedExecutionError,
+    WindowsObserveProvider, WindowsObserveRuntimeManager, WindowsUiaConsequentialRecoveryOutcome,
+    WindowsUiaPostconditionVerifier, WindowsUiaVerifiedExecutionError,
+    recover_consequential_uia_action,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,9 +244,11 @@ where
                     verifier,
                 )
                 .await
-                .map_err(|source| WindowsUiaAttachedRecoveryDrainError::Recovery {
-                    action_id: entry.action_id,
-                    source,
+                .map_err(|source| {
+                    WindowsUiaAttachedRecoveryDrainError::Recovery {
+                        action_id: entry.action_id,
+                        source,
+                    }
                 })?;
                 WindowsUiaAttachedRecoveryDrainOutcome::Recovered(recovered)
             }

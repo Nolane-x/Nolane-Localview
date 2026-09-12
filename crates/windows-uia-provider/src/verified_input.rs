@@ -1,4 +1,6 @@
+use localview_protocol::{ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::{
     WindowsUiaDispatchContextBlocker, WindowsUiaDispatchContextObservation,
@@ -64,6 +66,20 @@ impl WindowsVerifiedKeyboardBatch {
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct WindowsUiaVerifiedInputRequest {
+    pub dispatch_attempt_ref: Uuid,
+    pub action_id: Uuid,
+    pub preparation_journal_sequence: u64,
+    pub preparation_receipt_ref: String,
+    pub snapshot_cut_ref: String,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub element_ref: ProviderElementRef,
+    pub context_requirements: WindowsUiaDispatchContextRequirements,
+    pub batch: WindowsVerifiedKeyboardBatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

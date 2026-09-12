@@ -37,7 +37,7 @@ fn preregistration() -> LabPreregistration {
             .collect(),
         campaign_layer: CampaignLayer::L7,
         expected_distinctions: BTreeSet::from([
-            "required real-provider seeds must all execute".into(),
+            "required real-provider seeds must all execute".into()
         ]),
         model_bound: None,
         assumptions: BTreeSet::from(["hosted Windows UIA seed".into()]),
@@ -111,16 +111,10 @@ fn l7_run(preregistration: &LabPreregistration) -> LabRunBuilder {
 fn real_provider_pass_requires_every_preregistered_seed_to_be_observed() {
     let preregistration = preregistration();
     let mut run = l7_run(&preregistration);
-    run.append_observation(clean_observation(
-        "W01-missing-uia-property-event",
-        21,
-    ))
-    .unwrap();
-    run.append_observation(clean_observation(
-        "W02-recreated-uia-element",
-        22,
-    ))
-    .unwrap();
+    run.append_observation(clean_observation("W01-missing-uia-property-event", 21))
+        .unwrap();
+    run.append_observation(clean_observation("W02-recreated-uia-element", 22))
+        .unwrap();
 
     assert_eq!(
         run.finalize(ResultEvidence::RealProviderIntegrationPass, 30)
@@ -135,21 +129,12 @@ fn real_provider_pass_requires_every_preregistered_seed_to_be_observed() {
 fn real_provider_pass_rejects_observations_from_unregistered_seeds() {
     let preregistration = preregistration();
     let mut run = l7_run(&preregistration);
-    run.append_observation(clean_observation(
-        "W01-missing-uia-property-event",
-        21,
-    ))
-    .unwrap();
-    run.append_observation(clean_observation(
-        "W02-recreated-uia-element",
-        22,
-    ))
-    .unwrap();
-    run.append_observation(clean_observation(
-        "W06-windows-uia-provider-reacquire",
-        23,
-    ))
-    .unwrap();
+    run.append_observation(clean_observation("W01-missing-uia-property-event", 21))
+        .unwrap();
+    run.append_observation(clean_observation("W02-recreated-uia-element", 22))
+        .unwrap();
+    run.append_observation(clean_observation("W06-windows-uia-provider-reacquire", 23))
+        .unwrap();
     run.append_observation(clean_observation("W99-unregistered", 24))
         .unwrap();
 

@@ -314,7 +314,9 @@ pub enum WindowsUiaDispatchExecutionCoordinatorError {
     },
     #[error("Windows UIA canonical operation binding disappeared before provider execution")]
     CanonicalOperationMissingBeforeExecutor,
-    #[error("Windows UIA canonical operation binding is invalid before provider execution: {message}")]
+    #[error(
+        "Windows UIA canonical operation binding is invalid before provider execution: {message}"
+    )]
     CanonicalOperationBindingInvalidBeforeExecutor { message: String },
     #[error(
         "Windows UIA canonical operation {canonical:?} cannot select a provider verb for pattern {required_pattern:?}"
@@ -433,7 +435,10 @@ where
             );
         }
     };
-    let dispatch_operation = match provider_dispatch_operation(canonical_operation, required_pattern) {
+    let dispatch_operation = match provider_dispatch_operation(
+        canonical_operation,
+        required_pattern,
+    ) {
         Some(operation) => operation,
         None => {
             journal
@@ -712,7 +717,10 @@ mod tests {
     #[test]
     fn provider_verb_mapping_rejects_semantic_pattern_mismatches() {
         assert_eq!(
-            provider_dispatch_operation(CanonicalActionOperation::Expand, WindowsUiaPattern::Invoke),
+            provider_dispatch_operation(
+                CanonicalActionOperation::Expand,
+                WindowsUiaPattern::Invoke
+            ),
             None
         );
         assert_eq!(

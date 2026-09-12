@@ -141,8 +141,8 @@ where
         ConsequentialJournalTransition::IntentAdmitted { envelope } => Some(envelope),
         _ => None,
     });
-    let admitted_envelope = admitted_envelope
-        .ok_or(WindowsUiaDispatchAuthorityError::JournalIntentMissing)?;
+    let admitted_envelope =
+        admitted_envelope.ok_or(WindowsUiaDispatchAuthorityError::JournalIntentMissing)?;
     if admitted_envelope != &envelope {
         return Err(WindowsUiaDispatchAuthorityError::JournalEnvelopeMismatch);
     }
@@ -159,23 +159,29 @@ where
     let canonical_operation = journal
         .admitted_operation(action_id)
         .await
-        .map_err(|error| WindowsUiaDispatchAuthorityError::CanonicalOperationBindingInvalid {
-            message: error.to_string(),
-        })?
+        .map_err(
+            |error| WindowsUiaDispatchAuthorityError::CanonicalOperationBindingInvalid {
+                message: error.to_string(),
+            },
+        )?
         .ok_or(WindowsUiaDispatchAuthorityError::CanonicalOperationMissing)?;
     let requested_pattern = dispatch_revalidation.preflight.required_pattern;
     if !canonical_operation_matches_uia_pattern(canonical_operation, requested_pattern) {
-        return Err(WindowsUiaDispatchAuthorityError::CanonicalOperationMismatch {
-            canonical: canonical_operation,
-            requested_pattern,
-        });
+        return Err(
+            WindowsUiaDispatchAuthorityError::CanonicalOperationMismatch {
+                canonical: canonical_operation,
+                requested_pattern,
+            },
+        );
     }
 
     let authorization = revalidator
         .revalidate(action_id, &envelope.metadata)
-        .map_err(|error| WindowsUiaDispatchAuthorityError::AuthorizationRevalidationFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(
+            |error| WindowsUiaDispatchAuthorityError::AuthorizationRevalidationFailed {
+                message: error.to_string(),
+            },
+        )?;
     if authorization.action_id != action_id
         || authorization.decision_principal_ref != envelope.metadata.decision_principal_ref
         || authorization.acting_principal_ref != envelope.metadata.acting_principal_ref
@@ -185,15 +191,13 @@ where
     }
 
     let authorization_entry = journal
-        .record_authorization(
-            action_id,
-            authorization.authorization_revision,
-            true,
-        )
+        .record_authorization(action_id, authorization.authorization_revision, true)
         .await
-        .map_err(|error| WindowsUiaDispatchAuthorityError::JournalWriteFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(
+            |error| WindowsUiaDispatchAuthorityError::JournalWriteFailed {
+                message: error.to_string(),
+            },
+        )?;
 
     Ok(WindowsUiaDispatchAuthorityReceipt {
         action_id,
@@ -209,15 +213,13 @@ fn canonical_operation_matches_uia_pattern(
 ) -> bool {
     matches!(
         (canonical, requested_pattern),
-        (CanonicalActionOperation::Activate, WindowsUiaPattern::Invoke)
-            | (
-                CanonicalActionOperation::Select,
-                WindowsUiaPattern::SelectionItem
-            )
-            | (
-                CanonicalActionOperation::Toggle,
-                WindowsUiaPattern::Toggle
-            )
+        (
+            CanonicalActionOperation::Activate,
+            WindowsUiaPattern::Invoke
+        ) | (
+            CanonicalActionOperation::Select,
+            WindowsUiaPattern::SelectionItem
+        ) | (CanonicalActionOperation::Toggle, WindowsUiaPattern::Toggle)
             | (
                 CanonicalActionOperation::Expand,
                 WindowsUiaPattern::ExpandCollapse

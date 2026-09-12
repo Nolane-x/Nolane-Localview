@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use localview_chromium::{
-    discover_chromium_executable_with, ChromiumDiscoveryContext, ChromiumPlatform,
+    ChromiumDiscoveryContext, ChromiumPlatform, discover_chromium_executable_with,
 };
 
 fn path(value: &str) -> PathBuf {
@@ -9,7 +9,11 @@ fn path(value: &str) -> PathBuf {
 }
 
 fn existing<'a>(paths: &'a [&'a str]) -> impl Fn(&Path) -> bool + 'a {
-    move |candidate| paths.iter().any(|expected| candidate == Path::new(expected))
+    move |candidate| {
+        paths
+            .iter()
+            .any(|expected| candidate == Path::new(expected))
+    }
 }
 
 #[test]
@@ -136,7 +140,9 @@ fn windows_prefers_local_chrome_then_program_files_then_path() {
     );
     assert_eq!(
         system,
-        Some(path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"))
+        Some(path(
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        ))
     );
 }
 

@@ -8,8 +8,8 @@ use std::{
 };
 
 use localview_chromium::{
-    execute_rendered_screenshot, ChromiumExecutionPolicy, ChromiumExecutorError,
-    ChromiumScreenshotRequest,
+    ChromiumExecutionPolicy, ChromiumExecutorError, ChromiumScreenshotRequest,
+    execute_rendered_screenshot,
 };
 use url::Url;
 

@@ -110,7 +110,8 @@ impl FakeProvider {
             attributes,
         };
 
-        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache =
+            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -294,7 +295,11 @@ async fn exact_preflight_authority_revalidates_and_binds_one_exact_worker_lease(
         .unwrap();
 
     assert_eq!(preflight.authority, authority);
-    assert_eq!(provider.lease_calls(), 0, "preflight remains provider-read free");
+    assert_eq!(
+        provider.lease_calls(),
+        0,
+        "preflight remains provider-read free"
+    );
 
     let receipt = runtime
         .revalidate_uia_dispatch(
@@ -309,10 +314,22 @@ async fn exact_preflight_authority_revalidates_and_binds_one_exact_worker_lease(
 
     assert_eq!(receipt.authority, authority);
     assert_eq!(receipt.preflight, preflight);
-    assert_eq!(receipt.element_lease.snapshot_cut_ref, snapshot.snapshot_cut_ref());
-    assert_eq!(receipt.element_lease.provider_incarnation_ref, provider.provider);
-    assert_eq!(receipt.element_lease.target_incarnation_ref, provider.target);
-    assert_eq!(receipt.element_lease.element_ref, snapshot.nodes()[0].element_ref);
+    assert_eq!(
+        receipt.element_lease.snapshot_cut_ref,
+        snapshot.snapshot_cut_ref()
+    );
+    assert_eq!(
+        receipt.element_lease.provider_incarnation_ref,
+        provider.provider
+    );
+    assert_eq!(
+        receipt.element_lease.target_incarnation_ref,
+        provider.target
+    );
+    assert_eq!(
+        receipt.element_lease.element_ref,
+        snapshot.nodes()[0].element_ref
+    );
     assert_eq!(provider.lease_calls(), 1);
 }
 
@@ -362,7 +379,11 @@ async fn mutated_authority_or_stale_preflight_fails_before_live_lease_binding() 
             .unwrap_err(),
         WindowsUiaDispatchRevalidationError::Preflight(_)
     ));
-    assert_eq!(provider.lease_calls(), 0, "stale semantic evidence must fail before lease binding");
+    assert_eq!(
+        provider.lease_calls(),
+        0,
+        "stale semantic evidence must fail before lease binding"
+    );
 }
 
 #[tokio::test]

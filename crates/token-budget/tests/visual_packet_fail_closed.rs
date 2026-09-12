@@ -1,6 +1,6 @@
 use localview_protocol::{DetailLevel, Rect, TokenBudget};
 use localview_token_budget::{
-    select_visual_packet, VisualPacketBudget, VisualPacketCandidate, VisualPacketSource,
+    VisualPacketBudget, VisualPacketCandidate, VisualPacketSource, select_visual_packet,
 };
 
 fn budget() -> VisualPacketBudget {

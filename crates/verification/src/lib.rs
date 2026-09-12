@@ -73,8 +73,7 @@ pub fn coverage_report(
                         .required_evidence_classes
                         .intersection(&observation.evidence_classes)
                         .count() as u64;
-                    covered_weight +=
-                        (target.risk_weight.max(1) as u64 * present) / required;
+                    covered_weight += (target.risk_weight.max(1) as u64 * present) / required;
                 }
             }
         }
@@ -232,13 +231,12 @@ pub fn determinism(samples: &[CheckSample]) -> DeterminismReport {
             reason: "environment changed between runs".into(),
         };
     }
-    let counts = comparable.iter().fold(
-        BTreeMap::<&str, usize>::new(),
-        |mut counts, sample| {
+    let counts = comparable
+        .iter()
+        .fold(BTreeMap::<&str, usize>::new(), |mut counts, sample| {
             *counts.entry(sample.outcome_hash.as_str()).or_default() += 1;
             counts
-        },
-    );
+        });
     let dominant = counts.values().copied().max().unwrap_or_default();
     let score = dominant as f32 / comparable.len() as f32;
     DeterminismReport {
@@ -474,11 +472,10 @@ pub fn assess_proof(
     let completeness = if proof.evidence_ids.is_empty() {
         0.0
     } else {
-        proof.evidence_ids.len().saturating_sub(missing) as f32
-            / proof.evidence_ids.len() as f32
+        proof.evidence_ids.len().saturating_sub(missing) as f32 / proof.evidence_ids.len() as f32
     };
-    let score = (verdict_factor * 0.35 + completeness * 0.25 + mean_confidence * 0.4)
-        .clamp(0.0, 1.0);
+    let score =
+        (verdict_factor * 0.35 + completeness * 0.25 + mean_confidence * 0.4).clamp(0.0, 1.0);
     let accepted = proof.verdict == ProofVerdict::Pass
         && missing == 0
         && tainted == 0
@@ -669,7 +666,10 @@ pub struct ProofStaleness {
     pub reasons: Vec<String>,
 }
 
-pub fn proof_staleness(proof: &VerificationProof, current_revision: Option<&str>) -> ProofStaleness {
+pub fn proof_staleness(
+    proof: &VerificationProof,
+    current_revision: Option<&str>,
+) -> ProofStaleness {
     let mut reasons = Vec::new();
     match (proof.payload.revision.as_deref(), current_revision) {
         (Some(bound), Some(current)) if bound != current => {

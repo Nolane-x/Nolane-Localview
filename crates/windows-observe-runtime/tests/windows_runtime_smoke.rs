@@ -2,8 +2,9 @@
 mod windows_runtime_smoke {
     use std::{
         sync::{
+            Arc,
             atomic::{AtomicBool, Ordering},
-            mpsc, Arc,
+            mpsc,
         },
         thread,
         time::{Duration, Instant},
@@ -13,21 +14,21 @@ mod windows_runtime_smoke {
     use localview_native_provider::{SnapshotBudget, UserSelectedWindowTarget};
     use localview_protocol::{EventContinuityState, ReconciliationCompleteness};
     use localview_windows_observe_runtime::{
-        spawn_windows_uia_runtime_manager, WindowsObserveRuntimeConfig,
+        WindowsObserveRuntimeConfig, spawn_windows_uia_runtime_manager,
     };
     use localview_windows_uia_provider::WindowsUiaWorkerConfig;
     use uuid::Uuid;
     use windows::{
-        core::w,
         Win32::{
             Foundation::HWND,
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, SetWindowTextW,
-                ShowWindow, TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE, SW_SHOW,
+                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE,
+                PeekMessageW, SW_SHOW, SetWindowTextW, ShowWindow, TranslateMessage,
                 WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
+        core::w,
     };
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -118,7 +119,10 @@ mod windows_runtime_smoke {
             )
             .await
             .expect("attach real Win32 target through runtime manager");
-        assert_eq!(status.event_continuity, EventContinuityState::OrderingOpaque);
+        assert_eq!(
+            status.event_continuity,
+            EventContinuityState::OrderingOpaque
+        );
         assert_eq!(status.generation, 1);
         assert_eq!(
             status.current_snapshot_completeness,
@@ -142,9 +146,15 @@ mod windows_runtime_smoke {
                 .expect("drain concrete Windows UIA runtime");
             let recent = bridge.recent(session_id, 32).await;
             if recent.iter().any(|event| {
-                event.payload.get("native_provider").and_then(|value| value.as_str())
+                event
+                    .payload
+                    .get("native_provider")
+                    .and_then(|value| value.as_str())
                     == Some("windows_uia")
-                    && event.payload.get("native_event").and_then(|value| value.as_str())
+                    && event
+                        .payload
+                        .get("native_event")
+                        .and_then(|value| value.as_str())
                         == Some("property_changed")
             }) {
                 observed_property_change = true;

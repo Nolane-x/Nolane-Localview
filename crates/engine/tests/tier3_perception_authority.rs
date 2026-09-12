@@ -1,7 +1,7 @@
-use localview_engine::{choose_engine_authorized, EngineAdmissionError, EngineNeeds, EngineTier};
+use localview_engine::{EngineAdmissionError, EngineNeeds, EngineTier, choose_engine_authorized};
 use localview_planner::{
-    plan_budgeted_perception_cycle, BudgetedPerceptionCandidate, BudgetedPerceptionPlan,
-    PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
+    BudgetedPerceptionCandidate, BudgetedPerceptionPlan, PerceptionActionKind, PerceptionCandidate,
+    PerceptionCycleSignals, plan_budgeted_perception_cycle,
 };
 use localview_token_budget::{
     BudgetDimension, BudgetEscalationReason, PerceptionBudgetContract, PerceptionBudgetDecision,
@@ -83,10 +83,12 @@ fn browser_specific_planner_selection_admits_exactly_one_chromium_tier() {
         .expect("browser-specific planner authority should admit Tier 3");
 
     assert_eq!(decision.tier, EngineTier::Chromium);
-    assert!(decision
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("planner-authorized")));
+    assert!(
+        decision
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("planner-authorized"))
+    );
 }
 
 #[test]

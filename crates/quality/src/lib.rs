@@ -1,12 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
 use localview_protocol::{ElementRef, Rect, SourceLocation};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
-pub enum Severity { Info, Warning, Error }
+pub enum Severity {
+    Info,
+    Warning,
+    Error,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QualityFinding {
@@ -37,13 +41,22 @@ pub struct MockRule {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RequestDescriptor { pub method: String, pub url: String }
+pub struct RequestDescriptor {
+    pub method: String,
+    pub url: String,
+}
 
-pub fn matching_failure<'a>(request: &RequestDescriptor, rules: &'a [MockRule]) -> Option<&'a MockRule> {
+pub fn matching_failure<'a>(
+    request: &RequestDescriptor,
+    rules: &'a [MockRule],
+) -> Option<&'a MockRule> {
     rules.iter().find(|rule| {
         rule.enabled
             && request.url.contains(&rule.url_contains)
-            && rule.method.as_ref().is_none_or(|method| method.eq_ignore_ascii_case(&request.method))
+            && rule
+                .method
+                .as_ref()
+                .is_none_or(|method| method.eq_ignore_ascii_case(&request.method))
     })
 }
 
@@ -64,13 +77,33 @@ pub struct KeyboardJourney {
 }
 
 pub fn analyze_keyboard(nodes: &[KeyboardNode]) -> KeyboardJourney {
-    let mut positive = nodes.iter().filter(|node| node.focusable && node.visible && node.tabindex > 0).collect::<Vec<_>>();
+    let mut positive = nodes
+        .iter()
+        .filter(|node| node.focusable && node.visible && node.tabindex > 0)
+        .collect::<Vec<_>>();
     positive.sort_by_key(|node| node.tabindex);
-    let natural = nodes.iter().filter(|node| node.focusable && node.visible && node.tabindex == 0);
-    let order = positive.iter().map(|node| node.reference.clone()).chain(natural.map(|node| node.reference.clone())).collect();
-    let unreachable = nodes.iter().filter(|node| node.focusable && (!node.visible || node.tabindex < 0)).map(|node| node.reference.clone()).collect();
-    let suspicious_positive_tabindex = positive.into_iter().map(|node| node.reference.clone()).collect();
-    KeyboardJourney { order, unreachable, suspicious_positive_tabindex }
+    let natural = nodes
+        .iter()
+        .filter(|node| node.focusable && node.visible && node.tabindex == 0);
+    let order = positive
+        .iter()
+        .map(|node| node.reference.clone())
+        .chain(natural.map(|node| node.reference.clone()))
+        .collect();
+    let unreachable = nodes
+        .iter()
+        .filter(|node| node.focusable && (!node.visible || node.tabindex < 0))
+        .map(|node| node.reference.clone())
+        .collect();
+    let suspicious_positive_tabindex = positive
+        .into_iter()
+        .map(|node| node.reference.clone())
+        .collect();
+    KeyboardJourney {
+        order,
+        unreachable,
+        suspicious_positive_tabindex,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -87,16 +120,43 @@ pub fn pointer_findings(targets: &[PointerTarget]) -> Vec<QualityFinding> {
     let mut findings = Vec::new();
     for target in targets {
         if target.interactive && (target.rect.width < 44.0 || target.rect.height < 44.0) {
-            findings.push(finding("touch_target_small", Severity::Warning, &target.reference, "Interactive target is smaller than the 44×44 logical-pixel comfort target", 0.92));
+            findings.push(finding(
+                "touch_target_small",
+                Severity::Warning,
+                &target.reference,
+                "Interactive target is smaller than the 44×44 logical-pixel comfort target",
+                0.92,
+            ));
         }
         if target.interactive && !target.pointer_handler {
-            findings.push(finding("dead_click_candidate", Severity::Error, &target.reference, "Interactive-looking target has no pointer handler evidence", 0.88));
+            findings.push(finding(
+                "dead_click_candidate",
+                Severity::Error,
+                &target.reference,
+                "Interactive-looking target has no pointer handler evidence",
+                0.88,
+            ));
         }
         if !target.obscured_by.is_empty() {
-            findings.push(finding("occluded_interaction", Severity::Error, &target.reference, &format!("Target is obscured by {} element(s)", target.obscured_by.len()), 0.96));
+            findings.push(finding(
+                "occluded_interaction",
+                Severity::Error,
+                &target.reference,
+                &format!(
+                    "Target is obscured by {} element(s)",
+                    target.obscured_by.len()
+                ),
+                0.96,
+            ));
         }
         if target.feedback_ms.is_some_and(|latency| latency > 250) {
-            findings.push(finding("feedback_latency", Severity::Warning, &target.reference, "Visible interaction feedback exceeded 250 ms", 0.85));
+            findings.push(finding(
+                "feedback_latency",
+                Severity::Warning,
+                &target.reference,
+                "Visible interaction feedback exceeded 250 ms",
+                0.85,
+            ));
         }
     }
     findings
@@ -111,23 +171,63 @@ pub struct ContentStressCase {
 
 pub fn default_content_stress_cases(seed: &str) -> Vec<ContentStressCase> {
     vec![
-        ContentStressCase { id: "empty".into(), text: String::new(), purpose: "empty-state resilience".into() },
-        ContentStressCase { id: "long".into(), text: seed.repeat(12), purpose: "overflow and wrapping".into() },
-        ContentStressCase { id: "unbroken".into(), text: "W".repeat(160), purpose: "unbroken token overflow".into() },
-        ContentStressCase { id: "unicode".into(), text: format!("{seed} — 日本語 العربية 😀 é"), purpose: "unicode shaping".into() },
+        ContentStressCase {
+            id: "empty".into(),
+            text: String::new(),
+            purpose: "empty-state resilience".into(),
+        },
+        ContentStressCase {
+            id: "long".into(),
+            text: seed.repeat(12),
+            purpose: "overflow and wrapping".into(),
+        },
+        ContentStressCase {
+            id: "unbroken".into(),
+            text: "W".repeat(160),
+            purpose: "unbroken token overflow".into(),
+        },
+        ContentStressCase {
+            id: "unicode".into(),
+            text: format!("{seed} — 日本語 العربية 😀 é"),
+            purpose: "unicode shaping".into(),
+        },
     ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LocaleCase { pub locale: String, pub rtl: bool, pub pseudo: bool }
+pub struct LocaleCase {
+    pub locale: String,
+    pub rtl: bool,
+    pub pseudo: bool,
+}
 
 pub fn default_locale_sweep() -> Vec<LocaleCase> {
     vec![
-        LocaleCase { locale: "en-US".into(), rtl: false, pseudo: false },
-        LocaleCase { locale: "de-DE".into(), rtl: false, pseudo: false },
-        LocaleCase { locale: "ja-JP".into(), rtl: false, pseudo: false },
-        LocaleCase { locale: "ar".into(), rtl: true, pseudo: false },
-        LocaleCase { locale: "en-XA".into(), rtl: false, pseudo: true },
+        LocaleCase {
+            locale: "en-US".into(),
+            rtl: false,
+            pseudo: false,
+        },
+        LocaleCase {
+            locale: "de-DE".into(),
+            rtl: false,
+            pseudo: false,
+        },
+        LocaleCase {
+            locale: "ja-JP".into(),
+            rtl: false,
+            pseudo: false,
+        },
+        LocaleCase {
+            locale: "ar".into(),
+            rtl: true,
+            pseudo: false,
+        },
+        LocaleCase {
+            locale: "en-XA".into(),
+            rtl: false,
+            pseudo: true,
+        },
     ]
 }
 
@@ -144,10 +244,22 @@ pub fn motion_findings(samples: &[MotionSample]) -> Vec<QualityFinding> {
     let mut findings = Vec::new();
     for sample in samples {
         if sample.duration_ms > 700 && sample.layout_affecting {
-            findings.push(finding("motion_slow_layout", Severity::Warning, &sample.reference, "Long motion changes layout and may make the interface feel unstable", 0.82));
+            findings.push(finding(
+                "motion_slow_layout",
+                Severity::Warning,
+                &sample.reference,
+                "Long motion changes layout and may make the interface feel unstable",
+                0.82,
+            ));
         }
         if sample.repeats_forever && !sample.honors_reduced_motion {
-            findings.push(finding("reduced_motion_missing", Severity::Error, &sample.reference, "Infinite motion has no prefers-reduced-motion evidence", 0.94));
+            findings.push(finding(
+                "reduced_motion_missing",
+                Severity::Error,
+                &sample.reference,
+                "Infinite motion has no prefers-reduced-motion evidence",
+                0.94,
+            ));
         }
     }
     findings
@@ -164,15 +276,32 @@ pub struct HierarchyNode {
 }
 
 pub fn hierarchy_findings(nodes: &[HierarchyNode]) -> Vec<QualityFinding> {
-    if nodes.is_empty() { return Vec::new(); }
-    let max_font = nodes.iter().map(|node| node.font_size).fold(0.0_f64, f64::max);
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    let max_font = nodes
+        .iter()
+        .map(|node| node.font_size)
+        .fold(0.0_f64, f64::max);
     let mut findings = Vec::new();
     for node in nodes {
         if node.interactive && node.contrast < 3.0 {
-            findings.push(finding("weak_interactive_contrast", Severity::Warning, &node.reference, "Interactive control has weak visual contrast", 0.80));
+            findings.push(finding(
+                "weak_interactive_contrast",
+                Severity::Warning,
+                &node.reference,
+                "Interactive control has weak visual contrast",
+                0.80,
+            ));
         }
         if max_font >= 24.0 && node.font_size >= max_font * 0.95 && node.area < 400.0 {
-            findings.push(finding("hierarchy_fragment", Severity::Info, &node.reference, "Largest typography is attached to a very small visual region", 0.64));
+            findings.push(finding(
+                "hierarchy_fragment",
+                Severity::Info,
+                &node.reference,
+                "Largest typography is attached to a very small visual region",
+                0.64,
+            ));
         }
     }
     findings
@@ -190,13 +319,31 @@ pub struct ScrollMetrics {
 pub fn scroll_findings(metrics: &ScrollMetrics) -> Vec<QualityFinding> {
     let mut findings = Vec::new();
     if metrics.content_height > metrics.viewport_height && metrics.max_scroll_y <= 0.0 {
-        findings.push(global_finding("scroll_blocked", Severity::Error, "Content exceeds viewport but no scroll range is available", 0.98));
+        findings.push(global_finding(
+            "scroll_blocked",
+            Severity::Error,
+            "Content exceeds viewport but no scroll range is available",
+            0.98,
+        ));
     }
     if !metrics.sticky_overlaps.is_empty() {
-        findings.push(global_finding("sticky_occlusion", Severity::Warning, &format!("{} sticky element(s) may cover content while scrolling", metrics.sticky_overlaps.len()), 0.87));
+        findings.push(global_finding(
+            "sticky_occlusion",
+            Severity::Warning,
+            &format!(
+                "{} sticky element(s) may cover content while scrolling",
+                metrics.sticky_overlaps.len()
+            ),
+            0.87,
+        ));
     }
     if metrics.nested_scroll_regions > 3 {
-        findings.push(global_finding("nested_scroll_complexity", Severity::Info, "Many nested scroll regions increase interaction complexity", 0.70));
+        findings.push(global_finding(
+            "nested_scroll_complexity",
+            Severity::Info,
+            "Many nested scroll regions increase interaction complexity",
+            0.70,
+        ));
     }
     findings
 }
@@ -213,19 +360,41 @@ pub struct DesignRegression {
     pub moved_refs: Vec<ElementRef>,
 }
 
-pub fn diff_design(before: &DesignSnapshot, after: &DesignSnapshot, geometry_tolerance: f64) -> DesignRegression {
-    let keys = before.tokens.keys().chain(after.tokens.keys()).cloned().collect::<BTreeSet<_>>();
-    let token_changes = keys.into_iter().filter_map(|key| {
-        let old = before.tokens.get(&key).cloned();
-        let new = after.tokens.get(&key).cloned();
-        (old != new).then_some((key, (old, new)))
-    }).collect();
-    let moved_refs = before.boxes.iter().filter_map(|(reference, old)| {
-        let new = after.boxes.get(reference)?;
-        let delta = (old.x - new.x).abs() + (old.y - new.y).abs() + (old.width - new.width).abs() + (old.height - new.height).abs();
-        (delta > geometry_tolerance).then(|| reference.clone())
-    }).collect();
-    DesignRegression { token_changes, moved_refs }
+pub fn diff_design(
+    before: &DesignSnapshot,
+    after: &DesignSnapshot,
+    geometry_tolerance: f64,
+) -> DesignRegression {
+    let keys = before
+        .tokens
+        .keys()
+        .chain(after.tokens.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let token_changes = keys
+        .into_iter()
+        .filter_map(|key| {
+            let old = before.tokens.get(&key).cloned();
+            let new = after.tokens.get(&key).cloned();
+            (old != new).then_some((key, (old, new)))
+        })
+        .collect();
+    let moved_refs = before
+        .boxes
+        .iter()
+        .filter_map(|(reference, old)| {
+            let new = after.boxes.get(reference)?;
+            let delta = (old.x - new.x).abs()
+                + (old.y - new.y).abs()
+                + (old.width - new.width).abs()
+                + (old.height - new.height).abs();
+            (delta > geometry_tolerance).then(|| reference.clone())
+        })
+        .collect();
+    DesignRegression {
+        token_changes,
+        moved_refs,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -276,39 +445,99 @@ pub fn build_fix_loop(issue: &IssueCandidate) -> FixLoopPlan {
     }
 }
 
-fn finding(code: &str, severity: Severity, reference: &str, message: &str, confidence: f32) -> QualityFinding {
-    QualityFinding { code: code.into(), severity, reference: Some(reference.into()), message: message.into(), confidence }
+fn finding(
+    code: &str,
+    severity: Severity,
+    reference: &str,
+    message: &str,
+    confidence: f32,
+) -> QualityFinding {
+    QualityFinding {
+        code: code.into(),
+        severity,
+        reference: Some(reference.into()),
+        message: message.into(),
+        confidence,
+    }
 }
 
-fn global_finding(code: &str, severity: Severity, message: &str, confidence: f32) -> QualityFinding {
-    QualityFinding { code: code.into(), severity, reference: None, message: message.into(), confidence }
+fn global_finding(
+    code: &str,
+    severity: Severity,
+    message: &str,
+    confidence: f32,
+) -> QualityFinding {
+    QualityFinding {
+        code: code.into(),
+        severity,
+        reference: None,
+        message: message.into(),
+        confidence,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn rect(width: f64, height: f64) -> Rect { Rect { x: 0.0, y: 0.0, width, height } }
+    fn rect(width: f64, height: f64) -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        }
+    }
 
     #[test]
     fn failure_injection_matches_method_and_url() {
-        let rules = vec![MockRule { id: "login-500".into(), method: Some("POST".into()), url_contains: "/login".into(), mode: FailureMode::HttpStatus(500), enabled: true }];
-        let request = RequestDescriptor { method: "post".into(), url: "http://localhost/api/login".into() };
-        assert_eq!(matching_failure(&request, &rules).map(|rule| rule.id.as_str()), Some("login-500"));
+        let rules = vec![MockRule {
+            id: "login-500".into(),
+            method: Some("POST".into()),
+            url_contains: "/login".into(),
+            mode: FailureMode::HttpStatus(500),
+            enabled: true,
+        }];
+        let request = RequestDescriptor {
+            method: "post".into(),
+            url: "http://localhost/api/login".into(),
+        };
+        assert_eq!(
+            matching_failure(&request, &rules).map(|rule| rule.id.as_str()),
+            Some("login-500")
+        );
     }
 
     #[test]
     fn pointer_analysis_finds_small_dead_and_occluded_target() {
-        let findings = pointer_findings(&[PointerTarget { reference: "button:save".into(), rect: rect(24.0, 24.0), interactive: true, pointer_handler: false, obscured_by: vec!["dialog".into()], feedback_ms: Some(400) }]);
+        let findings = pointer_findings(&[PointerTarget {
+            reference: "button:save".into(),
+            rect: rect(24.0, 24.0),
+            interactive: true,
+            pointer_handler: false,
+            obscured_by: vec!["dialog".into()],
+            feedback_ms: Some(400),
+        }]);
         assert_eq!(findings.len(), 4);
     }
 
     #[test]
     fn design_diff_reports_token_and_geometry_changes() {
-        let before = DesignSnapshot { tokens: BTreeMap::from([("radius".into(), "8px".into())]), boxes: BTreeMap::from([("hero".into(), rect(100.0, 100.0))]) };
+        let before = DesignSnapshot {
+            tokens: BTreeMap::from([("radius".into(), "8px".into())]),
+            boxes: BTreeMap::from([("hero".into(), rect(100.0, 100.0))]),
+        };
         let mut after = before.clone();
         after.tokens.insert("radius".into(), "12px".into());
-        after.boxes.insert("hero".into(), Rect { x: 20.0, y: 0.0, width: 100.0, height: 100.0 });
+        after.boxes.insert(
+            "hero".into(),
+            Rect {
+                x: 20.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+        );
         let diff = diff_design(&before, &after, 4.0);
         assert!(diff.token_changes.contains_key("radius"));
         assert_eq!(diff.moved_refs, vec!["hero"]);

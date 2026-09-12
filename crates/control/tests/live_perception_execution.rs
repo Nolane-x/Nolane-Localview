@@ -1,23 +1,25 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{
     BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch, ObserverEvent,
     ObserverEventKind,
 };
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -215,14 +217,9 @@ async fn seed_semantic_and_layout(state: &ControlState, session_id: uuid::Uuid) 
 async fn perception_step_requires_auth_and_a_known_session() {
     let (state, session_id) = test_state().await;
     assert_eq!(
-        post_step(
-            state.clone(),
-            session_id,
-            false,
-            request_body(false, false),
-        )
-        .await
-        .0,
+        post_step(state.clone(), session_id, false, request_body(false, false),)
+            .await
+            .0,
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
@@ -268,13 +265,8 @@ async fn visual_selection_fails_closed_without_a_visual_executor_and_queues_no_p
     let (state, session_id) = test_state().await;
     seed_semantic(&state, session_id).await;
 
-    let (status, body) = post_step(
-        state.clone(),
-        session_id,
-        true,
-        request_body(false, false),
-    )
-    .await;
+    let (status, body) =
+        post_step(state.clone(), session_id, true, request_body(false, false)).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "perception_executor_unavailable");
@@ -287,13 +279,8 @@ async fn chromium_selection_fails_closed_without_a_tier3_executor_and_queues_no_
     let (state, session_id) = test_state().await;
     seed_semantic_and_layout(&state, session_id).await;
 
-    let (status, body) = post_step(
-        state.clone(),
-        session_id,
-        true,
-        request_body(false, true),
-    )
-    .await;
+    let (status, body) =
+        post_step(state.clone(), session_id, true, request_body(false, true)).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "perception_executor_unavailable");
@@ -306,13 +293,8 @@ async fn empty_plan_is_a_noop_not_an_implicit_fallback() {
     let (state, session_id) = test_state().await;
     seed_semantic_and_layout(&state, session_id).await;
 
-    let (status, body) = post_step(
-        state.clone(),
-        session_id,
-        true,
-        request_body(true, false),
-    )
-    .await;
+    let (status, body) =
+        post_step(state.clone(), session_id, true, request_body(true, false)).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["plan"]["actions"].as_array().map(Vec::len), Some(0));

@@ -69,17 +69,21 @@ async fn result_requires_exact_claimed_native_origin_and_session() {
         .enqueue_native_executor(session_id, visual_action())
         .await;
 
-    assert!(bridge
-        .claim_native_executor(session_id, request.id)
-        .await
-        .is_none());
+    assert!(
+        bridge
+            .claim_native_executor(session_id, request.id)
+            .await
+            .is_none()
+    );
 
     let taken = bridge.take_native_executor_requests(session_id, 1).await;
     assert_eq!(taken.len(), 1);
-    assert!(bridge
-        .claim_native_executor(other_session, request.id)
-        .await
-        .is_none());
+    assert!(
+        bridge
+            .claim_native_executor(other_session, request.id)
+            .await
+            .is_none()
+    );
 
     let claimed = bridge
         .claim_native_executor(session_id, request.id)
@@ -87,9 +91,11 @@ async fn result_requires_exact_claimed_native_origin_and_session() {
         .expect("exact native request becomes claimable only after take");
     assert_eq!(claimed.id, request.id);
 
-    assert!(bridge
-        .complete_native_executor(session_id, result(request.id))
-        .await);
+    assert!(
+        bridge
+            .complete_native_executor(session_id, result(request.id))
+            .await
+    );
     let results = bridge.recent_native_executor_results(session_id, 8).await;
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].request_id, request.id);
@@ -142,10 +148,17 @@ async fn active_native_origins_are_never_evicted_by_later_polls() {
     );
 
     let first = first_ids[0];
-    assert!(bridge.claim_native_executor(session_id, first).await.is_some());
-    assert!(bridge
-        .complete_native_executor(session_id, result(first))
-        .await);
+    assert!(
+        bridge
+            .claim_native_executor(session_id, first)
+            .await
+            .is_some()
+    );
+    assert!(
+        bridge
+            .complete_native_executor(session_id, result(first))
+            .await
+    );
 
     let newly_available = bridge.take_native_executor_requests(session_id, 8).await;
     assert_eq!(
@@ -162,9 +175,11 @@ async fn active_native_origins_are_never_evicted_by_later_polls() {
             .is_some(),
         "older inflight origin must remain claimable after later polls"
     );
-    assert!(bridge
-        .complete_native_executor(session_id, result(still_active))
-        .await);
+    assert!(
+        bridge
+            .complete_native_executor(session_id, result(still_active))
+            .await
+    );
 }
 
 #[tokio::test]
@@ -180,12 +195,20 @@ async fn expired_native_origins_release_capacity_and_reject_late_results() {
                 .id,
         );
     }
-    assert_eq!(bridge.take_native_executor_requests(session_id, 8).await.len(), 8);
+    assert_eq!(
+        bridge
+            .take_native_executor_requests(session_id, 8)
+            .await
+            .len(),
+        8
+    );
     let claimed_id = active_ids[0];
-    assert!(bridge
-        .claim_native_executor(session_id, claimed_id)
-        .await
-        .is_some());
+    assert!(
+        bridge
+            .claim_native_executor(session_id, claimed_id)
+            .await
+            .is_some()
+    );
 
     for _ in 0..8 {
         bridge
@@ -194,12 +217,12 @@ async fn expired_native_origins_release_capacity_and_reject_late_results() {
     }
 
     let expired = bridge
-        .expire_native_executor_active_before(
-            session_id,
-            Utc::now() + chrono::Duration::seconds(1),
-        )
+        .expire_native_executor_active_before(session_id, Utc::now() + chrono::Duration::seconds(1))
         .await;
-    assert_eq!(expired, 8, "all active inflight/claimed origins must expire");
+    assert_eq!(
+        expired, 8,
+        "all active inflight/claimed origins must expire"
+    );
     assert!(
         !bridge
             .complete_native_executor(session_id, result(claimed_id))
@@ -207,7 +230,10 @@ async fn expired_native_origins_release_capacity_and_reject_late_results() {
         "a late result must not resurrect an expired authority origin"
     );
     assert_eq!(
-        bridge.take_native_executor_requests(session_id, 8).await.len(),
+        bridge
+            .take_native_executor_requests(session_id, 8)
+            .await
+            .len(),
         8,
         "pending work must regain all active capacity after stale origins expire"
     );
@@ -220,19 +246,24 @@ async fn fresh_native_origins_survive_lease_cleanup() {
     let request = bridge
         .enqueue_native_executor(session_id, visual_action())
         .await;
-    assert_eq!(bridge.take_native_executor_requests(session_id, 1).await.len(), 1);
+    assert_eq!(
+        bridge
+            .take_native_executor_requests(session_id, 1)
+            .await
+            .len(),
+        1
+    );
 
     let expired = bridge
-        .expire_native_executor_active_before(
-            session_id,
-            Utc::now() - chrono::Duration::seconds(1),
-        )
+        .expire_native_executor_active_before(session_id, Utc::now() - chrono::Duration::seconds(1))
         .await;
     assert_eq!(expired, 0);
-    assert!(bridge
-        .claim_native_executor(session_id, request.id)
-        .await
-        .is_some());
+    assert!(
+        bridge
+            .claim_native_executor(session_id, request.id)
+            .await
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -242,22 +273,35 @@ async fn native_executor_result_error_truncation_is_utf8_safe() {
     let request = bridge
         .enqueue_native_executor(session_id, visual_action())
         .await;
-    assert_eq!(bridge.take_native_executor_requests(session_id, 1).await.len(), 1);
-    assert!(bridge
-        .claim_native_executor(session_id, request.id)
-        .await
-        .is_some());
+    assert_eq!(
+        bridge
+            .take_native_executor_requests(session_id, 1)
+            .await
+            .len(),
+        1
+    );
+    assert!(
+        bridge
+            .claim_native_executor(session_id, request.id)
+            .await
+            .is_some()
+    );
 
     let mut unicode_result = result(request.id);
     unicode_result.ok = false;
     unicode_result.error = Some("€".repeat(800));
     unicode_result.usage = None;
 
-    assert!(bridge
-        .complete_native_executor(session_id, unicode_result)
-        .await);
+    assert!(
+        bridge
+            .complete_native_executor(session_id, unicode_result)
+            .await
+    );
     let stored = bridge.recent_native_executor_results(session_id, 1).await;
-    let error = stored[0].error.as_deref().expect("bounded error is retained");
+    let error = stored[0]
+        .error
+        .as_deref()
+        .expect("bounded error is retained");
     assert!(error.len() <= 2 * 1024);
     assert!(error.chars().all(|character| character == '€'));
 }

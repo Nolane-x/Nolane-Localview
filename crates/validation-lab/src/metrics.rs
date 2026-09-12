@@ -43,13 +43,8 @@ impl LabMetricKind {
         Self::Cbfr,
     ];
 
-    pub const SILENT_UNSOUNDNESS_ZERO_TARGET: [Self; 5] = [
-        Self::Suar,
-        Self::Wpdr,
-        Self::Pilr,
-        Self::Pdmr,
-        Self::Uobrr,
-    ];
+    pub const SILENT_UNSOUNDNESS_ZERO_TARGET: [Self; 5] =
+        [Self::Suar, Self::Wpdr, Self::Pilr, Self::Pdmr, Self::Uobrr];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -214,10 +209,12 @@ pub fn reduce_metric_observations(
             let (_, denominator) = counters
                 .get_mut(metric)
                 .expect("all V4.3 metric counters are initialized");
-            *denominator = denominator.checked_add(1).ok_or(LabError::MetricCounterOverflow {
-                kind: *metric,
-                counter: "denominator",
-            })?;
+            *denominator = denominator
+                .checked_add(1)
+                .ok_or(LabError::MetricCounterOverflow {
+                    kind: *metric,
+                    counter: "denominator",
+                })?;
         }
 
         for flag in &observation.failure_flags {
@@ -225,10 +222,12 @@ pub fn reduce_metric_observations(
             let (numerator, _) = counters
                 .get_mut(&metric)
                 .expect("all V4.3 metric counters are initialized");
-            *numerator = numerator.checked_add(1).ok_or(LabError::MetricCounterOverflow {
-                kind: metric,
-                counter: "numerator",
-            })?;
+            *numerator = numerator
+                .checked_add(1)
+                .ok_or(LabError::MetricCounterOverflow {
+                    kind: metric,
+                    counter: "numerator",
+                })?;
         }
     }
 
@@ -247,9 +246,7 @@ pub enum SilentUnsoundnessGateStatus {
     Incomplete,
 }
 
-pub fn evaluate_silent_unsoundness_gate(
-    snapshot: &MetricSnapshot,
-) -> SilentUnsoundnessGateStatus {
+pub fn evaluate_silent_unsoundness_gate(snapshot: &MetricSnapshot) -> SilentUnsoundnessGateStatus {
     let mut incomplete = false;
 
     for kind in LabMetricKind::SILENT_UNSOUNDNESS_ZERO_TARGET {

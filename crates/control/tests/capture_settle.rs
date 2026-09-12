@@ -1,17 +1,14 @@
 use std::{
-    sync::{
-        atomic::AtomicBool,
-        Arc,
-    },
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
 };
 use chrono::{Duration as ChronoDuration, Utc};
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{
     BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch, ObserverEvent,
@@ -212,14 +209,15 @@ async fn capture_settle_requires_auth_and_known_session() {
 #[tokio::test]
 async fn capture_settle_reports_missing_fresh_semantic_snapshot() {
     let (state, session_id) = test_state().await;
-    let (status, body) =
-        get_settle_with_snapshot(state, session_id, false, Value::Null).await;
+    let (status, body) = get_settle_with_snapshot(state, session_id, false, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["stable"], false);
-    assert!(body["reasons"]
-        .as_array()
-        .expect("settle reasons")
-        .contains(&Value::String("no_semantic_snapshot".into())));
+    assert!(
+        body["reasons"]
+            .as_array()
+            .expect("settle reasons")
+            .contains(&Value::String("no_semantic_snapshot".into()))
+    );
 }
 
 #[tokio::test]

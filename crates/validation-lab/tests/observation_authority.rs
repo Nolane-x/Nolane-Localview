@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
 use localview_validation_lab::{
-    ActualExecutionAuthority, CampaignLayer, LabError, LabFailureFlag, LabMetricKind, LabObservation,
-    LabPreregistration, LabRevisionContext, LabRunAdmission, LabRunBuilder, LabSeedIdentity,
-    PersistedPreregistrationReceipt, ResultEvidence, canonical_digest, validate_persisted_receipt,
+    ActualExecutionAuthority, CampaignLayer, LabError, LabFailureFlag, LabMetricKind,
+    LabObservation, LabPreregistration, LabRevisionContext, LabRunAdmission, LabRunBuilder,
+    LabSeedIdentity, PersistedPreregistrationReceipt, ResultEvidence, canonical_digest,
+    validate_persisted_receipt,
 };
 use serde_json::json;
 
@@ -206,8 +207,14 @@ fn rejected_observation_does_not_advance_sequence_or_metric_authority() {
         BTreeSet::from([LabMetricKind::Suar]),
     ))
     .unwrap();
-    let completed = run.finalize(ResultEvidence::PreregisteredSeedPass, 30).unwrap();
-    let suar = completed.payload.metric_snapshot.get(LabMetricKind::Suar).unwrap();
+    let completed = run
+        .finalize(ResultEvidence::PreregisteredSeedPass, 30)
+        .unwrap();
+    let suar = completed
+        .payload
+        .metric_snapshot
+        .get(LabMetricKind::Suar)
+        .unwrap();
     assert_eq!((suar.numerator, suar.denominator), (0, 1));
     assert_eq!(completed.payload.observation_digests.len(), 1);
 }

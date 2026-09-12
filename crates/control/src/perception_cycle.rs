@@ -3,39 +3,41 @@
 use std::time::{Duration, Instant};
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use localview_engine::EngineDecision;
 use localview_evidence::{EvidenceKind, EvidenceObject, UncertaintyClass};
 use localview_live_analysis::LiveDiagnosis;
 use localview_live_bridge::{NativeExecutorAction, NativeExecutorRequest, NativeExecutorResult};
 use localview_planner::{
-    perception_escalation_reason, BudgetedPerceptionPlan, PerceptionActionKind,
-    PerceptionCycleSignals,
+    BudgetedPerceptionPlan, PerceptionActionKind, PerceptionCycleSignals,
+    perception_escalation_reason,
 };
 use localview_protocol::{PageSnapshot, SessionId, ViewportMeta};
 use localview_resource_governor::ResourceWorkKind;
 use localview_token_budget::{
-    evaluate_perception_budget, BudgetEscalationReason, PerceptionBudgetContract,
-    PerceptionBudgetDecision, PerceptionBudgetDecisionStatus, PerceptionBudgetUsage,
-    PerceptionBudgetViolation,
+    BudgetEscalationReason, PerceptionBudgetContract, PerceptionBudgetDecision,
+    PerceptionBudgetDecisionStatus, PerceptionBudgetUsage, PerceptionBudgetViolation,
+    evaluate_perception_budget,
 };
 use serde::Serialize;
 
 use crate::{
-    chromium_runtime::{execute_compatibility_probe, ChromiumRuntimeError},
-    fresh_snapshot::{acquire_fresh_semantic_snapshot, FreshSnapshotError},
-    native_executor::{wait_for_native_executor_result_with_timeout, NativeExecutorWaitError},
-    perception::{
-        authorized, build_live_perception_plan_with_usage_and_visual_satisfaction, denied,
-        plan_error_response, LivePerceptionPlanRequest,
-    },
-    resource_runtime::{denial_response as resource_denial_response, governor as resource_governor},
     ControlState,
+    chromium_runtime::{ChromiumRuntimeError, execute_compatibility_probe},
+    fresh_snapshot::{FreshSnapshotError, acquire_fresh_semantic_snapshot},
+    native_executor::{NativeExecutorWaitError, wait_for_native_executor_result_with_timeout},
+    perception::{
+        LivePerceptionPlanRequest, authorized,
+        build_live_perception_plan_with_usage_and_visual_satisfaction, denied, plan_error_response,
+    },
+    resource_runtime::{
+        denial_response as resource_denial_response, governor as resource_governor,
+    },
 };
 
 const MAX_PERCEPTION_CYCLE_STEPS: usize = 4;
@@ -136,14 +138,11 @@ async fn execute_live_perception_cycle(
             }
 
             spent.latency_ms = elapsed_ms(started_at);
-            let final_decision = match evaluate_perception_budget(
-                &request.budget,
-                &spent,
-                last_escalation_reason,
-            ) {
-                Ok(decision) => decision,
-                Err(violation) => return budget_violation_response(violation),
-            };
+            let final_decision =
+                match evaluate_perception_budget(&request.budget, &spent, last_escalation_reason) {
+                    Ok(decision) => decision,
+                    Err(violation) => return budget_violation_response(violation),
+                };
 
             return Json(LivePerceptionCycleResponse {
                 completion: PerceptionCycleCompletionReason::NoOp,
@@ -208,7 +207,7 @@ async fn execute_live_perception_cycle(
                 {
                     Ok(result) => result,
                     Err(NativeExecutorWaitError::Timeout) => {
-                        return native_visual_timeout_response(native_request.id)
+                        return native_visual_timeout_response(native_request.id);
                     }
                 };
                 if !result.ok {
@@ -284,14 +283,11 @@ async fn execute_live_perception_cycle(
             _ => return executor_unavailable_response(action_kind, spent),
         };
 
-        let post_execution_budget_decision = match evaluate_perception_budget(
-            &request.budget,
-            &spent,
-            escalation_reason,
-        ) {
-            Ok(decision) => decision,
-            Err(violation) => return budget_violation_response(violation),
-        };
+        let post_execution_budget_decision =
+            match evaluate_perception_budget(&request.budget, &spent, escalation_reason) {
+                Ok(decision) => decision,
+                Err(violation) => return budget_violation_response(violation),
+            };
         last_escalation_reason = escalation_reason;
 
         steps.push(PerceptionCycleStepReceipt {
@@ -317,10 +313,7 @@ fn zero_usage() -> PerceptionBudgetUsage {
 }
 
 fn elapsed_ms(started_at: Instant) -> u64 {
-    started_at
-        .elapsed()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
+    started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 fn chromium_timeout_cap(
@@ -328,10 +321,10 @@ fn chromium_timeout_cap(
     started_at: Instant,
     decision: &PerceptionBudgetDecision,
 ) -> Option<Duration> {
-    let planner_authorized_browser_escalation =
-        decision.status == PerceptionBudgetDecisionStatus::Escalated
-            && decision.budget_escalation_reason
-                == Some(BudgetEscalationReason::BrowserSpecificSuspicion);
+    let planner_authorized_browser_escalation = decision.status
+        == PerceptionBudgetDecisionStatus::Escalated
+        && decision.budget_escalation_reason
+            == Some(BudgetEscalationReason::BrowserSpecificSuspicion);
     if planner_authorized_browser_escalation {
         None
     } else {
@@ -364,9 +357,7 @@ fn add_actual_non_latency_usage(
         latency_ms: spent.latency_ms,
         text_tokens: spent.text_tokens.saturating_add(actual.text_tokens),
         image_regions: spent.image_regions.saturating_add(actual.image_regions),
-        chromium_spawns: spent
-            .chromium_spawns
-            .saturating_add(actual.chromium_spawns),
+        chromium_spawns: spent.chromium_spawns.saturating_add(actual.chromium_spawns),
     }
 }
 

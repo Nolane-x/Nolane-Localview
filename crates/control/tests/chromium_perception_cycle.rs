@@ -4,20 +4,22 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{configure_chromium_executor_for_sessions, router, ControlState};
+use localview_control::{ControlState, configure_chromium_executor_for_sessions, router};
 use localview_evidence::{EvidenceKind, EvidenceStore, UncertaintyClass};
 use localview_live_bridge::{LiveBridge, ObserverBatch, ObserverEvent, ObserverEventKind};
 use localview_observation::ObservationBus;
-use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_protocol::{
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -181,7 +183,8 @@ fn assert_empty_dir(path: &Path) {
 }
 
 #[tokio::test]
-async fn planner_authorized_chromium_executes_once_retains_private_safe_contract_evidence_and_replans_to_noop() {
+async fn planner_authorized_chromium_executes_once_retains_private_safe_contract_evidence_and_replans_to_noop()
+ {
     let source = r#"
 fn main() {
     println!("<html><body>compatibility-ok</body></html>");
@@ -236,7 +239,10 @@ fn main() {
         .expect("successful Tier-3 execution must retain bounded compatibility evidence");
     assert_eq!(chromium.kind, EvidenceKind::Contract);
     assert_eq!(chromium.provenance.engine.as_deref(), Some("chromium"));
-    assert_eq!(chromium.provenance.revision.as_deref(), Some("rev-chromium"));
+    assert_eq!(
+        chromium.provenance.revision.as_deref(),
+        Some("rev-chromium")
+    );
     assert_eq!(chromium.uncertainty, UncertaintyClass::Observed);
     assert!(chromium.confidence >= 0.999);
     assert!(!chromium.secret_taint);
@@ -257,7 +263,10 @@ fn main() {
     )
     .await;
     assert_eq!(plan_status, StatusCode::OK);
-    assert_eq!(next_plan["plan"]["actions"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        next_plan["plan"]["actions"].as_array().map(Vec::len),
+        Some(0)
+    );
     assert_eq!(next_plan["signals"]["browser_specific_suspicion"], false);
 
     let _ = fs::remove_dir_all(fixture_root);
@@ -304,12 +313,7 @@ fn main() {
     let profile_root = test_dir("escalated-profiles");
     fs::create_dir_all(&profile_root).expect("profile root");
     let (state, session_id) = test_state(executable, profile_root.clone()).await;
-    seed_semantic_and_layout(
-        &state,
-        session_id,
-        "http://127.0.0.1:5173/compatibility",
-    )
-    .await;
+    seed_semantic_and_layout(&state, session_id, "http://127.0.0.1:5173/compatibility").await;
 
     let mut body = cycle_body();
     body["budget"]["latency_ms"] = Value::from(40);

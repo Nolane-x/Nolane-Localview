@@ -23,10 +23,9 @@ impl RealProviderObservedOutcome {
     fn asserted_value(&self) -> Option<&str> {
         match self {
             Self::Asserted(value) => Some(value.as_str()),
-            Self::Unknown
-            | Self::Inconclusive
-            | Self::Unsupported
-            | Self::ConservativeBlock => None,
+            Self::Unknown | Self::Inconclusive | Self::Unsupported | Self::ConservativeBlock => {
+                None
+            }
         }
     }
 
@@ -127,10 +126,7 @@ pub fn adapt_real_provider_case(
 ) -> Result<RealProviderLabRecord, LabError> {
     validate_authority_field("case_id", input.case_id)?;
     validate_authority_field("seed_app_digest", input.seed_app_digest)?;
-    validate_authority_field(
-        "platform_profile_revision",
-        input.platform_profile_revision,
-    )?;
+    validate_authority_field("platform_profile_revision", input.platform_profile_revision)?;
     validate_authority_field(
         "environment_artifact_digest",
         input.environment_artifact_digest,
@@ -144,11 +140,8 @@ pub fn adapt_real_provider_case(
     let mut eligible_metrics = BTreeSet::new();
     let mut failure_flags = BTreeSet::new();
 
-    let semantic_counterexample = apply_case_semantics(
-        &input.case_kind,
-        &mut eligible_metrics,
-        &mut failure_flags,
-    )?;
+    let semantic_counterexample =
+        apply_case_semantics(&input.case_kind, &mut eligible_metrics, &mut failure_flags)?;
 
     if let Some(asserted) = input.observed_outcome.asserted_value() {
         eligible_metrics.insert(LabMetricKind::Rpomr);
@@ -167,10 +160,7 @@ pub fn adapt_real_provider_case(
 
     let mut evidence_refs = input.provider_evidence_refs;
     evidence_refs.insert(format!("ground-truth:{}", input.ground_truth.digest.0));
-    evidence_refs.insert(format!(
-        "environment:{}",
-        input.environment_artifact_digest
-    ));
+    evidence_refs.insert(format!("environment:{}", input.environment_artifact_digest));
     evidence_refs.insert(format!("seed-app:{}", input.seed_app_digest));
     evidence_refs.insert(format!("platform:{}", input.platform_profile_revision));
 
@@ -205,12 +195,16 @@ pub fn derive_real_provider_campaign_evidence(
     {
         return Some(ResultEvidence::CounterexampleFound);
     }
-    if records.iter().any(|record| record.result_evidence.is_none()) {
+    if records
+        .iter()
+        .any(|record| record.result_evidence.is_none())
+    {
         return None;
     }
-    if records.iter().all(|record| {
-        record.result_evidence == Some(ResultEvidence::RealProviderIntegrationPass)
-    }) {
+    if records
+        .iter()
+        .all(|record| record.result_evidence == Some(ResultEvidence::RealProviderIntegrationPass))
+    {
         return Some(ResultEvidence::RealProviderIntegrationPass);
     }
     None
@@ -261,10 +255,7 @@ fn apply_case_semantics(
                 "current_provider_incarnation",
                 current_provider_incarnation,
             )?;
-            validate_authority_field(
-                "opaque_provider_element_id",
-                opaque_provider_element_id,
-            )?;
+            validate_authority_field("opaque_provider_element_id", opaque_provider_element_id)?;
 
             if *provider_identity_reuse_observed {
                 eligible_metrics.insert(LabMetricKind::Piaer);
@@ -287,9 +278,7 @@ fn apply_case_semantics(
             invoke_support_unsupported,
             dispatch_attempted,
             side_effect_observed,
-        } => {
-            !*invoke_support_unsupported || *dispatch_attempted || *side_effect_observed
-        }
+        } => !*invoke_support_unsupported || *dispatch_attempted || *side_effect_observed,
         RealProviderCaseKind::W05ProviderHang {
             caller_returned_bounded,
             poisoned_worker_reused,
@@ -355,9 +344,7 @@ fn apply_case_semantics(
             conflicting_modifier_observed,
             input_state_conflict_blocked,
             input_inserted,
-        } => {
-            !*conflicting_modifier_observed || !*input_state_conflict_blocked || *input_inserted
-        }
+        } => !*conflicting_modifier_observed || !*input_state_conflict_blocked || *input_inserted,
     };
     Ok(semantic_counterexample)
 }

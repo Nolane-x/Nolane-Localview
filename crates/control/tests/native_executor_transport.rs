@@ -1,16 +1,16 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{LiveBridge, NativeExecutorAction, NativeExecutorResult};
 use localview_observation::ObservationBus;
@@ -190,7 +190,10 @@ async fn native_result_requires_exact_taken_origin_before_completion() {
     )
     .await;
     assert_eq!(before_take, StatusCode::CONFLICT);
-    assert_eq!(body["error"], "native_executor_result_without_inflight_origin");
+    assert_eq!(
+        body["error"],
+        "native_executor_result_without_inflight_origin"
+    );
 
     let (take_status, taken) = request(
         state.clone(),
@@ -246,7 +249,10 @@ fn native_executor_poll_expires_stale_active_authority_before_taking_more_work()
         .find(".take_native_executor_requests(")
         .expect("poll transport must take native executor requests");
 
-    assert!(expire < take, "stale active origins must be expired before taking more work");
+    assert!(
+        expire < take,
+        "stale active origins must be expired before taking more work"
+    );
     assert!(source.contains("NATIVE_EXECUTOR_ACTIVE_LEASE_SECS"));
     assert!(source.contains("chrono::Duration::seconds(NATIVE_EXECUTOR_ACTIVE_LEASE_SECS)"));
 }
