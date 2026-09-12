@@ -12,6 +12,7 @@ use crate::{
     WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
     WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
     WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,
+    WindowsUiaVerifiedInputReceipt, WindowsUiaVerifiedInputRequest,
     event_buffer::{WindowsUiaEventBuffer, WindowsUiaEventDraft, WindowsUiaEventKind},
     worker::{
         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
@@ -251,6 +252,14 @@ mod platform {
             request: WindowsUiaSetValueDispatchRequest,
         ) -> Result<WindowsUiaSetValueDispatchReceipt, WindowsUiaWorkerError> {
             self.inner.dispatch_set_value(attachment, request)
+        }
+
+        pub fn dispatch_verified_input(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaVerifiedInputRequest,
+        ) -> Result<WindowsUiaVerifiedInputReceipt, WindowsUiaWorkerError> {
+            self.inner.dispatch_verified_input(attachment, request)
         }
 
         pub(crate) fn query_virtualized_item_on_mta(

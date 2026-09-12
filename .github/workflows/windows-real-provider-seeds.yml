@@ -14,9 +14,9 @@ permissions:
 
 jobs:
   windows-real-provider-seeds:
-    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W05/W06
+    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W05/W06/W07/W08/W09
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       LOCALVIEW_UIA_SMOKE: "1"
       LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
@@ -35,7 +35,7 @@ jobs:
           dotnet-version: 8.0.x
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
-      - name: Build WPF edge seed for W03/W05
+      - name: Build WPF edge seed for W03/W05/W07/W08/W09
         run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
       - name: Bind hosted Windows environment authority
         shell: pwsh
@@ -108,13 +108,49 @@ jobs:
             throw "required W05 real-provider test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w05 $testName -- --ignored --exact --nocapture --test-threads=1
-      - name: Prospective six-seed campaign binds exact W01 through W06 evidence
+      - name: W07 foreground theft is blocked before any real input effect
         shell: pwsh
         run: |
-          $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_through_w06_to_exact_candidate"
+          $testName = "windows_real_provider_w07::w07_foreground_theft_is_blocked_before_any_real_input_effect"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w07 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W07 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w07 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W08 deterministic partial wrapper preserves unknown and denies retry
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w08::w08_deterministic_partial_wrapper_preserves_unknown_without_retry"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w08 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W08 deterministic wrapper test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w08 $testName -- --exact --nocapture --test-threads=1
+      - name: W08 production full-dispatch smoke uses journal-minted exact UIA worker authority
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w08_full::w08_production_worker_full_dispatch_uses_authority_path"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w08 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W08 authority-path production smoke is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w08 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W09 held modifier is blocked without normalization or input effect
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w09::w09_user_held_modifier_is_blocked_without_normalization_or_input_effect"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w09 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W09 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w09 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Prospective nine-seed campaign binds exact W01 through W09 evidence
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_through_w09_to_exact_candidate"
           $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign -- --list
           if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
-            throw "required bound six-seed L7 campaign test is not registered: $testName"
+            throw "required bound nine-seed L7 campaign test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign $testName -- --ignored --exact --nocapture --test-threads=1
       - name: Publish bounded L7 Lab artifacts

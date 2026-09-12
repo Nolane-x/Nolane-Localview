@@ -94,6 +94,10 @@ pub enum WindowsUiaWorkerError {
     InvalidSetValueDispatchRequest,
     #[error("Windows UI Automation SetValue verification request is invalid")]
     InvalidSetValueVerificationRequest,
+    #[error("Windows UI Automation verified input request is invalid")]
+    InvalidVerifiedInputRequest,
+    #[error("Windows UI Automation verified input boundary failed: {0}")]
+    VerifiedInputBoundary(#[from] crate::WindowsVerifiedInputBoundaryError),
     #[error("Windows UI Automation fresh SetValue element identity is ambiguous")]
     SetValueVerificationElementAmbiguous,
     #[error("Windows UI Automation SetValue password field is blocked")]
@@ -195,7 +199,7 @@ mod platform {
     use super::*;
     use crate::worker_health::{WorkerHealth, WorkerReceiveError};
     use crate::{
-        WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact,
+        WindowsInputDispatchBlocker, WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact,
         WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
         WindowsUiaDispatchContextRequest, WindowsUiaItemLookupProperty, WindowsUiaPattern,
         WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchReceipt,
@@ -203,9 +207,13 @@ mod platform {
         WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
         WindowsUiaSetValueEquality, WindowsUiaSetValueVerificationReceipt,
         WindowsUiaSetValueVerificationRequest, WindowsUiaValueCapabilityFacts,
+        WindowsUiaVerifiedInputReceipt, WindowsUiaVerifiedInputRequest,
         WindowsUiaVirtualizedItemQueryReceipt, WindowsUiaVirtualizedItemQueryRequest,
         WindowsUiaVirtualizedItemRealizeReceipt, WindowsUiaVirtualizedItemRealizeRequest,
-        evaluate_windows_uia_dispatch_context,
+        WindowsVerifiedInputBoundaryError, WindowsVerifiedInputBoundaryReceipt,
+        classify_windows_input_insertion, evaluate_windows_keyboard_state,
+        evaluate_windows_uia_dispatch_context, snapshot_windows_keyboard_state,
+        windows_insert_verified_key_events,
     };
 
     const PROPERTIES_PER_NODE: usize = 19;
@@ -244,6 +252,11 @@ mod platform {
             attachment: WindowsUiaAttachment,
             request: WindowsUiaSetValueDispatchRequest,
             reply: Sender<Result<WindowsUiaSetValueDispatchReceipt, WindowsUiaWorkerError>>,
+        },
+        DispatchVerifiedInput {
+            attachment: WindowsUiaAttachment,
+            request: WindowsUiaVerifiedInputRequest,
+            reply: Sender<Result<WindowsUiaVerifiedInputReceipt, WindowsUiaWorkerError>>,
         },
         VerifySetValue {
             attachment: WindowsUiaAttachment,
@@ -519,6 +532,37 @@ mod platform {
             self.receive(&reply_rx)
         }
 
+        pub fn dispatch_verified_input(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaVerifiedInputRequest,
+        ) -> Result<WindowsUiaVerifiedInputReceipt, WindowsUiaWorkerError> {
+            if request.dispatch_attempt_ref.is_nil()
+                || request.action_id.is_nil()
+                || request.preparation_journal_sequence == 0
+                || request.preparation_receipt_ref.trim().is_empty()
+                || request.snapshot_cut_ref.trim().is_empty()
+                || request.provider_incarnation_ref != self.provider_incarnation_ref
+                || request.provider_incarnation_ref != attachment.provider_incarnation_ref
+                || request.target_incarnation_ref != attachment.target_incarnation_ref
+                || request.element_ref.provider_incarnation_ref != request.provider_incarnation_ref
+                || request.element_ref.target_incarnation_ref != request.target_incarnation_ref
+                || request.element_ref.acquisition_cut_ref != request.snapshot_cut_ref
+            {
+                return Err(WindowsUiaWorkerError::InvalidVerifiedInputRequest);
+            }
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
+            self.sender
+                .send(WorkerCommand::DispatchVerifiedInput {
+                    attachment: attachment.clone(),
+                    request,
+                    reply: reply_tx,
+                })
+                .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
+            self.receive(&reply_rx)
+        }
+
         pub(crate) fn query_virtualized_item_on_mta(
             &self,
             attachment: &WindowsUiaAttachment,
@@ -722,6 +766,13 @@ mod platform {
                     reply,
                 } => {
                     let _ = reply.send(state.dispatch_set_value(&attachment, request));
+                }
+                WorkerCommand::DispatchVerifiedInput {
+                    attachment,
+                    request,
+                    reply,
+                } => {
+                    let _ = reply.send(state.dispatch_verified_input(&attachment, request));
                 }
                 WorkerCommand::VerifySetValue {
                     attachment,
@@ -1101,6 +1152,64 @@ mod platform {
                 element_ref: retained.element_ref.clone(),
                 observation,
             })
+        }
+
+        fn dispatch_verified_input(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaVerifiedInputRequest,
+        ) -> Result<WindowsUiaVerifiedInputReceipt, WindowsUiaWorkerError> {
+            if request.provider_incarnation_ref != self.provider_incarnation_ref
+                || request.provider_incarnation_ref != attachment.provider_incarnation_ref
+                || request.target_incarnation_ref != attachment.target_incarnation_ref
+                || request.element_ref.provider_incarnation_ref != request.provider_incarnation_ref
+                || request.element_ref.target_incarnation_ref != request.target_incarnation_ref
+                || request.element_ref.acquisition_cut_ref != request.snapshot_cut_ref
+            {
+                return Err(WindowsUiaWorkerError::InvalidVerifiedInputRequest);
+            }
+
+            let context = self.revalidate_dispatch_context(
+                attachment,
+                WindowsUiaDispatchContextRequest {
+                    snapshot_cut_ref: request.snapshot_cut_ref.clone(),
+                    element_ref: request.element_ref.clone(),
+                    requirements: request.context_requirements,
+                },
+            )?;
+            let keyboard_state = snapshot_windows_keyboard_state()?;
+            evaluate_windows_keyboard_state(&keyboard_state).map_err(|error| match error {
+                WindowsInputDispatchBlocker::InputStateConflict => {
+                    WindowsVerifiedInputBoundaryError::InputStateConflict
+                }
+                other => WindowsVerifiedInputBoundaryError::InvalidInsertionResult(other),
+            })?;
+
+            let raw = windows_insert_verified_key_events(request.batch.events());
+            let expected = request.batch.len() as u32;
+            if raw.requested_event_count != expected {
+                return Err(WindowsVerifiedInputBoundaryError::RequestedCountMismatch {
+                    expected,
+                    reported: raw.requested_event_count,
+                }
+                .into());
+            }
+            let insertion_class =
+                classify_windows_input_insertion(expected, raw.inserted_event_count)
+                    .map_err(WindowsVerifiedInputBoundaryError::InvalidInsertionResult)?;
+
+            let boundary = WindowsVerifiedInputBoundaryReceipt {
+                dispatch_context: context.observation,
+                keyboard_state,
+                requested_event_count: expected,
+                inserted_event_count: raw.inserted_event_count,
+                insertion_class,
+                raw_error_code: raw.raw_error_code,
+                reconciliation_required: true,
+            };
+            Ok(WindowsUiaVerifiedInputReceipt::from_request(
+                request, boundary,
+            ))
         }
 
         fn dispatch_pattern(

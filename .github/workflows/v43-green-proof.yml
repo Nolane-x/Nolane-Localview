@@ -1,0 +1,40 @@
+name: V4.3 Green Proof
+
+on:
+  push:
+    branches:
+      - feat/v43-l7-windows-w07-w08-w09-input-authority
+
+permissions:
+  contents: read
+
+jobs:
+  verified-input-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run pure verified input contract
+        run: cargo test -p localview-windows-uia-provider --test verified_input_contract -- --nocapture
+      - name: Run verified input authority binding contract
+        run: cargo test -p localview-windows-uia-provider --test verified_input_authority_binding_contract -- --nocapture
+      - name: Run verified input boundary contract
+        run: cargo test -p localview-windows-uia-provider --test verified_input_worker_contract -- --nocapture
+      - name: Run W07 W08 W09 lab contract
+        run: cargo test -p localview-validation-lab --test real_provider_w07_w08_w09 -- --nocapture
+      - name: Run verified input runtime dispatch classification
+        run: cargo test -p localview-windows-observe-runtime --test verified_input_dispatch_classification -- --nocapture
+      - name: Run verified input runtime authority contract
+        run: cargo test -p localview-windows-observe-runtime --test verified_input_execution_contract -- --nocapture
+      - name: Run shared execution coordinator behavior
+        run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior -- --nocapture
+
+  windows-verified-input-backend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run Windows verified input backend contract
+        run: cargo test -p localview-windows-uia-provider --test windows_verified_input_backend_contract -- --nocapture
+      - name: Run exact UIA worker verified input boundary contract
+        run: cargo test -p localview-windows-uia-provider --test windows_verified_input_worker_mta_contract -- --nocapture

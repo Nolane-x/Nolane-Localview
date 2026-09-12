@@ -7,13 +7,15 @@ use localview_live_bridge::{
 };
 use localview_native_provider::NativeSemanticSnapshotRevision;
 use localview_protocol::{DispatchResult, SessionId, WorldOutcome};
+use localview_windows_uia_provider::WindowsVerifiedKeyboardBatch;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
     WindowsObserveProvider, WindowsObserveRuntimeManager,
     WindowsUiaDispatchExecutionCoordinatorError, WindowsUiaDispatchExecutionPermit,
-    WindowsUiaDispatchExecutor, execute_armed_uia_dispatch,
+    WindowsUiaDispatchExecutor, WindowsUiaVerifiedInputExecutionCoordinatorError,
+    WindowsUiaVerifiedInputExecutor, execute_armed_uia_dispatch, execute_armed_uia_verified_input,
 };
 
 /// Independent predicate authority for consequential postconditions.
@@ -96,6 +98,8 @@ pub enum WindowsUiaConsequentialRecoveryOutcome {
 pub enum WindowsUiaVerifiedExecutionError {
     #[error(transparent)]
     Dispatch(#[from] WindowsUiaDispatchExecutionCoordinatorError),
+    #[error(transparent)]
+    VerifiedInputDispatch(#[from] WindowsUiaVerifiedInputExecutionCoordinatorError),
     #[error("post-dispatch observation authority failed: {message}")]
     ObservationAuthority { message: String },
     #[error("post-dispatch runtime capture failed: {message}")]
@@ -114,7 +118,9 @@ pub enum WindowsUiaVerifiedExecutionError {
     Commit { message: String },
     #[error("durable postcondition receipt is missing for consequential action {action_id}")]
     DurablePostconditionReceiptMissing { action_id: Uuid },
-    #[error("durable postcondition receipt is not VerifiedExpected for consequential action {action_id}")]
+    #[error(
+        "durable postcondition receipt is not VerifiedExpected for consequential action {action_id}"
+    )]
     DurablePostconditionReceiptNotVerified { action_id: Uuid },
     #[error("unexpected recovery state after durable dispatch evidence: {state:?}")]
     UnexpectedRecoveryState {
@@ -122,16 +128,22 @@ pub enum WindowsUiaVerifiedExecutionError {
     },
 }
 
-/// Execute one armed consequential UIA action through world verification.
-///
-/// `DispatchedFull` is intentionally not a terminal success here. Any outcome
-/// that may have reached the provider must pass a fresh causal observation,
-/// independent typed predicate verification, and durable reconciliation before
-/// `Committed` can be returned. Known-not-dispatched outcomes terminate without
-/// invoking the verifier because no world-side postcondition needs proving.
-/// Pre-executor authority rejection is handled by the lower dispatch coordinator,
-/// which releases only the process-local execution grant and preserves durable
-/// PREPARED uncertainty for same-process reconciliation.
+/// One-shot verified-input execution authority plus the exact bounded keyboard
+/// batch authorized for that dispatch attempt.
+#[derive(Debug)]
+pub struct WindowsUiaVerifiedInputExecutionRequest {
+    pub armed: WindowsUiaDispatchExecutionPermit,
+    pub batch: WindowsVerifiedKeyboardBatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsUiaDispatchVerificationContext {
+    action_id: Uuid,
+    dispatch_result: DispatchResult,
+    dispatch_journal_sequence: u64,
+}
+
+/// Execute one armed consequential semantic UIA action through world verification.
 pub async fn execute_armed_uia_dispatch_verified<P, E, V>(
     bridge: &LiveBridge,
     journal: &ConsequentialJournal,
@@ -147,16 +159,84 @@ where
     V: WindowsUiaPostconditionVerifier,
 {
     let dispatch = execute_armed_uia_dispatch(bridge, journal, session_id, armed, executor).await?;
-    let action_id = dispatch.provider_receipt.action_id;
-    let dispatch_result = dispatch.provider_receipt.dispatch_result;
-    let dispatch_journal_sequence = dispatch.journal_entry.journal_sequence;
+    complete_uia_dispatch_verification(
+        bridge,
+        journal,
+        runtime,
+        session_id,
+        WindowsUiaDispatchVerificationContext {
+            action_id: dispatch.provider_receipt.action_id,
+            dispatch_result: dispatch.provider_receipt.dispatch_result,
+            dispatch_journal_sequence: dispatch.journal_entry.journal_sequence,
+        },
+        verifier,
+    )
+    .await
+}
 
+/// Execute one armed verified-keyboard fallback through the exact same
+/// post-dispatch observation, predicate verification, reconciliation and commit
+/// path as semantic UIA. Full platform insertion is therefore never world
+/// success by itself, and partial insertion remains reconciliation-only.
+pub async fn execute_armed_uia_verified_input_verified<P, E, V>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    session_id: SessionId,
+    request: WindowsUiaVerifiedInputExecutionRequest,
+    executor: &E,
+    verifier: &V,
+) -> Result<WindowsUiaVerifiedExecutionOutcome, WindowsUiaVerifiedExecutionError>
+where
+    P: WindowsObserveProvider,
+    E: WindowsUiaVerifiedInputExecutor,
+    V: WindowsUiaPostconditionVerifier,
+{
+    let dispatch = execute_armed_uia_verified_input(
+        bridge,
+        journal,
+        session_id,
+        request.armed,
+        request.batch,
+        executor,
+    )
+    .await?;
+    complete_uia_dispatch_verification(
+        bridge,
+        journal,
+        runtime,
+        session_id,
+        WindowsUiaDispatchVerificationContext {
+            action_id: dispatch.provider_receipt.action_id,
+            dispatch_result: crate::dispatch_result_for_verified_input(
+                &dispatch.provider_receipt.boundary,
+            ),
+            dispatch_journal_sequence: dispatch.journal_entry.journal_sequence,
+        },
+        verifier,
+    )
+    .await
+}
+
+async fn complete_uia_dispatch_verification<P, V>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    session_id: SessionId,
+    dispatch: WindowsUiaDispatchVerificationContext,
+    verifier: &V,
+) -> Result<WindowsUiaVerifiedExecutionOutcome, WindowsUiaVerifiedExecutionError>
+where
+    P: WindowsObserveProvider,
+    V: WindowsUiaPostconditionVerifier,
+{
+    let action_id = dispatch.action_id;
     let state = journal.recovery_state(action_id).await;
     if state == Some(ConsequentialRecoveryState::KnownNotDispatched) {
         return Ok(WindowsUiaVerifiedExecutionOutcome::KnownNotDispatched {
             action_id,
-            dispatch_result,
-            dispatch_journal_sequence,
+            dispatch_result: dispatch.dispatch_result,
+            dispatch_journal_sequence: dispatch.dispatch_journal_sequence,
         });
     }
     if state != Some(ConsequentialRecoveryState::PossiblyDispatched) {
@@ -235,7 +315,7 @@ where
         return Ok(WindowsUiaVerifiedExecutionOutcome::Committed {
             action_id,
             world_outcome: reconciliation.world_outcome,
-            dispatch_journal_sequence,
+            dispatch_journal_sequence: dispatch.dispatch_journal_sequence,
             reconciliation_journal_sequence,
             commit_journal_sequence: commit.journal_sequence,
         });
@@ -245,7 +325,7 @@ where
         WindowsUiaVerifiedExecutionOutcome::PostconditionNotVerified {
             action_id,
             world_outcome: reconciliation.world_outcome,
-            dispatch_journal_sequence,
+            dispatch_journal_sequence: dispatch.dispatch_journal_sequence,
             reconciliation_journal_sequence,
         },
     )
@@ -347,9 +427,7 @@ where
         | Some(ConsequentialRecoveryState::PossiblyDispatched)
         | Some(ConsequentialRecoveryState::OutcomeObservedUnverified) => {}
         other => {
-            return Err(WindowsUiaVerifiedExecutionError::UnexpectedRecoveryState {
-                state: other,
-            });
+            return Err(WindowsUiaVerifiedExecutionError::UnexpectedRecoveryState { state: other });
         }
     }
 
@@ -426,12 +504,14 @@ where
                 message: error.to_string(),
             }
         })?;
-        return Ok(WindowsUiaConsequentialRecoveryOutcome::ReconciledCommitted {
-            action_id,
-            world_outcome: reconciliation.world_outcome,
-            reconciliation_journal_sequence,
-            commit_journal_sequence: commit.journal_sequence,
-        });
+        return Ok(
+            WindowsUiaConsequentialRecoveryOutcome::ReconciledCommitted {
+                action_id,
+                world_outcome: reconciliation.world_outcome,
+                reconciliation_journal_sequence,
+                commit_journal_sequence: commit.journal_sequence,
+            },
+        );
     }
 
     Ok(

@@ -10,9 +10,12 @@ use localview_protocol::{
     TransportResult,
 };
 use localview_windows_uia_provider::{
-    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextBlocker,
-    WindowsUiaDispatchContextRequest, WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
-    WindowsUiaPatternDispatchOperation, evaluate_windows_uia_dispatch_context,
+    WindowsInputInsertionClass, WindowsUiaBoundDispatchContextReceipt,
+    WindowsUiaDispatchContextBlocker, WindowsUiaDispatchContextRequest,
+    WindowsUiaDispatchContextRequirements, WindowsUiaPattern, WindowsUiaPatternDispatchOperation,
+    WindowsUiaVerifiedInputRequest, WindowsVerifiedInputBoundaryReceipt,
+    WindowsVerifiedKeyboardBatch, classify_windows_input_insertion,
+    evaluate_windows_uia_dispatch_context,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -300,6 +303,97 @@ pub struct WindowsUiaDispatchExecutionResult {
     pub journal_entry: ConsequentialJournalEntry,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUiaVerifiedInputProviderReceipt {
+    pub dispatch_attempt_ref: Uuid,
+    pub action_id: Uuid,
+    pub preparation_journal_sequence: u64,
+    pub preparation_receipt_ref: String,
+    pub snapshot_cut_ref: String,
+    pub provider_incarnation_ref: ProviderIncarnationRef,
+    pub target_incarnation_ref: TargetIncarnationRef,
+    pub element_ref: ProviderElementRef,
+    pub batch_digest: String,
+    pub transport_result: TransportResult,
+    pub boundary: WindowsVerifiedInputBoundaryReceipt,
+}
+
+#[allow(async_fn_in_trait)]
+pub trait WindowsUiaVerifiedInputExecutor: Send + Sync {
+    type Error: StdError + Send + Sync + 'static;
+
+    async fn execute_verified_input(
+        &self,
+        request: WindowsUiaVerifiedInputRequest,
+    ) -> Result<WindowsUiaVerifiedInputProviderReceipt, Self::Error>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsUiaVerifiedInputExecutionResult {
+    pub provider_receipt: WindowsUiaVerifiedInputProviderReceipt,
+    pub journal_entry: ConsequentialJournalEntry,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum WindowsUiaVerifiedInputExecutionCoordinatorError {
+    #[error(
+        "Windows verified-input canonical authority changed before provider execution: {message}"
+    )]
+    PreExecutorAuthorityRejected { message: String },
+    #[error(
+        "Windows verified-input provider execution failed or became transport-uncertain: {message}"
+    )]
+    ProviderExecutionFailed { message: String },
+    #[error("Windows verified-input provider receipt does not match the exact one-shot request")]
+    ProviderReceiptMismatch,
+    #[error("Windows verified-input provider returned a receipt without executor delivery")]
+    ProviderReceiptTransportMismatch,
+    #[error(
+        "Windows verified-input execution authority abandonment failed after {stage}: {message}"
+    )]
+    ExecutionAuthorityAbandonmentFailed {
+        stage: &'static str,
+        message: String,
+    },
+    #[error("Windows verified-input durable dispatch linearization append failed: {message}")]
+    JournalLinearizationFailed { message: String },
+    #[error(
+        "Windows verified-input durable linearization entry did not match the exact provider outcome"
+    )]
+    LinearizationEntryMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsUiaVerifiedInputRequestBinding {
+    dispatch_attempt_ref: Uuid,
+    action_id: Uuid,
+    preparation_journal_sequence: u64,
+    preparation_receipt_ref: String,
+    snapshot_cut_ref: String,
+    provider_incarnation_ref: ProviderIncarnationRef,
+    target_incarnation_ref: TargetIncarnationRef,
+    element_ref: ProviderElementRef,
+    batch_digest: String,
+    batch_event_count: u32,
+}
+
+impl WindowsUiaVerifiedInputRequestBinding {
+    fn from_request(request: &WindowsUiaVerifiedInputRequest) -> Self {
+        Self {
+            dispatch_attempt_ref: request.dispatch_attempt_ref(),
+            action_id: request.action_id(),
+            preparation_journal_sequence: request.preparation_journal_sequence(),
+            preparation_receipt_ref: request.preparation_receipt_ref().to_owned(),
+            snapshot_cut_ref: request.snapshot_cut_ref().to_owned(),
+            provider_incarnation_ref: request.provider_incarnation_ref().clone(),
+            target_incarnation_ref: request.target_incarnation_ref().clone(),
+            element_ref: request.element_ref().clone(),
+            batch_digest: request.batch_digest().to_owned(),
+            batch_event_count: request.batch().len() as u32,
+        }
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum WindowsUiaDispatchExecutionCoordinatorError {
     #[error("Windows UIA canonical action envelope disappeared before provider execution")]
@@ -314,7 +408,9 @@ pub enum WindowsUiaDispatchExecutionCoordinatorError {
     },
     #[error("Windows UIA canonical operation binding disappeared before provider execution")]
     CanonicalOperationMissingBeforeExecutor,
-    #[error("Windows UIA canonical operation binding is invalid before provider execution: {message}")]
+    #[error(
+        "Windows UIA canonical operation binding is invalid before provider execution: {message}"
+    )]
     CanonicalOperationBindingInvalidBeforeExecutor { message: String },
     #[error(
         "Windows UIA canonical operation {canonical:?} cannot select a provider verb for pattern {required_pattern:?}"
@@ -433,7 +529,10 @@ where
             );
         }
     };
-    let dispatch_operation = match provider_dispatch_operation(canonical_operation, required_pattern) {
+    let dispatch_operation = match provider_dispatch_operation(
+        canonical_operation,
+        required_pattern,
+    ) {
         Some(operation) => operation,
         None => {
             journal
@@ -544,6 +643,182 @@ where
         provider_receipt,
         journal_entry,
     })
+}
+
+/// Consume the existing opaque Windows execution permit through exactly one
+/// verified keyboard fallback attempt and the same durable consequential journal
+/// writer used by semantic UIA dispatch.
+///
+/// The caller never supplies provider lineage or a raw platform request. The
+/// coordinator derives those fields from the sealed PREPARED authority, binds the
+/// exact ordered key batch to that one-shot permit, moves the request into the
+/// executor once, validates exact receipt identity and raw insertion consistency,
+/// then linearizes the classified dispatch result. Full insertion is dispatch
+/// evidence only; world success remains a later reconciliation decision.
+pub async fn execute_armed_uia_verified_input<E>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    session_id: SessionId,
+    armed: WindowsUiaDispatchExecutionPermit,
+    batch: WindowsVerifiedKeyboardBatch,
+    executor: &E,
+) -> Result<WindowsUiaVerifiedInputExecutionResult, WindowsUiaVerifiedInputExecutionCoordinatorError>
+where
+    E: WindowsUiaVerifiedInputExecutor,
+{
+    if let Err(error) =
+        verify_armed_canonical_before_executor(bridge, journal, session_id, &armed).await
+    {
+        journal
+            .abandon_dispatch_execution(armed.dispatch_permit)
+            .await
+            .map_err(|abandonment| {
+                WindowsUiaVerifiedInputExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                    stage: "pre_executor_revalidation_failed",
+                    message: abandonment.to_string(),
+                }
+            })?;
+        return Err(
+            WindowsUiaVerifiedInputExecutionCoordinatorError::PreExecutorAuthorityRejected {
+                message: error.to_string(),
+            },
+        );
+    }
+
+    let lease = &armed.seal.authority.dispatch_revalidation.element_lease;
+    let request = WindowsUiaVerifiedInputRequest::from_execution_permit(
+        &armed.dispatch_permit,
+        lease.snapshot_cut_ref.clone(),
+        lease.provider_incarnation_ref.clone(),
+        lease.target_incarnation_ref.clone(),
+        lease.element_ref.clone(),
+        armed.seal.context.requirements,
+        batch,
+    );
+    let binding = WindowsUiaVerifiedInputRequestBinding::from_request(&request);
+    let action_id = binding.action_id;
+
+    let provider_receipt = match executor.execute_verified_input(request).await {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let message = error.to_string();
+            journal
+                .abandon_dispatch_execution(armed.dispatch_permit)
+                .await
+                .map_err(|abandonment| {
+                    WindowsUiaVerifiedInputExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                        stage: "provider_execution_failed",
+                        message: abandonment.to_string(),
+                    }
+                })?;
+            return Err(
+                WindowsUiaVerifiedInputExecutionCoordinatorError::ProviderExecutionFailed {
+                    message,
+                },
+            );
+        }
+    };
+
+    if !verified_input_receipt_matches_request(&provider_receipt, &binding) {
+        journal
+            .abandon_dispatch_execution(armed.dispatch_permit)
+            .await
+            .map_err(|abandonment| {
+                WindowsUiaVerifiedInputExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                    stage: "provider_receipt_mismatch",
+                    message: abandonment.to_string(),
+                }
+            })?;
+        return Err(WindowsUiaVerifiedInputExecutionCoordinatorError::ProviderReceiptMismatch);
+    }
+    if provider_receipt.transport_result != TransportResult::DeliveredToExecutor {
+        journal
+            .abandon_dispatch_execution(armed.dispatch_permit)
+            .await
+            .map_err(|abandonment| {
+                WindowsUiaVerifiedInputExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                    stage: "provider_transport_mismatch",
+                    message: abandonment.to_string(),
+                }
+            })?;
+        return Err(
+            WindowsUiaVerifiedInputExecutionCoordinatorError::ProviderReceiptTransportMismatch,
+        );
+    }
+
+    let boundary = &provider_receipt.boundary;
+    let classified = classify_windows_input_insertion(
+        boundary.requested_event_count,
+        boundary.inserted_event_count,
+    )
+    .ok();
+    if boundary.requested_event_count != binding.batch_event_count
+        || classified != Some(boundary.insertion_class)
+        || (matches!(
+            boundary.insertion_class,
+            WindowsInputInsertionClass::FullyInserted
+                | WindowsInputInsertionClass::PartialDispatchUnknownOutcome
+        ) && !boundary.reconciliation_required)
+    {
+        journal
+            .abandon_dispatch_execution(armed.dispatch_permit)
+            .await
+            .map_err(|abandonment| {
+                WindowsUiaVerifiedInputExecutionCoordinatorError::ExecutionAuthorityAbandonmentFailed {
+                    stage: "provider_boundary_mismatch",
+                    message: abandonment.to_string(),
+                }
+            })?;
+        return Err(WindowsUiaVerifiedInputExecutionCoordinatorError::ProviderReceiptMismatch);
+    }
+
+    let dispatch_result = crate::dispatch_result_for_verified_input(boundary);
+    let linearization = DispatchLinearizationReceipt {
+        receipt_ref: format!(
+            "windows-uia:verified-input:{}:{}",
+            provider_receipt.dispatch_attempt_ref, provider_receipt.batch_digest
+        ),
+        transport_result: provider_receipt.transport_result,
+        dispatch_result,
+    };
+    let journal_entry = journal
+        .record_dispatch_linearized(armed.dispatch_permit, linearization.clone())
+        .await
+        .map_err(|error| {
+            WindowsUiaVerifiedInputExecutionCoordinatorError::JournalLinearizationFailed {
+                message: error.to_string(),
+            }
+        })?;
+
+    if journal_entry.action_id != action_id
+        || !matches!(
+            &journal_entry.transition,
+            ConsequentialJournalTransition::DispatchLinearized { receipt }
+                if receipt == &linearization
+        )
+    {
+        return Err(WindowsUiaVerifiedInputExecutionCoordinatorError::LinearizationEntryMismatch);
+    }
+
+    Ok(WindowsUiaVerifiedInputExecutionResult {
+        provider_receipt,
+        journal_entry,
+    })
+}
+
+fn verified_input_receipt_matches_request(
+    receipt: &WindowsUiaVerifiedInputProviderReceipt,
+    request: &WindowsUiaVerifiedInputRequestBinding,
+) -> bool {
+    receipt.dispatch_attempt_ref == request.dispatch_attempt_ref
+        && receipt.action_id == request.action_id
+        && receipt.preparation_journal_sequence == request.preparation_journal_sequence
+        && receipt.preparation_receipt_ref == request.preparation_receipt_ref
+        && receipt.snapshot_cut_ref == request.snapshot_cut_ref
+        && receipt.provider_incarnation_ref == request.provider_incarnation_ref
+        && receipt.target_incarnation_ref == request.target_incarnation_ref
+        && receipt.element_ref == request.element_ref
+        && receipt.batch_digest == request.batch_digest
 }
 
 async fn verify_prepared_canonical_before_arm(
@@ -712,7 +987,10 @@ mod tests {
     #[test]
     fn provider_verb_mapping_rejects_semantic_pattern_mismatches() {
         assert_eq!(
-            provider_dispatch_operation(CanonicalActionOperation::Expand, WindowsUiaPattern::Invoke),
+            provider_dispatch_operation(
+                CanonicalActionOperation::Expand,
+                WindowsUiaPattern::Invoke
+            ),
             None
         );
         assert_eq!(

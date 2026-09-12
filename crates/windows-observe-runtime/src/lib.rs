@@ -15,6 +15,7 @@ mod semantic_postcondition;
 mod set_value_execution;
 mod verified_action_coordinator;
 mod verified_execution;
+mod verified_input_execution;
 pub use action_preflight::*;
 pub use attached_recovery::*;
 pub use dispatch_authority::*;
@@ -26,6 +27,7 @@ pub use semantic_postcondition::*;
 pub use set_value_execution::*;
 pub use verified_action_coordinator::*;
 pub use verified_execution::*;
+pub use verified_input_execution::*;
 
 use localview_live_bridge::{
     LiveBridge, ObservationStatus, ObserverEvent, ObserverEventKind, ProviderIngestReport,

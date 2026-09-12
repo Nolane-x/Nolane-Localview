@@ -13,9 +13,13 @@ chrono.workspace = true
 localview-live-bridge = { path = "../live-bridge" }
 localview-native-provider = { path = "../native-provider" }
 localview-protocol = { path = "../protocol" }
+sha2.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.61"

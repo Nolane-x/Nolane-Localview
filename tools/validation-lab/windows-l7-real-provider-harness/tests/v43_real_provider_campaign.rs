@@ -7,6 +7,14 @@ mod baseline_cases;
 mod follow_on_cases;
 
 #[cfg(windows)]
+#[path = "support/v43_verified_input_seed.rs"]
+mod verified_input_seed;
+
+#[cfg(windows)]
+#[path = "support/v43_verified_input_cases.rs"]
+mod verified_input_cases;
+
+#[cfg(windows)]
 mod windows_l7_real_provider_campaign {
     use std::{
         collections::BTreeSet,
@@ -24,20 +32,23 @@ mod windows_l7_real_provider_campaign {
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
 
-    use super::{baseline_cases, follow_on_cases};
+    use super::{baseline_cases, follow_on_cases, verified_input_cases};
 
     const PLATFORM_PROFILE: &str = "windows-uia-hosted-r1";
     const COMPARISON_PROFILE: &str = "real-provider-exact-r1";
     const RANDOM_SOURCE_PROFILE: &str = "deterministic-hosted-seed-protocol";
     const CAMPAIGN_START_SEQUENCE: u64 = 100;
 
-    const REQUIRED_CASES: [&str; 6] = [
+    const REQUIRED_CASES: [&str; 9] = [
         "W01-missing-uia-property-event",
         "W02-recreated-uia-element",
         "W03-virtualized-item-realization",
         "W04-unsupported-invoke-pattern",
         "W05-windows-uia-provider-hang",
         "W06-windows-uia-provider-reacquire",
+        "W07-foreground-stolen-before-input",
+        "W08-partial-input-dispatch",
+        "W09-user-held-modifier-interference",
     ];
 
     fn required_env(name: &'static str) -> String {
@@ -73,7 +84,7 @@ mod windows_l7_real_provider_campaign {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires hosted Windows UIA providers, both seed executables, and CI environment authority"]
-    async fn prospective_l7_campaign_binds_w01_through_w06_to_exact_candidate() {
+    async fn prospective_l7_campaign_binds_w01_through_w09_to_exact_candidate() {
         assert!(
             std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
             "real-provider campaign execution must be explicitly enabled"
@@ -96,25 +107,30 @@ mod windows_l7_real_provider_campaign {
             "permission_state": environment_value("LOCALVIEW_PERMISSION_STATE"),
             "classic_seed_executable_digest": classic_seed_digest,
             "edge_seed_executable_digest": edge_seed_digest,
+            "w08_partial_evidence_source": "deterministic-wrapper-through-production-boundary",
+            "w08_natural_windows_partial_observed": false,
+            "w08_real_platform_companion_evidence": "production-SendInput-full-dispatch-through-same-receipt-path",
             "required_cases": REQUIRED_CASES,
         });
         write_value(&artifact_dir.join("environment-manifest.json"), &environment);
         let environment_digest =
-            canonical_digest(&environment).expect("digest canonical six-seed environment manifest");
+            canonical_digest(&environment).expect("digest canonical nine-seed environment manifest");
 
         let seed_catalog_digest = canonical_digest(&json!({
             "candidate_sha": required_env("LOCALVIEW_CANDIDATE_SHA"),
             "environment_digest": environment_digest.0.clone(),
             "classic_seed_executable_digest": classic_seed_digest.clone(),
             "edge_seed_executable_digest": edge_seed_digest.clone(),
+            "w08_partial_evidence_source": "deterministic-wrapper-through-production-boundary",
+            "w08_natural_windows_partial_observed": false,
             "required_cases": REQUIRED_CASES,
         }))
-        .expect("digest prospective W01-W06 L7 seed catalog");
+        .expect("digest prospective W01-W09 L7 seed catalog");
 
         let preregistration = LabPreregistration {
             revision_context: LabRevisionContext {
-                lab_revision: "lab-v43-windows-l7-r2".into(),
-                seed_corpus_revision: "windows-provider-seeds-w01-w06-r2".into(),
+                lab_revision: "lab-v43-windows-l7-r3".into(),
+                seed_corpus_revision: "windows-provider-seeds-w01-w09-r3".into(),
                 spec_revision_digest: "v4.3-principal-provider-reconciliation-closure".into(),
                 reference_reducer_revision: "provider-oracle-r1".into(),
                 mutation_catalog_revision: "windows-provider-seed-matrix-r1".into(),
@@ -155,6 +171,22 @@ mod windows_l7_real_provider_campaign {
                     prediction_revision: "w06-provider-reacquire-r1".into(),
                     oracle_revision: "independent-seed-pipe-r1".into(),
                 },
+                LabSeedIdentity {
+                    seed_id: REQUIRED_CASES[6].into(),
+                    prediction_revision: "w07-foreground-stolen-r1".into(),
+                    oracle_revision: "independent-wpf-input-oracle-r1".into(),
+                },
+                LabSeedIdentity {
+                    seed_id: REQUIRED_CASES[7].into(),
+                    prediction_revision: "w08-partial-input-dispatch-r1".into(),
+                    oracle_revision:
+                        "deterministic-partial-wrapper-plus-independent-wpf-full-smoke-r1".into(),
+                },
+                LabSeedIdentity {
+                    seed_id: REQUIRED_CASES[8].into(),
+                    prediction_revision: "w09-modifier-interference-r1".into(),
+                    oracle_revision: "independent-wpf-input-oracle-r1".into(),
+                },
             ],
             campaign_layer: CampaignLayer::L7,
             expected_distinctions: BTreeSet::from([
@@ -164,12 +196,17 @@ mod windows_l7_real_provider_campaign {
                 "unsupported semantic pattern != successful dispatch".into(),
                 "provider timeout != reusable worker authority".into(),
                 "provider reacquire invalidates old authority".into(),
+                "preflight foreground != final input-boundary foreground".into(),
+                "partial platform insertion != retry authority".into(),
+                "user-held modifier != LocalView normalization authority".into(),
             ]),
             model_bound: None,
             assumptions: BTreeSet::from([
                 "hosted Windows runner exposes real Win32 UI Automation".into(),
                 "hosted Windows runner supports deterministic WPF UI Automation".into(),
                 "production LocalView never reads either seed oracle channel".into(),
+                "W08 partial insertion count is deterministic wrapper evidence through the production boundary and is not claimed as a naturally observed hosted-Windows partial SendInput result".into(),
+                "W08 separately executes the real production SendInput backend for ordinary full insertion through the same verified receipt path".into(),
             ]),
             declared_metrics: BTreeSet::from([
                 LabMetricKind::Rpomr,
@@ -184,7 +221,7 @@ mod windows_l7_real_provider_campaign {
 
         let prepared = preregistration
             .prepare()
-            .expect("prepare six-seed L7 preregistration");
+            .expect("prepare nine-seed L7 preregistration");
         let prereg_path = artifact_dir.join("LAB-PREREGISTRATION.json");
         fs::write(&prereg_path, &prepared.canonical_bytes)
             .expect("persist preregistration before campaign start");
@@ -216,7 +253,7 @@ mod windows_l7_real_provider_campaign {
             admission,
             authority,
         )
-        .expect("start typed prospective W01-W06 real-provider campaign");
+        .expect("start typed prospective W01-W09 provider campaign");
 
         let environment_digest_text = environment_digest.0.clone();
         let records = vec![
@@ -266,6 +303,30 @@ mod windows_l7_real_provider_campaign {
                 106,
             )
             .await,
+            verified_input_cases::run_w07(
+                &edge_seed_digest,
+                &environment_digest_text,
+                PLATFORM_PROFILE,
+                COMPARISON_PROFILE,
+                107,
+            )
+            .await,
+            verified_input_cases::run_w08(
+                &edge_seed_digest,
+                &environment_digest_text,
+                PLATFORM_PROFILE,
+                COMPARISON_PROFILE,
+                108,
+            )
+            .await,
+            verified_input_cases::run_w09(
+                &edge_seed_digest,
+                &environment_digest_text,
+                PLATFORM_PROFILE,
+                COMPARISON_PROFILE,
+                109,
+            )
+            .await,
         ];
 
         let observed_seed_ids = records
@@ -275,7 +336,7 @@ mod windows_l7_real_provider_campaign {
                     .observation
                     .seed_id
                     .clone()
-                    .expect("every L7 real-provider observation must bind a seed identity")
+                    .expect("every L7 provider observation must bind a seed identity")
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(
@@ -284,14 +345,14 @@ mod windows_l7_real_provider_campaign {
                 .iter()
                 .map(|seed| (*seed).to_owned())
                 .collect::<BTreeSet<_>>(),
-            "the prospective campaign must execute exactly W01 through W06"
+            "the prospective campaign must execute exactly W01 through W09"
         );
 
         for record in &records {
             assert_eq!(
                 record.result_evidence,
                 Some(ResultEvidence::RealProviderIntegrationPass),
-                "every required real-provider case must be complete before campaign finalization"
+                "every required W01-W09 case must be complete before campaign finalization"
             );
             assert!(record.observation.provider_backed);
             assert!(record.observation.failure_flags.is_empty());
@@ -300,25 +361,25 @@ mod windows_l7_real_provider_campaign {
         }
 
         let campaign_evidence = derive_real_provider_campaign_evidence(&records)
-            .expect("all six real-provider records must produce campaign evidence");
+            .expect("all nine provider records must produce campaign evidence");
         assert_eq!(
             campaign_evidence,
             ResultEvidence::RealProviderIntegrationPass
         );
         let completed = run
-            .finalize(campaign_evidence, 107)
-            .expect("clean measured W01-W06 L7 campaign may mint scoped real-provider pass");
+            .finalize(campaign_evidence, 110)
+            .expect("clean measured W01-W09 L7 campaign may mint scoped provider pass");
         let rpomr = completed
             .payload
             .metric_snapshot
             .get(LabMetricKind::Rpomr)
             .expect("RPOMR metric must exist");
-        assert_eq!((rpomr.numerator, rpomr.denominator), (0, 6));
+        assert_eq!((rpomr.numerator, rpomr.denominator), (0, 9));
         assert_eq!(
             completed.payload.result_class,
             ResearchResultClass::RealProviderIntegrationPass
         );
-        assert_eq!(completed.payload.observation_digests.len(), 6);
+        assert_eq!(completed.payload.observation_digests.len(), 9);
         assert_eq!(
             completed
                 .payload
@@ -332,8 +393,8 @@ mod windows_l7_real_provider_campaign {
         );
         fs::write(
             artifact_dir.join("LAB-RESULT.json"),
-            serde_json::to_vec_pretty(&completed).expect("serialize completed W01-W06 result"),
+            serde_json::to_vec_pretty(&completed).expect("serialize completed W01-W09 result"),
         )
-        .expect("persist completed six-seed L7 result artifact");
+        .expect("persist completed nine-seed L7 result artifact");
     }
 }
