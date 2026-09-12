@@ -1,4 +1,4 @@
-name: V4.3 W12 Restart RED Proof Once
+name: V4.3 W12 Semantic RED Proof Once
 
 on:
   push:
@@ -8,10 +8,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  w12-real-provider-red:
+  w12-semantic-red:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
@@ -20,13 +20,56 @@ jobs:
       LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-l7-windows-w11-w12-race-authority
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+      - name: Add bounded test-only restart helper
+        shell: pwsh
+        run: |
+          $path = "tools/validation-lab/windows-l7-real-provider-harness/tests/support/v43_verified_input_seed.rs"
+          $text = [System.IO.File]::ReadAllText($path)
+          $marker = @'
+    pub fn shutdown(mut self) {
+'@
+          if (-not $text.Contains($marker)) {
+            throw "expected EdgeSeedProcess shutdown method marker not found"
+          }
+          $helper = @'
+    pub fn kill_and_wait(mut self) {
+        if self.shift_owned {
+            let _ = self.release_shift();
+        }
+        self.child
+            .kill()
+            .expect("terminate WPF edge seed process for restart authority test");
+        self.child
+            .wait()
+            .expect("wait for terminated WPF edge seed process");
+        self.shutdown = true;
+    }
+
+'@
+          $text = $text.Replace($marker, $helper + $marker)
+          [System.IO.File]::WriteAllText($path, $text, [System.Text.UTF8Encoding]::new($false))
+          git diff --check
+          git diff -- $path
+      - name: Compile W12 test with lifecycle helper
+        shell: pwsh
+        run: cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w12 --no-run
+      - name: Commit test-only restart helper
+        shell: pwsh
+        run: |
+          git config user.name "Nolane-x"
+          git config user.email "casioreview20@gmail.com"
+          git add tools/validation-lab/windows-l7-real-provider-harness/tests/support/v43_verified_input_seed.rs
+          git commit -m "test(v43): add bounded edge-seed restart helper"
+          git push origin HEAD:feat/v43-l7-windows-w11-w12-race-authority
       - name: Build W12 WPF edge seed
         run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
-      - name: Prove W12 stale authority is rejected
+      - name: Prove production W12 semantic RED
         shell: pwsh
         run: |
           $testName = "windows_real_provider_w12::w12_restart_rejects_pre_restart_authority_before_any_replacement_effect"
