@@ -162,6 +162,19 @@ impl EdgeSeedProcess {
         response
     }
 
+    pub fn kill_and_wait(mut self) {
+        if self.shift_owned {
+            let _ = self.release_shift();
+        }
+        self.child
+            .kill()
+            .expect("terminate WPF edge seed process for restart authority test" );
+        self.child
+            .wait()
+            .expect("wait for terminated WPF edge seed process" );
+        self.shutdown = true;
+    }
+
     pub fn shutdown(mut self) {
         if self.shift_owned {
             let _ = self.release_shift();
