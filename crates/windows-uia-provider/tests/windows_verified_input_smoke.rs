@@ -1,7 +1,9 @@
 #![cfg(windows)]
 
 use std::{
+    fs,
     io::{BufRead, BufReader, Write},
+    path::PathBuf,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -36,12 +38,7 @@ impl EdgeSeedProcess {
             .expect("launch isolated WPF verified-input smoke seed");
         let stdin = child.stdin.take().expect("edge seed stdin must be piped");
         let stdout = child.stdout.take().expect("edge seed stdout must be piped");
-        Self {
-            child,
-            stdin,
-            stdout: BufReader::new(stdout),
-            shutdown: false,
-        }
+        Self { child, stdin, stdout: BufReader::new(stdout), shutdown: false }
     }
 
     fn command(&mut self, command: Value) -> Value {
@@ -49,28 +46,16 @@ impl EdgeSeedProcess {
         writeln!(self.stdin).expect("terminate edge-seed command JSON line");
         self.stdin.flush().expect("flush edge-seed command");
         let mut line = String::new();
-        self.stdout
-            .read_line(&mut line)
-            .expect("read edge-seed JSON-line response");
-        assert!(
-            !line.trim().is_empty(),
-            "edge seed closed its oracle channel unexpectedly"
-        );
+        self.stdout.read_line(&mut line).expect("read edge-seed JSON-line response");
+        assert!(!line.trim().is_empty(), "edge seed closed its oracle channel unexpectedly");
         serde_json::from_str(&line).expect("parse edge-seed JSON-line response")
     }
 
     fn prepare_input_target(&mut self) -> Value {
         let response = self.command(json!({ "command": "prepare_verified_input_target" }));
         assert_eq!(response.get("ok").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            response.get("target_is_foreground").and_then(Value::as_bool),
-            Some(true),
-            "production SendInput smoke must begin with the synthetic target foreground"
-        );
-        assert_eq!(
-            response.get("effect_count").and_then(Value::as_u64),
-            Some(0)
-        );
+        assert_eq!(response.get("target_is_foreground").and_then(Value::as_bool), Some(true));
+        assert_eq!(response.get("effect_count").and_then(Value::as_u64), Some(0));
         response
     }
 
@@ -84,18 +69,10 @@ impl EdgeSeedProcess {
         let deadline = Instant::now() + timeout;
         loop {
             let state = self.input_state();
-            if state
-                .get("effect_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default()
-                > 0
-            {
+            if state.get("effect_count").and_then(Value::as_u64).unwrap_or_default() > 0 {
                 return state;
             }
-            assert!(
-                Instant::now() < deadline,
-                "SendInput reported full insertion but independent WPF target never observed Space"
-            );
+            assert!(Instant::now() < deadline, "SendInput reported full insertion but independent WPF target never observed Space");
             thread::sleep(Duration::from_millis(25));
         }
     }
@@ -125,19 +102,11 @@ struct ProductionWindowsEnvironment {
 }
 
 impl WindowsVerifiedInputEnvironment for ProductionWindowsEnvironment {
-    fn observe_dispatch_context(
-        &mut self,
-    ) -> Result<WindowsUiaDispatchContextObservation, WindowsVerifiedInputBoundaryError> {
-        observe_windows_verified_input_context(
-            self.target_window_handle,
-            self.target_process_id,
-            true,
-        )
+    fn observe_dispatch_context(&mut self) -> Result<WindowsUiaDispatchContextObservation, WindowsVerifiedInputBoundaryError> {
+        observe_windows_verified_input_context(self.target_window_handle, self.target_process_id, true)
     }
 
-    fn snapshot_keyboard_state(
-        &mut self,
-    ) -> Result<WindowsKeyboardStateSnapshot, WindowsVerifiedInputBoundaryError> {
+    fn snapshot_keyboard_state(&mut self) -> Result<WindowsKeyboardStateSnapshot, WindowsVerifiedInputBoundaryError> {
         snapshot_windows_keyboard_state()
     }
 
@@ -148,19 +117,32 @@ impl WindowsVerifiedInputEnvironment for ProductionWindowsEnvironment {
 }
 
 fn truth_u64(value: &Value, field: &str) -> u64 {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .unwrap_or_else(|| panic!("edge-seed field {field} must be u64: {value}"))
+    value.get(field).and_then(Value::as_u64).unwrap_or_else(|| panic!("edge-seed field {field} must be u64: {value}"))
+}
+
+fn persist_full_smoke_artifact(receipt_requested: u32, receipt_inserted: u32, effect_count: u64) {
+    let Some(dir) = std::env::var_os("LOCALVIEW_L7_ARTIFACT_DIR") else { return; };
+    let path = PathBuf::from(dir).join("W08-PRODUCTION-FULL-SMOKE.json");
+    let artifact = json!({
+        "case_id": "W08-partial-input-dispatch",
+        "evidence_kind": "production-windows-sendinput-full-dispatch-smoke",
+        "candidate_sha": std::env::var("LOCALVIEW_CANDIDATE_SHA").unwrap_or_else(|_| "unknown:standalone-w08-smoke".into()),
+        "requested_event_count": receipt_requested,
+        "inserted_event_count": receipt_inserted,
+        "insertion_class": "fully-inserted",
+        "independent_oracle_effect_count": effect_count,
+        "natural_windows_partial_observed": false,
+        "claim_boundary": "production backend/receipt-path evidence only; does not claim hosted Windows naturally produced a partial SendInput result"
+    });
+    fs::create_dir_all(path.parent().expect("artifact parent")).expect("create W08 artifact directory");
+    fs::write(path, serde_json::to_vec_pretty(&artifact).expect("serialize W08 production smoke artifact"))
+        .expect("persist W08 production smoke artifact");
 }
 
 #[test]
 #[ignore = "requires interactive Windows desktop and LOCALVIEW_UIA_EDGE_SEED_BIN"]
 fn production_send_input_full_dispatch_uses_verified_receipt_path() {
-    assert!(
-        std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(),
-        "real production input smoke must be explicitly enabled"
-    );
+    assert!(std::env::var_os("LOCALVIEW_UIA_SMOKE").is_some(), "real production input smoke must be explicitly enabled");
 
     let mut seed = EdgeSeedProcess::spawn();
     let fixture = seed.prepare_input_target();
@@ -170,21 +152,10 @@ fn production_send_input_full_dispatch_uses_verified_receipt_path() {
     assert_ne!(target_process_id, 0);
 
     let batch = WindowsVerifiedKeyboardBatch::new(vec![
-        WindowsVerifiedKeyEvent {
-            virtual_key: 0x20,
-            transition: WindowsKeyTransition::KeyDown,
-        },
-        WindowsVerifiedKeyEvent {
-            virtual_key: 0x20,
-            transition: WindowsKeyTransition::KeyUp,
-        },
-    ])
-    .expect("construct bounded Space batch");
-    let mut environment = ProductionWindowsEnvironment {
-        target_window_handle,
-        target_process_id,
-        insert_calls: 0,
-    };
+        WindowsVerifiedKeyEvent { virtual_key: 0x20, transition: WindowsKeyTransition::KeyDown },
+        WindowsVerifiedKeyEvent { virtual_key: 0x20, transition: WindowsKeyTransition::KeyUp },
+    ]).expect("construct bounded Space batch");
+    let mut environment = ProductionWindowsEnvironment { target_window_handle, target_process_id, insert_calls: 0 };
 
     let receipt = execute_windows_verified_input_boundary(
         WindowsUiaDispatchContextRequirements {
@@ -194,32 +165,18 @@ fn production_send_input_full_dispatch_uses_verified_receipt_path() {
         },
         &batch,
         &mut environment,
-    )
-    .expect("production Win32 backend must traverse the verified-input receipt boundary");
+    ).expect("production Win32 backend must traverse the verified-input receipt boundary");
 
     assert_eq!(environment.insert_calls, 1, "SendInput must be attempted exactly once");
     assert_eq!(receipt.requested_event_count, 2);
     assert_eq!(receipt.inserted_event_count, 2);
-    assert_eq!(
-        receipt.insertion_class,
-        WindowsInputInsertionClass::FullyInserted
-    );
-    assert!(
-        receipt.reconciliation_required,
-        "full platform acceptance still requires world reconciliation"
-    );
+    assert_eq!(receipt.insertion_class, WindowsInputInsertionClass::FullyInserted);
+    assert!(receipt.reconciliation_required, "full platform acceptance still requires world reconciliation");
 
     let after = seed.wait_for_input_effect(Duration::from_secs(2));
-    assert_eq!(
-        truth_u64(&after, "effect_count"),
-        1,
-        "independent WPF oracle must observe exactly one Space key effect"
-    );
-    assert_eq!(
-        after.get("target_is_foreground").and_then(Value::as_bool),
-        Some(true),
-        "production smoke must not depend on changing foreground ownership"
-    );
-
+    let effect_count = truth_u64(&after, "effect_count");
+    assert_eq!(effect_count, 1, "independent WPF oracle must observe exactly one Space key effect");
+    assert_eq!(after.get("target_is_foreground").and_then(Value::as_bool), Some(true));
+    persist_full_smoke_artifact(receipt.requested_event_count, receipt.inserted_event_count, effect_count);
     seed.shutdown();
 }
