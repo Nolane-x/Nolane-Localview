@@ -1,7 +1,7 @@
 use localview_protocol::{DetailLevel, Rect, TokenBudget};
 use localview_token_budget::{
-    VisualPacketBudget, VisualPacketCandidate, VisualPacketSelectionMode, VisualPacketSource,
-    select_visual_packet,
+    select_visual_packet, VisualPacketBudget, VisualPacketCandidate, VisualPacketSelectionMode,
+    VisualPacketSource,
 };
 
 fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
@@ -69,10 +69,7 @@ fn local_high_information_evidence_beats_expensive_viewport_fallback() {
 
     assert_eq!(selected.mode, VisualPacketSelectionMode::Images);
     assert_eq!(selected.selected.len(), 1);
-    assert_eq!(
-        selected.selected[0].source,
-        VisualPacketSource::ChangedRegion
-    );
+    assert_eq!(selected.selected[0].source, VisualPacketSource::ChangedRegion);
     assert_eq!(selected.selected[0].information_gain_milli, 1000);
     assert_eq!(selected.selected[0].confidence_milli, 1000);
     assert_eq!(selected.selected[0].relevance_milli, 1000);
@@ -116,12 +113,10 @@ fn image_region_budget_selects_distinct_changes_without_redundant_nested_context
     let selected = select_visual_packet((1440, 900), &candidates, &budget(2)).unwrap();
 
     assert_eq!(selected.selected.len(), 2);
-    assert!(
-        selected
-            .selected
-            .iter()
-            .all(|item| item.source == VisualPacketSource::ChangedRegion)
-    );
+    assert!(selected
+        .selected
+        .iter()
+        .all(|item| item.source == VisualPacketSource::ChangedRegion));
     assert!(selected.selected[0].rect.x < selected.selected[1].rect.x);
 }
 
@@ -153,10 +148,7 @@ fn invalid_or_out_of_viewport_candidate_geometry_fails_closed() {
     )];
 
     let error = select_visual_packet((390, 844), &candidates, &budget(1)).unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "visual packet candidate geometry is outside the viewport"
-    );
+    assert_eq!(error.to_string(), "visual packet candidate geometry is outside the viewport");
 }
 
 #[test]
@@ -176,8 +168,8 @@ fn selection_is_input_order_independent_for_equal_candidate_sets() {
         1000,
     );
 
-    let forward =
-        select_visual_packet((1200, 800), &[left.clone(), right.clone()], &budget(2)).unwrap();
+    let forward = select_visual_packet((1200, 800), &[left.clone(), right.clone()], &budget(2))
+        .unwrap();
     let reversed = select_visual_packet((1200, 800), &[right, left], &budget(2)).unwrap();
 
     assert_eq!(forward.selected, reversed.selected);

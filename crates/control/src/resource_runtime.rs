@@ -6,11 +6,11 @@ use std::{
 };
 
 use axum::{
-    Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
+    Json, Router,
 };
 use localview_protocol::SessionId;
 use localview_resource_governor::{
@@ -22,14 +22,14 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    ControlState,
     perception::{authorized, denied},
     surface_liveness::reap_expired_surface_owner_resources_for_sessions,
     surface_owner::{
-        SurfaceOwnerError, SurfaceOwnerProof, pin_surface_owner_for_sessions,
-        register_surface_owner_for_sessions,
+        pin_surface_owner_for_sessions, register_surface_owner_for_sessions, SurfaceOwnerError,
+        SurfaceOwnerProof,
     },
-    surface_recovery::{SurfaceRecoveryKey, surface_recovery_journal_for_sessions},
+    surface_recovery::{surface_recovery_journal_for_sessions, SurfaceRecoveryKey},
+    ControlState,
 };
 
 #[derive(Debug)]
@@ -408,8 +408,11 @@ async fn activate_surface_resource(
     if request.incarnation == 0 {
         return surface_bad_request("invalid_surface_identity");
     }
-    let Some(identity) = surface_identity(request.surface_kind, request.label, request.incarnation)
-    else {
+    let Some(identity) = surface_identity(
+        request.surface_kind,
+        request.label,
+        request.incarnation,
+    ) else {
         return surface_bad_request("invalid_surface_identity");
     };
     let Some(recovery) = surface_recovery_journal_for_sessions(&state.sessions) else {
@@ -425,11 +428,7 @@ async fn activate_surface_resource(
         Ok(key) => key,
         Err(_) => return surface_bad_request("invalid_surface_identity"),
     };
-    let claim = (
-        proof.owner_instance_id,
-        request.session_id,
-        identity.clone(),
-    );
+    let claim = (proof.owner_instance_id, request.session_id, identity.clone());
 
     let reservation = {
         let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -492,8 +491,11 @@ async fn reattach_surface_resource(
     if request.incarnation == 0 {
         return surface_bad_request("invalid_surface_identity");
     }
-    let Some(identity) = surface_identity(request.surface_kind, request.label, request.incarnation)
-    else {
+    let Some(identity) = surface_identity(
+        request.surface_kind,
+        request.label,
+        request.incarnation,
+    ) else {
         return surface_bad_request("invalid_surface_identity");
     };
     let Some(recovery) = surface_recovery_journal_for_sessions(&state.sessions) else {
@@ -513,11 +515,7 @@ async fn reattach_surface_resource(
         return surface_conflict("surface_recovery_debt_missing");
     }
 
-    let claim = (
-        proof.owner_instance_id,
-        request.session_id,
-        identity.clone(),
-    );
+    let claim = (proof.owner_instance_id, request.session_id, identity.clone());
     let reservation = {
         let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
         let mut entries = lock_surface_registry(registry);
@@ -573,8 +571,11 @@ async fn update_surface_visibility(
         Ok(guard) => guard,
         Err(error) => return surface_owner_conflict(error),
     };
-    let Some(identity) = surface_identity(request.surface_kind, request.label, request.incarnation)
-    else {
+    let Some(identity) = surface_identity(
+        request.surface_kind,
+        request.label,
+        request.incarnation,
+    ) else {
         return surface_bad_request("invalid_surface_identity");
     };
 
@@ -583,11 +584,7 @@ async fn update_surface_visibility(
     let Some(entry) = existing_surface_entry_mut(&mut entries, &state.sessions) else {
         return surface_conflict("surface_owner_missing");
     };
-    let key = (
-        proof.owner_instance_id,
-        request.session_id,
-        identity.clone(),
-    );
+    let key = (proof.owner_instance_id, request.session_id, identity.clone());
     let Some(lease) = entry.live.get(&key) else {
         return if surface_owned_by_other_owner(
             entry,
@@ -622,8 +619,11 @@ async fn release_surface_resource(
         Ok(guard) => guard,
         Err(error) => return surface_owner_conflict(error),
     };
-    let Some(identity) = surface_identity(request.surface_kind, request.label, request.incarnation)
-    else {
+    let Some(identity) = surface_identity(
+        request.surface_kind,
+        request.label,
+        request.incarnation,
+    ) else {
         return surface_bad_request("invalid_surface_identity");
     };
     let recovery = surface_recovery_journal_for_sessions(&state.sessions);
@@ -634,11 +634,7 @@ async fn release_surface_resource(
         let Some(entry) = existing_surface_entry_mut(&mut entries, &state.sessions) else {
             return surface_conflict("surface_owner_missing");
         };
-        let key = (
-            proof.owner_instance_id,
-            request.session_id,
-            identity.clone(),
-        );
+        let key = (proof.owner_instance_id, request.session_id, identity.clone());
         if !entry.live.contains_key(&key) {
             return if surface_owned_by_other_owner(
                 entry,
@@ -696,15 +692,12 @@ fn surface_owned_by_other_owner(
     session_id: SessionId,
     identity: &LiveSurfaceIdentity,
 ) -> bool {
-    entry
-        .live
-        .keys()
-        .any(|(current_owner, current_session, current)| {
-            *current_owner != owner_instance_id
-                && *current_session == session_id
-                && current.surface_kind == identity.surface_kind
-                && current.label == identity.label
-        })
+    entry.live.keys().any(|(current_owner, current_session, current)| {
+        *current_owner != owner_instance_id
+            && *current_session == session_id
+            && current.surface_kind == identity.surface_kind
+            && current.label == identity.label
+    })
 }
 
 fn clear_activating_claim(

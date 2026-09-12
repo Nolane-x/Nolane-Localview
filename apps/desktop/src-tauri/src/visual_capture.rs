@@ -9,19 +9,20 @@ use std::{
 use localview_artifacts::ArtifactStore;
 use localview_capture::{CaptureTarget, SettleDecision, SettleReason, StableCapturePolicy};
 use localview_native_capture::{
-    CaptureRequest, CapturedFrame, NativeCaptureError, ViewportMeta, capture_webview,
+    capture_webview, CaptureRequest, CapturedFrame, NativeCaptureError, ViewportMeta,
 };
 use localview_protocol::{Rect, SessionId};
 use localview_resource_governor::{
-    RetainedResourceBudget, RetainedResourceKind, RetainedResourceLedger, RetainedResourceViolation,
+    RetainedResourceBudget, RetainedResourceKind, RetainedResourceLedger,
+    RetainedResourceViolation,
 };
 use localview_visual::{
-    ChangedRegionPlan, ChangedRegionPolicy, RgbaImage, VisualBaselineCache, VisualBaselineContext,
-    decode_png_rgba, encode_png_rgba, plan_changed_css_regions,
+    decode_png_rgba, encode_png_rgba, plan_changed_css_regions, ChangedRegionPlan,
+    ChangedRegionPolicy, RgbaImage, VisualBaselineCache, VisualBaselineContext,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 use crate::{control_client, err, read_token, state_dir, workspace_surface};
 use workspace_surface::{bridge_surface_label_allowed, workspace_navigation_allowed};
@@ -249,7 +250,9 @@ pub async fn capture_changed_regions(
             ChangedRegionPolicy::default(),
         )
         .map_err(|_| "changed-region visual planning failed; pixels discarded".to_string())?,
-        None => ChangedRegionPlan::Viewport { changed_ratio: 1.0 },
+        None => ChangedRegionPlan::Viewport {
+            changed_ratio: 1.0,
+        },
     };
 
     if let ChangedRegionPlan::Unchanged = &plan {
@@ -382,16 +385,14 @@ async fn compatible_changed_baseline(
         .expect("visual baseline cache initialized above");
     let retained_resources = &state.retained_resources;
 
-    let current_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
-        "visual baseline retained usage exceeds supported accounting range".to_string()
-    })?;
+    let current_bytes = u64::try_from(baselines.used_bytes())
+        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
     retained_resources
         .synchronize(RetainedResourceKind::Cache, current_bytes)
         .map_err(retained_resource_error)?;
     let compatible = baselines.get_compatible(session_id, context);
-    let actual_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
-        "visual baseline retained usage exceeds supported accounting range".to_string()
-    })?;
+    let actual_bytes = u64::try_from(baselines.used_bytes())
+        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
     retained_resources
         .synchronize(RetainedResourceKind::Cache, actual_bytes)
         .map_err(retained_resource_error)?;
@@ -416,9 +417,8 @@ async fn commit_changed_baseline(
         .expect("visual baseline cache initialized above");
     let retained_resources = &state.retained_resources;
 
-    let current_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
-        "visual baseline retained usage exceeds supported accounting range".to_string()
-    })?;
+    let current_bytes = u64::try_from(baselines.used_bytes())
+        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
     retained_resources
         .synchronize(RetainedResourceKind::Cache, current_bytes)
         .map_err(retained_resource_error)?;
@@ -435,19 +435,16 @@ async fn commit_changed_baseline(
     else {
         return Ok(false);
     };
-    let projected_bytes = u64::try_from(projected_bytes).map_err(|_| {
-        "visual baseline retained projection exceeds supported accounting range".to_string()
-    })?;
+    let projected_bytes = u64::try_from(projected_bytes)
+        .map_err(|_| "visual baseline retained projection exceeds supported accounting range".to_string())?;
     retained_resources
         .admit_projected(RetainedResourceKind::Cache, projected_bytes)
         .map_err(retained_resource_error)?;
 
     let insert_result = baselines.insert(session_id, context, image);
-    let actual_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
-        "visual baseline retained usage exceeds supported accounting range".to_string()
-    })?;
-    let reconcile_result =
-        retained_resources.synchronize(RetainedResourceKind::Cache, actual_bytes);
+    let actual_bytes = u64::try_from(baselines.used_bytes())
+        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
+    let reconcile_result = retained_resources.synchronize(RetainedResourceKind::Cache, actual_bytes);
 
     let cached = insert_result
         .map_err(|_| "visual baseline cache rejected the captured frame".to_string())?;
@@ -538,8 +535,9 @@ async fn emit_changed_capture_plan(
                     captured_at_unix_ms,
                 };
                 let target = RequestedCaptureTarget::Region(rect.clone());
-                receipts
-                    .push(persist_and_register(state, session_id, region_frame, &target).await?);
+                receipts.push(
+                    persist_and_register(state, session_id, region_frame, &target).await?,
+                );
             }
 
             Ok(ChangedCaptureEmission {
@@ -612,8 +610,8 @@ async fn register_visual_diff_evidence(
 }
 
 fn canonical_visual_diff_route(route: &str) -> Result<String, String> {
-    let mut route =
-        url::Url::parse(route).map_err(|_| "visual diff route is not a valid URL".to_string())?;
+    let mut route = url::Url::parse(route)
+        .map_err(|_| "visual diff route is not a valid URL".to_string())?;
     route.set_query(None);
     route.set_fragment(None);
     Ok(route.to_string())
@@ -685,9 +683,7 @@ fn validate_live_target_viewport(
         && (frame.viewport.css_width as f64 != freeze.viewport_css_width
             || frame.viewport.css_height as f64 != freeze.viewport_css_height)
     {
-        return Err(
-            "native visual region viewport changed during capture; pixels discarded".into(),
-        );
+        return Err("native visual region viewport changed during capture; pixels discarded".into());
     }
     Ok(())
 }
@@ -758,11 +754,17 @@ async fn wait_for_capture_settle(session_id: SessionId) -> Result<(), String> {
         }
     };
 
-    match tokio::time::timeout(Duration::from_millis(policy.timeout_ms), settle_transaction).await {
+    match tokio::time::timeout(
+        Duration::from_millis(policy.timeout_ms),
+        settle_transaction,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(_) => {
             let reasons = last_reasons.lock().await;
-            let reason_names = serde_json::to_string(&*reasons).unwrap_or_else(|_| "[]".to_owned());
+            let reason_names =
+                serde_json::to_string(&*reasons).unwrap_or_else(|_| "[]".to_owned());
             Err(format!(
                 "stable capture settle timed out after {} ms; last_reasons={reason_names}",
                 policy.timeout_ms
@@ -860,7 +862,11 @@ fn apply_capture_target(
         return Ok(frame);
     };
 
-    validate_region(rect, freeze.viewport_css_width, freeze.viewport_css_height)?;
+    validate_region(
+        rect,
+        freeze.viewport_css_width,
+        freeze.viewport_css_height,
+    )?;
     let cropped = localview_visual::crop_png_css_rect(
         &frame.png,
         (frame.pixel_width, frame.pixel_height),
@@ -868,9 +874,8 @@ fn apply_capture_target(
         rect,
     )
     .map_err(|_| "native visual region crop failed; pixels discarded".to_string())?;
-    let decoded = localview_visual::decode_png_rgba(&cropped).map_err(|_| {
-        "native visual region crop verification failed; pixels discarded".to_string()
-    })?;
+    let decoded = localview_visual::decode_png_rgba(&cropped)
+        .map_err(|_| "native visual region crop verification failed; pixels discarded".to_string())?;
 
     frame.png = cropped;
     frame.pixel_width = decoded.width;
@@ -1015,8 +1020,8 @@ async fn persist_and_register(
 
         let put_result = artifacts.put("visual/png", &png).await;
         let actual_bytes = artifacts.used_bytes();
-        let reconcile_result =
-            retained_resources.synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
+        let reconcile_result = retained_resources
+            .synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
 
         let artifact = put_result.map_err(err)?;
         reconcile_result.map_err(retained_resource_error)?;
@@ -1080,13 +1085,15 @@ fn retained_resource_error(violation: RetainedResourceViolation) -> String {
     };
     format!(
         "retained resource denied: kind={kind} current={} projected_or_observed={} limit={}",
-        violation.current_bytes, violation.projected_or_observed_bytes, violation.limit_bytes
+        violation.current_bytes,
+        violation.projected_or_observed_bytes,
+        violation.limit_bytes
     )
 }
 
 use localview_capture::{
-    ProgressiveTargetError, ProgressiveTargetKind, ProgressiveTargetProvenance,
-    resolve_progressive_targets,
+    resolve_progressive_targets, ProgressiveTargetError, ProgressiveTargetKind,
+    ProgressiveTargetProvenance,
 };
 use localview_protocol::{ElementRef, PageSnapshot};
 
@@ -1117,8 +1124,7 @@ pub async fn capture_progressive_target(
     let _capture_guard = capture_gate.lock().await;
 
     let snapshot = fresh_semantic_snapshot(session_id).await?;
-    let plan =
-        resolve_progressive_targets(&snapshot, &reference).map_err(progressive_target_error)?;
+    let plan = resolve_progressive_targets(&snapshot, &reference).map_err(progressive_target_error)?;
     if snapshot.viewport != (viewport.css_width, viewport.css_height) {
         return Err("progressive target viewport does not match fresh semantic snapshot".into());
     }
@@ -1209,16 +1215,7 @@ fn validate_progressive_live_state(
 
 fn progressive_route_signature(
     route: &str,
-) -> Result<
-    (
-        String,
-        Option<String>,
-        Option<u16>,
-        String,
-        Vec<(String, String)>,
-    ),
-    String,
-> {
+) -> Result<(String, Option<String>, Option<u16>, String, Vec<(String, String)>), String> {
     let url = url::Url::parse(route)
         .map_err(|_| "progressive target route is not a valid URL".to_string())?;
     let mut query = Vec::new();

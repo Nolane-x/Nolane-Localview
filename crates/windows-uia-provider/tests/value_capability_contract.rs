@@ -69,7 +69,10 @@ fn value_supported_with_explicit_non_password_writable_facts_is_admissible() {
     )));
 
     assert_eq!(facts.is_password(), WindowsUiaBooleanCapabilityFact::False);
-    assert_eq!(facts.is_read_only(), WindowsUiaBooleanCapabilityFact::False);
+    assert_eq!(
+        facts.is_read_only(),
+        WindowsUiaBooleanCapabilityFact::False
+    );
     assert!(
         facts.permits_set_value(),
         "SetValue admission requires exact Value support plus explicit non-password and writable facts"

@@ -3,11 +3,11 @@
 use std::time::Duration;
 
 use axum::{
-    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
+    Json, Router,
 };
 use chrono::Utc;
 use localview_evidence::{EvidenceKind, EvidenceObject, UncertaintyClass};
@@ -16,15 +16,16 @@ use localview_protocol::{SessionId, ViewportMeta};
 use serde_json::Value;
 
 use crate::{
-    ControlState,
     perception::{authorized, denied},
+    ControlState,
 };
 
 const MAX_NATIVE_EXECUTOR_POLL_BATCH: usize = 8;
 const NATIVE_EXECUTOR_ACTIVE_LEASE_SECS: i64 = 15;
 const MAX_NATIVE_EXECUTOR_EVIDENCE_IDS: usize = 8;
 const NATIVE_EXECUTOR_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const NATIVE_VISUAL_EVIDENCE_CORRELATION_ERROR: &str = "native visual evidence correlation failed";
+const NATIVE_VISUAL_EVIDENCE_CORRELATION_ERROR: &str =
+    "native visual evidence correlation failed";
 
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,7 +271,13 @@ async fn native_visual_diff_result_correlated(
         let Some(visual) = state.evidence.get(visual_id).await else {
             return false;
         };
-        if !authoritative_native_visual_evidence(&visual, request, result, viewport, revision) {
+        if !authoritative_native_visual_evidence(
+            &visual,
+            request,
+            result,
+            viewport,
+            revision,
+        ) {
             return false;
         }
     }
@@ -346,9 +353,13 @@ fn evidence_viewport_matches(evidence: &EvidenceObject, viewport: &ViewportMeta)
     let Some(evidence_viewport) = evidence.payload.get("viewport") else {
         return false;
     };
-    let width_matches = evidence_viewport.get("css_width").and_then(Value::as_u64)
+    let width_matches = evidence_viewport
+        .get("css_width")
+        .and_then(Value::as_u64)
         == Some(u64::from(viewport.css_width));
-    let height_matches = evidence_viewport.get("css_height").and_then(Value::as_u64)
+    let height_matches = evidence_viewport
+        .get("css_height")
+        .and_then(Value::as_u64)
         == Some(u64::from(viewport.css_height));
     let scale_matches = evidence_viewport
         .get("device_scale_factor")

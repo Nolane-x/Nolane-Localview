@@ -7,10 +7,7 @@ fn contract_source(name: &str) -> String {
         .join("tests")
         .join(name);
     fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!(
-            "required D2 restart contract {} is unavailable: {error}",
-            path.display()
-        )
+        panic!("required D2 restart contract {} is unavailable: {error}", path.display())
     })
 }
 

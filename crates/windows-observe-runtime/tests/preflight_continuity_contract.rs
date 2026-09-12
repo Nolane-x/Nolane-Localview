@@ -49,10 +49,7 @@ impl Provider {
 
     fn snapshot(&self, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
         let mut capabilities = WindowsUiaActionCapabilities::default();
-        capabilities.record(
-            WindowsUiaPattern::Invoke,
-            WindowsUiaPatternSupport::Supported,
-        );
+        capabilities.record(WindowsUiaPattern::Invoke, WindowsUiaPatternSupport::Supported);
         let mut attributes = BTreeMap::new();
         capabilities.write_attributes(&mut attributes);
         let element_ref = ProviderElementRef {
@@ -66,8 +63,7 @@ impl Provider {
             realization: ProviderElementRealization::RealizedCurrent,
             lifetime_profile_revision: "windows-uia-lifetime-v1".into(),
         };
-        let mut cache =
-            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -113,10 +109,7 @@ impl WindowsObserveProvider for Provider {
         self.provider.clone()
     }
 
-    fn attach(
-        &self,
-        _selection: UserSelectedWindowTarget,
-    ) -> Result<Self::Attachment, Self::Error> {
+    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
         Ok(Attachment(self.target.clone()))
     }
 
@@ -136,10 +129,7 @@ impl WindowsObserveProvider for Provider {
         }))
     }
 
-    fn subscription_lineage(
-        &self,
-        subscription: &Self::Subscription,
-    ) -> WindowsObserveSubscriptionLineage {
+    fn subscription_lineage(&self, subscription: &Self::Subscription) -> WindowsObserveSubscriptionLineage {
         subscription.0.clone()
     }
 

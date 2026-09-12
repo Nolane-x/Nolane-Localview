@@ -79,11 +79,7 @@ fn element_ref_json() -> serde_json::Value {
     })
 }
 
-async fn post(
-    app: axum::Router,
-    session_id: Uuid,
-    body: serde_json::Value,
-) -> (StatusCode, String) {
+async fn post(app: axum::Router, session_id: Uuid, body: serde_json::Value) -> (StatusCode, String) {
     let response = app
         .oneshot(
             Request::builder()

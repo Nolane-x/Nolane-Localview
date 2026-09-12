@@ -76,14 +76,14 @@ fn restore_is_attempted_after_native_failure_and_failure_discards_pixels() {
     let module = include_str!("../src/visual_capture.rs");
 
     assert!(module.contains("let native_result = capture_managed_surface("));
-    assert!(
-        module.contains(
-            "let restore_result = restore_visual_state(session_id, &freeze.token).await;"
-        )
-    );
+    assert!(module.contains(
+        "let restore_result = restore_visual_state(session_id, &freeze.token).await;"
+    ));
     assert!(module.contains("visual capture restore acknowledgement failed; pixels discarded"));
     assert!(module.contains("match (native_result, restore_result)"));
-    assert!(module.contains("(Err(native_error), Ok(())) => return Err(native_error)"));
+    assert!(module.contains(
+        "(Err(native_error), Ok(())) => return Err(native_error)"
+    ));
     assert!(module.contains("(Ok(_), Err(_)) | (Err(_), Err(_))"));
 
     assert!(!module.contains("eval("));
@@ -130,9 +130,7 @@ fn region_capture_rejects_live_viewport_drift_before_persistence() {
     let module = include_str!("../src/visual_capture.rs");
 
     assert!(module.contains("validate_live_target_viewport"));
-    assert!(
-        module.contains("native visual region viewport changed during capture; pixels discarded")
-    );
+    assert!(module.contains("native visual region viewport changed during capture; pixels discarded"));
     assert!(module.contains("frame.viewport.css_width"));
     assert!(module.contains("frame.viewport.css_height"));
     assert!(module.contains("freeze.viewport_css_width"));

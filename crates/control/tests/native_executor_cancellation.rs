@@ -1,14 +1,14 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{
-    body::{Body, to_bytes},
-    http::{Method, Request, StatusCode, header},
+    body::{to_bytes, Body},
+    http::{header, Method, Request, StatusCode},
 };
 use chrono::Utc;
-use localview_control::{ControlState, router};
+use localview_control::{router, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{LiveBridge, NativeExecutorAction};
 use localview_observation::ObservationBus;
@@ -120,11 +120,7 @@ async fn queued_cancel_is_terminal_idempotent_and_session_scoped() {
         .await;
 
     let (wrong_status, wrong_body) = cancel(state.clone(), other, request.id).await;
-    assert_eq!(
-        wrong_status,
-        StatusCode::NOT_FOUND,
-        "cross-session: {wrong_body}"
-    );
+    assert_eq!(wrong_status, StatusCode::NOT_FOUND, "cross-session: {wrong_body}");
 
     let (status, body) = cancel(state.clone(), owner, request.id).await;
     assert_eq!(status, StatusCode::OK, "cancel: {body}");
@@ -173,11 +169,7 @@ async fn inflight_cancel_emits_one_cooperative_signal_and_ack_is_idempotent() {
     assert_eq!(body["acknowledged"], false);
 
     let (repeat_status, repeat_body) = cancel(state.clone(), owner, request.id).await;
-    assert_eq!(
-        repeat_status,
-        StatusCode::ACCEPTED,
-        "repeat request: {repeat_body}"
-    );
+    assert_eq!(repeat_status, StatusCode::ACCEPTED, "repeat request: {repeat_body}");
     assert_eq!(repeat_body["state"], "cancellation_requested");
 
     let (signal_status, signal_body) = send(
@@ -247,7 +239,9 @@ async fn acknowledged_cancellation_rejects_late_result_and_releases_executor_cap
     let (ack_status, _) = send(
         state.clone(),
         Method::POST,
-        format!("/v1/sessions/{owner}/native-executor/cancellations/{request_id}/ack"),
+        format!(
+            "/v1/sessions/{owner}/native-executor/cancellations/{request_id}/ack"
+        ),
         None,
     )
     .await;
@@ -285,9 +279,5 @@ async fn acknowledged_cancellation_rejects_late_result_and_releases_executor_cap
         })),
     )
     .await;
-    assert_eq!(
-        late_status,
-        StatusCode::CONFLICT,
-        "late result: {late_body}"
-    );
+    assert_eq!(late_status, StatusCode::CONFLICT, "late result: {late_body}");
 }

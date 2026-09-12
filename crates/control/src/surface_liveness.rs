@@ -3,24 +3,24 @@
 use std::{sync::Arc, time::Instant};
 
 use axum::{
-    Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
+    Json, Router,
 };
 use localview_sessions::SessionManager;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    ControlState,
     perception::{authorized, denied},
     resource_runtime::release_surface_resource_owner_for_sessions,
     surface_owner::{
-        SurfaceOwnerError, SurfaceOwnerProof, heartbeat_surface_owner_for_sessions_at,
-        reap_expired_surface_owners_for_sessions_at,
+        heartbeat_surface_owner_for_sessions_at, reap_expired_surface_owners_for_sessions_at,
+        SurfaceOwnerError, SurfaceOwnerProof,
     },
+    ControlState,
 };
 
 #[derive(Debug, Deserialize)]
@@ -80,7 +80,9 @@ pub fn reap_expired_surface_owner_resources_for_sessions_at(
         .sum()
 }
 
-pub fn reap_expired_surface_owner_resources_for_sessions(sessions: &Arc<SessionManager>) -> usize {
+pub fn reap_expired_surface_owner_resources_for_sessions(
+    sessions: &Arc<SessionManager>,
+) -> usize {
     reap_expired_surface_owner_resources_for_sessions_at(sessions, Instant::now())
 }
 

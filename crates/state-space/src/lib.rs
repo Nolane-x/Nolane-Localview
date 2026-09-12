@@ -23,18 +23,8 @@ pub struct StateDimension {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Constraint {
-    ForbidPair {
-        left_dimension: String,
-        left_value: String,
-        right_dimension: String,
-        right_value: String,
-    },
-    RequirePair {
-        when_dimension: String,
-        when_value: String,
-        required_dimension: String,
-        allowed_values: BTreeSet<String>,
-    },
+    ForbidPair { left_dimension: String, left_value: String, right_dimension: String, right_value: String },
+    RequirePair { when_dimension: String, when_value: String, required_dimension: String, allowed_values: BTreeSet<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,11 +36,7 @@ pub struct ProductState {
 
 impl ProductState {
     pub fn key(&self) -> String {
-        self.values
-            .iter()
-            .map(|(dimension, value)| format!("{dimension}={value}"))
-            .collect::<Vec<_>>()
-            .join("|")
+        self.values.iter().map(|(dimension, value)| format!("{dimension}={value}")).collect::<Vec<_>>().join("|")
     }
 }
 
@@ -71,18 +57,9 @@ pub struct CompiledStateSpace {
 
 pub fn compile(plan: &StateSpacePlan) -> CompiledStateSpace {
     if plan.dimensions.is_empty() {
-        return CompiledStateSpace {
-            states: Vec::new(),
-            total_unconstrained_combinations: 0,
-            pair_coverage: 1.0,
-            eliminated_by_constraints: 0,
-        };
+        return CompiledStateSpace { states: Vec::new(), total_unconstrained_combinations: 0, pair_coverage: 1.0, eliminated_by_constraints: 0 };
     }
-    let total_unconstrained_combinations = plan
-        .dimensions
-        .iter()
-        .map(|dimension| dimension.values.len().max(1))
-        .product();
+    let total_unconstrained_combinations = plan.dimensions.iter().map(|dimension| dimension.values.len().max(1)).product();
     let mut all = Vec::new();
     expand_states(&plan.dimensions, 0, &mut BTreeMap::new(), &mut all);
     let before_constraints = all.len();
@@ -91,18 +68,9 @@ pub fn compile(plan: &StateSpacePlan) -> CompiledStateSpace {
 
     for state in &mut all {
         state.score = risk_score(state, &plan.dimensions);
-        state.provenance = state
-            .values
-            .iter()
-            .map(|(dimension, value)| format!("dimension:{dimension}={value}"))
-            .collect();
+        state.provenance = state.values.iter().map(|(dimension, value)| format!("dimension:{dimension}={value}")).collect();
     }
-    all.sort_by(|left, right| {
-        right
-            .score
-            .total_cmp(&left.score)
-            .then_with(|| left.key().cmp(&right.key()))
-    });
+    all.sort_by(|left, right| right.score.total_cmp(&left.score).then_with(|| left.key().cmp(&right.key())));
 
     let target = plan.max_states.max(1).min(all.len());
     let universe = pair_universe(&all, &plan.dimensions);
@@ -111,48 +79,25 @@ pub fn compile(plan: &StateSpacePlan) -> CompiledStateSpace {
     let mut remaining = all;
 
     while selected.len() < target && !remaining.is_empty() {
-        let (best_index, _) = remaining
-            .iter()
-            .enumerate()
-            .map(|(index, state)| {
-                let pairs = state_pairs(state, &plan.dimensions);
-                let new_pairs = pairs.iter().filter(|pair| !covered.contains(*pair)).count();
-                let boundary_bonus = boundary_hits(state, &plan.dimensions);
-                let utility = new_pairs as f32 * 10.0 + boundary_bonus as f32 * 3.0 + state.score;
-                (index, utility)
-            })
-            .max_by(|left, right| left.1.total_cmp(&right.1))
-            .expect("remaining is not empty");
+        let (best_index, _) = remaining.iter().enumerate().map(|(index, state)| {
+            let pairs = state_pairs(state, &plan.dimensions);
+            let new_pairs = pairs.iter().filter(|pair| !covered.contains(*pair)).count();
+            let boundary_bonus = boundary_hits(state, &plan.dimensions);
+            let utility = new_pairs as f32 * 10.0 + boundary_bonus as f32 * 3.0 + state.score;
+            (index, utility)
+        }).max_by(|left, right| left.1.total_cmp(&right.1)).expect("remaining is not empty");
         let picked = remaining.remove(best_index);
         covered.extend(state_pairs(&picked, &plan.dimensions));
         selected.push(picked);
     }
 
-    let pair_coverage = if universe.is_empty() {
-        1.0
-    } else {
-        covered.intersection(&universe).count() as f32 / universe.len() as f32
-    };
-    CompiledStateSpace {
-        states: selected,
-        total_unconstrained_combinations,
-        pair_coverage,
-        eliminated_by_constraints,
-    }
+    let pair_coverage = if universe.is_empty() { 1.0 } else { covered.intersection(&universe).count() as f32 / universe.len() as f32 };
+    CompiledStateSpace { states: selected, total_unconstrained_combinations, pair_coverage, eliminated_by_constraints }
 }
 
-fn expand_states(
-    dimensions: &[StateDimension],
-    index: usize,
-    current: &mut BTreeMap<String, String>,
-    output: &mut Vec<ProductState>,
-) {
+fn expand_states(dimensions: &[StateDimension], index: usize, current: &mut BTreeMap<String, String>, output: &mut Vec<ProductState>) {
     if index == dimensions.len() {
-        output.push(ProductState {
-            values: current.clone(),
-            score: 0.0,
-            provenance: Vec::new(),
-        });
+        output.push(ProductState { values: current.clone(), score: 0.0, provenance: Vec::new() });
         return;
     }
     let dimension = &dimensions[index];
@@ -165,47 +110,24 @@ fn expand_states(
 
 fn satisfies_constraints(values: &BTreeMap<String, String>, constraints: &[Constraint]) -> bool {
     constraints.iter().all(|constraint| match constraint {
-        Constraint::ForbidPair {
-            left_dimension,
-            left_value,
-            right_dimension,
-            right_value,
-        } => {
-            !(values.get(left_dimension) == Some(left_value)
-                && values.get(right_dimension) == Some(right_value))
+        Constraint::ForbidPair { left_dimension, left_value, right_dimension, right_value } => {
+            !(values.get(left_dimension) == Some(left_value) && values.get(right_dimension) == Some(right_value))
         }
-        Constraint::RequirePair {
-            when_dimension,
-            when_value,
-            required_dimension,
-            allowed_values,
-        } => {
-            values.get(when_dimension) != Some(when_value)
-                || values
-                    .get(required_dimension)
-                    .is_some_and(|value| allowed_values.contains(value))
+        Constraint::RequirePair { when_dimension, when_value, required_dimension, allowed_values } => {
+            values.get(when_dimension) != Some(when_value) || values.get(required_dimension).is_some_and(|value| allowed_values.contains(value))
         }
     })
 }
 
 fn risk_score(state: &ProductState, dimensions: &[StateDimension]) -> f32 {
-    dimensions
-        .iter()
-        .map(|dimension| {
-            let boundary = state
-                .values
-                .get(&dimension.id)
-                .is_some_and(|value| dimension.boundary_values.contains(value));
-            dimension.risk_weight.max(0.0) * if boundary { 1.5 } else { 1.0 }
-        })
-        .sum()
+    dimensions.iter().map(|dimension| {
+        let boundary = state.values.get(&dimension.id).is_some_and(|value| dimension.boundary_values.contains(value));
+        dimension.risk_weight.max(0.0) * if boundary { 1.5 } else { 1.0 }
+    }).sum()
 }
 
 fn pair_universe(states: &[ProductState], dimensions: &[StateDimension]) -> HashSet<String> {
-    states
-        .iter()
-        .flat_map(|state| state_pairs(state, dimensions))
-        .collect()
+    states.iter().flat_map(|state| state_pairs(state, dimensions)).collect()
 }
 
 fn state_pairs(state: &ProductState, dimensions: &[StateDimension]) -> Vec<String> {
@@ -214,13 +136,8 @@ fn state_pairs(state: &ProductState, dimensions: &[StateDimension]) -> Vec<Strin
         for right in (left + 1)..dimensions.len() {
             let left_dimension = &dimensions[left].id;
             let right_dimension = &dimensions[right].id;
-            if let (Some(left_value), Some(right_value)) = (
-                state.values.get(left_dimension),
-                state.values.get(right_dimension),
-            ) {
-                result.push(format!(
-                    "{left_dimension}={left_value}|{right_dimension}={right_value}"
-                ));
+            if let (Some(left_value), Some(right_value)) = (state.values.get(left_dimension), state.values.get(right_dimension)) {
+                result.push(format!("{left_dimension}={left_value}|{right_dimension}={right_value}"));
             }
         }
     }
@@ -228,15 +145,7 @@ fn state_pairs(state: &ProductState, dimensions: &[StateDimension]) -> Vec<Strin
 }
 
 fn boundary_hits(state: &ProductState, dimensions: &[StateDimension]) -> usize {
-    dimensions
-        .iter()
-        .filter(|dimension| {
-            state
-                .values
-                .get(&dimension.id)
-                .is_some_and(|value| dimension.boundary_values.contains(value))
-        })
-        .count()
+    dimensions.iter().filter(|dimension| state.values.get(&dimension.id).is_some_and(|value| dimension.boundary_values.contains(value))).count()
 }
 
 #[cfg(test)]
@@ -246,14 +155,7 @@ mod tests {
     fn dimension(id: &str, values: &[&str]) -> StateDimension {
         StateDimension {
             id: id.into(),
-            values: values
-                .iter()
-                .map(|value| StateValue {
-                    id: (*value).into(),
-                    label: (*value).into(),
-                    metadata: BTreeMap::new(),
-                })
-                .collect(),
+            values: values.iter().map(|value| StateValue { id: (*value).into(), label: (*value).into(), metadata: BTreeMap::new() }).collect(),
             risk_weight: 1.0,
             boundary_values: BTreeSet::new(),
         }
@@ -262,28 +164,14 @@ mod tests {
     #[test]
     fn compiler_respects_forbidden_pairs_and_reduces_state_set() {
         let plan = StateSpacePlan {
-            dimensions: vec![
-                dimension("theme", &["light", "dark"]),
-                dimension("locale", &["en", "ar"]),
-                dimension("viewport", &["mobile", "desktop"]),
-            ],
-            constraints: vec![Constraint::ForbidPair {
-                left_dimension: "theme".into(),
-                left_value: "dark".into(),
-                right_dimension: "locale".into(),
-                right_value: "ar".into(),
-            }],
+            dimensions: vec![dimension("theme", &["light", "dark"]), dimension("locale", &["en", "ar"]), dimension("viewport", &["mobile", "desktop"])],
+            constraints: vec![Constraint::ForbidPair { left_dimension: "theme".into(), left_value: "dark".into(), right_dimension: "locale".into(), right_value: "ar".into() }],
             max_states: 4,
         };
         let compiled = compile(&plan);
         assert_eq!(compiled.total_unconstrained_combinations, 8);
         assert!(compiled.states.len() <= 4);
-        assert!(
-            compiled
-                .states
-                .iter()
-                .all(|state| !(state.values["theme"] == "dark" && state.values["locale"] == "ar"))
-        );
+        assert!(compiled.states.iter().all(|state| !(state.values["theme"] == "dark" && state.values["locale"] == "ar")));
         assert!(compiled.pair_coverage > 0.5);
     }
 }

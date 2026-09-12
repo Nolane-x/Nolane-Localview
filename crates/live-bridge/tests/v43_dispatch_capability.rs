@@ -59,10 +59,7 @@ async fn admitted_and_authorized(
     journal: &ConsequentialJournal,
     action: &CanonicalActionEnvelope,
 ) -> u64 {
-    journal
-        .record_intent_admitted(action.clone())
-        .await
-        .unwrap();
+    journal.record_intent_admitted(action.clone()).await.unwrap();
     journal
         .record_authorization(
             action.transport_action_id,
@@ -142,9 +139,7 @@ async fn prepared_capability_from_a_prior_journal_instance_cannot_resume_after_r
         Some(ConsequentialRecoveryState::DispatchPrepared)
     );
     assert_eq!(
-        reopened
-            .requires_reconciliation(action.transport_action_id)
-            .await,
+        reopened.requires_reconciliation(action.transport_action_id).await,
         Some(true)
     );
 
@@ -174,9 +169,7 @@ async fn abandoning_an_execution_permit_never_restores_retry_authority() {
         Some(ConsequentialRecoveryState::DispatchPrepared)
     );
     assert_eq!(
-        journal
-            .requires_reconciliation(action.transport_action_id)
-            .await,
+        journal.requires_reconciliation(action.transport_action_id).await,
         Some(true)
     );
 

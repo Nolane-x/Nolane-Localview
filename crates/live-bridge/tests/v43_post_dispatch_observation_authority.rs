@@ -39,10 +39,7 @@ async fn admit_and_authorize(
     journal: &ConsequentialJournal,
     action: &CanonicalActionEnvelope,
 ) -> u64 {
-    journal
-        .record_intent_admitted(action.clone())
-        .await
-        .unwrap();
+    journal.record_intent_admitted(action.clone()).await.unwrap();
     journal
         .record_authorization(
             action.transport_action_id,
@@ -65,10 +62,7 @@ async fn prepare(
             DispatchPreparationReceipt {
                 receipt_ref: format!("prepared:{authorization_journal_sequence}"),
                 authorization_journal_sequence,
-                precondition_snapshot_cut_ref: action
-                    .metadata
-                    .precondition_snapshot_cut_ref
-                    .clone(),
+                precondition_snapshot_cut_ref: action.metadata.precondition_snapshot_cut_ref.clone(),
                 provider_incarnation_ref: action.metadata.provider_incarnation_ref.clone(),
                 target_incarnation_ref: action.metadata.target_incarnation_ref.clone(),
             },
@@ -102,10 +96,7 @@ async fn observation_authority_cannot_exist_before_dispatch_uncertainty() {
     let path = journal_path("post-observe-before-dispatch");
     let action = action();
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    journal
-        .record_intent_admitted(action.clone())
-        .await
-        .unwrap();
+    journal.record_intent_admitted(action.clone()).await.unwrap();
 
     let error = journal
         .begin_postcondition_observation(action.transport_action_id)
@@ -224,14 +215,8 @@ async fn linearized_dispatch_mints_exact_fresh_observation_cut_and_causal_bindin
         .expect("only the exact freshly minted snapshot cut may complete observation");
     assert_eq!(receipt.action_id(), action.transport_action_id);
     assert_eq!(receipt.snapshot_cut_ref(), cut);
-    assert_eq!(
-        receipt.reconciliation_receipt_ref(),
-        "reconcile:after-dispatch"
-    );
-    assert_eq!(
-        receipt.causal_journal_sequence(),
-        linearized.journal_sequence
-    );
+    assert_eq!(receipt.reconciliation_receipt_ref(), "reconcile:after-dispatch");
+    assert_eq!(receipt.causal_journal_sequence(), linearized.journal_sequence);
 
     let _ = std::fs::remove_file(path);
 }
@@ -255,9 +240,7 @@ async fn crash_reopened_prepared_state_can_observe_but_cannot_recreate_dispatch_
     let observation = reopened
         .begin_postcondition_observation(action.transport_action_id)
         .await
-        .expect(
-            "reopened PREPARED state has no live dispatch grant and must reconcile uncertainty",
-        );
+        .expect("reopened PREPARED state has no live dispatch grant and must reconcile uncertainty");
     assert!(matches!(
         observation.cause(),
         ConsequentialPostconditionObservationCause::DispatchPreparedUncertain {

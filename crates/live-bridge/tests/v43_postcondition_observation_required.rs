@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
 use localview_live_bridge::{
-    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
-    ConsequentialJournal, ConsequentialPostconditionEvidence,
-    ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
-    DispatchLinearizationReceipt, DispatchPreparationReceipt, LiveBridge,
-    ProviderObservationBinding, reconcile_consequential_postconditions,
+    reconcile_consequential_postconditions, ActionEnvelopeMetadata, ActionIdempotencyClass,
+    ActionRiskClass, CanonicalActionEnvelope, ConsequentialJournal,
+    ConsequentialPostconditionEvidence, ConsequentialPostconditionReconciliationReceipt,
+    ConsequentialPostconditionStatus, DispatchLinearizationReceipt, DispatchPreparationReceipt,
+    LiveBridge, ProviderObservationBinding,
 };
 use localview_protocol::{
     DispatchResult, EventContinuityState, PrincipalRef, ProviderIncarnationRef,
@@ -15,10 +15,7 @@ use localview_protocol::{
 use uuid::Uuid;
 
 fn path() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "localview-post-observation-required-{}.jsonl",
-        Uuid::new_v4()
-    ))
+    std::env::temp_dir().join(format!("localview-post-observation-required-{}.jsonl", Uuid::new_v4()))
 }
 
 #[tokio::test]
@@ -33,12 +30,8 @@ async fn reconciliation_consumes_only_a_journal_minted_post_dispatch_observation
             acting_principal_ref: PrincipalRef::from("principal:executor:causal-postcondition"),
             authorization_revision: "auth:causal-postcondition:v1".into(),
             precondition_snapshot_cut_ref: "cut:before-dispatch".into(),
-            provider_incarnation_ref: ProviderIncarnationRef::from(
-                "provider:uia:causal-postcondition:1",
-            ),
-            target_incarnation_ref: TargetIncarnationRef::from(
-                "target:window:causal-postcondition:1",
-            ),
+            provider_incarnation_ref: ProviderIncarnationRef::from("provider:uia:causal-postcondition:1"),
+            target_incarnation_ref: TargetIncarnationRef::from("target:window:causal-postcondition:1"),
             risk_class: ActionRiskClass::ReversibleUiState,
             idempotency_class: ActionIdempotencyClass::IdempotentByObservedState,
             expected_postcondition_contract_refs: vec!["post:visible".into()],
@@ -47,10 +40,7 @@ async fn reconciliation_consumes_only_a_journal_minted_post_dispatch_observation
     let journal = ConsequentialJournal::open(&path).await.unwrap();
     let bridge = LiveBridge::new(32, 8);
 
-    journal
-        .record_intent_admitted(action.clone())
-        .await
-        .unwrap();
+    journal.record_intent_admitted(action.clone()).await.unwrap();
     let authorization = journal
         .record_authorization(
             action.transport_action_id,
@@ -65,10 +55,7 @@ async fn reconciliation_consumes_only_a_journal_minted_post_dispatch_observation
             DispatchPreparationReceipt {
                 receipt_ref: "prepared:causal-postcondition".into(),
                 authorization_journal_sequence: authorization.journal_sequence,
-                precondition_snapshot_cut_ref: action
-                    .metadata
-                    .precondition_snapshot_cut_ref
-                    .clone(),
+                precondition_snapshot_cut_ref: action.metadata.precondition_snapshot_cut_ref.clone(),
                 provider_incarnation_ref: action.metadata.provider_incarnation_ref.clone(),
                 target_incarnation_ref: action.metadata.target_incarnation_ref.clone(),
             },
@@ -119,11 +106,9 @@ async fn reconciliation_consumes_only_a_journal_minted_post_dispatch_observation
         observed_digest: "digest:causal-postcondition".into(),
         incompleteness_debt: Vec::new(),
     };
-    assert!(
-        bridge
-            .record_reconciliation(action.session_id, provider_snapshot.clone())
-            .await
-    );
+    assert!(bridge
+        .record_reconciliation(action.session_id, provider_snapshot.clone())
+        .await);
     let observation_receipt = journal
         .complete_postcondition_observation(observation, provider_snapshot)
         .await

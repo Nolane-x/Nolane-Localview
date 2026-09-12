@@ -23,9 +23,7 @@ fn visual_packet_command_is_registered_and_uses_the_shared_native_capture_author
 
     assert!(command.contains("session_capture_gate(&state, session_id).await?"));
     assert_eq!(
-        command
-            .matches("capture_redacted_viewport_after_gate(")
-            .count(),
+        command.matches("capture_redacted_viewport_after_gate(").count(),
         1,
         "visual packet selection must acquire native pixels once"
     );

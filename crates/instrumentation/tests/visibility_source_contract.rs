@@ -1,4 +1,4 @@
-use localview_instrumentation::{InstrumentationConfig, bootstrap_script};
+use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 
 #[test]
 fn semantic_nodes_report_bounded_visibility_and_occlusion() {

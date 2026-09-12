@@ -56,7 +56,9 @@ async fn oversized_single_artifact_is_rejected_before_file_creation() {
     let dir = test_dir("oversized");
     let mut store = ArtifactStore::open(&dir, 5).await.unwrap();
 
-    assert!(store.projected_used_bytes_after_put(b"123456").is_err());
+    assert!(store
+        .projected_used_bytes_after_put(b"123456")
+        .is_err());
     assert!(store.put("visual/png", b"123456").await.is_err());
     assert_eq!(store.used_bytes(), 0);
     assert_eq!(disk_bytes(&dir).await, 0);

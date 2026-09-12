@@ -32,8 +32,5 @@ fn windows_public_postcondition_types_are_the_shared_correctness_types() {
         ..Default::default()
     };
     let shared_matcher: SharedNodeMatcherV1 = windows_matcher;
-    assert_eq!(
-        shared_matcher.automation_id.as_deref(),
-        Some("completion-status")
-    );
+    assert_eq!(shared_matcher.automation_id.as_deref(), Some("completion-status"));
 }

@@ -88,8 +88,7 @@ impl FakeProvider {
             is_offscreen: Some(false),
             attributes: BTreeMap::new(),
         };
-        let mut cache =
-            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -123,10 +122,7 @@ impl WindowsObserveProvider for FakeProvider {
         self.provider.clone()
     }
 
-    fn attach(
-        &self,
-        _selection: UserSelectedWindowTarget,
-    ) -> Result<Self::Attachment, Self::Error> {
+    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
         Ok(FakeAttachment(self.target.clone()))
     }
 
@@ -270,10 +266,7 @@ fn recovery_envelope_for_session(
 }
 
 async fn record_prepared(journal: &ConsequentialJournal, action: &CanonicalActionEnvelope) {
-    journal
-        .record_intent_admitted(action.clone())
-        .await
-        .unwrap();
+    journal.record_intent_admitted(action.clone()).await.unwrap();
     let authorization = journal
         .record_authorization(
             action.transport_action_id,
@@ -288,10 +281,7 @@ async fn record_prepared(journal: &ConsequentialJournal, action: &CanonicalActio
             DispatchPreparationReceipt {
                 receipt_ref: format!("prepared:{}", action.transport_action_id),
                 authorization_journal_sequence: authorization.journal_sequence,
-                precondition_snapshot_cut_ref: action
-                    .metadata
-                    .precondition_snapshot_cut_ref
-                    .clone(),
+                precondition_snapshot_cut_ref: action.metadata.precondition_snapshot_cut_ref.clone(),
                 provider_incarnation_ref: action.metadata.provider_incarnation_ref.clone(),
                 target_incarnation_ref: action.metadata.target_incarnation_ref.clone(),
             },
@@ -339,10 +329,7 @@ async fn boot_debt_recovery_runs_once_per_exact_attachment_and_leaves_opaque_con
         },
     )
     .unwrap();
-    runtime
-        .attach(recovery_session(), selection())
-        .await
-        .unwrap();
+    runtime.attach(recovery_session(), selection()).await.unwrap();
     assert_eq!(provider.snapshot_calls(), 1);
 
     let path = std::env::temp_dir().join(format!(
@@ -357,8 +344,7 @@ async fn boot_debt_recovery_runs_once_per_exact_attachment_and_leaves_opaque_con
     // Crossing the journal reopen boundary is the restart model: durable PREPARED
     // survives, while process-local dispatch grants deliberately do not.
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    let scope =
-        ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
+    let scope = ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
 
     let mut tracker = super::WindowsBootRecoveryTracker::default();
     let verifier = super::FailClosedWindowsPostconditionVerifier;
@@ -373,10 +359,7 @@ async fn boot_debt_recovery_runs_once_per_exact_attachment_and_leaves_opaque_con
     .await;
 
     assert_eq!(first.len(), 1);
-    let drain = first[0]
-        .outcome
-        .as_ref()
-        .expect("first recovery must succeed");
+    let drain = first[0].outcome.as_ref().expect("first recovery must succeed");
     assert_eq!(drain.entries.len(), 1);
     assert!(matches!(
         &drain.entries[0],
@@ -418,10 +401,7 @@ async fn boot_recovery_scope_excludes_actions_admitted_after_boot_inventory_was_
         },
     )
     .unwrap();
-    runtime
-        .attach(recovery_session(), selection())
-        .await
-        .unwrap();
+    runtime.attach(recovery_session(), selection()).await.unwrap();
 
     let path = std::env::temp_dir().join(format!(
         "localview-v43-daemon-boot-scope-{}.jsonl",
@@ -433,8 +413,7 @@ async fn boot_recovery_scope_excludes_actions_admitted_after_boot_inventory_was_
     drop(pre_boot_journal);
 
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    let boot_scope =
-        ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
+    let boot_scope = ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
 
     // This action is deliberately admitted after the boot scope was frozen. Its
     // live PREPARED grant stays active, but scoped boot recovery must never touch
@@ -466,9 +445,7 @@ async fn boot_recovery_scope_excludes_actions_admitted_after_boot_inventory_was_
         ) if *action_id == boot_action.transport_action_id
     ));
     assert_eq!(
-        journal
-            .recovery_state(live_action.transport_action_id)
-            .await,
+        journal.recovery_state(live_action.transport_action_id).await,
         Some(ConsequentialRecoveryState::DispatchPrepared),
         "watcher must not mutate consequential work admitted after boot"
     );
@@ -489,10 +466,7 @@ async fn one_failed_attachment_does_not_starve_later_boot_recovery_and_only_fail
         },
     )
     .unwrap();
-    runtime
-        .attach(recovery_session(), selection())
-        .await
-        .unwrap();
+    runtime.attach(recovery_session(), selection()).await.unwrap();
     runtime
         .attach(second_recovery_session(), second_selection())
         .await
@@ -510,8 +484,7 @@ async fn one_failed_attachment_does_not_starve_later_boot_recovery_and_only_fail
     drop(pre_boot_journal);
 
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    let scope =
-        ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
+    let scope = ConsequentialRecoveryActionScope::from_inventory(&journal.recovery_inventory().await);
 
     let verifier = SelectiveVerifier {
         failing_action_id: failing_action.transport_action_id,

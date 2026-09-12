@@ -1,6 +1,6 @@
 use localview_capture::{
-    CaptureStage, CaptureTarget, SettleObservation, SettleReason, StableCapturePolicy, build_plan,
-    evaluate_settle,
+    build_plan, evaluate_settle, CaptureStage, CaptureTarget, SettleObservation, SettleReason,
+    StableCapturePolicy,
 };
 use serde_json::json;
 
@@ -78,11 +78,7 @@ fn missing_network_counter_fails_closed_when_network_gate_is_enabled() {
     let decision = evaluate_settle(&StableCapturePolicy::default(), &observation);
     let reasons = reason_names(&observation, &StableCapturePolicy::default());
     assert!(!decision.stable);
-    assert!(
-        reasons
-            .iter()
-            .any(|reason| reason == "network_state_unknown")
-    );
+    assert!(reasons.iter().any(|reason| reason == "network_state_unknown"));
 }
 
 #[test]
@@ -105,11 +101,7 @@ fn disabled_network_gate_does_not_require_inflight_counter() {
     };
 
     let decision = evaluate_settle(&policy, &observation);
-    assert!(
-        decision.stable,
-        "unexpected reasons: {:?}",
-        decision.reasons
-    );
+    assert!(decision.stable, "unexpected reasons: {:?}", decision.reasons);
 }
 
 #[test]
@@ -157,11 +149,7 @@ fn events_at_or_outside_quiet_windows_do_not_block() {
     observation.latest_layout_at_unix_ms = Some(9_800);
     observation.latest_network_at_unix_ms = Some(9_750);
     let decision = evaluate_settle(&StableCapturePolicy::default(), &observation);
-    assert!(
-        decision.stable,
-        "unexpected reasons: {:?}",
-        decision.reasons
-    );
+    assert!(decision.stable, "unexpected reasons: {:?}", decision.reasons);
 }
 
 #[test]
@@ -202,10 +190,7 @@ fn default_capture_policy_masks_common_private_and_credential_surfaces() {
 
     for selector in expected {
         assert!(
-            policy
-                .mask_selectors
-                .iter()
-                .any(|candidate| candidate == selector),
+            policy.mask_selectors.iter().any(|candidate| candidate == selector),
             "missing default private selector: {selector}"
         );
     }

@@ -1,4 +1,6 @@
-use localview_live_bridge::{LiveBridge, NativeExecutorAction, NativeExecutorCancellationState};
+use localview_live_bridge::{
+    LiveBridge, NativeExecutorAction, NativeExecutorCancellationState,
+};
 use localview_protocol::{SessionId, ViewportMeta};
 
 fn action() -> NativeExecutorAction {
@@ -35,10 +37,7 @@ async fn evicted_pending_origin_is_not_a_cancellation_target() {
         .request_native_executor_cancellation(session_id, middle)
         .await
         .expect("middle request remains queued");
-    assert_eq!(
-        middle_cancel.state,
-        NativeExecutorCancellationState::Cancelled
-    );
+    assert_eq!(middle_cancel.state, NativeExecutorCancellationState::Cancelled);
     assert!(middle_cancel.acknowledged);
 
     let newest = retained.last().expect("newest retained request").id;
@@ -46,10 +45,7 @@ async fn evicted_pending_origin_is_not_a_cancellation_target() {
         .request_native_executor_cancellation(session_id, newest)
         .await
         .expect("newest request remains queued");
-    assert_eq!(
-        newest_cancel.state,
-        NativeExecutorCancellationState::Cancelled
-    );
+    assert_eq!(newest_cancel.state, NativeExecutorCancellationState::Cancelled);
     assert!(newest_cancel.acknowledged);
 }
 

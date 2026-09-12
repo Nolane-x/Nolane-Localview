@@ -1,14 +1,17 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{
+        atomic::AtomicBool,
+        Arc,
+    },
     time::Duration,
 };
 
 use axum::{
     body::Body,
-    http::{Request, StatusCode, header::AUTHORIZATION},
+    http::{header::AUTHORIZATION, Request, StatusCode},
 };
 use chrono::Utc;
-use localview_control::{ControlState, router};
+use localview_control::{router, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
@@ -16,7 +19,7 @@ use localview_protocol::{
     Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
 };
 use localview_sessions::SessionManager;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
 

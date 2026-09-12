@@ -109,14 +109,8 @@ fn every_failure_flag_maps_to_exactly_one_v43_metric() {
     let mappings = [
         (LabFailureFlag::SilentUnsoundAction, LabMetricKind::Suar),
         (LabFailureFlag::WrongPrincipalDispatch, LabMetricKind::Wpdr),
-        (
-            LabFailureFlag::PrincipalInformationLeak,
-            LabMetricKind::Pilr,
-        ),
-        (
-            LabFailureFlag::EventOnlyFalseFreshness,
-            LabMetricKind::Eoffr,
-        ),
+        (LabFailureFlag::PrincipalInformationLeak, LabMetricKind::Pilr),
+        (LabFailureFlag::EventOnlyFalseFreshness, LabMetricKind::Eoffr),
         (LabFailureFlag::ReconciliationMiss, LabMetricKind::Rmr),
         (LabFailureFlag::ProviderIdAbaEscape, LabMetricKind::Piaer),
         (LabFailureFlag::WrongForegroundInput, LabMetricKind::Wfir),
@@ -154,11 +148,7 @@ fn every_failure_flag_maps_to_exactly_one_v43_metric() {
     let snapshot = reduce_metric_observations(&observations).unwrap();
     for (_, metric) in mappings {
         let value = snapshot.get(metric).unwrap();
-        assert_eq!(
-            (value.numerator, value.denominator),
-            (1, 1),
-            "wrong mapping for {metric:?}"
-        );
+        assert_eq!((value.numerator, value.denominator), (1, 1), "wrong mapping for {metric:?}");
         assert_eq!(value.status, MetricStatus::Measured);
     }
 }

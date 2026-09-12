@@ -1,14 +1,12 @@
 #![forbid(unsafe_code)]
 
-use localview_protocol::{ElementRef, LayoutChange, PageSnapshot, SemanticNode, StateDiff};
 use std::collections::{HashMap, HashSet};
+use localview_protocol::{ElementRef, LayoutChange, PageSnapshot, SemanticNode, StateDiff};
 
 pub fn flatten(root: &SemanticNode) -> HashMap<ElementRef, &SemanticNode> {
     fn walk<'a>(node: &'a SemanticNode, out: &mut HashMap<ElementRef, &'a SemanticNode>) {
         out.insert(node.reference.clone(), node);
-        for child in &node.children {
-            walk(child, out);
-        }
+        for child in &node.children { walk(child, out); }
     }
     let mut out = HashMap::new();
     walk(root, &mut out);
@@ -24,21 +22,11 @@ pub fn snapshot_diff(before: &PageSnapshot, after: &PageSnapshot) -> StateDiff {
     let mut changed_refs = Vec::new();
     let mut layout_changes = Vec::new();
     for reference in old_keys.intersection(&new_keys) {
-        let a = old
-            .get(reference)
-            .expect("intersection key exists in old map");
-        let b = new
-            .get(reference)
-            .expect("intersection key exists in new map");
-        if semantic_signature(a) != semantic_signature(b) {
-            changed_refs.push(reference.clone());
-        }
+        let a = old.get(reference).expect("intersection key exists in old map");
+        let b = new.get(reference).expect("intersection key exists in new map");
+        if semantic_signature(a) != semantic_signature(b) { changed_refs.push(reference.clone()); }
         if a.rect != b.rect {
-            layout_changes.push(LayoutChange {
-                reference: reference.clone(),
-                before: a.rect.clone(),
-                after: b.rect.clone(),
-            });
+            layout_changes.push(LayoutChange { reference: reference.clone(), before: a.rect.clone(), after: b.rect.clone() });
         }
     }
     changed_refs.extend(new_keys.difference(&old_keys).cloned());
@@ -57,37 +45,19 @@ pub fn snapshot_diff(before: &PageSnapshot, after: &PageSnapshot) -> StateDiff {
 }
 
 fn semantic_signature(node: &SemanticNode) -> String {
-    let attrs = node
-        .attributes
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join(";");
-    format!(
-        "{}|{:?}|{:?}|{}|{}",
-        node.tag, node.role, node.name, node.interactive, attrs
-    )
+    let attrs = node.attributes.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(";");
+    format!("{}|{:?}|{:?}|{}|{}", node.tag, node.role, node.name, node.interactive, attrs)
 }
 
 fn multiset_delta<T: Clone + PartialEq>(before: &[T], after: &[T]) -> Vec<T> {
-    after
-        .iter()
-        .filter(|v| !before.contains(v))
-        .cloned()
-        .collect()
+    after.iter().filter(|v| !before.contains(v)).cloned().collect()
 }
 
 pub fn compact_snapshot(snapshot: &PageSnapshot, max_nodes: usize) -> serde_json::Value {
     fn compact(node: &SemanticNode, remaining: &mut usize) -> Option<serde_json::Value> {
-        if *remaining == 0 {
-            return None;
-        }
+        if *remaining == 0 { return None; }
         *remaining -= 1;
-        let children = node
-            .children
-            .iter()
-            .filter_map(|c| compact(c, remaining))
-            .collect::<Vec<_>>();
+        let children = node.children.iter().filter_map(|c| compact(c, remaining)).collect::<Vec<_>>();
         Some(serde_json::json!({
             "ref": node.reference,
             "role": node.role,
@@ -109,12 +79,7 @@ pub fn compact_snapshot(snapshot: &PageSnapshot, max_nodes: usize) -> serde_json
     })
 }
 
-pub fn stable_ref(
-    role: Option<&str>,
-    name: Option<&str>,
-    tag: &str,
-    ancestry: &[&str],
-) -> ElementRef {
+pub fn stable_ref(role: Option<&str>, name: Option<&str>, tag: &str, ancestry: &[&str]) -> ElementRef {
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in ancestry
         .iter()
@@ -141,12 +106,7 @@ mod tests {
             role: Some("button".into()),
             name: Some("Save".into()),
             tag: "button".into(),
-            rect: Some(Rect {
-                x,
-                y: 0.0,
-                width: 100.0,
-                height: 40.0,
-            }),
+            rect: Some(Rect { x, y: 0.0, width: 100.0, height: 40.0 }),
             interactive: true,
             attributes: BTreeMap::new(),
             source: None,
@@ -175,9 +135,6 @@ mod tests {
 
     #[test]
     fn refs_are_stable() {
-        assert_eq!(
-            stable_ref(Some("button"), Some("Save"), "button", &["main"]),
-            stable_ref(Some("button"), Some("Save"), "button", &["main"])
-        );
+        assert_eq!(stable_ref(Some("button"), Some("Save"), "button", &["main"]), stable_ref(Some("button"), Some("Save"), "button", &["main"]));
     }
 }

@@ -1,4 +1,4 @@
-use localview_instrumentation::{InstrumentationConfig, bootstrap_script};
+use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 
 #[test]
 fn default_runtime_exposes_bounded_semantic_and_geometry_contract() {

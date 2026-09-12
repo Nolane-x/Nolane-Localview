@@ -9,19 +9,21 @@ use std::{
 
 use chrono::Utc;
 use localview_chromium::{
-    ChromiumExecutionPolicy, ChromiumExecutorError, execute_ephemeral_with_lifecycle,
-    validate_loopback_url,
+    execute_ephemeral_with_lifecycle, validate_loopback_url, ChromiumExecutionPolicy,
+    ChromiumExecutorError,
 };
 use localview_evidence::{EvidenceDraft, EvidenceKind, Provenance, UncertaintyClass};
 use localview_protocol::SessionId;
-use localview_resource_governor::{LiveResourceKind, ResourceAdmissionDenial, ResourceWorkKind};
+use localview_resource_governor::{
+    LiveResourceKind, ResourceAdmissionDenial, ResourceWorkKind,
+};
 use localview_sessions::SessionManager;
 use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    ControlState,
     resource_runtime::{governor as resource_governor, runtime_resource_governor_for_sessions},
+    ControlState,
 };
 
 const DEFAULT_CHROMIUM_TIMEOUT: Duration = Duration::from_secs(8);
@@ -114,18 +116,20 @@ pub(crate) async fn execute_compatibility_probe(
 
     let mut policy = config.policy;
     if let Some(timeout_cap) = timeout_cap {
-        policy.timeout = policy
-            .timeout
-            .min(timeout_cap.max(Duration::from_millis(1)));
+        policy.timeout = policy.timeout.min(timeout_cap.max(Duration::from_millis(1)));
     }
-    let execution =
-        execute_ephemeral_with_lifecycle(&config.executable, &target, &policy, move || {
+    let execution = execute_ephemeral_with_lifecycle(
+        &config.executable,
+        &target,
+        &policy,
+        move || {
             reservation
                 .activate_live(LiveResourceKind::ChromiumProcess)
                 .map_err(|_| ChromiumExecutorError::Lifecycle)
-        })
-        .await
-        .map_err(ChromiumRuntimeError::Executor)?;
+        },
+    )
+    .await
+    .map_err(ChromiumRuntimeError::Executor)?;
     let Some(exit_code) = execution.exit_code.filter(|code| *code == 0) else {
         return Err(ChromiumRuntimeError::NonZeroExit(execution.exit_code));
     };
@@ -189,7 +193,10 @@ fn config(state: &ControlState) -> Option<ChromiumExecutorConfig> {
     entries.get(&key).map(|entry| entry.config.clone())
 }
 
-async fn resolve_target(state: &ControlState, id: SessionId) -> Result<Url, ChromiumRuntimeError> {
+async fn resolve_target(
+    state: &ControlState,
+    id: SessionId,
+) -> Result<Url, ChromiumRuntimeError> {
     let session = state
         .sessions
         .get(id)
@@ -211,9 +218,7 @@ async fn resolve_target(state: &ControlState, id: SessionId) -> Result<Url, Chro
         .rev()
         .find_map(|event| event.route);
     match observed_route {
-        Some(route) => {
-            resolve_route_target(&base, &route).ok_or(ChromiumRuntimeError::InvalidTarget)
-        }
+        Some(route) => resolve_route_target(&base, &route).ok_or(ChromiumRuntimeError::InvalidTarget),
         None => Ok(base),
     }
 }

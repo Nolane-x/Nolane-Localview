@@ -46,10 +46,7 @@ fn oracle_correction_uses_a_new_revision_and_preserves_both_seeds() {
         "STALE"
     );
     assert_eq!(
-        catalog
-            .get(&corrected_id)
-            .unwrap()
-            .expected_semantic_outcome,
+        catalog.get(&corrected_id).unwrap().expected_semantic_outcome,
         "RECONCILIATION_REQUIRED"
     );
 }

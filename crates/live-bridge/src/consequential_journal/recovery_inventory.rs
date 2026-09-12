@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
-    ConsequentialJournal, ConsequentialJournalTransition, ConsequentialRecoveryState,
-    recovery_state_for,
+    recovery_state_for, ConsequentialJournal, ConsequentialJournalTransition,
+    ConsequentialRecoveryState,
 };
 
 /// Typed recovery work allowed by a durable consequential state.
@@ -35,9 +35,9 @@ impl ConsequentialRecoveryState {
             }
             // PREPARED remains uncertain after restart. Recovery observes current
             // state and never recreates dispatch authority or retries the action.
-            Self::DispatchPrepared | Self::PossiblyDispatched | Self::OutcomeObservedUnverified => {
-                ObservationRequired
-            }
+            Self::DispatchPrepared
+            | Self::PossiblyDispatched
+            | Self::OutcomeObservedUnverified => ObservationRequired,
             Self::VerifiedUncommitted => CommitOnly,
             Self::Compensated | Self::Committed => HistoricalTerminal,
             Self::CompensationFailed => ReconciliationRequired,

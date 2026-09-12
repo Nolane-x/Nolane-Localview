@@ -87,8 +87,7 @@ async fn poll_session(
 
         let request_id = request.id;
         let state = app.state::<visual_capture::VisualCaptureState>();
-        let result =
-            visual_capture::execute_native_visual_packet(app.clone(), state, request).await;
+        let result = visual_capture::execute_native_visual_packet(app.clone(), state, request).await;
 
         match cancellation_requested(client, token, session_id, request_id).await {
             Ok(true) => {

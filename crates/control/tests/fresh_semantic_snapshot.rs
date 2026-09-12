@@ -1,22 +1,20 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{
-    body::{Body, to_bytes},
-    http::{Request, StatusCode, header},
+    body::{to_bytes, Body},
+    http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use localview_control::{ControlState, router};
+use localview_control::{router, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{BridgeActionKind, BridgeActionResult, LiveBridge};
 use localview_observation::ObservationBus;
-use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
-};
+use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -239,18 +237,12 @@ async fn fresh_semantic_snapshot_projects_the_matching_new_action_result() {
     assert_eq!(body["viewport"], serde_json::json!([1000, 800]));
     assert_eq!(body["root"]["reference"], "@root");
     assert_eq!(body["root"]["children"][0]["reference"], "@card");
-    assert_eq!(
-        body["root"]["children"][0]["source"]["file"],
-        "SettingsCard.tsx"
-    );
+    assert_eq!(body["root"]["children"][0]["source"]["file"], "SettingsCard.tsx");
     assert_eq!(
         body["root"]["children"][0]["source"]["component"],
         "SettingsCard.tsx:10"
     );
-    assert_eq!(
-        body["root"]["children"][0]["children"][0]["reference"],
-        "@save"
-    );
+    assert_eq!(body["root"]["children"][0]["children"][0]["reference"], "@save");
     assert_eq!(
         body["root"]["children"][0]["children"][0]["source"]["component"],
         "SettingsCard.tsx:35"
@@ -263,8 +255,13 @@ async fn fresh_semantic_snapshot_projects_the_matching_new_action_result() {
 #[tokio::test]
 async fn failed_matching_snapshot_action_result_fails_closed() {
     let (state, session_id) = test_state().await;
-    let (status, body) =
-        get_fresh_with_action_result(state, session_id, false, raw_snapshot_payload()).await;
+    let (status, body) = get_fresh_with_action_result(
+        state,
+        session_id,
+        false,
+        raw_snapshot_payload(),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["error"], "fresh_semantic_snapshot_failed");

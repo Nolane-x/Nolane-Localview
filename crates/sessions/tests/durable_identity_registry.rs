@@ -91,10 +91,7 @@ async fn duplicate_lineage_or_uuid_is_rejected_without_rewrite() {
 
     let resolver = SessionIdentityResolver::open_file(path.clone()).await;
     assert_eq!(resolver.health(), SessionIdentityHealth::VolatileDegraded);
-    assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        same_uuid_two_lineages
-    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), same_uuid_two_lineages);
     cleanup(&dir);
 }
 

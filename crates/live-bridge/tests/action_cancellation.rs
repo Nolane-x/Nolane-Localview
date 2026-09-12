@@ -43,10 +43,7 @@ async fn inflight_cancel_fences_result_claim_before_ack() {
         .request_action_cancellation(session, action.id)
         .await
         .expect("inflight action remains cancellable");
-    assert_eq!(
-        outcome.state,
-        ActionCancellationState::CancellationRequested
-    );
+    assert_eq!(outcome.state, ActionCancellationState::CancellationRequested);
     assert!(!outcome.acknowledged);
     assert!(bridge.claim_action(session, action.id).await.is_none());
 
@@ -56,17 +53,10 @@ async fn inflight_cancel_fences_result_claim_before_ack() {
         .expect("exact signal");
     assert_eq!(signal.action_id, action.id);
 
-    assert!(
-        bridge
-            .acknowledge_action_cancellation(session, action.id)
-            .await
-    );
-    assert!(
-        bridge
-            .action_cancellation(session, action.id)
-            .await
-            .is_none()
-    );
+    assert!(bridge
+        .acknowledge_action_cancellation(session, action.id)
+        .await);
+    assert!(bridge.action_cancellation(session, action.id).await.is_none());
     assert!(bridge.recent_results(session, 8).await.is_empty());
 }
 
@@ -105,15 +95,10 @@ async fn cancellation_ack_discards_origin_instead_of_polluting_claimed_storage()
             .request_action_cancellation(session, cancelled.id)
             .await
             .expect("inflight cancellation");
-        assert_eq!(
-            outcome.state,
-            ActionCancellationState::CancellationRequested
-        );
-        assert!(
-            bridge
-                .acknowledge_action_cancellation(session, cancelled.id)
-                .await
-        );
+        assert_eq!(outcome.state, ActionCancellationState::CancellationRequested);
+        assert!(bridge
+            .acknowledge_action_cancellation(session, cancelled.id)
+            .await);
     }
 
     bridge
@@ -153,12 +138,10 @@ async fn result_claim_wins_linearization_and_later_cancel_is_too_late() {
         .await
         .expect("result claim wins before cancellation");
     assert_eq!(claimed.id, action.id);
-    assert!(
-        bridge
-            .request_action_cancellation(session, action.id)
-            .await
-            .is_none()
-    );
+    assert!(bridge
+        .request_action_cancellation(session, action.id)
+        .await
+        .is_none());
 
     bridge
         .complete_action(
@@ -184,12 +167,10 @@ async fn cancellation_is_exact_session_owned() {
         .enqueue_action(owner, None, BridgeActionKind::Focus)
         .await;
 
-    assert!(
-        bridge
-            .request_action_cancellation(other, action.id)
-            .await
-            .is_none()
-    );
+    assert!(bridge
+        .request_action_cancellation(other, action.id)
+        .await
+        .is_none());
     assert_eq!(bridge.take_actions(owner, 8).await.len(), 1);
 }
 
@@ -207,18 +188,14 @@ async fn queue_eviction_removes_stale_pending_cancellation_ownership() {
         );
     }
 
-    assert!(
-        bridge
-            .request_action_cancellation(session, ids[0])
-            .await
-            .is_none()
-    );
-    assert!(
-        bridge
-            .request_action_cancellation(session, ids[8])
-            .await
-            .is_some()
-    );
+    assert!(bridge
+        .request_action_cancellation(session, ids[0])
+        .await
+        .is_none());
+    assert!(bridge
+        .request_action_cancellation(session, ids[8])
+        .await
+        .is_some());
 }
 
 #[tokio::test]
@@ -240,10 +217,7 @@ async fn cancellation_listing_is_bounded_but_exact_lookup_is_not_truncated() {
             .request_action_cancellation(session, *id)
             .await
             .expect("inflight action");
-        assert_eq!(
-            outcome.state,
-            ActionCancellationState::CancellationRequested
-        );
+        assert_eq!(outcome.state, ActionCancellationState::CancellationRequested);
     }
 
     assert_eq!(bridge.action_cancellations(session, 32).await.len(), 32);
@@ -271,20 +245,16 @@ async fn terminal_action_cancellation_tombstones_are_bounded() {
             first = Some(action.id);
         }
         last = Some(action.id);
-        assert!(
-            bridge
-                .request_action_cancellation(session, action.id)
-                .await
-                .is_some()
-        );
+        assert!(bridge
+            .request_action_cancellation(session, action.id)
+            .await
+            .is_some());
     }
 
-    assert!(
-        bridge
-            .request_action_cancellation(session, first.expect("first"))
-            .await
-            .is_none()
-    );
+    assert!(bridge
+        .request_action_cancellation(session, first.expect("first"))
+        .await
+        .is_none());
     let latest = bridge
         .request_action_cancellation(session, last.expect("last"))
         .await
@@ -300,12 +270,10 @@ async fn public_cancellation_cannot_address_internal_capture_actions() {
         .enqueue_capture_freeze(session, vec![".secret".into()])
         .await;
 
-    assert!(
-        bridge
-            .request_action_cancellation(session, freeze.id)
-            .await
-            .is_none()
-    );
+    assert!(bridge
+        .request_action_cancellation(session, freeze.id)
+        .await
+        .is_none());
     let internal = bridge.take_internal_capture_actions(session, 8).await;
     assert_eq!(internal.len(), 1);
     assert_eq!(internal[0].id, freeze.id);

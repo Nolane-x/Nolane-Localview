@@ -1,7 +1,7 @@
 use localview_protocol::Rect;
 use localview_visual::{
-    RgbaImage, VisualError, decode_png_rgba, encode_png_rgba, redact_css_rects,
-    redact_png_css_rects,
+    decode_png_rgba, encode_png_rgba, redact_css_rects, redact_png_css_rects, RgbaImage,
+    VisualError,
 };
 
 fn solid_rgba(width: u32, height: u32, rgba: [u8; 4]) -> RgbaImage {
@@ -9,11 +9,7 @@ fn solid_rgba(width: u32, height: u32, rgba: [u8; 4]) -> RgbaImage {
     for _ in 0..width * height {
         data.extend_from_slice(&rgba);
     }
-    RgbaImage {
-        width,
-        height,
-        data,
-    }
+    RgbaImage { width, height, data }
 }
 
 fn pixel(image: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
@@ -108,7 +104,8 @@ fn png_redaction_round_trips_native_pixels_and_checks_frame_dimensions() {
         height: 1.0,
     }];
 
-    let (redacted_png, applied) = redact_png_css_rects(&png, (4, 4), (2.0, 2.0), &masks).unwrap();
+    let (redacted_png, applied) =
+        redact_png_css_rects(&png, (4, 4), (2.0, 2.0), &masks).unwrap();
     let redacted = decode_png_rgba(&redacted_png).unwrap();
 
     assert_eq!(applied, 1);

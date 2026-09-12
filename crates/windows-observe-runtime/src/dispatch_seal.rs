@@ -10,11 +10,11 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    WindowsObserveDispatchContextProvider, WindowsObserveRuntimeError,
-    WindowsObserveRuntimeManager, WindowsUiaActionPreflightReceipt,
+    validate_uia_dispatch_authority, WindowsObserveDispatchContextProvider,
+    WindowsObserveRuntimeError, WindowsObserveRuntimeManager, WindowsUiaActionPreflightReceipt,
     WindowsUiaAuthorizationRevalidator, WindowsUiaDispatchAuthorityError,
     WindowsUiaDispatchAuthorityReceipt, WindowsUiaDispatchRevalidationError,
-    WindowsUiaDispatchRevalidationRequest, validate_uia_dispatch_authority,
+    WindowsUiaDispatchRevalidationRequest,
 };
 
 /// Caller-owned inputs for the last data-only Windows dispatch seal.
@@ -59,9 +59,7 @@ pub enum WindowsUiaDispatchSealError {
     CanonicalEnvelopeChangedAfterContext,
     #[error("Windows UIA canonical action is stale after provider context validation")]
     CanonicalEnvelopeStaleAfterContext,
-    #[error(
-        "Windows UIA durable journal left AuthorizedNotDispatched during provider context validation: {state:?}"
-    )]
+    #[error("Windows UIA durable journal left AuthorizedNotDispatched during provider context validation: {state:?}")]
     JournalStateChangedAfterContext {
         state: Option<ConsequentialRecoveryState>,
     },

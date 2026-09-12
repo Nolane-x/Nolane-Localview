@@ -9,7 +9,10 @@ pub fn approximate_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(4)
 }
 
-pub fn serialize_with_budget<T: Serialize>(value: &T, budget: &TokenBudget) -> serde_json::Value {
+pub fn serialize_with_budget<T: Serialize>(
+    value: &T,
+    budget: &TokenBudget,
+) -> serde_json::Value {
     let full = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
     let serialized = serde_json::to_string(&full).unwrap_or_default();
     if approximate_tokens(&serialized) <= budget.max_tokens {
@@ -215,14 +218,9 @@ pub enum VisualPacketSelectionError {
 impl fmt::Display for VisualPacketSelectionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidViewport => {
-                write!(f, "visual packet viewport dimensions must be positive")
-            }
+            Self::InvalidViewport => write!(f, "visual packet viewport dimensions must be positive"),
             Self::InvalidCandidateGeometry => {
-                write!(
-                    f,
-                    "visual packet candidate geometry is outside the viewport"
-                )
+                write!(f, "visual packet candidate geometry is outside the viewport")
             }
             Self::InvalidCandidateScore => {
                 write!(f, "visual packet candidate scores must be within 0..=1000")
@@ -334,8 +332,8 @@ fn score_candidate(candidate: &VisualPacketCandidate, viewport: (u32, u32)) -> S
         * u128::from(candidate.confidence_milli)
         * u128::from(candidate.relevance_milli)
         * 1000;
-    let utility_score =
-        (numerator / u128::from(normalized_cost_milli.max(1))).min(u128::from(u64::MAX)) as u64;
+    let utility_score = (numerator / u128::from(normalized_cost_milli.max(1)))
+        .min(u128::from(u64::MAX)) as u64;
 
     ScoredCandidate {
         selected: SelectedVisualEvidence {
@@ -402,10 +400,7 @@ fn compare_scored_candidates(left: &ScoredCandidate, right: &ScoredCandidate) ->
         .then_with(|| compare_rect(&left.selected.rect, &right.selected.rect))
 }
 
-fn compare_selected_geometry(
-    left: &SelectedVisualEvidence,
-    right: &SelectedVisualEvidence,
-) -> Ordering {
+fn compare_selected_geometry(left: &SelectedVisualEvidence, right: &SelectedVisualEvidence) -> Ordering {
     compare_rect(&left.rect, &right.rect)
         .then_with(|| source_rank(left.source).cmp(&source_rank(right.source)))
 }
@@ -488,11 +483,7 @@ fn trim_json(mut value: serde_json::Value, max_chars: usize) -> serde_json::Valu
 mod tests {
     use super::*;
 
-    fn selected(
-        source: VisualPacketSource,
-        rect: Rect,
-        utility_score: u64,
-    ) -> SelectedVisualEvidence {
+    fn selected(source: VisualPacketSource, rect: Rect, utility_score: u64) -> SelectedVisualEvidence {
         SelectedVisualEvidence {
             source,
             rect,

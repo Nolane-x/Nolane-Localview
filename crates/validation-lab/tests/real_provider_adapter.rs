@@ -57,16 +57,9 @@ fn asserted_provider_world_fact_is_compared_to_independent_ground_truth() {
     ))
     .unwrap();
     assert!(pass.observation.provider_backed);
-    assert!(
-        pass.observation
-            .eligible_metrics
-            .contains(&LabMetricKind::Rpomr)
-    );
+    assert!(pass.observation.eligible_metrics.contains(&LabMetricKind::Rpomr));
     assert!(pass.observation.failure_flags.is_empty());
-    assert_eq!(
-        pass.result_evidence,
-        Some(ResultEvidence::RealProviderIntegrationPass)
-    );
+    assert_eq!(pass.result_evidence, Some(ResultEvidence::RealProviderIntegrationPass));
     assert!(
         pass.observation
             .evidence_refs
@@ -98,10 +91,7 @@ fn asserted_provider_world_fact_is_compared_to_independent_ground_truth() {
         mismatch.observation.failure_flags,
         BTreeSet::from([LabFailureFlag::RealProviderOracleMismatch])
     );
-    assert_eq!(
-        mismatch.result_evidence,
-        Some(ResultEvidence::CounterexampleFound)
-    );
+    assert_eq!(mismatch.result_evidence, Some(ResultEvidence::CounterexampleFound));
 
     let snapshot = reduce_metric_observations(&[pass.observation, mismatch.observation]).unwrap();
     let rpomr = snapshot.get(LabMetricKind::Rpomr).unwrap();
@@ -126,18 +116,8 @@ fn conservative_non_assertions_do_not_fake_rpomr_or_real_provider_pass() {
     .collect::<Vec<_>>();
 
     for record in &records {
-        assert!(
-            !record
-                .observation
-                .eligible_metrics
-                .contains(&LabMetricKind::Rpomr)
-        );
-        assert!(
-            !record
-                .observation
-                .failure_flags
-                .contains(&LabFailureFlag::RealProviderOracleMismatch)
-        );
+        assert!(!record.observation.eligible_metrics.contains(&LabMetricKind::Rpomr));
+        assert!(!record.observation.failure_flags.contains(&LabFailureFlag::RealProviderOracleMismatch));
         assert_eq!(record.result_evidence, None);
     }
 
@@ -159,30 +139,10 @@ fn w01_distinguishes_real_event_gap_from_established_reconciliation() {
         clean_w01(),
     ))
     .unwrap();
-    assert!(
-        reconciled
-            .observation
-            .eligible_metrics
-            .contains(&LabMetricKind::Eoffr)
-    );
-    assert!(
-        reconciled
-            .observation
-            .eligible_metrics
-            .contains(&LabMetricKind::Rmr)
-    );
-    assert!(
-        !reconciled
-            .observation
-            .failure_flags
-            .contains(&LabFailureFlag::EventOnlyFalseFreshness)
-    );
-    assert!(
-        !reconciled
-            .observation
-            .failure_flags
-            .contains(&LabFailureFlag::ReconciliationMiss)
-    );
+    assert!(reconciled.observation.eligible_metrics.contains(&LabMetricKind::Eoffr));
+    assert!(reconciled.observation.eligible_metrics.contains(&LabMetricKind::Rmr));
+    assert!(!reconciled.observation.failure_flags.contains(&LabFailureFlag::EventOnlyFalseFreshness));
+    assert!(!reconciled.observation.failure_flags.contains(&LabFailureFlag::ReconciliationMiss));
 
     let false_fresh = adapt_real_provider_case(input(
         "W01-false-fresh",
@@ -195,16 +155,8 @@ fn w01_distinguishes_real_event_gap_from_established_reconciliation() {
         },
     ))
     .unwrap();
-    assert!(
-        false_fresh
-            .observation
-            .failure_flags
-            .contains(&LabFailureFlag::EventOnlyFalseFreshness)
-    );
-    assert_eq!(
-        false_fresh.result_evidence,
-        Some(ResultEvidence::CounterexampleFound)
-    );
+    assert!(false_fresh.observation.failure_flags.contains(&LabFailureFlag::EventOnlyFalseFreshness));
+    assert_eq!(false_fresh.result_evidence, Some(ResultEvidence::CounterexampleFound));
 
     let reconciliation_miss = adapt_real_provider_case(input(
         "W01-reconciliation-miss",
@@ -217,12 +169,7 @@ fn w01_distinguishes_real_event_gap_from_established_reconciliation() {
         },
     ))
     .unwrap();
-    assert!(
-        reconciliation_miss
-            .observation
-            .failure_flags
-            .contains(&LabFailureFlag::ReconciliationMiss)
-    );
+    assert!(reconciliation_miss.observation.failure_flags.contains(&LabFailureFlag::ReconciliationMiss));
 }
 
 #[test]
@@ -239,22 +186,9 @@ fn w02_only_measures_aba_when_real_provider_identity_reuse_was_observed() {
         },
     ))
     .unwrap();
-    assert!(
-        escaped
-            .observation
-            .eligible_metrics
-            .contains(&LabMetricKind::Piaer)
-    );
-    assert!(
-        escaped
-            .observation
-            .failure_flags
-            .contains(&LabFailureFlag::ProviderIdAbaEscape)
-    );
-    assert_eq!(
-        escaped.result_evidence,
-        Some(ResultEvidence::CounterexampleFound)
-    );
+    assert!(escaped.observation.eligible_metrics.contains(&LabMetricKind::Piaer));
+    assert!(escaped.observation.failure_flags.contains(&LabFailureFlag::ProviderIdAbaEscape));
+    assert_eq!(escaped.result_evidence, Some(ResultEvidence::CounterexampleFound));
 
     let no_reuse = adapt_real_provider_case(input(
         "W02-no-reuse",
@@ -268,12 +202,7 @@ fn w02_only_measures_aba_when_real_provider_identity_reuse_was_observed() {
         },
     ))
     .unwrap();
-    assert!(
-        !no_reuse
-            .observation
-            .eligible_metrics
-            .contains(&LabMetricKind::Piaer)
-    );
+    assert!(!no_reuse.observation.eligible_metrics.contains(&LabMetricKind::Piaer));
 
     let same_provider = adapt_real_provider_case(input(
         "W02-same-incarnation",
@@ -287,12 +216,7 @@ fn w02_only_measures_aba_when_real_provider_identity_reuse_was_observed() {
         },
     ))
     .expect("W02 element recreation can occur within one live provider incarnation");
-    assert!(
-        same_provider
-            .observation
-            .eligible_metrics
-            .contains(&LabMetricKind::Piaer)
-    );
+    assert!(same_provider.observation.eligible_metrics.contains(&LabMetricKind::Piaer));
     assert!(same_provider.observation.failure_flags.is_empty());
 }
 
@@ -309,87 +233,22 @@ fn w06_reacquire_tracks_stale_authority_and_cleanup_separately() {
         },
     ))
     .unwrap();
-    assert!(
-        record
-            .observation
-            .eligible_metrics
-            .contains(&LabMetricKind::Scar)
-    );
-    assert!(
-        record
-            .observation
-            .eligible_metrics
-            .contains(&LabMetricKind::Cbfr)
-    );
-    assert!(
-        record
-            .observation
-            .failure_flags
-            .contains(&LabFailureFlag::StaleCacheAuthority)
-    );
-    assert!(
-        record
-            .observation
-            .failure_flags
-            .contains(&LabFailureFlag::CleanupToBaselineFailure)
-    );
-    assert_eq!(
-        record.result_evidence,
-        Some(ResultEvidence::CounterexampleFound)
-    );
+    assert!(record.observation.eligible_metrics.contains(&LabMetricKind::Scar));
+    assert!(record.observation.eligible_metrics.contains(&LabMetricKind::Cbfr));
+    assert!(record.observation.failure_flags.contains(&LabFailureFlag::StaleCacheAuthority));
+    assert!(record.observation.failure_flags.contains(&LabFailureFlag::CleanupToBaselineFailure));
+    assert_eq!(record.result_evidence, Some(ResultEvidence::CounterexampleFound));
 }
 
 #[test]
 fn real_provider_authority_fields_fail_closed_before_observation_minting() {
     let mut cases = vec![
-        (
-            "case_id",
-            input(
-                "   ",
-                RealProviderObservedOutcome::Asserted("name=after".into()),
-                clean_w01(),
-            ),
-        ),
-        (
-            "seed_app_digest",
-            input(
-                "W01",
-                RealProviderObservedOutcome::Asserted("name=after".into()),
-                clean_w01(),
-            ),
-        ),
-        (
-            "platform_profile_revision",
-            input(
-                "W01",
-                RealProviderObservedOutcome::Asserted("name=after".into()),
-                clean_w01(),
-            ),
-        ),
-        (
-            "environment_artifact_digest",
-            input(
-                "W01",
-                RealProviderObservedOutcome::Asserted("name=after".into()),
-                clean_w01(),
-            ),
-        ),
-        (
-            "ground_truth_digest",
-            input(
-                "W01",
-                RealProviderObservedOutcome::Asserted("name=after".into()),
-                clean_w01(),
-            ),
-        ),
-        (
-            "comparison_profile_revision",
-            input(
-                "W01",
-                RealProviderObservedOutcome::Asserted("name=after".into()),
-                clean_w01(),
-            ),
-        ),
+        ("case_id", input("   ", RealProviderObservedOutcome::Asserted("name=after".into()), clean_w01())),
+        ("seed_app_digest", input("W01", RealProviderObservedOutcome::Asserted("name=after".into()), clean_w01())),
+        ("platform_profile_revision", input("W01", RealProviderObservedOutcome::Asserted("name=after".into()), clean_w01())),
+        ("environment_artifact_digest", input("W01", RealProviderObservedOutcome::Asserted("name=after".into()), clean_w01())),
+        ("ground_truth_digest", input("W01", RealProviderObservedOutcome::Asserted("name=after".into()), clean_w01())),
+        ("comparison_profile_revision", input("W01", RealProviderObservedOutcome::Asserted("name=after".into()), clean_w01())),
     ];
     cases[1].1.seed_app_digest = " ";
     cases[2].1.platform_profile_revision = " ";

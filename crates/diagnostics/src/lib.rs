@@ -8,11 +8,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum DiagnosticClass {
-    Deterministic,
-    Heuristic,
-    Subjective,
-}
+pub enum DiagnosticClass { Deterministic, Heuristic, Subjective }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticIssue {
@@ -46,17 +42,9 @@ pub fn assemble(
         category: "layout".into(),
         code: issue.code.clone(),
         message: issue.message.clone(),
-        severity: match issue.severity {
-            Severity::Info => 1,
-            Severity::Warning => 2,
-            Severity::Error => 3,
-        },
+        severity: match issue.severity { Severity::Info => 1, Severity::Warning => 2, Severity::Error => 3 },
         confidence: (issue.confidence.clamp(0.0, 1.0) * 100.0).round() as u8,
-        class: if issue.confidence >= 0.99 {
-            DiagnosticClass::Deterministic
-        } else {
-            DiagnosticClass::Heuristic
-        },
+        class: if issue.confidence >= 0.99 { DiagnosticClass::Deterministic } else { DiagnosticClass::Heuristic },
         refs: issue.refs.clone(),
         evidence: Some(issue.evidence.clone()),
     }));
@@ -65,16 +53,9 @@ pub fn assemble(
         category: "network".into(),
         code: format!("{:?}", issue.kind).to_ascii_lowercase(),
         message: issue.message.clone(),
-        severity: match issue.kind {
-            NetworkIssueKind::Failed | NetworkIssueKind::Cors => 3,
-            _ => 2,
-        },
+        severity: match issue.kind { NetworkIssueKind::Failed | NetworkIssueKind::Cors => 3, _ => 2 },
         confidence: issue.confidence,
-        class: if issue.confidence >= 95 {
-            DiagnosticClass::Deterministic
-        } else {
-            DiagnosticClass::Heuristic
-        },
+        class: if issue.confidence >= 95 { DiagnosticClass::Deterministic } else { DiagnosticClass::Heuristic },
         refs: issue.request_ids.clone(),
         evidence: None,
     }));
@@ -85,11 +66,7 @@ pub fn assemble(
         message: issue.message.clone(),
         severity: 2,
         confidence: issue.confidence,
-        class: if issue.deterministic {
-            DiagnosticClass::Deterministic
-        } else {
-            DiagnosticClass::Heuristic
-        },
+        class: if issue.deterministic { DiagnosticClass::Deterministic } else { DiagnosticClass::Heuristic },
         refs: vec![issue.reference.clone()],
         evidence: None,
     }));
@@ -105,30 +82,11 @@ pub fn assemble(
         evidence: None,
     }));
 
-    issues.sort_by_key(|issue| {
-        (
-            std::cmp::Reverse(issue.severity),
-            std::cmp::Reverse(issue.confidence),
-        )
-    });
-    let deterministic = issues
-        .iter()
-        .filter(|i| i.class == DiagnosticClass::Deterministic)
-        .count();
-    let heuristic = issues
-        .iter()
-        .filter(|i| i.class == DiagnosticClass::Heuristic)
-        .count();
-    let subjective = issues
-        .iter()
-        .filter(|i| i.class == DiagnosticClass::Subjective)
-        .count();
-    DiagnosticReport {
-        issues,
-        deterministic,
-        heuristic,
-        subjective,
-    }
+    issues.sort_by_key(|issue| (std::cmp::Reverse(issue.severity), std::cmp::Reverse(issue.confidence)));
+    let deterministic = issues.iter().filter(|i| i.class == DiagnosticClass::Deterministic).count();
+    let heuristic = issues.iter().filter(|i| i.class == DiagnosticClass::Heuristic).count();
+    let subjective = issues.iter().filter(|i| i.class == DiagnosticClass::Subjective).count();
+    DiagnosticReport { issues, deterministic, heuristic, subjective }
 }
 
 #[cfg(test)]

@@ -31,9 +31,7 @@ pub struct RuntimeObject {
 }
 
 impl RuntimeObject {
-    pub fn hash(&self) -> ObjectHash {
-        object_hash(self)
-    }
+    pub fn hash(&self) -> ObjectHash { object_hash(self) }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -50,53 +48,33 @@ impl ContentStore {
         hash
     }
 
-    pub fn get(&self, hash: &str) -> Option<&RuntimeObject> {
-        self.objects.get(hash)
-    }
+    pub fn get(&self, hash: &str) -> Option<&RuntimeObject> { self.objects.get(hash) }
 
-    pub fn len(&self) -> usize {
-        self.objects.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.objects.is_empty()
-    }
+    pub fn len(&self) -> usize { self.objects.len() }
+    pub fn is_empty(&self) -> bool { self.objects.is_empty() }
 
     pub fn dependency_closure(&self, root: &str) -> BTreeSet<ObjectHash> {
         let mut visited = BTreeSet::new();
         let mut queue = VecDeque::from([root.to_owned()]);
         while let Some(hash) = queue.pop_front() {
-            if !visited.insert(hash.clone()) {
-                continue;
-            }
+            if !visited.insert(hash.clone()) { continue; }
             if let Some(object) = self.objects.get(&hash) {
-                for dependency in &object.dependencies {
-                    queue.push_back(dependency.clone());
-                }
+                for dependency in &object.dependencies { queue.push_back(dependency.clone()); }
             }
         }
         visited
     }
 
     pub fn collect_garbage(&mut self, roots: &[ObjectHash]) -> usize {
-        let keep = roots
-            .iter()
-            .flat_map(|root| self.dependency_closure(root))
-            .collect::<BTreeSet<_>>();
+        let keep = roots.iter().flat_map(|root| self.dependency_closure(root)).collect::<BTreeSet<_>>();
         let before = self.objects.len();
         self.objects.retain(|hash, _| keep.contains(hash));
         before.saturating_sub(self.objects.len())
     }
 
     pub fn validate_dependencies(&self, root: &str) -> Vec<ObjectHash> {
-        let Some(object) = self.objects.get(root) else {
-            return vec![root.to_owned()];
-        };
-        object
-            .dependencies
-            .iter()
-            .filter(|dependency| !self.objects.contains_key(*dependency))
-            .cloned()
-            .collect()
+        let Some(object) = self.objects.get(root) else { return vec![root.to_owned()]; };
+        object.dependencies.iter().filter(|dependency| !self.objects.contains_key(*dependency)).cloned().collect()
     }
 }
 
@@ -110,9 +88,7 @@ pub struct RegionMerkleNode {
 }
 
 impl RegionMerkleNode {
-    pub fn root_hash(&self) -> ObjectHash {
-        object_hash(self)
-    }
+    pub fn root_hash(&self) -> ObjectHash { object_hash(self) }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -141,10 +117,7 @@ pub fn object_hash<T: Serialize>(value: &T) -> ObjectHash {
 fn canonical_value(value: Value) -> Value {
     match value {
         Value::Object(map) => {
-            let ordered = map
-                .into_iter()
-                .map(|(key, value)| (key, canonical_value(value)))
-                .collect::<BTreeMap<_, _>>();
+            let ordered = map.into_iter().map(|(key, value)| (key, canonical_value(value))).collect::<BTreeMap<_, _>>();
             Value::Object(ordered.into_iter().collect())
         }
         Value::Array(values) => Value::Array(values.into_iter().map(canonical_value).collect()),
@@ -166,24 +139,9 @@ mod tests {
     #[test]
     fn store_deduplicates_and_gc_preserves_dependencies() {
         let mut store = ContentStore::default();
-        let leaf = store.insert(RuntimeObject {
-            kind: RuntimeObjectKind::Semantic,
-            schema_version: 1,
-            payload: serde_json::json!({"node": "hero"}),
-            dependencies: vec![],
-        });
-        let root = store.insert(RuntimeObject {
-            kind: RuntimeObjectKind::Proof,
-            schema_version: 1,
-            payload: serde_json::json!({"verdict": "pass"}),
-            dependencies: vec![leaf.clone()],
-        });
-        store.insert(RuntimeObject {
-            kind: RuntimeObjectKind::Asset,
-            schema_version: 1,
-            payload: serde_json::json!({"unused": true}),
-            dependencies: vec![],
-        });
+        let leaf = store.insert(RuntimeObject { kind: RuntimeObjectKind::Semantic, schema_version: 1, payload: serde_json::json!({"node": "hero"}), dependencies: vec![] });
+        let root = store.insert(RuntimeObject { kind: RuntimeObjectKind::Proof, schema_version: 1, payload: serde_json::json!({"verdict": "pass"}), dependencies: vec![leaf.clone()] });
+        store.insert(RuntimeObject { kind: RuntimeObjectKind::Asset, schema_version: 1, payload: serde_json::json!({"unused": true}), dependencies: vec![] });
         assert_eq!(store.collect_garbage(std::slice::from_ref(&root)), 1);
         assert!(store.get(&leaf).is_some());
     }

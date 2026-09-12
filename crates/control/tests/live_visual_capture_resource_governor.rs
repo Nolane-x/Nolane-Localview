@@ -1,20 +1,18 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{
-    body::{Body, to_bytes},
-    http::{Method, Request, StatusCode, header},
+    body::{to_bytes, Body},
+    http::{header, Method, Request, StatusCode},
 };
 use chrono::Utc;
-use localview_control::{ControlState, router};
+use localview_control::{router, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
-use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
-};
+use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;

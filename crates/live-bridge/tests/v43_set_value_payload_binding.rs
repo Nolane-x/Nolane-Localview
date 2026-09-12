@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use localview_live_bridge::{
-    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BridgeActionKind,
-    CanonicalActionOperation, ConsequentialJournal, LiveBridge, ProviderObservationBinding,
-    SetValueCommitmentKey, SetValueMode, SetValuePayloadRef, verify_set_value_payload_binding,
+    verify_set_value_payload_binding, ActionEnvelopeMetadata, ActionIdempotencyClass,
+    ActionRiskClass, BridgeActionKind, CanonicalActionOperation, ConsequentialJournal, LiveBridge,
+    ProviderObservationBinding, SetValueCommitmentKey, SetValueMode, SetValuePayloadRef,
 };
 use localview_protocol::{
     EventContinuityState, PrincipalRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
@@ -14,10 +14,7 @@ fn journal_path(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("localview-{label}-{}.jsonl", Uuid::new_v4()))
 }
 
-fn metadata(
-    provider: ProviderIncarnationRef,
-    target: TargetIncarnationRef,
-) -> ActionEnvelopeMetadata {
+fn metadata(provider: ProviderIncarnationRef, target: TargetIncarnationRef) -> ActionEnvelopeMetadata {
     ActionEnvelopeMetadata {
         decision_principal_ref: PrincipalRef::from("principal:set-value-binding:decision"),
         acting_principal_ref: PrincipalRef::from("principal:set-value-binding:acting"),
@@ -100,9 +97,7 @@ async fn set_value_payload_binding_is_opaque_immutable_and_exact() {
 
     let encoded = serde_json::to_vec(&binding).unwrap();
     assert!(
-        !encoded
-            .windows(payload.len())
-            .any(|window| window == payload),
+        !encoded.windows(payload.len()).any(|window| window == payload),
         "durable payload metadata must never serialize caller plaintext"
     );
     assert!(verify_set_value_payload_binding(&key, &binding, payload).is_ok());

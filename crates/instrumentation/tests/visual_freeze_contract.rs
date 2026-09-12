@@ -1,4 +1,4 @@
-use localview_instrumentation::{InstrumentationConfig, bootstrap_script};
+use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 
 #[test]
 fn visual_freeze_lease_is_bounded_owned_and_motion_only() {
@@ -17,10 +17,7 @@ fn visual_freeze_lease_is_bounded_owned_and_motion_only() {
         "scroll-behavior: auto !important",
         "requestAnimationFrame",
     ] {
-        assert!(
-            script.contains(required),
-            "missing visual freeze contract: {required}"
-        );
+        assert!(script.contains(required), "missing visual freeze contract: {required}");
     }
 
     assert!(script.contains("lease.token !== token"));

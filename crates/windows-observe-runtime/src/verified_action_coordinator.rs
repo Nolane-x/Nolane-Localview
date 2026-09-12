@@ -1,6 +1,8 @@
 use localview_live_bridge::{CanonicalQueuedAction, ConsequentialJournal, LiveBridge};
 use localview_protocol::ProviderElementRef;
-use localview_windows_uia_provider::{WindowsUiaDispatchContextRequirements, WindowsUiaPattern};
+use localview_windows_uia_provider::{
+    WindowsUiaDispatchContextRequirements, WindowsUiaPattern,
+};
 use thiserror::Error;
 
 use crate::{
@@ -106,7 +108,13 @@ where
     let armed = arm_uia_dispatch_execution(bridge, journal, runtime, session_id, prepared).await?;
 
     execute_armed_uia_dispatch_verified(
-        bridge, journal, runtime, session_id, armed, executor, verifier,
+        bridge,
+        journal,
+        runtime,
+        session_id,
+        armed,
+        executor,
+        verifier,
     )
     .await
     .map_err(Into::into)

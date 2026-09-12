@@ -1,4 +1,6 @@
-use localview_windows_uia_provider::{WindowsUiaPattern, WindowsUiaPatternDispatchOperation};
+use localview_windows_uia_provider::{
+    WindowsUiaPattern, WindowsUiaPatternDispatchOperation,
+};
 
 #[test]
 fn expand_and_collapse_remain_distinct_provider_operations_for_one_pattern() {

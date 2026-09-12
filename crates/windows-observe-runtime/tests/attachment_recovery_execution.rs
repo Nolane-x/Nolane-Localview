@@ -118,10 +118,7 @@ impl WindowsObserveProvider for FakeProvider {
         self.provider.clone()
     }
 
-    fn attach(
-        &self,
-        _selection: UserSelectedWindowTarget,
-    ) -> Result<Self::Attachment, Self::Error> {
+    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
         Ok(FakeAttachment(self.target.clone()))
     }
 
@@ -236,7 +233,10 @@ fn path() -> PathBuf {
     ))
 }
 
-fn envelope(label: &str, provider: &FakeProvider) -> CanonicalActionEnvelope {
+fn envelope(
+    label: &str,
+    provider: &FakeProvider,
+) -> CanonicalActionEnvelope {
     CanonicalActionEnvelope {
         envelope_id: Uuid::new_v4(),
         transport_action_id: Uuid::new_v4(),
@@ -259,10 +259,7 @@ async fn record_authorized_not_dispatched(
     journal: &ConsequentialJournal,
     action: &CanonicalActionEnvelope,
 ) {
-    journal
-        .record_intent_admitted(action.clone())
-        .await
-        .unwrap();
+    journal.record_intent_admitted(action.clone()).await.unwrap();
     journal
         .record_authorization(
             action.transport_action_id,
@@ -273,11 +270,11 @@ async fn record_authorized_not_dispatched(
         .unwrap();
 }
 
-async fn record_prepared(journal: &ConsequentialJournal, action: &CanonicalActionEnvelope) {
-    journal
-        .record_intent_admitted(action.clone())
-        .await
-        .unwrap();
+async fn record_prepared(
+    journal: &ConsequentialJournal,
+    action: &CanonicalActionEnvelope,
+) {
+    journal.record_intent_admitted(action.clone()).await.unwrap();
     let authorization = journal
         .record_authorization(
             action.transport_action_id,
@@ -306,8 +303,7 @@ async fn record_prepared(journal: &ConsequentialJournal, action: &CanonicalActio
 }
 
 #[tokio::test]
-async fn attachment_recovery_executes_only_typed_recovery_dispositions_without_redispatch_surface()
-{
+async fn attachment_recovery_executes_only_typed_recovery_dispositions_without_redispatch_surface() {
     let bridge = LiveBridge::new(64, 8);
     let provider = FakeProvider::new();
     let runtime = WindowsObserveRuntimeManager::new(
@@ -333,10 +329,15 @@ async fn attachment_recovery_executes_only_typed_recovery_dispositions_without_r
     // Reopen proves no process-local dispatch capability survives restart.
     let journal = ConsequentialJournal::open(&path).await.unwrap();
     let verifier = FakeVerifier::new();
-    let drain =
-        recover_attached_consequential_debt(&bridge, &journal, &runtime, session(), &verifier)
-            .await
-            .unwrap();
+    let drain = recover_attached_consequential_debt(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        &verifier,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(drain.entries.len(), 2);
     assert!(matches!(
@@ -420,10 +421,15 @@ async fn commit_only_and_historical_recovery_never_recaptures_or_reverifies() {
 
     let snapshots_before = provider.snapshot_calls();
     let verifier = FakeVerifier::new();
-    let commit_only =
-        recover_attached_consequential_debt(&bridge, &journal, &runtime, session(), &verifier)
-            .await
-            .unwrap();
+    let commit_only = recover_attached_consequential_debt(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        &verifier,
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         &commit_only.entries[0],
         WindowsUiaAttachedRecoveryDrainOutcome::Recovered(
@@ -433,10 +439,15 @@ async fn commit_only_and_historical_recovery_never_recaptures_or_reverifies() {
     assert_eq!(provider.snapshot_calls(), snapshots_before);
     assert_eq!(verifier.calls(), 0);
 
-    let historical =
-        recover_attached_consequential_debt(&bridge, &journal, &runtime, session(), &verifier)
-            .await
-            .unwrap();
+    let historical = recover_attached_consequential_debt(
+        &bridge,
+        &journal,
+        &runtime,
+        session(),
+        &verifier,
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         &historical.entries[0],
         WindowsUiaAttachedRecoveryDrainOutcome::HistoricalTerminal {

@@ -1,20 +1,18 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{
-    body::{Body, to_bytes},
-    http::{Method, Request, StatusCode, header},
+    body::{to_bytes, Body},
+    http::{header, Method, Request, StatusCode},
 };
 use chrono::Utc;
-use localview_control::{ControlState, router};
+use localview_control::{router, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
-use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
-};
+use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -166,7 +164,15 @@ fn unchanged_expectation(max_changed_ratio: f64) -> Value {
 #[tokio::test]
 async fn live_visual_verify_requires_auth_and_a_known_session() {
     let (state, session_id) = test_state().await;
-    let diff_id = create_diff(state.clone(), session_id, "unchanged", 0.0, "rev-a", vec![]).await;
+    let diff_id = create_diff(
+        state.clone(),
+        session_id,
+        "unchanged",
+        0.0,
+        "rev-a",
+        vec![],
+    )
+    .await;
     let payload = serde_json::json!({
         "evidence_id": diff_id,
         "expectation": unchanged_expectation(0.001)
@@ -196,7 +202,15 @@ async fn live_visual_verify_requires_auth_and_a_known_session() {
 #[tokio::test]
 async fn live_visual_verify_uses_retained_diff_observation_and_explicit_policy() {
     let (state, session_id) = test_state().await;
-    let diff_id = create_diff(state.clone(), session_id, "unchanged", 0.0, "rev-a", vec![]).await;
+    let diff_id = create_diff(
+        state.clone(),
+        session_id,
+        "unchanged",
+        0.0,
+        "rev-a",
+        vec![],
+    )
+    .await;
 
     let (status, body) = send(
         state,
@@ -248,7 +262,15 @@ async fn baseline_reset_is_live_inconclusive_not_a_false_visual_pass() {
 #[tokio::test]
 async fn caller_cannot_submit_visual_verdict_or_failure_authority() {
     let (state, session_id) = test_state().await;
-    let diff_id = create_diff(state.clone(), session_id, "unchanged", 0.0, "rev-a", vec![]).await;
+    let diff_id = create_diff(
+        state.clone(),
+        session_id,
+        "unchanged",
+        0.0,
+        "rev-a",
+        vec![],
+    )
+    .await;
     let payload = serde_json::json!({
         "evidence_id": diff_id,
         "expectation": unchanged_expectation(0.001),

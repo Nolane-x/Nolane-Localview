@@ -12,18 +12,11 @@ type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ReceiptVerdict {
-    Pass,
-    Fail,
-    Inconclusive,
-}
+pub enum ReceiptVerdict { Pass, Fail, Inconclusive }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum AttestorKind {
-    Local,
-    Ci,
-}
+pub enum AttestorKind { Local, Ci }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProofReceiptPayload {
@@ -57,45 +50,25 @@ pub struct ProofReceipt {
     pub signature: String,
 }
 
-pub fn sign(
-    payload: ProofReceiptPayload,
-    attestor: AttestorKind,
-    key_id: impl Into<String>,
-    key: &[u8],
-) -> Result<ProofReceipt, AttestationError> {
-    if key.len() < 16 {
-        return Err(AttestationError::WeakKey);
-    }
+pub fn sign(payload: ProofReceiptPayload, attestor: AttestorKind, key_id: impl Into<String>, key: &[u8]) -> Result<ProofReceipt, AttestationError> {
+    if key.len() < 16 { return Err(AttestationError::WeakKey); }
     let payload_hash = payload.canonical_hash();
     let mut mac = HmacSha256::new_from_slice(key).map_err(|_| AttestationError::InvalidKey)?;
     mac.update(payload_hash.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
-    Ok(ProofReceipt {
-        payload,
-        payload_hash,
-        attestor,
-        key_id: key_id.into(),
-        signature,
-    })
+    Ok(ProofReceipt { payload, payload_hash, attestor, key_id: key_id.into(), signature })
 }
 
 pub fn verify(receipt: &ProofReceipt, key: &[u8]) -> Result<bool, AttestationError> {
-    if receipt.payload.canonical_hash() != receipt.payload_hash {
-        return Ok(false);
-    }
+    if receipt.payload.canonical_hash() != receipt.payload_hash { return Ok(false); }
     let mut mac = HmacSha256::new_from_slice(key).map_err(|_| AttestationError::InvalidKey)?;
     mac.update(receipt.payload_hash.as_bytes());
-    let signature =
-        hex::decode(&receipt.signature).map_err(|_| AttestationError::InvalidSignatureEncoding)?;
+    let signature = hex::decode(&receipt.signature).map_err(|_| AttestationError::InvalidSignatureEncoding)?;
     Ok(mac.verify_slice(&signature).is_ok())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AttestationError {
-    WeakKey,
-    InvalidKey,
-    InvalidSignatureEncoding,
-}
+pub enum AttestationError { WeakKey, InvalidKey, InvalidSignatureEncoding }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CurrentRuntimeBinding {
@@ -105,26 +78,14 @@ pub struct CurrentRuntimeBinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StalenessReport {
-    pub stale: bool,
-    pub reasons: Vec<String>,
-}
+pub struct StalenessReport { pub stale: bool, pub reasons: Vec<String> }
 
 pub fn staleness(receipt: &ProofReceipt, current: &CurrentRuntimeBinding) -> StalenessReport {
     let mut reasons = Vec::new();
-    if receipt.payload.candidate_revision != current.candidate_revision {
-        reasons.push("candidate revision changed".into());
-    }
-    if receipt.payload.environment_hash != current.environment_hash {
-        reasons.push("environment changed".into());
-    }
-    if receipt.payload.plan_hash != current.plan_hash {
-        reasons.push("verification plan changed".into());
-    }
-    StalenessReport {
-        stale: !reasons.is_empty(),
-        reasons,
-    }
+    if receipt.payload.candidate_revision != current.candidate_revision { reasons.push("candidate revision changed".into()); }
+    if receipt.payload.environment_hash != current.environment_hash { reasons.push("environment changed".into()); }
+    if receipt.payload.plan_hash != current.plan_hash { reasons.push("verification plan changed".into()); }
+    StalenessReport { stale: !reasons.is_empty(), reasons }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -135,32 +96,19 @@ pub struct PrEvidenceReceipt {
     pub all_pass: bool,
 }
 
-pub fn aggregate_pr(
-    pull_request: impl Into<String>,
-    head_revision: impl Into<String>,
-    receipts: &[ProofReceipt],
-) -> PrEvidenceReceipt {
+pub fn aggregate_pr(pull_request: impl Into<String>, head_revision: impl Into<String>, receipts: &[ProofReceipt]) -> PrEvidenceReceipt {
     PrEvidenceReceipt {
         pull_request: pull_request.into(),
         head_revision: head_revision.into(),
-        receipt_hashes: receipts
-            .iter()
-            .map(|receipt| receipt.payload_hash.clone())
-            .collect(),
-        all_pass: !receipts.is_empty()
-            && receipts
-                .iter()
-                .all(|receipt| receipt.payload.verdict == ReceiptVerdict::Pass),
+        receipt_hashes: receipts.iter().map(|receipt| receipt.payload_hash.clone()).collect(),
+        all_pass: !receipts.is_empty() && receipts.iter().all(|receipt| receipt.payload.verdict == ReceiptVerdict::Pass),
     }
 }
 
 fn canonical_value(value: Value) -> Value {
     match value {
         Value::Object(map) => {
-            let ordered = map
-                .into_iter()
-                .map(|(key, value)| (key, canonical_value(value)))
-                .collect::<BTreeMap<_, _>>();
+            let ordered = map.into_iter().map(|(key, value)| (key, canonical_value(value))).collect::<BTreeMap<_, _>>();
             Value::Object(ordered.into_iter().collect())
         }
         Value::Array(values) => Value::Array(values.into_iter().map(canonical_value).collect()),
@@ -173,19 +121,7 @@ mod tests {
     use super::*;
 
     fn payload() -> ProofReceiptPayload {
-        ProofReceiptPayload {
-            schema_version: 1,
-            project: "LocalView".into(),
-            baseline_revision: "a".into(),
-            candidate_revision: "b".into(),
-            environment_hash: "env".into(),
-            plan_hash: "plan".into(),
-            evidence_hashes: vec!["ev".into()],
-            contract_hashes: vec![],
-            mutation_run_hash: None,
-            verdict: ReceiptVerdict::Pass,
-            created_at: DateTime::<Utc>::from_timestamp(1, 0).expect("timestamp"),
-        }
+        ProofReceiptPayload { schema_version: 1, project: "LocalView".into(), baseline_revision: "a".into(), candidate_revision: "b".into(), environment_hash: "env".into(), plan_hash: "plan".into(), evidence_hashes: vec!["ev".into()], contract_hashes: vec![], mutation_run_hash: None, verdict: ReceiptVerdict::Pass, created_at: DateTime::<Utc>::from_timestamp(1, 0).expect("timestamp") }
     }
 
     #[test]

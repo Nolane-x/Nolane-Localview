@@ -2,8 +2,8 @@ use localview_protocol::{
     ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef,
 };
 use localview_windows_uia_provider::{
-    WindowsUiaItemLookupProperty, WindowsUiaVirtualizedItemQueryRequest,
-    WindowsUiaVirtualizedItemRealizeRequest, WindowsUiaVirtualizedItemRequestError,
+    WindowsUiaItemLookupProperty, WindowsUiaVirtualizedItemRequestError,
+    WindowsUiaVirtualizedItemQueryRequest, WindowsUiaVirtualizedItemRealizeRequest,
 };
 
 fn element(cut: &str, realization: ProviderElementRealization) -> ProviderElementRef {
@@ -54,7 +54,10 @@ fn item_container_query_requires_realized_exact_cut_and_nonempty_lookup_value() 
     assert_eq!(
         WindowsUiaVirtualizedItemQueryRequest::new(
             "cut:w03:1",
-            element("cut:w03:1", ProviderElementRealization::RealizationRequired,),
+            element(
+                "cut:w03:1",
+                ProviderElementRealization::RealizationRequired,
+            ),
             WindowsUiaItemLookupProperty::Name,
             "LocalView Virtual Item 255",
         ),
@@ -64,7 +67,10 @@ fn item_container_query_requires_realized_exact_cut_and_nonempty_lookup_value() 
 
 #[test]
 fn realization_request_accepts_only_exact_realization_required_placeholder() {
-    let placeholder = element("cut:w03:1", ProviderElementRealization::RealizationRequired);
+    let placeholder = element(
+        "cut:w03:1",
+        ProviderElementRealization::RealizationRequired,
+    );
     let request = WindowsUiaVirtualizedItemRealizeRequest::new("cut:w03:1", placeholder.clone())
         .expect("virtual placeholder should be realizable");
     assert_eq!(request.snapshot_cut_ref(), "cut:w03:1");
@@ -73,7 +79,10 @@ fn realization_request_accepts_only_exact_realization_required_placeholder() {
     assert_eq!(
         WindowsUiaVirtualizedItemRealizeRequest::new(
             "cut:w03:2",
-            element("cut:w03:1", ProviderElementRealization::RealizationRequired,),
+            element(
+                "cut:w03:1",
+                ProviderElementRealization::RealizationRequired,
+            ),
         ),
         Err(WindowsUiaVirtualizedItemRequestError::AcquisitionCutMismatch),
     );

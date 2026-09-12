@@ -1,9 +1,9 @@
 use axum::{
-    Json, Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
+    Json, Router,
 };
 use localview_live_bridge::ActionCancellationState;
 use localview_protocol::SessionId;
@@ -16,7 +16,10 @@ const MAX_CANCELLATION_SIGNALS: usize = 32;
 
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
-        .route("/v1/sessions/{id}/actions/cancel", post(cancel_action))
+        .route(
+            "/v1/sessions/{id}/actions/cancel",
+            post(cancel_action),
+        )
         .route(
             "/v1/sessions/{id}/actions/cancellations",
             get(action_cancellations),

@@ -5,10 +5,7 @@ use std::{fs, path::PathBuf};
 fn source(path: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
     fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!(
-            "required desktop surface resource source {} is unavailable: {error}",
-            path.display()
-        )
+        panic!("required desktop surface resource source {} is unavailable: {error}", path.display())
     })
 }
 
@@ -189,7 +186,8 @@ fn desktop_heartbeat_is_five_seconds_and_never_refreshes_stale_owner_proof() {
         .next()
         .expect("heartbeat body");
     assert!(
-        !heartbeat.contains("refresh_registration") && !heartbeat.contains("reattach_surface_once"),
+        !heartbeat.contains("refresh_registration")
+            && !heartbeat.contains("reattach_surface_once"),
         "heartbeat failure must not preempt one-shot surface recovery by refreshing or reattaching authority"
     );
 }

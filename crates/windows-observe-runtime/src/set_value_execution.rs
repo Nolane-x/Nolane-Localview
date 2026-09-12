@@ -10,8 +10,8 @@ use localview_postcondition_contracts::{
     PayloadEqualityModeV1, PayloadEqualityPostconditionContractV1,
 };
 use localview_protocol::{
-    ProviderElementRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef, TransportResult,
-    WorldOutcome,
+    ProviderElementRef, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
+    TransportResult, WorldOutcome,
 };
 use localview_windows_uia_provider::{
     WindowsUiaPattern, WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
@@ -180,9 +180,7 @@ pub enum WindowsUiaSetValueExecutionError {
     AdmittedEnvelopeMissing,
     #[error("Windows UIA SetValue admitted envelope does not match fresh observation lineage")]
     AdmittedEnvelopeMismatch,
-    #[error(
-        "Windows UIA SetValue expected postcondition is not the exact payload equality contract"
-    )]
+    #[error("Windows UIA SetValue expected postcondition is not the exact payload equality contract")]
     PayloadEqualityContractMismatch,
     #[error("Windows UIA SetValue fresh equality read failed: {message}")]
     Verification { message: String },
@@ -279,11 +277,7 @@ where
         return Err(WindowsUiaSetValueExecutionError::CanonicalOperationMismatch);
     }
 
-    let required_pattern = seal
-        .authority
-        .dispatch_revalidation
-        .preflight
-        .required_pattern;
+    let required_pattern = seal.authority.dispatch_revalidation.preflight.required_pattern;
     if required_pattern != WindowsUiaPattern::Value {
         abandon(
             journal,
@@ -408,11 +402,9 @@ where
             linearization.clone(),
         )
         .await
-        .map_err(
-            |error| WindowsUiaSetValueExecutionError::JournalLinearizationFailed {
-                message: error.to_string(),
-            },
-        )?;
+        .map_err(|error| WindowsUiaSetValueExecutionError::JournalLinearizationFailed {
+            message: error.to_string(),
+        })?;
     if journal_entry.action_id != action_id
         || !matches!(
             &journal_entry.transition,
@@ -439,11 +431,9 @@ where
     let observation_permit = journal
         .begin_postcondition_observation(action_id)
         .await
-        .map_err(
-            |error| WindowsUiaSetValueExecutionError::ObservationAuthority {
-                message: error.to_string(),
-            },
-        )?;
+        .map_err(|error| WindowsUiaSetValueExecutionError::ObservationAuthority {
+            message: error.to_string(),
+        })?;
     let capture = runtime
         .capture_postcondition_observation_with_snapshot(journal, observation_permit)
         .await
@@ -479,9 +469,7 @@ where
     }
 
     let contract_ref = exact_payload_equality_contract(
-        &admitted_envelope
-            .metadata
-            .expected_postcondition_contract_refs,
+        &admitted_envelope.metadata.expected_postcondition_contract_refs,
         payload.payload_ref,
         payload.mode,
     )?;
@@ -522,7 +510,8 @@ where
         status,
         receipt_ref: format!(
             "windows-uia:set-value-equality:{}:{}",
-            action_id, verification.observation_cut_ref
+            action_id,
+            verification.observation_cut_ref
         ),
     };
     let reconciliation = reconcile_consequential_postconditions(
@@ -556,14 +545,12 @@ where
         });
     }
 
-    Ok(
-        WindowsUiaVerifiedExecutionOutcome::PostconditionNotVerified {
-            action_id,
-            world_outcome: reconciliation.world_outcome,
-            dispatch_journal_sequence,
-            reconciliation_journal_sequence,
-        },
-    )
+    Ok(WindowsUiaVerifiedExecutionOutcome::PostconditionNotVerified {
+        action_id,
+        world_outcome: reconciliation.world_outcome,
+        dispatch_journal_sequence,
+        reconciliation_journal_sequence,
+    })
 }
 
 async fn abandon(

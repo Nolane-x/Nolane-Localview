@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use localview_evidence::EvidenceKind;
 use localview_token_budget::{
-    BudgetEscalationReason, PerceptionBudgetContract, PerceptionBudgetDecision,
-    PerceptionBudgetUsage, evaluate_perception_budget,
+    evaluate_perception_budget, BudgetEscalationReason, PerceptionBudgetContract,
+    PerceptionBudgetDecision, PerceptionBudgetUsage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -67,10 +67,7 @@ pub struct PerceptionPlan {
     pub rejected: Vec<String>,
 }
 
-pub fn plan_perception(
-    candidates: &[PerceptionCandidate],
-    budget: &PerceptionBudget,
-) -> PerceptionPlan {
+pub fn plan_perception(candidates: &[PerceptionCandidate], budget: &PerceptionBudget) -> PerceptionPlan {
     let mut ordered = candidates.to_vec();
     ordered.sort_by(|left, right| {
         right
@@ -99,9 +96,7 @@ pub fn plan_perception(
         }
         let next_cpu = plan.cpu_ms.saturating_add(candidate.estimated_cpu_ms);
         let next_tokens = plan.tokens.saturating_add(candidate.estimated_tokens);
-        let next_capture = plan
-            .capture_bytes
-            .saturating_add(candidate.estimated_capture_bytes);
+        let next_capture = plan.capture_bytes.saturating_add(candidate.estimated_capture_bytes);
         if next_cpu > budget.max_cpu_ms
             || next_tokens > budget.max_tokens
             || next_capture > budget.max_capture_bytes
@@ -306,7 +301,10 @@ pub fn plan_budgeted_perception_cycle_with_usage(
     }
 }
 
-fn add_usage(spent: &PerceptionBudgetUsage, next: &PerceptionBudgetUsage) -> PerceptionBudgetUsage {
+fn add_usage(
+    spent: &PerceptionBudgetUsage,
+    next: &PerceptionBudgetUsage,
+) -> PerceptionBudgetUsage {
     PerceptionBudgetUsage {
         latency_ms: spent.latency_ms.saturating_add(next.latency_ms),
         text_tokens: spent.text_tokens.saturating_add(next.text_tokens),
@@ -388,7 +386,8 @@ pub fn adaptive_qa_plan(
                 if !dedupe.insert(key.clone()) {
                     continue;
                 }
-                let priority = (score * 1000.0).round().clamp(0.0, u16::MAX as f32) as u16;
+                let priority =
+                    (score * 1000.0).round().clamp(0.0, u16::MAX as f32) as u16;
                 result.push(QaCheck {
                     id: key,
                     target: target.clone(),
@@ -411,65 +410,17 @@ mod tests {
     #[test]
     fn planner_prefers_high_information_action_within_budget() {
         let candidates = vec![
-            PerceptionCandidate {
-                id: "full".into(),
-                kind: PerceptionActionKind::ViewportCapture,
-                target: None,
-                expected_evidence: vec![EvidenceKind::Visual],
-                uncertainty_reduction: 0.8,
-                risk_relevance: 0.8,
-                estimated_cpu_ms: 200,
-                estimated_tokens: 800,
-                estimated_capture_bytes: 2_000_000,
-            },
-            PerceptionCandidate {
-                id: "region".into(),
-                kind: PerceptionActionKind::RegionCapture,
-                target: Some("hero".into()),
-                expected_evidence: vec![EvidenceKind::Visual],
-                uncertainty_reduction: 0.7,
-                risk_relevance: 0.9,
-                estimated_cpu_ms: 30,
-                estimated_tokens: 120,
-                estimated_capture_bytes: 100_000,
-            },
+            PerceptionCandidate { id: "full".into(), kind: PerceptionActionKind::ViewportCapture, target: None, expected_evidence: vec![EvidenceKind::Visual], uncertainty_reduction: 0.8, risk_relevance: 0.8, estimated_cpu_ms: 200, estimated_tokens: 800, estimated_capture_bytes: 2_000_000 },
+            PerceptionCandidate { id: "region".into(), kind: PerceptionActionKind::RegionCapture, target: Some("hero".into()), expected_evidence: vec![EvidenceKind::Visual], uncertainty_reduction: 0.7, risk_relevance: 0.9, estimated_cpu_ms: 30, estimated_tokens: 120, estimated_capture_bytes: 100_000 },
         ];
-        let plan = plan_perception(
-            &candidates,
-            &PerceptionBudget {
-                max_actions: 1,
-                max_cpu_ms: 300,
-                max_tokens: 1000,
-                max_capture_bytes: 3_000_000,
-                allow_chromium: false,
-            },
-        );
+        let plan = plan_perception(&candidates, &PerceptionBudget { max_actions: 1, max_cpu_ms: 300, max_tokens: 1000, max_capture_bytes: 3_000_000, allow_chromium: false });
         assert_eq!(plan.actions[0].id, "region");
     }
 
     #[test]
     fn chromium_requires_explicit_budget_permission() {
-        let candidate = PerceptionCandidate {
-            id: "chromium".into(),
-            kind: PerceptionActionKind::ChromiumEscalation,
-            target: None,
-            expected_evidence: vec![EvidenceKind::Visual],
-            uncertainty_reduction: 1.0,
-            risk_relevance: 1.0,
-            estimated_cpu_ms: 1,
-            estimated_tokens: 1,
-            estimated_capture_bytes: 1,
-        };
-        let plan = plan_perception(
-            &[candidate],
-            &PerceptionBudget {
-                max_actions: 1,
-                max_cpu_ms: 10,
-                max_tokens: 10,
-                max_capture_bytes: 10,
-                allow_chromium: false,
-            },
-        );
+        let candidate = PerceptionCandidate { id: "chromium".into(), kind: PerceptionActionKind::ChromiumEscalation, target: None, expected_evidence: vec![EvidenceKind::Visual], uncertainty_reduction: 1.0, risk_relevance: 1.0, estimated_cpu_ms: 1, estimated_tokens: 1, estimated_capture_bytes: 1 };
+        let plan = plan_perception(&[candidate], &PerceptionBudget { max_actions: 1, max_cpu_ms: 10, max_tokens: 10, max_capture_bytes: 10, allow_chromium: false });
         assert!(plan.actions.is_empty());
     }
 }

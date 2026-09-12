@@ -39,10 +39,7 @@ pub struct SourceRegionIndex {
 
 impl SourceRegionIndex {
     pub fn upsert(&mut self, binding: RegionBinding) {
-        if let Some(previous) = self
-            .regions
-            .insert(binding.region_id.clone(), binding.clone())
-        {
+        if let Some(previous) = self.regions.insert(binding.region_id.clone(), binding.clone()) {
             for source in previous.source_keys {
                 self.remove_source_region(&source.file, &previous.region_id);
             }
@@ -185,7 +182,8 @@ pub fn change_impact(
         .flat_map(|file| index.regions_for_source(file))
         .map(|binding| binding.region_id.clone())
         .collect::<BTreeSet<_>>();
-    let impacted_dependencies = graph.blast_radius(&changed_sources, &BTreeSet::new(), max_depth);
+    let impacted_dependencies =
+        graph.blast_radius(&changed_sources, &BTreeSet::new(), max_depth);
     ChangeImpact {
         changed_sources,
         impacted_regions,
@@ -229,8 +227,11 @@ mod tests {
             kind: DependencyKind::Import,
             evidence_ids: vec![],
         });
-        let impacted =
-            graph.blast_radius(&BTreeSet::from(["tokens.css".into()]), &BTreeSet::new(), 3);
+        let impacted = graph.blast_radius(
+            &BTreeSet::from(["tokens.css".into()]),
+            &BTreeSet::new(),
+            3,
+        );
         assert!(impacted.contains("checkout"));
     }
 }

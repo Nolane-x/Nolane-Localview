@@ -214,7 +214,11 @@ pub fn plan_changed_css_regions(
     }
 
     let (css_width, css_height) = css_viewport;
-    if !css_width.is_finite() || !css_height.is_finite() || css_width <= 0.0 || css_height <= 0.0 {
+    if !css_width.is_finite()
+        || !css_height.is_finite()
+        || css_width <= 0.0
+        || css_height <= 0.0
+    {
         return Err(VisualError::InvalidViewport);
     }
     if policy.tile_px == 0
@@ -433,7 +437,11 @@ pub fn crop_png_css_rect(
     }
 
     let (css_width, css_height) = css_viewport;
-    if !css_width.is_finite() || !css_height.is_finite() || css_width <= 0.0 || css_height <= 0.0 {
+    if !css_width.is_finite()
+        || !css_height.is_finite()
+        || css_width <= 0.0
+        || css_height <= 0.0
+    {
         return Err(VisualError::InvalidViewport);
     }
 
@@ -463,8 +471,12 @@ pub fn crop_png_css_rect(
     let scale_y = image.height as f64 / css_height;
     let left = (css_left * scale_x).floor().max(0.0) as u32;
     let top = (css_top * scale_y).floor().max(0.0) as u32;
-    let right = (css_right * scale_x).ceil().min(image.width as f64) as u32;
-    let bottom = (css_bottom * scale_y).ceil().min(image.height as f64) as u32;
+    let right = (css_right * scale_x)
+        .ceil()
+        .min(image.width as f64) as u32;
+    let bottom = (css_bottom * scale_y)
+        .ceil()
+        .min(image.height as f64) as u32;
     if right <= left || bottom <= top {
         return Err(VisualError::InvalidRegionGeometry);
     }
@@ -546,7 +558,11 @@ pub fn redact_css_rects(
     image.validate()?;
 
     let (css_width, css_height) = css_viewport;
-    if !css_width.is_finite() || !css_height.is_finite() || css_width <= 0.0 || css_height <= 0.0 {
+    if !css_width.is_finite()
+        || !css_height.is_finite()
+        || css_width <= 0.0
+        || css_height <= 0.0
+    {
         return Err(VisualError::InvalidViewport);
     }
 
@@ -581,8 +597,12 @@ pub fn redact_css_rects(
 
         let left = (css_left * scale_x).floor().max(0.0) as u32;
         let top = (css_top * scale_y).floor().max(0.0) as u32;
-        let right = (css_right * scale_x).ceil().min(image.width as f64) as u32;
-        let bottom = (css_bottom * scale_y).ceil().min(image.height as f64) as u32;
+        let right = (css_right * scale_x)
+            .ceil()
+            .min(image.width as f64) as u32;
+        let bottom = (css_bottom * scale_y)
+            .ceil()
+            .min(image.height as f64) as u32;
         if right <= left || bottom <= top {
             continue;
         }

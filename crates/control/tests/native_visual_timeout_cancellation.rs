@@ -1,10 +1,10 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use chrono::Utc;
-use localview_control::{ControlState, wait_for_native_executor_result_with_timeout};
+use localview_control::{wait_for_native_executor_result_with_timeout, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{
     LiveBridge, NativeExecutorAction, NativeExecutorCancellationState, NativeExecutorResult,
@@ -42,7 +42,9 @@ fn discovered(port: u16) -> DiscoveredServer {
 
 async fn test_state() -> (ControlState, localview_protocol::SessionId) {
     let sessions = Arc::new(SessionManager::new(Duration::from_secs(2)));
-    let reconcile = sessions.reconcile(vec![discovered(5373)], Utc::now()).await;
+    let reconcile = sessions
+        .reconcile(vec![discovered(5373)], Utc::now())
+        .await;
     let session_id = reconcile.created[0];
     let state = ControlState {
         token: Arc::from("test-token"),
@@ -82,10 +84,7 @@ async fn complete_one(
     session_id: localview_protocol::SessionId,
     marker: &str,
 ) -> uuid::Uuid {
-    let request = state
-        .live
-        .enqueue_native_executor(session_id, action())
-        .await;
+    let request = state.live.enqueue_native_executor(session_id, action()).await;
     let dispatched = state
         .live
         .take_native_executor_requests(session_id, 1)
@@ -122,10 +121,7 @@ fn native_visual_consumers_share_exact_cancellable_waiter_authority() {
 #[tokio::test]
 async fn queued_native_visual_timeout_cancels_before_dispatch() {
     let (state, session_id) = test_state().await;
-    let request = state
-        .live
-        .enqueue_native_executor(session_id, action())
-        .await;
+    let request = state.live.enqueue_native_executor(session_id, action()).await;
 
     assert!(
         wait_for_native_executor_result_with_timeout(
@@ -159,10 +155,7 @@ async fn queued_native_visual_timeout_cancels_before_dispatch() {
 #[tokio::test]
 async fn inflight_native_visual_timeout_fences_result_before_worker_ack() {
     let (state, session_id) = test_state().await;
-    let request = state
-        .live
-        .enqueue_native_executor(session_id, action())
-        .await;
+    let request = state.live.enqueue_native_executor(session_id, action()).await;
     let dispatched = state
         .live
         .take_native_executor_requests(session_id, 8)
@@ -207,10 +200,7 @@ async fn waiter_finds_exact_native_result_outside_recent_window() {
         complete_one(&state, session_id, &format!("newer-{index}")).await;
     }
 
-    let recent = state
-        .live
-        .recent_native_executor_results(session_id, 16)
-        .await;
+    let recent = state.live.recent_native_executor_results(session_id, 16).await;
     assert_eq!(recent.len(), 16);
     assert!(
         recent.iter().all(|item| item.request_id != target_id),
@@ -224,9 +214,7 @@ async fn waiter_finds_exact_native_result_outside_recent_window() {
         Duration::from_millis(30),
     )
     .await
-    .expect(
-        "exact retained result must resolve even when newer completions hide it from recent-16",
-    );
+    .expect("exact retained result must resolve even when newer completions hide it from recent-16");
 
     assert_eq!(resolved.request_id, target_id);
     assert_eq!(

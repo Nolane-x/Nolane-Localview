@@ -17,11 +17,11 @@ use localview_protocol::{
     ReconciliationCompleteness, SessionId, TargetIncarnationRef,
 };
 use localview_windows_observe_runtime::{
-    WindowsObserveActionLeaseProvider, WindowsObserveDispatchContextProvider,
+    seal_uia_dispatch, WindowsObserveActionLeaseProvider, WindowsObserveDispatchContextProvider,
     WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
     WindowsObserveSubscriptionLineage, WindowsUiaActionPreflightRequest,
     WindowsUiaAuthorizationRevalidationReceipt, WindowsUiaAuthorizationRevalidator,
-    WindowsUiaDispatchSealError, WindowsUiaDispatchSealRequest, seal_uia_dispatch,
+    WindowsUiaDispatchSealError, WindowsUiaDispatchSealRequest,
 };
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaBoundDispatchContextReceipt,
@@ -122,8 +122,7 @@ impl FakeProvider {
             attributes,
         };
 
-        let mut cache =
-            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -320,16 +319,10 @@ fn selection() -> UserSelectedWindowTarget {
 }
 
 fn journal_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "localview-windows-{label}-{}.jsonl",
-        Uuid::new_v4()
-    ))
+    std::env::temp_dir().join(format!("localview-windows-{label}-{}.jsonl", Uuid::new_v4()))
 }
 
-fn authority(
-    provider: &FakeProvider,
-    snapshot: &NativeSemanticSnapshotRevision,
-) -> ActionEnvelopeMetadata {
+fn authority(provider: &FakeProvider, snapshot: &NativeSemanticSnapshotRevision) -> ActionEnvelopeMetadata {
     ActionEnvelopeMetadata {
         decision_principal_ref: PrincipalRef::from("principal:decision:dispatch-seal"),
         acting_principal_ref: PrincipalRef::from("principal:acting:dispatch-seal"),
@@ -439,19 +432,11 @@ async fn seal_revalidates_semantics_authority_journal_and_exact_provider_context
     assert_eq!(receipt.context.requirements, requirements());
     assert_eq!(
         receipt.context.snapshot_cut_ref,
-        receipt
-            .authority
-            .dispatch_revalidation
-            .element_lease
-            .snapshot_cut_ref
+        receipt.authority.dispatch_revalidation.element_lease.snapshot_cut_ref
     );
     assert_eq!(
         receipt.context.element_ref,
-        receipt
-            .authority
-            .dispatch_revalidation
-            .element_lease
-            .element_ref
+        receipt.authority.dispatch_revalidation.element_lease.element_ref
     );
     assert_eq!(provider.context_calls(), 1);
 

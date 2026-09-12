@@ -13,10 +13,7 @@ fn journal_path(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("localview-{label}-{}.jsonl", Uuid::new_v4()))
 }
 
-fn metadata(
-    provider: ProviderIncarnationRef,
-    target: TargetIncarnationRef,
-) -> ActionEnvelopeMetadata {
+fn metadata(provider: ProviderIncarnationRef, target: TargetIncarnationRef) -> ActionEnvelopeMetadata {
     ActionEnvelopeMetadata {
         decision_principal_ref: PrincipalRef::from("principal:operation-binding:decision"),
         acting_principal_ref: PrincipalRef::from("principal:operation-binding:acting"),
@@ -97,10 +94,7 @@ async fn canonical_operation_binding_is_durable_one_shot_and_bound_to_exact_inte
         .record_intent_admitted(queued.envelope.clone())
         .await
         .unwrap();
-    let bound = journal
-        .record_intent_operation_bound(&queued)
-        .await
-        .unwrap();
+    let bound = journal.record_intent_operation_bound(&queued).await.unwrap();
     assert_eq!(bound.action_id, queued.action.id);
     assert_eq!(bound.intent_journal_sequence, admitted.journal_sequence);
     assert_eq!(bound.operation, CanonicalActionOperation::Activate);
@@ -109,10 +103,7 @@ async fn canonical_operation_binding_is_durable_one_shot_and_bound_to_exact_inte
         Some(CanonicalActionOperation::Activate)
     );
     assert!(
-        journal
-            .record_intent_operation_bound(&queued)
-            .await
-            .is_err(),
+        journal.record_intent_operation_bound(&queued).await.is_err(),
         "operation binding must be immutable once durably recorded"
     );
     drop(journal);
@@ -125,9 +116,5 @@ async fn canonical_operation_binding_is_durable_one_shot_and_bound_to_exact_inte
     );
 
     let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(format!(
-        "{}.operation-{}.json",
-        path.display(),
-        queued.action.id
-    ));
+    let _ = std::fs::remove_file(format!("{}.operation-{}.json", path.display(), queued.action.id));
 }

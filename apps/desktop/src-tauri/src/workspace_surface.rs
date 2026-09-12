@@ -199,7 +199,7 @@ async fn open_native(
     url: url::Url,
     bounds: WorkspaceBounds,
 ) -> Result<(), String> {
-    use localview_instrumentation::{InstrumentationConfig, bootstrap_script};
+    use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
     use tauri::webview::WebviewBuilder;
     use tauri::{LogicalPosition, LogicalSize, Manager, WebviewUrl};
 
@@ -365,9 +365,7 @@ async fn close_native(
 
     if current.is_none() {
         if webview.is_some() {
-            return Err(
-                "native workspace platform child exists without desktop owner truth".into(),
-            );
+            return Err("native workspace platform child exists without desktop owner truth".into());
         }
         return Ok(());
     }
@@ -402,9 +400,7 @@ mod tests {
             "http://127.0.0.1:3000/",
             "http://[::1]:8080/",
         ] {
-            assert!(workspace_navigation_allowed(
-                &url::Url::parse(allowed).unwrap()
-            ));
+            assert!(workspace_navigation_allowed(&url::Url::parse(allowed).unwrap()));
         }
         for rejected in [
             "https://example.com/",
@@ -412,9 +408,7 @@ mod tests {
             "tauri://localhost/",
             "http://localhost.example.com/",
         ] {
-            assert!(!workspace_navigation_allowed(
-                &url::Url::parse(rejected).unwrap()
-            ));
+            assert!(!workspace_navigation_allowed(&url::Url::parse(rejected).unwrap()));
         }
     }
 

@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use localview_native_provider::{NativeSemanticNodeObservation, NativeSemanticSnapshotRevision};
+use localview_native_provider::{
+    NativeSemanticNodeObservation, NativeSemanticSnapshotRevision,
+};
 use localview_protocol::ReconciliationCompleteness;
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -214,7 +216,9 @@ pub enum PayloadEqualityPostconditionContractError {
 }
 
 impl PayloadEqualityPostconditionContractV1 {
-    pub fn to_contract_ref(&self) -> Result<String, PayloadEqualityPostconditionContractError> {
+    pub fn to_contract_ref(
+        &self,
+    ) -> Result<String, PayloadEqualityPostconditionContractError> {
         if !is_canonical_uuid(&self.payload_ref) {
             return Err(PayloadEqualityPostconditionContractError::InvalidPayloadRef);
         }
@@ -235,7 +239,9 @@ impl PayloadEqualityPostconditionContractV1 {
         let object = value
             .as_object()
             .ok_or(PayloadEqualityPostconditionContractError::InvalidPayload)?;
-        if object.len() != 2 || !object.contains_key("mode") || !object.contains_key("payload_ref")
+        if object.len() != 2
+            || !object.contains_key("mode")
+            || !object.contains_key("payload_ref")
         {
             return Err(PayloadEqualityPostconditionContractError::UnknownField);
         }
@@ -592,10 +598,7 @@ impl NativeSemanticPostconditionContractV1 {
             return NativeSemanticPostconditionEvaluation::Unknown;
         }
 
-        let found = snapshot
-            .nodes()
-            .iter()
-            .any(|node| self.matcher.matches(node));
+        let found = snapshot.nodes().iter().any(|node| self.matcher.matches(node));
         match (self.expectation, found) {
             (NativeSemanticPostconditionExpectation::Present, true)
             | (NativeSemanticPostconditionExpectation::Absent, false) => {

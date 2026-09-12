@@ -1,19 +1,20 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    env, fs,
+    env,
+    fs,
     path::{Path, PathBuf},
     process::Command,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use localview_chromium::{
-    ChromiumExecutionPolicy, ChromiumExecutorError, execute_ephemeral,
-    execute_ephemeral_with_lifecycle, validate_loopback_url,
+    execute_ephemeral, execute_ephemeral_with_lifecycle, validate_loopback_url,
+    ChromiumExecutionPolicy, ChromiumExecutorError,
 };
 use url::Url;
 

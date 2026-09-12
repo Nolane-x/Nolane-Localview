@@ -68,15 +68,8 @@ fn duplicate_create_is_rejected_and_visibility_requires_exact_owner() {
     registry
         .set_visibility(&identity, DesktopSurfaceVisibility::Hidden)
         .expect("exact owner may become hidden");
-    let current = registry.current(
-        session_id,
-        DesktopSurfaceKind::WorkspaceChild,
-        &identity.label,
-    );
-    assert_eq!(
-        current.expect("current live owner").visibility,
-        DesktopSurfaceVisibility::Hidden
-    );
+    let current = registry.current(session_id, DesktopSurfaceKind::WorkspaceChild, &identity.label);
+    assert_eq!(current.expect("current live owner").visibility, DesktopSurfaceVisibility::Hidden);
 }
 
 #[test]
@@ -127,23 +120,13 @@ fn repeated_create_close_cycles_converge_to_zero_live_surfaces() {
         registry.record_closed(&identity).expect("close");
     }
 
-    assert_eq!(
-        registry.live_count(),
-        0,
-        "owner ledger must return to baseline"
-    );
+    assert_eq!(registry.live_count(), 0, "owner ledger must return to baseline");
 }
 
 #[test]
 fn registry_only_exposes_target_surface_kinds_not_the_main_shell() {
-    assert_eq!(
-        DesktopSurfaceKind::PreviewWindow.as_runtime_kind(),
-        "preview_window"
-    );
-    assert_eq!(
-        DesktopSurfaceKind::WorkspaceChild.as_runtime_kind(),
-        "workspace_child"
-    );
+    assert_eq!(DesktopSurfaceKind::PreviewWindow.as_runtime_kind(), "preview_window");
+    assert_eq!(DesktopSurfaceKind::WorkspaceChild.as_runtime_kind(), "workspace_child");
     assert_eq!(DesktopSurfaceKind::from_runtime_kind("main"), None);
     assert_eq!(DesktopSurfaceKind::from_runtime_kind("iframe"), None);
 }

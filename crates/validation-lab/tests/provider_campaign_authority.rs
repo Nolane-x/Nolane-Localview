@@ -95,20 +95,16 @@ fn rpomr_observation(failure: bool) -> LabObservation {
 
 #[test]
 fn provider_campaign_layers_are_semantically_fixed() {
-    assert!(
-        validate_provider_campaign_layer(
-            ProviderCampaignKind::FakeProviderSimulator,
-            CampaignLayer::L6,
-        )
-        .is_ok()
-    );
-    assert!(
-        validate_provider_campaign_layer(
-            ProviderCampaignKind::RealProviderSeedApplications,
-            CampaignLayer::L7,
-        )
-        .is_ok()
-    );
+    assert!(validate_provider_campaign_layer(
+        ProviderCampaignKind::FakeProviderSimulator,
+        CampaignLayer::L6,
+    )
+    .is_ok());
+    assert!(validate_provider_campaign_layer(
+        ProviderCampaignKind::RealProviderSeedApplications,
+        CampaignLayer::L7,
+    )
+    .is_ok());
 
     assert_eq!(
         validate_provider_campaign_layer(
@@ -172,8 +168,11 @@ fn real_provider_campaign_requires_prospective_l7_admission() {
 #[test]
 fn generic_run_cannot_self_promote_to_real_provider_pass() {
     let prereg = preregistration(CampaignLayer::L7, Some("windows-uia-r1"));
-    let mut run =
-        LabRunBuilder::start(prospective_admission(&prereg), actual_authority(&prereg)).unwrap();
+    let mut run = LabRunBuilder::start(
+        prospective_admission(&prereg),
+        actual_authority(&prereg),
+    )
+    .unwrap();
     run.append_observation(rpomr_observation(false)).unwrap();
 
     assert_eq!(
@@ -212,9 +211,7 @@ fn typed_l7_run_cannot_pass_without_measured_clean_rpomr() {
         actual_authority(&prereg),
     )
     .unwrap();
-    mismatch
-        .append_observation(rpomr_observation(true))
-        .unwrap();
+    mismatch.append_observation(rpomr_observation(true)).unwrap();
     assert_eq!(
         mismatch
             .finalize(ResultEvidence::RealProviderIntegrationPass, 30)

@@ -33,10 +33,7 @@ fn preregistration() -> LabPreregistration {
             oracle_revision: "oracle-r2".into(),
         }],
         campaign_layer: CampaignLayer::L1,
-        expected_distinctions: BTreeSet::from([
-            "fresh-vs-stale".into(),
-            "principal-binding".into(),
-        ]),
+        expected_distinctions: BTreeSet::from(["fresh-vs-stale".into(), "principal-binding".into()]),
         model_bound: Some(10_000),
         assumptions: BTreeSet::from(["deterministic-scheduler".into(), "model-free".into()]),
         declared_metrics: BTreeSet::from([
@@ -54,10 +51,7 @@ fn preregistration() -> LabPreregistration {
 fn canonical_json_sorts_maps_and_pins_numeric_encoding() {
     let a = json!({"z": {"b": 2, "a": 1}, "a": [3, 2, 1]});
     let b = json!({"a": [3, 2, 1], "z": {"a": 1, "b": 2}});
-    assert_eq!(
-        canonical_json_bytes(&a).unwrap(),
-        canonical_json_bytes(&b).unwrap()
-    );
+    assert_eq!(canonical_json_bytes(&a).unwrap(), canonical_json_bytes(&b).unwrap());
     assert_eq!(canonical_digest(&a).unwrap(), canonical_digest(&b).unwrap());
 
     let numeric = json!({"a": 1, "b": 1.5, "c": 1e6});
@@ -78,16 +72,11 @@ fn preregistration_digest_is_semantic_and_set_order_independent() {
         .into_iter()
         .collect();
 
-    assert_eq!(
-        first.prepare().unwrap().digest,
-        same.prepare().unwrap().digest
-    );
+    assert_eq!(first.prepare().unwrap().digest, same.prepare().unwrap().digest);
 
     let baseline = first.prepare().unwrap().digest;
     let mut changed = preregistration();
-    changed
-        .expected_distinctions
-        .insert("unknown-outcome".into());
+    changed.expected_distinctions.insert("unknown-outcome".into());
     assert_ne!(baseline, changed.prepare().unwrap().digest);
 
     let mut changed = preregistration();
@@ -122,8 +111,9 @@ fn only_exact_external_persistence_acknowledgement_mints_validated_receipt() {
     assert_eq!(validated.persistence_ref(), "artifact://prereg/42");
 
     let mut mismatched = receipt.clone();
-    mismatched.digest =
-        CanonicalDigest("2222222222222222222222222222222222222222222222222222222222222222".into());
+    mismatched.digest = CanonicalDigest(
+        "2222222222222222222222222222222222222222222222222222222222222222".into(),
+    );
     assert!(matches!(
         validate_persisted_receipt(&prepared, mismatched),
         Err(LabError::PreregistrationPersistenceMismatch { .. })

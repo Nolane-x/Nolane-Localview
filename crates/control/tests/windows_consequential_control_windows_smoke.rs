@@ -2,22 +2,21 @@
 mod windows_consequential_control_windows_smoke {
     use std::{
         sync::{
-            Arc,
             atomic::{AtomicBool, Ordering},
-            mpsc,
+            mpsc, Arc,
         },
         thread,
         time::Duration,
     };
 
     use axum::{
-        body::{Body, to_bytes},
-        http::{Request, StatusCode, header::AUTHORIZATION},
+        body::{to_bytes, Body},
+        http::{header::AUTHORIZATION, Request, StatusCode},
     };
     use chrono::Utc;
     use localview_control::{
-        ControlState, configure_windows_consequential_control_for_sessions,
-        configure_windows_observe_runtime_for_sessions, router,
+        configure_windows_consequential_control_for_sessions,
+        configure_windows_observe_runtime_for_sessions, router, ControlState,
     };
     use localview_evidence::EvidenceStore;
     use localview_live_bridge::{
@@ -30,9 +29,9 @@ mod windows_consequential_control_windows_smoke {
     };
     use localview_sessions::SessionManager;
     use localview_windows_observe_runtime::{
-        NativeSemanticNodeMatcherV1, NativeSemanticPostconditionContractV1,
-        NativeSemanticPostconditionExpectation, WindowsObserveRuntimeConfig,
-        spawn_windows_uia_runtime_manager,
+        spawn_windows_uia_runtime_manager, NativeSemanticNodeMatcherV1,
+        NativeSemanticPostconditionContractV1, NativeSemanticPostconditionExpectation,
+        WindowsObserveRuntimeConfig,
     };
     use localview_windows_uia_provider::{
         WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport,
@@ -41,17 +40,17 @@ mod windows_consequential_control_windows_smoke {
     use tower::ServiceExt;
     use uuid::Uuid;
     use windows::{
+        core::w,
         Win32::{
             Foundation::{HWND, LPARAM, LRESULT, WPARAM},
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GWLP_WNDPROC, MSG, PM_REMOVE, PeekMessageW, SW_SHOW, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WM_COMMAND,
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+                PeekMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+                TranslateMessage, CW_USEDEFAULT, GWLP_WNDPROC, MSG, PM_REMOVE, SW_SHOW, WM_COMMAND,
                 WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
             },
         },
-        core::w,
     };
 
     const BEFORE_TITLE: &str = "LocalView Control Before";
@@ -361,10 +360,7 @@ mod windows_consequential_control_windows_smoke {
             .latest_action_postcondition_receipt(action_id)
             .await
             .expect("control-path commit must retain a postcondition receipt");
-        assert_eq!(
-            receipt.verdict,
-            ActionPostconditionVerdict::VerifiedExpected
-        );
+        assert_eq!(receipt.verdict, ActionPostconditionVerdict::VerifiedExpected);
         assert_ne!(
             receipt.observation_snapshot_cut_ref, precondition_cut,
             "control-path verification must use a fresh post-dispatch observation cut"

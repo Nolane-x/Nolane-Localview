@@ -21,12 +21,10 @@ fn internal_visual_actions_have_stable_wire_shapes() {
 #[test]
 fn only_visual_state_actions_are_internal_capture_actions() {
     assert!(BridgeActionKind::FreezeVisuals.is_internal_capture_action());
-    assert!(
-        BridgeActionKind::RestoreVisuals {
-            token: Uuid::from_u128(1),
-        }
-        .is_internal_capture_action()
-    );
+    assert!(BridgeActionKind::RestoreVisuals {
+        token: Uuid::from_u128(1),
+    }
+    .is_internal_capture_action());
 
     assert!(!BridgeActionKind::Click.is_internal_capture_action());
     assert!(!BridgeActionKind::Snapshot.is_internal_capture_action());
@@ -58,22 +56,18 @@ async fn public_and_internal_drains_never_steal_each_others_actions() {
         public.iter().map(|action| action.id).collect::<Vec<_>>(),
         vec![click.id, snapshot.id]
     );
-    assert!(
-        public
-            .iter()
-            .all(|action| !action.action.is_internal_capture_action())
-    );
+    assert!(public
+        .iter()
+        .all(|action| !action.action.is_internal_capture_action()));
 
     let internal = bridge.take_internal_capture_actions(session_id, 16).await;
     assert_eq!(
         internal.iter().map(|action| action.id).collect::<Vec<_>>(),
         vec![freeze.id, restore.id]
     );
-    assert!(
-        internal
-            .iter()
-            .all(|action| action.action.is_internal_capture_action())
-    );
+    assert!(internal
+        .iter()
+        .all(|action| action.action.is_internal_capture_action()));
 }
 
 #[tokio::test]
@@ -170,7 +164,9 @@ async fn internal_capture_results_never_appear_in_public_result_history() {
         .await;
 
     assert!(bridge.recent_results(session_id, 8).await.is_empty());
-    let private = bridge.recent_internal_capture_results(session_id, 8).await;
+    let private = bridge
+        .recent_internal_capture_results(session_id, 8)
+        .await;
     assert_eq!(private.len(), 1);
     assert_eq!(private[0].action_id, freeze.id);
 }

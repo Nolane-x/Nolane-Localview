@@ -69,8 +69,7 @@ impl FakeProvider {
             is_offscreen: Some(false),
             attributes: BTreeMap::new(),
         };
-        let mut cache =
-            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -104,10 +103,7 @@ impl WindowsObserveProvider for FakeProvider {
         self.provider.clone()
     }
 
-    fn attach(
-        &self,
-        _selection: UserSelectedWindowTarget,
-    ) -> Result<Self::Attachment, Self::Error> {
+    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
         Ok(FakeAttachment(self.target.clone()))
     }
 
@@ -214,16 +210,11 @@ async fn prepared_set_value_without_live_payload_is_reconciliation_only_after_re
 
     let path = PathBuf::from(format!(
         "{}{}",
-        std::env::temp_dir()
-            .join(format!("localview-set-value-recovery-{}", Uuid::new_v4()))
-            .display(),
+        std::env::temp_dir().join(format!("localview-set-value-recovery-{}", Uuid::new_v4())).display(),
         ".jsonl"
     ));
     let journal = ConsequentialJournal::open(&path).await.unwrap();
-    journal
-        .record_intent_admitted(queued.envelope.clone())
-        .await
-        .unwrap();
+    journal.record_intent_admitted(queued.envelope.clone()).await.unwrap();
     journal
         .record_intent_operation_bound_explicit(&queued, CanonicalActionOperation::SetValue)
         .await

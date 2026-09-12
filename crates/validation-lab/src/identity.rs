@@ -20,15 +20,9 @@ impl LabRevisionContext {
         require("lab_revision", &self.lab_revision)?;
         require("seed_corpus_revision", &self.seed_corpus_revision)?;
         require("spec_revision_digest", &self.spec_revision_digest)?;
-        require(
-            "reference_reducer_revision",
-            &self.reference_reducer_revision,
-        )?;
+        require("reference_reducer_revision", &self.reference_reducer_revision)?;
         require("mutation_catalog_revision", &self.mutation_catalog_revision)?;
-        require(
-            "comparison_profile_revision",
-            &self.comparison_profile_revision,
-        )?;
+        require("comparison_profile_revision", &self.comparison_profile_revision)?;
         require("random_source_profile", &self.random_source_profile)?;
         if let Some(platform_profile) = &self.platform_profile {
             require("platform_profile", platform_profile)?;

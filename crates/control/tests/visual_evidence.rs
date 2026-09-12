@@ -1,14 +1,17 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{
+        atomic::AtomicBool,
+        Arc,
+    },
     time::Duration,
 };
 
 use axum::{
     body::Body,
-    http::{Request, StatusCode, header},
+    http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use localview_control::{ControlState, router};
+use localview_control::{router, ControlState};
 use localview_evidence::{EvidenceKind, EvidenceStore};
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;

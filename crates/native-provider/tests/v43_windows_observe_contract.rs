@@ -1,8 +1,8 @@
 use localview_native_provider::{
+    derive_windows_target_incarnation, provider_element_ref_from_runtime_id,
     NativeProviderCapabilities, NativeProviderIdentityError, ProviderEventOrdering,
     ProviderEventReliabilityProfile, SnapshotBudget, SnapshotBudgetGuard, SnapshotBudgetLimit,
-    UserSelectedWindowTarget, WindowsTargetFingerprint, derive_windows_target_incarnation,
-    provider_element_ref_from_runtime_id,
+    UserSelectedWindowTarget, WindowsTargetFingerprint,
 };
 use localview_protocol::{ProviderElementRealization, ProviderIncarnationRef};
 use uuid::Uuid;
@@ -81,10 +81,7 @@ fn runtime_id_is_only_an_opaque_hint_inside_provider_and_target_incarnation() {
         ProviderElementRealization::RealizedCurrent,
     );
 
-    assert_eq!(
-        first.opaque_provider_element_id,
-        reused.opaque_provider_element_id
-    );
+    assert_eq!(first.opaque_provider_element_id, reused.opaque_provider_element_id);
     assert_ne!(first.target_incarnation_ref, reused.target_incarnation_ref);
     assert_ne!(first, reused);
 }

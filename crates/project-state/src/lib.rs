@@ -36,9 +36,7 @@ pub enum ProjectStateError {
     MissingHead,
 }
 
-pub async fn inspect_git(
-    root_hint: impl AsRef<Path>,
-) -> Result<ProjectRevision, ProjectStateError> {
+pub async fn inspect_git(root_hint: impl AsRef<Path>) -> Result<ProjectRevision, ProjectStateError> {
     let root_hint = root_hint.as_ref();
     let root = git_text(root_hint, &["rev-parse", "--show-toplevel"]).await?;
     let root_path = PathBuf::from(root.trim());

@@ -23,14 +23,8 @@ fn changed_region_transaction_publishes_diff_before_advancing_baseline() {
         .find("commit_changed_baseline(")
         .expect("changed visual transaction must advance the baseline");
 
-    assert!(
-        emit < diff,
-        "diff provenance must point at emitted visual evidence"
-    );
-    assert!(
-        diff < baseline,
-        "baseline must not advance before diff evidence is retained"
-    );
+    assert!(emit < diff, "diff provenance must point at emitted visual evidence");
+    assert!(diff < baseline, "baseline must not advance before diff evidence is retained");
 }
 
 #[test]

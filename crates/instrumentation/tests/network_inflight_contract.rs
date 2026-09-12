@@ -1,4 +1,4 @@
-use localview_instrumentation::{InstrumentationConfig, bootstrap_script};
+use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 
 #[test]
 fn readiness_exposes_only_bounded_network_inflight_count() {

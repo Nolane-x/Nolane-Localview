@@ -2,25 +2,23 @@
 
 use std::{
     path::PathBuf,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{
-    body::{Body, to_bytes},
-    http::{Method, Request, StatusCode, header},
+    body::{to_bytes, Body},
+    http::{header, Method, Request, StatusCode},
 };
 use chrono::Utc;
 use localview_control::{
-    ControlState, SurfaceRecoveryJournal, SurfaceRecoveryKey,
-    configure_surface_recovery_journal_for_sessions, router,
+    configure_surface_recovery_journal_for_sessions, router, ControlState, SurfaceRecoveryJournal,
+    SurfaceRecoveryKey,
 };
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
-use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
-};
+use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
 use localview_sessions::SessionManager;
 use serde::Deserialize;
 use serde_json::Value;

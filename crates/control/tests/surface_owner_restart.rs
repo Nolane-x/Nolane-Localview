@@ -2,27 +2,27 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{
-    body::{Body, to_bytes},
-    http::{Method, Request, StatusCode, header},
+    body::{to_bytes, Body},
+    http::{header, Method, Request, StatusCode},
 };
 use chrono::Utc;
 use localview_control::{
-    ControlState, SURFACE_RECOVERY_JOURNAL_FILE, SurfaceRecoveryJournal, SurfaceRecoveryKey,
     configure_surface_recovery_journal_for_sessions, router,
-    runtime_resource_governor_for_sessions,
+    runtime_resource_governor_for_sessions, ControlState, SurfaceRecoveryJournal,
+    SurfaceRecoveryKey, SURFACE_RECOVERY_JOURNAL_FILE,
 };
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
-use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
+use localview_sessions::{
+    SessionIdentityResolver, SessionManager, SESSION_IDENTITY_REGISTRY_FILE,
 };
-use localview_sessions::{SESSION_IDENTITY_REGISTRY_FILE, SessionIdentityResolver, SessionManager};
 use serde::Deserialize;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -129,12 +129,9 @@ fn reserve_body(session_id: Uuid, owner: OwnerRegistration) -> Value {
         "session_id": session_id,
         "request_id": "pre-crash-open"
     });
-    body.as_object_mut().expect("reserve body").extend(
-        owner_fields(owner)
-            .as_object()
-            .expect("owner fields")
-            .clone(),
-    );
+    body.as_object_mut()
+        .expect("reserve body")
+        .extend(owner_fields(owner).as_object().expect("owner fields").clone());
     body
 }
 
@@ -147,12 +144,9 @@ fn activate_body(session_id: Uuid, owner: OwnerRegistration) -> Value {
         "incarnation": 1,
         "visibility": "hidden"
     });
-    body.as_object_mut().expect("activate body").extend(
-        owner_fields(owner)
-            .as_object()
-            .expect("owner fields")
-            .clone(),
-    );
+    body.as_object_mut()
+        .expect("activate body")
+        .extend(owner_fields(owner).as_object().expect("owner fields").clone());
     body
 }
 
@@ -164,12 +158,9 @@ fn reattach_body(session_id: Uuid, owner: OwnerRegistration) -> Value {
         "incarnation": 1,
         "visibility": "hidden"
     });
-    body.as_object_mut().expect("reattach body").extend(
-        owner_fields(owner)
-            .as_object()
-            .expect("owner fields")
-            .clone(),
-    );
+    body.as_object_mut()
+        .expect("reattach body")
+        .extend(owner_fields(owner).as_object().expect("owner fields").clone());
     body
 }
 
@@ -180,12 +171,9 @@ fn release_body(session_id: Uuid, owner: OwnerRegistration) -> Value {
         "label": "preview-survived-daemon",
         "incarnation": 1
     });
-    body.as_object_mut().expect("release body").extend(
-        owner_fields(owner)
-            .as_object()
-            .expect("owner fields")
-            .clone(),
-    );
+    body.as_object_mut()
+        .expect("release body")
+        .extend(owner_fields(owner).as_object().expect("owner fields").clone());
     body
 }
 
@@ -210,7 +198,10 @@ async fn exact_debt_reattaches_same_durable_session_with_fresh_boot_authority() 
             .await
             .expect("open first-boot recovery journal"),
     );
-    configure_surface_recovery_journal_for_sessions(&first_sessions, Some(first_journal.clone()));
+    configure_surface_recovery_journal_for_sessions(
+        &first_sessions,
+        Some(first_journal.clone()),
+    );
     let first_owner = register(first_state.clone(), owner_instance_id).await;
     assert!(!first_owner.recovery_required);
 
@@ -266,7 +257,10 @@ async fn exact_debt_reattaches_same_durable_session_with_fresh_boot_authority() 
             .await
             .expect("replay second-boot recovery journal"),
     );
-    configure_surface_recovery_journal_for_sessions(&second_sessions, Some(second_journal.clone()));
+    configure_surface_recovery_journal_for_sessions(
+        &second_sessions,
+        Some(second_journal.clone()),
+    );
     assert!(second_journal.outstanding_exact(&debt_key));
 
     let second_owner = register(second_state.clone(), owner_instance_id).await;

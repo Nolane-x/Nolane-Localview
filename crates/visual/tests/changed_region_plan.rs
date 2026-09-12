@@ -1,5 +1,5 @@
 use localview_visual::{
-    ChangedRegionPlan, ChangedRegionPolicy, RgbaImage, VisualError, plan_changed_css_regions,
+    plan_changed_css_regions, ChangedRegionPlan, ChangedRegionPolicy, RgbaImage, VisualError,
 };
 
 fn image(width: u32, height: u32) -> RgbaImage {

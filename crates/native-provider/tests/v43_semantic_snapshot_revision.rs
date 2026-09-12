@@ -80,10 +80,7 @@ fn publishing_refresh_creates_a_new_immutable_cache_revision() {
     assert_eq!(first.capture_sequence(), 1);
     assert_eq!(first.nodes()[0].name.as_deref(), Some("Save"));
     assert_eq!(second.nodes()[0].name.as_deref(), Some("Saved"));
-    assert_eq!(
-        cache.current().unwrap().cache_revision_ref(),
-        second.cache_revision_ref()
-    );
+    assert_eq!(cache.current().unwrap().cache_revision_ref(), second.cache_revision_ref());
 }
 
 #[test]
@@ -92,16 +89,14 @@ fn cache_lineage_rejects_silent_provider_or_target_reincarnation() {
     cache.publish(draft("Save", 1, "cut:1")).unwrap();
 
     let mut wrong_provider = draft("Save", 2, "cut:2");
-    wrong_provider.provider_incarnation_ref =
-        ProviderIncarnationRef::from("provider:windows-uia:worker-2");
+    wrong_provider.provider_incarnation_ref = ProviderIncarnationRef::from("provider:windows-uia:worker-2");
     assert_eq!(
         cache.publish(wrong_provider).unwrap_err(),
         SnapshotPublishError::ProviderIncarnationMismatch
     );
 
     let mut wrong_target = draft("Save", 2, "cut:2");
-    wrong_target.target_incarnation_ref =
-        TargetIncarnationRef::from("target:windows:selection=two");
+    wrong_target.target_incarnation_ref = TargetIncarnationRef::from("target:windows:selection=two");
     assert_eq!(
         cache.publish(wrong_target).unwrap_err(),
         SnapshotPublishError::TargetIncarnationMismatch
@@ -159,15 +154,9 @@ fn reconciliation_receipt_is_an_exact_projection_of_the_snapshot_revision() {
     assert_eq!(receipt.target_incarnation_ref, target());
     assert_eq!(receipt.snapshot_cut_ref, "cut:7");
     assert_eq!(receipt.surface_scope, "window:1234");
-    assert_eq!(
-        receipt.completeness,
-        ReconciliationCompleteness::Established
-    );
+    assert_eq!(receipt.completeness, ReconciliationCompleteness::Established);
     assert_eq!(receipt.cache_profile_revision, "windows-uia-cache-v1");
-    assert_eq!(
-        receipt.permission_visibility_revision,
-        "uia-permission:interactive-user:v1"
-    );
+    assert_eq!(receipt.permission_visibility_revision, "uia-permission:interactive-user:v1");
     assert_eq!(receipt.capture_sequence, 7);
     assert_eq!(receipt.observed_digest, snapshot.observed_digest());
     assert!(receipt.incompleteness_debt.is_empty());

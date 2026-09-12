@@ -217,7 +217,10 @@ impl WindowsUiaValueCapabilityFacts {
     pub const fn permits_set_value(self) -> bool {
         matches!(self.value_support, WindowsUiaPatternSupport::Supported)
             && matches!(self.is_password, WindowsUiaBooleanCapabilityFact::False)
-            && matches!(self.is_read_only, WindowsUiaBooleanCapabilityFact::False)
+            && matches!(
+                self.is_read_only,
+                WindowsUiaBooleanCapabilityFact::False
+            )
     }
 
     pub fn write_attributes(self, attributes: &mut BTreeMap<String, String>) {

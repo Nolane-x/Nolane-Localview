@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use localview_capture::{
-    ProgressiveTargetError, ProgressiveTargetKind, ProgressiveTargetProvenance,
-    resolve_progressive_targets,
+    resolve_progressive_targets, ProgressiveTargetError, ProgressiveTargetKind,
+    ProgressiveTargetProvenance,
 };
 use localview_protocol::{PageSnapshot, Rect, SemanticNode, SourceLocation};
 
@@ -293,10 +293,7 @@ fn missing_ref_or_invalid_target_geometry_fails_closed() {
     );
     let error = resolve_progressive_targets(&snapshot(invalid_root), "@bad")
         .expect_err("non-finite geometry must fail");
-    assert!(matches!(
-        error,
-        ProgressiveTargetError::InvalidElementGeometry
-    ));
+    assert!(matches!(error, ProgressiveTargetError::InvalidElementGeometry));
 
     let offscreen = node(
         "@offscreen",
@@ -316,10 +313,7 @@ fn missing_ref_or_invalid_target_geometry_fails_closed() {
     );
     let error = resolve_progressive_targets(&snapshot(offscreen_root), "@offscreen")
         .expect_err("fully offscreen geometry must fail");
-    assert!(matches!(
-        error,
-        ProgressiveTargetError::InvalidElementGeometry
-    ));
+    assert!(matches!(error, ProgressiveTargetError::InvalidElementGeometry));
 }
 
 #[test]
@@ -341,10 +335,7 @@ fn infinite_and_zero_sized_target_geometry_fail_closed() {
         );
         let error = resolve_progressive_targets(&snapshot(root), "@bad")
             .expect_err("infinite or zero-sized geometry must fail");
-        assert!(matches!(
-            error,
-            ProgressiveTargetError::InvalidElementGeometry
-        ));
+        assert!(matches!(error, ProgressiveTargetError::InvalidElementGeometry));
     }
 }
 

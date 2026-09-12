@@ -20,20 +20,20 @@ mod windows_smoke {
 
     use localview_capture::CaptureTarget;
     use localview_native_capture::{
-        CaptureRequest, NativeCaptureBackend, ViewportMeta, capture_webview2_for_gui_smoke,
+        capture_webview2_for_gui_smoke, CaptureRequest, NativeCaptureBackend, ViewportMeta,
     };
     use localview_visual::decode_png_rgba;
     use webview2_com::{Microsoft::Web::WebView2::Win32::*, *};
     use windows::{
+        core::{w, PCWSTR, PWSTR},
         Win32::{
             Foundation::{E_POINTER, HWND, RECT},
-            System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
+            System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
             UI::WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, SW_SHOW, ShowWindow,
+                CreateWindowExW, DestroyWindow, ShowWindow, CW_USEDEFAULT, SW_SHOW,
                 WS_OVERLAPPEDWINDOW,
             },
         },
-        core::{PCWSTR, PWSTR, w},
     };
 
     const SMOKE_WIDTH: u32 = 320;
@@ -52,8 +52,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
     }
 
     fn start_fixture_server() -> (String, thread::JoinHandle<()>, mpsc::Receiver<String>) {
-        let listener =
-            TcpListener::bind("127.0.0.1:0").expect("bind deterministic loopback fixture");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind deterministic loopback fixture");
         listener
             .set_nonblocking(true)
             .expect("make WebView2 fixture listener bounded");
@@ -92,7 +91,9 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                         ) =>
                     {
                         request_tx
-                            .send(format!("conn={connection_index}; read_timeout={error}"))
+                            .send(format!(
+                                "conn={connection_index}; read_timeout={error}"
+                            ))
                             .expect("send WebView2 fixture timeout trace");
                         continue;
                     }
@@ -125,9 +126,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                 stream
                     .write_all(response.as_bytes())
                     .expect("write deterministic WebView2 fixture");
-                stream
-                    .flush()
-                    .expect("flush deterministic WebView2 fixture");
+                stream.flush().expect("flush deterministic WebView2 fixture");
                 break;
             }
         });
@@ -158,7 +157,8 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         let (tx, rx) = mpsc::channel();
         CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
             Box::new(|handler| unsafe {
-                CreateCoreWebView2Environment(&handler).map_err(webview2_com::Error::WindowsError)
+                CreateCoreWebView2Environment(&handler)
+                    .map_err(webview2_com::Error::WindowsError)
             }),
             Box::new(move |error_code, environment| {
                 error_code?;
@@ -208,8 +208,8 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
 
         let starting_navigation_id = expected_navigation_id.clone();
         let starting_trace = event_trace.clone();
-        let starting_handler =
-            NavigationStartingEventHandler::create(Box::new(move |_sender, args| {
+        let starting_handler = NavigationStartingEventHandler::create(Box::new(
+            move |_sender, args| {
                 let Some(args) = args else {
                     return Ok(());
                 };
@@ -227,13 +227,14 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                     starting_navigation_id.set(Some(navigation_id));
                 }
                 Ok(())
-            }));
+            },
+        ));
 
         let (tx, rx) = mpsc::channel();
         let completed_navigation_id = expected_navigation_id.clone();
         let completed_trace = event_trace.clone();
-        let completed_handler =
-            NavigationCompletedEventHandler::create(Box::new(move |_sender, args| {
+        let completed_handler = NavigationCompletedEventHandler::create(Box::new(
+            move |_sender, args| {
                 let Some(args) = args else {
                     return Ok(());
                 };
@@ -255,7 +256,8 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                 tx.send((is_success.as_bool(), web_error_status))
                     .expect("send correlated WebView2 navigation completion");
                 Ok(())
-            }));
+            },
+        ));
 
         let mut starting_token = 0_i64;
         let mut completed_token = 0_i64;
@@ -335,30 +337,18 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         );
         let value: serde_json::Value =
             serde_json::from_str(&result).expect("WebView2 diagnostic must be valid JSON");
-        assert_eq!(
-            value["ready"], "complete",
-            "unexpected DOM readiness: {value}"
-        );
+        assert_eq!(value["ready"], "complete", "unexpected DOM readiness: {value}");
         assert_eq!(value["missing"], false, "proof node missing: {value}");
         assert_eq!(value["href"], route, "unexpected fixture route: {value}");
         assert_eq!(
             value["color"], "rgb(220, 40, 60)",
             "proof CSS did not apply: {value}"
         );
-        assert_eq!(
-            value["viewport"][0], SMOKE_WIDTH,
-            "unexpected viewport: {value}"
-        );
-        assert_eq!(
-            value["viewport"][1], SMOKE_HEIGHT,
-            "unexpected viewport: {value}"
-        );
+        assert_eq!(value["viewport"][0], SMOKE_WIDTH, "unexpected viewport: {value}");
+        assert_eq!(value["viewport"][1], SMOKE_HEIGHT, "unexpected viewport: {value}");
         assert_eq!(value["rect"][0], 80.0, "unexpected proof geometry: {value}");
         assert_eq!(value["rect"][1], 45.0, "unexpected proof geometry: {value}");
-        assert_eq!(
-            value["rect"][2], 160.0,
-            "unexpected proof geometry: {value}"
-        );
+        assert_eq!(value["rect"][2], 160.0, "unexpected proof geometry: {value}");
         assert_eq!(value["rect"][3], 90.0, "unexpected proof geometry: {value}");
     }
 

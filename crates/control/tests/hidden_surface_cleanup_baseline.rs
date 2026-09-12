@@ -1,25 +1,24 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{
-    body::{Body, to_bytes},
-    http::{Method, Request, StatusCode, header},
+    body::{to_bytes, Body},
+    http::{header, Method, Request, StatusCode},
 };
 use chrono::Utc;
 use localview_control::{
-    ControlState, SurfaceRecoveryJournal, configure_surface_recovery_journal_for_sessions,
-    release_surface_resource_session_for_sessions, router, runtime_resource_governor_for_sessions,
+    configure_surface_recovery_journal_for_sessions,
+    release_surface_resource_session_for_sessions, router,
+    runtime_resource_governor_for_sessions, ControlState, SurfaceRecoveryJournal,
 };
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::LiveBridge;
 use localview_observation::ObservationBus;
-use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
-};
+use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
 use localview_sessions::SessionManager;
 use serde::Deserialize;
 use serde_json::Value;

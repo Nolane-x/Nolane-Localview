@@ -1,27 +1,25 @@
 use std::time::Duration;
 
 use axum::{
-    Json, Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
+    Json, Router,
 };
 use localview_evidence::{EvidenceKind, UncertaintyClass};
 use localview_live_bridge::NativeExecutorAction;
 use localview_protocol::{SessionId, ViewportMeta};
 use localview_resource_governor::ResourceWorkKind;
 use localview_verification::{
-    VisualChangeExpectation, VisualChangeObservation, verify_visual_change,
+    verify_visual_change, VisualChangeExpectation, VisualChangeObservation,
 };
 use serde::Deserialize;
 
 use crate::{
+    native_executor::{wait_for_native_executor_result_with_timeout, NativeExecutorWaitError},
+    resource_runtime::{denial_response as resource_denial_response, governor as resource_governor},
     ControlState,
-    native_executor::{NativeExecutorWaitError, wait_for_native_executor_result_with_timeout},
-    resource_runtime::{
-        denial_response as resource_denial_response, governor as resource_governor,
-    },
 };
 
 const NATIVE_VISUAL_DIFF_TIMEOUT: Duration = Duration::from_secs(12);
@@ -179,12 +177,17 @@ async fn verify_retained_visual_diff(
         return session_not_found();
     }
 
-    let result =
-        match verify_retained_evidence(&state, id, &request.evidence_id, request.expectation).await
-        {
-            Ok(result) => result,
-            Err(error) => return retained_verification_error_response(error),
-        };
+    let result = match verify_retained_evidence(
+        &state,
+        id,
+        &request.evidence_id,
+        request.expectation,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => return retained_verification_error_response(error),
+    };
 
     Json(serde_json::json!({
         "evidence_id": request.evidence_id,
@@ -270,8 +273,7 @@ async fn capture_and_verify_visual_diff(
         return invalid_native_visual_diff_result(native_request.id);
     };
 
-    let result = match verify_retained_evidence(&state, id, &evidence_id, request.expectation).await
-    {
+    let result = match verify_retained_evidence(&state, id, &evidence_id, request.expectation).await {
         Ok(result) => result,
         Err(error) => return retained_verification_error_response(error),
     };

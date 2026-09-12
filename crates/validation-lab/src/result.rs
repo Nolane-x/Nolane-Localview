@@ -416,7 +416,9 @@ fn validate_actual_authority(
         });
     }
     if actual.comparison_profile_revision
-        != preregistration.revision_context.comparison_profile_revision
+        != preregistration
+            .revision_context
+            .comparison_profile_revision
     {
         return Err(LabError::ProspectiveAuthorityDrift {
             field: "comparison_profile_revision",

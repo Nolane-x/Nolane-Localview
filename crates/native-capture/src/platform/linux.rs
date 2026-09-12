@@ -1,8 +1,8 @@
 use tauri::webview::PlatformWebview;
-use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebView, WebViewExt, gio};
+use webkit2gtk::{gio, SnapshotOptions, SnapshotRegion, WebView, WebViewExt};
 
 use crate::{
-    CaptureCompletion, CaptureRequest, NativeCaptureBackend, NativeCaptureError, build_frame,
+    build_frame, CaptureCompletion, CaptureRequest, NativeCaptureBackend, NativeCaptureError,
 };
 
 pub(crate) fn capture(
@@ -37,9 +37,9 @@ fn capture_view(view: &WebView, request: CaptureRequest, completion: CaptureComp
 mod tests {
     use std::{
         sync::{
-            Arc,
             atomic::{AtomicBool, Ordering},
             mpsc,
+            Arc,
         },
         thread,
         time::{Duration, Instant},
@@ -106,8 +106,7 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         );
 
         assert!(
-            pump_until(Instant::now() + Duration::from_secs(8), || loaded
-                .load(Ordering::SeqCst)),
+            pump_until(Instant::now() + Duration::from_secs(8), || loaded.load(Ordering::SeqCst)),
             "deterministic WebKitGTK fixture did not finish loading"
         );
 
@@ -151,16 +150,10 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
         assert_eq!(frame.route, "http://127.0.0.1/");
         assert_eq!(frame.revision.as_deref(), Some("gui-smoke"));
         assert!(frame.pixel_width > 0 && frame.pixel_height > 0);
-        assert!(
-            frame.png.len() > 256,
-            "real rendered PNG must not be a trivial header"
-        );
+        assert!(frame.png.len() > 256, "real rendered PNG must not be a trivial header");
 
         let decoded = decode_png_rgba(&frame.png).expect("captured PNG must fully decode");
-        assert_eq!(
-            (decoded.width, decoded.height),
-            (frame.pixel_width, frame.pixel_height)
-        );
+        assert_eq!((decoded.width, decoded.height), (frame.pixel_width, frame.pixel_height));
         let center_x = decoded.width / 2;
         let center_y = decoded.height / 2;
         let offset = ((center_y * decoded.width + center_x) * 4) as usize;

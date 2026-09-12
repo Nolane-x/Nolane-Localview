@@ -1,8 +1,8 @@
 use localview_evidence::EvidenceKind;
 use localview_planner::{
-    BudgetedPerceptionCandidate, PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
-    PerceptionPlanRejectionReason, plan_budgeted_perception_cycle,
-    plan_budgeted_perception_cycle_with_usage,
+    plan_budgeted_perception_cycle, plan_budgeted_perception_cycle_with_usage,
+    BudgetedPerceptionCandidate, PerceptionActionKind, PerceptionCandidate,
+    PerceptionCycleSignals, PerceptionPlanRejectionReason,
 };
 use localview_token_budget::{
     BudgetEscalationReason, PerceptionBudgetContract, PerceptionBudgetDecisionStatus,
@@ -71,8 +71,11 @@ fn cheapest_sufficient_action_stays_within_the_cycle_contract_without_escalation
         ),
     ];
 
-    let plan =
-        plan_budgeted_perception_cycle(&candidates, &budget(), &PerceptionCycleSignals::default());
+    let plan = plan_budgeted_perception_cycle(
+        &candidates,
+        &budget(),
+        &PerceptionCycleSignals::default(),
+    );
 
     assert_eq!(plan.actions.len(), 1);
     assert_eq!(plan.actions[0].action.id, "region");
@@ -92,8 +95,11 @@ fn crossing_the_cycle_budget_without_evidence_for_escalation_is_rejected() {
         usage(1_600, 200, 1, 0),
     )];
 
-    let plan =
-        plan_budgeted_perception_cycle(&candidates, &budget(), &PerceptionCycleSignals::default());
+    let plan = plan_budgeted_perception_cycle(
+        &candidates,
+        &budget(),
+        &PerceptionCycleSignals::default(),
+    );
 
     assert!(plan.actions.is_empty());
     assert_eq!(plan.rejected.len(), 1);
@@ -289,7 +295,12 @@ fn cumulative_overrun_uses_planner_owned_reason_and_reports_total_usage() {
         ..Default::default()
     };
 
-    let plan = plan_budgeted_perception_cycle_with_usage(&candidates, &budget(), &spent, &signals);
+    let plan = plan_budgeted_perception_cycle_with_usage(
+        &candidates,
+        &budget(),
+        &spent,
+        &signals,
+    );
 
     assert_eq!(plan.actions.len(), 1);
     assert_eq!(plan.budget_decision.usage, usage(1_600, 850, 1, 0));
@@ -319,8 +330,12 @@ fn cumulative_chromium_usage_counts_the_normalized_next_spawn() {
         ..Default::default()
     };
 
-    let plan =
-        plan_budgeted_perception_cycle_with_usage(&candidates, &chromium_budget, &spent, &signals);
+    let plan = plan_budgeted_perception_cycle_with_usage(
+        &candidates,
+        &chromium_budget,
+        &spent,
+        &signals,
+    );
 
     assert_eq!(plan.actions.len(), 1);
     assert_eq!(plan.budget_decision.usage.chromium_spawns, 2);

@@ -24,7 +24,7 @@ mod windows_smoke {
             Foundation::{LPARAM, WPARAM},
             System::Threading::GetCurrentProcessId,
             UI::WindowsAndMessaging::{
-                CB_ADDSTRING, CB_SETCURSEL, CBS_DROPDOWNLIST, CW_USEDEFAULT, CreateWindowExW,
+                CBS_DROPDOWNLIST, CB_ADDSTRING, CB_SETCURSEL, CW_USEDEFAULT, CreateWindowExW,
                 DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, SW_SHOW,
                 SendMessageW, ShowWindow, TranslateMessage, WINDOW_STYLE, WS_CHILD,
                 WS_OVERLAPPEDWINDOW, WS_VISIBLE,
@@ -66,7 +66,8 @@ mod windows_smoke {
                     )
                     .expect("create ExpandCollapse fixture parent")
                 };
-                let combo_style = WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | CBS_DROPDOWNLIST as u32);
+                let combo_style =
+                    WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | CBS_DROPDOWNLIST as u32);
                 let combo = unsafe {
                     CreateWindowExW(
                         Default::default(),
@@ -171,8 +172,7 @@ mod windows_smoke {
             })
             .expect("real ComboBox must publish ExpandCollapse support");
         assert_eq!(
-            combo
-                .attributes
+            combo.attributes
                 .get(EXPAND_COLLAPSE_STATE_ATTRIBUTE)
                 .map(String::as_str),
             Some("collapsed"),

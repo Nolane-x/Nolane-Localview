@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::{CanonicalActionOperation, CanonicalQueuedAction};
 
 use super::{
-    ConsequentialJournal, ConsequentialJournalError, ConsequentialJournalTransition,
-    ConsequentialRecoveryState, recovery_state_for,
+    recovery_state_for, ConsequentialJournal, ConsequentialJournalError,
+    ConsequentialJournalTransition, ConsequentialRecoveryState,
 };
 
 /// Durable, payload-free binding between one admitted canonical intent and the
@@ -173,7 +173,10 @@ fn operation_binding_path(journal_path: &Path, action_id: Uuid) -> PathBuf {
     ))
 }
 
-fn write_binding_create_new(path: &Path, encoded: &[u8]) -> Result<(), ConsequentialJournalError> {
+fn write_binding_create_new(
+    path: &Path,
+    encoded: &[u8],
+) -> Result<(), ConsequentialJournalError> {
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -219,9 +222,9 @@ fn read_binding(
             operation: "read_operation_binding",
             message: error.to_string(),
         })?;
-    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
-        ConsequentialJournalError::Serialization {
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|error| ConsequentialJournalError::Serialization {
             message: format!("invalid canonical operation binding: {error}"),
-        }
-    })
+        })
 }

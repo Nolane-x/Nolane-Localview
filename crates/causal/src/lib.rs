@@ -302,48 +302,18 @@ mod tests {
     use super::*;
 
     fn node(id: &str) -> CausalNode {
-        CausalNode {
-            id: id.into(),
-            kind: CausalEntityKind::Region,
-            label: id.into(),
-        }
+        CausalNode { id: id.into(), kind: CausalEntityKind::Region, label: id.into() }
     }
 
     #[test]
     fn blast_radius_respects_confidence_threshold() {
         let mut graph = CausalGraph::default();
-        for id in ["source", "component", "hero", "footer"] {
-            graph.upsert_node(node(id));
-        }
-        graph.add_edge(CausalEdge {
-            from: "source".into(),
-            to: "component".into(),
-            relation: CausalRelation::Renders,
-            confidence: 0.95,
-            evidence_ids: vec!["ev1".into()],
-        });
-        graph.add_edge(CausalEdge {
-            from: "component".into(),
-            to: "hero".into(),
-            relation: CausalRelation::Renders,
-            confidence: 0.9,
-            evidence_ids: vec!["ev2".into()],
-        });
-        graph.add_edge(CausalEdge {
-            from: "source".into(),
-            to: "footer".into(),
-            relation: CausalRelation::DependsOn,
-            confidence: 0.2,
-            evidence_ids: vec!["ev3".into()],
-        });
+        for id in ["source", "component", "hero", "footer"] { graph.upsert_node(node(id)); }
+        graph.add_edge(CausalEdge { from: "source".into(), to: "component".into(), relation: CausalRelation::Renders, confidence: 0.95, evidence_ids: vec!["ev1".into()] });
+        graph.add_edge(CausalEdge { from: "component".into(), to: "hero".into(), relation: CausalRelation::Renders, confidence: 0.9, evidence_ids: vec!["ev2".into()] });
+        graph.add_edge(CausalEdge { from: "source".into(), to: "footer".into(), relation: CausalRelation::DependsOn, confidence: 0.2, evidence_ids: vec!["ev3".into()] });
         let impacts = graph.blast_radius("source", 3, 0.5);
-        assert_eq!(
-            impacts
-                .iter()
-                .map(|impact| impact.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["component", "hero"]
-        );
+        assert_eq!(impacts.iter().map(|impact| impact.id.as_str()).collect::<Vec<_>>(), vec!["component", "hero"]);
     }
 
     #[test]

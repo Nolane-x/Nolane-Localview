@@ -306,14 +306,21 @@ fn shared_registry_never_proves_presence_or_absence_from_incomplete_observation(
 #[test]
 fn direct_v1_parser_keeps_strict_legacy_error_semantics() {
     let encoded = completion_contract().to_contract_ref().unwrap();
-    let unsupported = encoded.replacen("lvpc:native-semantic:v1:", "lvpc:native-semantic:v2:", 1);
+    let unsupported = encoded.replacen(
+        "lvpc:native-semantic:v1:",
+        "lvpc:native-semantic:v2:",
+        1,
+    );
     assert!(matches!(
         NativeSemanticPostconditionContractV1::from_contract_ref(&unsupported),
         Err(NativeSemanticPostconditionContractError::UnsupportedVersion { .. })
     ));
 
-    let non_canonical =
-        encoded.replacen("lvpc:native-semantic:v1:{", "lvpc:native-semantic:v1: {", 1);
+    let non_canonical = encoded.replacen(
+        "lvpc:native-semantic:v1:{",
+        "lvpc:native-semantic:v1: {",
+        1,
+    );
     assert!(matches!(
         NativeSemanticPostconditionContractV1::from_contract_ref(&non_canonical),
         Err(NativeSemanticPostconditionContractError::NonCanonicalReference)
@@ -325,15 +332,21 @@ fn direct_v2_parser_rejects_unknown_fields_and_noncanonical_references() {
     let encoded = completion_count_contract(NativeSemanticCountComparisonV2::Equal, 1)
         .to_contract_ref()
         .unwrap();
-    let unknown_field =
-        encoded.replacen("\"count\":1,", "\"count\":1,\"business_success\":true,", 1);
+    let unknown_field = encoded.replacen(
+        "\"count\":1,",
+        "\"count\":1,\"business_success\":true,",
+        1,
+    );
     assert!(matches!(
         NativeSemanticPostconditionContractV2::from_contract_ref(&unknown_field),
         Err(NativeSemanticPostconditionContractError::UnknownField)
     ));
 
-    let non_canonical =
-        encoded.replacen("lvpc:native-semantic:v2:{", "lvpc:native-semantic:v2: {", 1);
+    let non_canonical = encoded.replacen(
+        "lvpc:native-semantic:v2:{",
+        "lvpc:native-semantic:v2: {",
+        1,
+    );
     assert!(matches!(
         NativeSemanticPostconditionContractV2::from_contract_ref(&non_canonical),
         Err(NativeSemanticPostconditionContractError::NonCanonicalReference)

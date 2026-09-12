@@ -111,14 +111,21 @@ fn contract_ref_is_versioned_canonical_and_rejects_ambiguous_forms() {
         contract
     );
 
-    let unsupported = encoded.replacen("lvpc:native-semantic:v1:", "lvpc:native-semantic:v2:", 1);
+    let unsupported = encoded.replacen(
+        "lvpc:native-semantic:v1:",
+        "lvpc:native-semantic:v2:",
+        1,
+    );
     assert!(matches!(
         NativeSemanticPostconditionContractV1::from_contract_ref(&unsupported),
         Err(NativeSemanticPostconditionContractError::UnsupportedVersion { .. })
     ));
 
-    let non_canonical =
-        encoded.replacen("lvpc:native-semantic:v1:{", "lvpc:native-semantic:v1: {", 1);
+    let non_canonical = encoded.replacen(
+        "lvpc:native-semantic:v1:{",
+        "lvpc:native-semantic:v1: {",
+        1,
+    );
     assert!(matches!(
         NativeSemanticPostconditionContractV1::from_contract_ref(&non_canonical),
         Err(NativeSemanticPostconditionContractError::NonCanonicalReference)
@@ -250,9 +257,7 @@ fn typed_verifier_never_proves_negative_or_positive_contracts_from_incomplete_sn
         )
         .unwrap();
 
-    assert!(
-        evidence
-            .iter()
-            .all(|item| item.status == ConsequentialPostconditionStatus::Unknown)
-    );
+    assert!(evidence
+        .iter()
+        .all(|item| item.status == ConsequentialPostconditionStatus::Unknown));
 }

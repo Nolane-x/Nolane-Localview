@@ -80,7 +80,10 @@ pub enum BridgeActionKind {
 
 impl BridgeActionKind {
     pub fn is_internal_capture_action(&self) -> bool {
-        matches!(self, Self::FreezeVisuals | Self::RestoreVisuals { .. })
+        matches!(
+            self,
+            Self::FreezeVisuals | Self::RestoreVisuals { .. }
+        )
     }
 }
 
@@ -110,10 +113,7 @@ pub struct PrivateBridgeAction {
 }
 
 impl PrivateBridgeAction {
-    fn from_action(
-        action: BridgeAction,
-        private_capture: Option<PrivateCaptureActionData>,
-    ) -> Self {
+    fn from_action(action: BridgeAction, private_capture: Option<PrivateCaptureActionData>) -> Self {
         Self {
             id: action.id,
             session_id: action.session_id,
@@ -247,7 +247,10 @@ impl LiveBridge {
         self.ingest_collect(batch).await.0
     }
 
-    pub async fn ingest_collect(&self, batch: ObserverBatch) -> (IngestReport, Vec<ObserverEvent>) {
+    pub async fn ingest_collect(
+        &self,
+        batch: ObserverBatch,
+    ) -> (IngestReport, Vec<ObserverEvent>) {
         let mut states = self.inner.write().await;
         let state = states.entry(batch.session_id).or_default();
         if batch.generation > state.generation {
@@ -305,9 +308,7 @@ impl LiveBridge {
         let mut states = self.inner.write().await;
         let state = states.entry(session_id).or_default();
         match scope {
-            ActionScope::Public => {
-                push_bounded(&mut state.actions, action.clone(), self.action_capacity)
-            }
+            ActionScope::Public => push_bounded(&mut state.actions, action.clone(), self.action_capacity),
             ActionScope::InternalCapture => push_bounded(
                 &mut state.capture_actions,
                 action.clone(),
@@ -469,11 +470,7 @@ impl LiveBridge {
         let Some(state) = states.get_mut(&session_id) else {
             return false;
         };
-        let Some(index) = state
-            .inflight
-            .iter()
-            .position(|action| action.id == action_id)
-        else {
+        let Some(index) = state.inflight.iter().position(|action| action.id == action_id) else {
             return false;
         };
         state.inflight.remove(index).is_some()
@@ -545,10 +542,7 @@ impl LiveBridge {
         };
 
         sanitize_result_for_storage(completed.as_ref().map(|(action, _)| action), &mut result);
-        match completed
-            .map(|(_, scope)| scope)
-            .unwrap_or(ActionScope::Public)
-        {
+        match completed.map(|(_, scope)| scope).unwrap_or(ActionScope::Public) {
             ActionScope::Public => push_bounded(&mut state.results, result, self.result_capacity),
             ActionScope::InternalCapture => {
                 push_bounded(&mut state.capture_results, result, self.result_capacity)
@@ -565,9 +559,11 @@ impl LiveBridge {
         let Some(state) = states.get_mut(&session_id) else {
             return false;
         };
-        let Some(index) = state.native_executor_claimed.iter().position(|request| {
-            request.id == result.request_id && request.session_id == session_id
-        }) else {
+        let Some(index) = state
+            .native_executor_claimed
+            .iter()
+            .position(|request| request.id == result.request_id && request.session_id == session_id)
+        else {
             return false;
         };
         let Some(request) = state.native_executor_claimed.remove(index) else {
@@ -640,9 +636,7 @@ impl LiveBridge {
 fn sanitize_mask_selectors(mask_selectors: Vec<String>) -> Vec<String> {
     mask_selectors
         .into_iter()
-        .filter(|selector| {
-            !selector.is_empty() && selector.len() <= MAX_PRIVATE_MASK_SELECTOR_BYTES
-        })
+        .filter(|selector| !selector.is_empty() && selector.len() <= MAX_PRIVATE_MASK_SELECTOR_BYTES)
         .take(MAX_PRIVATE_MASK_SELECTORS)
         .collect()
 }
@@ -705,10 +699,7 @@ fn take_claimed_by_id(
             .remove(index)
             .map(|action| (action, ActionScope::InternalCapture));
     }
-    let index = state
-        .claimed
-        .iter()
-        .position(|action| action.id == action_id)?;
+    let index = state.claimed.iter().position(|action| action.id == action_id)?;
     state
         .claimed
         .remove(index)
@@ -753,8 +744,7 @@ fn sanitize_native_executor_result(
         result.ok = false;
         result.usage = None;
         result.payload = Value::Null;
-        result.error =
-            Some("native executor result payload exceeded bounded metadata limit".into());
+        result.error = Some("native executor result payload exceeded bounded metadata limit".into());
     }
 
     if let Some(error) = result.error.as_mut() {

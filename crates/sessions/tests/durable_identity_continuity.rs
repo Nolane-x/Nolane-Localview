@@ -1,7 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{path::{Path, PathBuf}, time::Duration};
 
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use localview_protocol::{
@@ -66,8 +63,10 @@ fn time(second: u32) -> chrono::DateTime<Utc> {
 async fn same_project_reuses_uuid_across_fresh_manager_lifetimes() {
     let (dir, path) = temp_registry();
     let first_resolver = SessionIdentityResolver::open_file(path.clone()).await;
-    let first_manager =
-        SessionManager::with_identity_resolver(Duration::from_secs(1), first_resolver);
+    let first_manager = SessionManager::with_identity_resolver(
+        Duration::from_secs(1),
+        first_resolver,
+    );
     let first = first_manager
         .reconcile(
             vec![discovered(
@@ -99,10 +98,7 @@ async fn same_project_reuses_uuid_across_fresh_manager_lifetimes() {
         .await;
 
     assert_eq!(second.created, vec![first_id]);
-    let session = second_manager
-        .get(first_id)
-        .await
-        .expect("reused session id");
+    let session = second_manager.get(first_id).await.expect("reused session id");
     assert_eq!(session.endpoint.port, 8443);
     assert_eq!(session.endpoint.scheme, "https");
     cleanup(&dir);
@@ -258,11 +254,7 @@ async fn ambiguous_same_lineage_batch_never_aliases_or_claims_durable_mapping() 
     assert_ne!(result.created[0], result.created[1]);
     assert_eq!(manager.list().await.len(), 2);
     assert_eq!(observer.health(), SessionIdentityHealth::Healthy);
-    assert_eq!(
-        observer.record_count(),
-        0,
-        "ambiguous lineage must not be persisted"
-    );
+    assert_eq!(observer.record_count(), 0, "ambiguous lineage must not be persisted");
     cleanup(&dir);
 }
 

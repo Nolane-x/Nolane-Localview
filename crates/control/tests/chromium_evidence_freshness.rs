@@ -1,24 +1,22 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{
-    body::{Body, to_bytes},
-    http::{Request, StatusCode, header},
+    body::{to_bytes, Body},
+    http::{header, Request, StatusCode},
 };
 use chrono::Utc;
-use localview_control::{ControlState, router};
+use localview_control::{router, ControlState};
 use localview_evidence::{
     EvidenceDraft, EvidenceKind, EvidenceStore, Provenance, UncertaintyClass,
 };
 use localview_live_bridge::{LiveBridge, ObserverBatch, ObserverEvent, ObserverEventKind};
 use localview_observation::ObservationBus;
-use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
-};
+use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
 use localview_sessions::SessionManager;
 use tower::ServiceExt;
 

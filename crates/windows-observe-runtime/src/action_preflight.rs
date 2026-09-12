@@ -2,8 +2,8 @@ use localview_live_bridge::{
     ActionEnvelopeBindingError, ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass,
 };
 use localview_protocol::{
-    EventContinuityState, ProviderElementRealization, ProviderElementRef,
-    ReconciliationCompleteness, SessionId,
+    EventContinuityState, ProviderElementRealization, ProviderElementRef, ReconciliationCompleteness,
+    SessionId,
 };
 use localview_windows_uia_provider::{
     WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact, WindowsUiaElementLeaseReceipt,
@@ -60,9 +60,7 @@ pub enum WindowsUiaActionPreflightError {
     PreconditionSnapshotCutMismatch { expected: String, actual: String },
     #[error("Windows UIA action preflight current snapshot is incomplete")]
     SnapshotIncomplete,
-    #[error(
-        "Windows UIA action preflight element acquisition cut does not match the current snapshot"
-    )]
+    #[error("Windows UIA action preflight element acquisition cut does not match the current snapshot")]
     ElementAcquisitionCutMismatch { expected: String, actual: String },
     #[error("Windows UIA action preflight element does not exist in the exact current snapshot")]
     ElementNotFound,
@@ -254,7 +252,8 @@ where
             .map_err(WindowsUiaDispatchRevalidationError::LeaseProvider)?;
 
         if element_lease.snapshot_cut_ref != refreshed.snapshot_cut_ref
-            || element_lease.provider_incarnation_ref != request.authority.provider_incarnation_ref
+            || element_lease.provider_incarnation_ref
+                != request.authority.provider_incarnation_ref
             || element_lease.target_incarnation_ref != request.authority.target_incarnation_ref
             || element_lease.element_ref != refreshed.element_ref
         {
@@ -311,9 +310,7 @@ fn map_read_error(error: WindowsSemanticReadError) -> WindowsUiaActionPreflightE
         WindowsSemanticReadError::ElementAcquisitionCutMismatch { expected, actual } => {
             WindowsUiaActionPreflightError::ElementAcquisitionCutMismatch { expected, actual }
         }
-        WindowsSemanticReadError::ElementNotFound => {
-            WindowsUiaActionPreflightError::ElementNotFound
-        }
+        WindowsSemanticReadError::ElementNotFound => WindowsUiaActionPreflightError::ElementNotFound,
         WindowsSemanticReadError::ObserveOnlyRiskRequired
         | WindowsSemanticReadError::PureReadIdempotencyRequired => {
             WindowsUiaActionPreflightError::ReadGateInvariant

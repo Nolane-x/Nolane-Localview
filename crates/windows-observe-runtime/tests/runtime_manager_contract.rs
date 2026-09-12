@@ -17,7 +17,9 @@ use localview_windows_observe_runtime::{
     WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeError,
     WindowsObserveRuntimeManager, WindowsObserveSubscriptionLineage,
 };
-use localview_windows_uia_provider::{WindowsUiaEvent, WindowsUiaEventDrain, WindowsUiaEventKind};
+use localview_windows_uia_provider::{
+    WindowsUiaEvent, WindowsUiaEventDrain, WindowsUiaEventKind,
+};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -81,8 +83,7 @@ impl FakeProvider {
     }
 
     fn snapshot_revision(&self, sequence: u64) -> Arc<NativeSemanticSnapshotRevision> {
-        let mut cache =
-            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -228,10 +229,7 @@ async fn attach_owns_subscription_binds_opaque_lineage_and_establishes_initial_s
     assert_eq!(status.generation, 1);
     assert_eq!(status.provider_incarnation_ref, provider.provider);
     assert_eq!(status.target_incarnation_ref, provider.target);
-    assert_eq!(
-        status.event_continuity,
-        EventContinuityState::OrderingOpaque
-    );
+    assert_eq!(status.event_continuity, EventContinuityState::OrderingOpaque);
     assert_eq!(
         status.current_snapshot_completeness,
         Some(ReconciliationCompleteness::Established)
@@ -276,10 +274,7 @@ async fn opaque_callback_reconciles_once_gap_reconciles_again_and_quiet_drain_do
         first.reconciliation_performed,
         "an accepted callback under opaque ordering invalidates the pre-callback snapshot"
     );
-    assert_eq!(
-        first.status.event_continuity,
-        EventContinuityState::OrderingOpaque
-    );
+    assert_eq!(first.status.event_continuity, EventContinuityState::OrderingOpaque);
     assert_eq!(
         provider.counts().0,
         2,

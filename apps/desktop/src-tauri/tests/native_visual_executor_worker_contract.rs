@@ -2,9 +2,8 @@ use std::{fs, path::PathBuf};
 
 fn source(path: &str) -> String {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    fs::read_to_string(manifest.join(path)).unwrap_or_else(|error| {
-        panic!("required native executor source {path} is missing: {error}")
-    })
+    fs::read_to_string(manifest.join(path))
+        .unwrap_or_else(|error| panic!("required native executor source {path} is missing: {error}"))
 }
 
 #[test]

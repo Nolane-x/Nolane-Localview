@@ -1,5 +1,5 @@
 use localview_verification::{
-    VisualChangeExpectation, VisualChangeObservation, VisualChangeVerdict, verify_visual_change,
+    verify_visual_change, VisualChangeExpectation, VisualChangeObservation, VisualChangeVerdict,
 };
 
 #[test]
@@ -79,43 +79,37 @@ fn changed_expectation_passes_and_fails_deterministically_at_the_boundary() {
 #[test]
 fn invalid_or_non_finite_ratios_fail_closed() {
     for changed_ratio in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
-        assert!(
-            verify_visual_change(
-                &VisualChangeObservation {
-                    changed_ratio,
-                    baseline_comparable: true,
-                },
-                VisualChangeExpectation::Unchanged {
-                    max_changed_ratio: 0.01,
-                },
-            )
-            .is_err()
-        );
+        assert!(verify_visual_change(
+            &VisualChangeObservation {
+                changed_ratio,
+                baseline_comparable: true,
+            },
+            VisualChangeExpectation::Unchanged {
+                max_changed_ratio: 0.01,
+            },
+        )
+        .is_err());
     }
 
     for max_changed_ratio in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
-        assert!(
-            verify_visual_change(
-                &VisualChangeObservation {
-                    changed_ratio: 0.0,
-                    baseline_comparable: true,
-                },
-                VisualChangeExpectation::Unchanged { max_changed_ratio },
-            )
-            .is_err()
-        );
+        assert!(verify_visual_change(
+            &VisualChangeObservation {
+                changed_ratio: 0.0,
+                baseline_comparable: true,
+            },
+            VisualChangeExpectation::Unchanged { max_changed_ratio },
+        )
+        .is_err());
     }
 
     for min_changed_ratio in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
-        assert!(
-            verify_visual_change(
-                &VisualChangeObservation {
-                    changed_ratio: 0.5,
-                    baseline_comparable: true,
-                },
-                VisualChangeExpectation::Changed { min_changed_ratio },
-            )
-            .is_err()
-        );
+        assert!(verify_visual_change(
+            &VisualChangeObservation {
+                changed_ratio: 0.5,
+                baseline_comparable: true,
+            },
+            VisualChangeExpectation::Changed { min_changed_ratio },
+        )
+        .is_err());
     }
 }

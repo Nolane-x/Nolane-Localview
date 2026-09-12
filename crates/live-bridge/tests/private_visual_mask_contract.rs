@@ -16,7 +16,9 @@ async fn private_freeze_carries_selectors_but_stores_only_bounded_geometry() {
         .enqueue_capture_freeze(session_id, selectors.clone())
         .await;
 
-    let drained = bridge.take_internal_capture_actions(session_id, 8).await;
+    let drained = bridge
+        .take_internal_capture_actions(session_id, 8)
+        .await;
     assert_eq!(drained.len(), 1);
     assert_eq!(drained[0].id, action.id);
     assert!(matches!(drained[0].action, BridgeActionKind::FreezeVisuals));
@@ -57,7 +59,9 @@ async fn private_freeze_carries_selectors_but_stores_only_bounded_geometry() {
         )
         .await;
 
-    let stored = bridge.recent_internal_capture_results(session_id, 8).await;
+    let stored = bridge
+        .recent_internal_capture_results(session_id, 8)
+        .await;
     assert_eq!(stored.len(), 1);
     let payload = &stored[0].payload;
     assert_eq!(payload["paused_animations"], 3);

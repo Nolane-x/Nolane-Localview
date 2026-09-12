@@ -2,8 +2,8 @@
 
 use std::{thread::available_parallelism, time::Duration};
 
-use localview_resource_governor::{RuntimeResourceGovernor, normalize_process_metrics};
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, get_current_pid};
+use localview_resource_governor::{normalize_process_metrics, RuntimeResourceGovernor};
+use sysinfo::{get_current_pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::time::MissedTickBehavior;
 use tracing::warn;
 
@@ -31,13 +31,19 @@ async fn sample_forever(governor: RuntimeResourceGovernor) -> Result<(), &'stati
     loop {
         interval.tick().await;
         let pids = [pid];
-        system.refresh_processes_specifics(ProcessesToUpdate::Some(&pids), true, refresh_kind);
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&pids),
+            true,
+            refresh_kind,
+        );
         let Some(process) = system.process(pid) else {
             continue;
         };
-        let Some(metrics) =
-            normalize_process_metrics(process.memory(), process.cpu_usage(), logical_cpus)
-        else {
+        let Some(metrics) = normalize_process_metrics(
+            process.memory(),
+            process.cpu_usage(),
+            logical_cpus,
+        ) else {
             continue;
         };
         governor.update_process_metrics(metrics.memory_mb, metrics.cpu_percent);

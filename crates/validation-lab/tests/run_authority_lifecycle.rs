@@ -66,7 +66,9 @@ fn validated_receipt(
     .unwrap()
 }
 
-fn prospective_admission(prereg: &LabPreregistration) -> localview_validation_lab::LabRunAdmission {
+fn prospective_admission(
+    prereg: &LabPreregistration,
+) -> localview_validation_lab::LabRunAdmission {
     LabRunAdmission::Prospective {
         preregistration: prereg.clone(),
         receipt: validated_receipt(prereg, 11),
@@ -102,30 +104,15 @@ fn typed_observation(
 #[test]
 fn result_evidence_maps_to_a_closed_non_proved_taxonomy() {
     let cases = [
-        (
-            ResultEvidence::ExploratoryObservation,
-            ResearchResultClass::ExploratoryObservation,
-        ),
-        (
-            ResultEvidence::PreregisteredSeedPass,
-            ResearchResultClass::PreregisteredSeedPass,
-        ),
-        (
-            ResultEvidence::CounterexampleFound,
-            ResearchResultClass::CounterexampleFound,
-        ),
+        (ResultEvidence::ExploratoryObservation, ResearchResultClass::ExploratoryObservation),
+        (ResultEvidence::PreregisteredSeedPass, ResearchResultClass::PreregisteredSeedPass),
+        (ResultEvidence::CounterexampleFound, ResearchResultClass::CounterexampleFound),
         (
             ResultEvidence::NoCounterexampleWithinBoundN,
             ResearchResultClass::NoCounterexampleWithinBoundN,
         ),
-        (
-            ResultEvidence::MutantKilled,
-            ResearchResultClass::MutantKilled,
-        ),
-        (
-            ResultEvidence::MutantSurvived,
-            ResearchResultClass::MutantSurvived,
-        ),
+        (ResultEvidence::MutantKilled, ResearchResultClass::MutantKilled),
+        (ResultEvidence::MutantSurvived, ResearchResultClass::MutantSurvived),
         (
             ResultEvidence::DifferentialEquivalentWithinVectorSet,
             ResearchResultClass::DifferentialEquivalentWithinVectorSet,
@@ -178,27 +165,12 @@ fn exact_validated_receipt_and_actual_authority_admit_prospective_seed_pass() {
     ))
     .unwrap();
 
-    let completed = run
-        .finalize(ResultEvidence::PreregisteredSeedPass, 30)
-        .unwrap();
-    assert_eq!(
-        completed.payload.result_class,
-        ResearchResultClass::PreregisteredSeedPass
-    );
-    assert_eq!(
-        completed.payload.preregistration_digest,
-        Some(expected_digest.clone())
-    );
-    assert_eq!(
-        completed.identity.result_artifact_digest,
-        canonical_digest(&completed.payload).unwrap()
-    );
+    let completed = run.finalize(ResultEvidence::PreregisteredSeedPass, 30).unwrap();
+    assert_eq!(completed.payload.result_class, ResearchResultClass::PreregisteredSeedPass);
+    assert_eq!(completed.payload.preregistration_digest, Some(expected_digest.clone()));
+    assert_eq!(completed.identity.result_artifact_digest, canonical_digest(&completed.payload).unwrap());
 
-    let suar = completed
-        .payload
-        .metric_snapshot
-        .get(LabMetricKind::Suar)
-        .unwrap();
+    let suar = completed.payload.metric_snapshot.get(LabMetricKind::Suar).unwrap();
     assert_eq!((suar.numerator, suar.denominator), (0, 1));
     assert_eq!(suar.status, MetricStatus::Measured);
 
@@ -216,8 +188,8 @@ fn exact_validated_receipt_and_actual_authority_admit_prospective_seed_pass() {
 fn typed_failure_observation_is_bound_into_result_metrics_and_digest() {
     let mut prereg = preregistration();
     prereg.declared_metrics.insert(LabMetricKind::Wpdr);
-    let mut run =
-        LabRunBuilder::start(prospective_admission(&prereg), actual_authority(&prereg)).unwrap();
+    let mut run = LabRunBuilder::start(prospective_admission(&prereg), actual_authority(&prereg))
+        .unwrap();
     run.append_observation(typed_observation(
         "wrong-principal",
         BTreeSet::from([LabMetricKind::Wpdr]),
@@ -226,19 +198,10 @@ fn typed_failure_observation_is_bound_into_result_metrics_and_digest() {
     ))
     .unwrap();
 
-    let completed = run
-        .finalize(ResultEvidence::CounterexampleFound, 30)
-        .unwrap();
-    let wpdr = completed
-        .payload
-        .metric_snapshot
-        .get(LabMetricKind::Wpdr)
-        .unwrap();
+    let completed = run.finalize(ResultEvidence::CounterexampleFound, 30).unwrap();
+    let wpdr = completed.payload.metric_snapshot.get(LabMetricKind::Wpdr).unwrap();
     assert_eq!((wpdr.numerator, wpdr.denominator), (1, 1));
-    assert_eq!(
-        completed.identity.result_artifact_digest,
-        canonical_digest(&completed.payload).unwrap()
-    );
+    assert_eq!(completed.identity.result_artifact_digest, canonical_digest(&completed.payload).unwrap());
     assert_eq!(completed.payload.observation_digests.len(), 1);
 }
 
@@ -267,13 +230,8 @@ fn exploratory_admission_does_not_require_a_persisted_preregistration_or_escalat
     )
     .unwrap();
 
-    let completed = run
-        .finalize(ResultEvidence::PreregisteredSeedPass, 30)
-        .unwrap();
-    assert_eq!(
-        completed.payload.result_class,
-        ResearchResultClass::ExploratoryObservation
-    );
+    let completed = run.finalize(ResultEvidence::PreregisteredSeedPass, 30).unwrap();
+    assert_eq!(completed.payload.result_class, ResearchResultClass::ExploratoryObservation);
     assert_eq!(completed.payload.preregistration_digest, None);
     assert!(matches!(
         completed.payload.execution_mode,
@@ -307,9 +265,7 @@ fn receipt_persisted_at_or_after_start_cannot_authorize_prospective_execution() 
 fn prospective_receipt_for_different_preregistration_is_a_hard_error() {
     let prereg = preregistration();
     let mut changed = prereg.clone();
-    changed
-        .expected_distinctions
-        .insert("FRESH != STALE".into());
+    changed.expected_distinctions.insert("FRESH != STALE".into());
     let receipt = validated_receipt(&changed, 11);
 
     assert!(matches!(
@@ -320,9 +276,7 @@ fn prospective_receipt_for_different_preregistration_is_a_hard_error() {
             },
             actual_authority(&prereg),
         ),
-        Err(LabError::ProspectiveAuthorityDrift {
-            field: "preregistration_digest"
-        })
+        Err(LabError::ProspectiveAuthorityDrift { field: "preregistration_digest" })
     ));
 }
 
@@ -347,11 +301,7 @@ fn prospective_actual_authority_drift_is_a_hard_error_for_every_bound_field() {
     assert_drift(&prereg, bound_drift, "model_bound");
 }
 
-fn assert_drift(
-    prereg: &LabPreregistration,
-    actual: ActualExecutionAuthority,
-    field: &'static str,
-) {
+fn assert_drift(prereg: &LabPreregistration, actual: ActualExecutionAuthority, field: &'static str) {
     assert!(matches!(
         LabRunBuilder::start(prospective_admission(prereg), actual),
         Err(LabError::ProspectiveAuthorityDrift { field: actual_field }) if actual_field == field
@@ -361,11 +311,10 @@ fn assert_drift(
 #[test]
 fn finalized_run_rejects_second_finalize_and_late_observation() {
     let prereg = preregistration();
-    let mut run =
-        LabRunBuilder::start(prospective_admission(&prereg), actual_authority(&prereg)).unwrap();
-
-    run.finalize(ResultEvidence::PreregisteredSeedPass, 30)
+    let mut run = LabRunBuilder::start(prospective_admission(&prereg), actual_authority(&prereg))
         .unwrap();
+
+    run.finalize(ResultEvidence::PreregisteredSeedPass, 30).unwrap();
     assert!(matches!(
         run.finalize(ResultEvidence::PreregisteredSeedPass, 31),
         Err(LabError::AlreadyFinalized)

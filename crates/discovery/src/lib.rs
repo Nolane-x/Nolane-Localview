@@ -1,14 +1,12 @@
 #![forbid(unsafe_code)]
 
+use std::{collections::HashSet, net::IpAddr, process::Stdio, time::Duration};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use futures::{StreamExt, stream};
-use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
-};
+use futures::{stream, StreamExt};
+use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
 use regex::Regex;
 use reqwest::Client;
-use std::{collections::HashSet, net::IpAddr, process::Stdio, time::Duration};
 use tokio::process::Command;
 
 #[async_trait]
@@ -48,9 +46,7 @@ impl ListenerSource for CommandListenerSource {
     }
 }
 
-pub struct HttpClassifier {
-    client: Client,
-}
+pub struct HttpClassifier { client: Client }
 
 impl HttpClassifier {
     pub fn new(timeout: Duration) -> Result<Self> {
@@ -64,8 +60,7 @@ impl HttpClassifier {
 
     pub async fn classify(&self, candidate: &ListenerCandidate) -> Result<Classification> {
         let url = candidate.endpoint.url()?;
-        let response = self
-            .client
+        let response = self.client
             .get(url)
             .header("user-agent", "LocalView/0.2 discovery")
             .send()
@@ -78,19 +73,11 @@ impl HttpClassifier {
     }
 }
 
-pub struct DiscoveryEngine<S> {
-    source: S,
-    classifier: HttpClassifier,
-    concurrency: usize,
-}
+pub struct DiscoveryEngine<S> { source: S, classifier: HttpClassifier, concurrency: usize }
 
 impl<S: ListenerSource> DiscoveryEngine<S> {
     pub fn new(source: S, timeout: Duration, concurrency: usize) -> Result<Self> {
-        Ok(Self {
-            source,
-            classifier: HttpClassifier::new(timeout)?,
-            concurrency: concurrency.max(1),
-        })
+        Ok(Self { source, classifier: HttpClassifier::new(timeout)?, concurrency: concurrency.max(1) })
     }
 
     pub async fn scan(&self) -> Result<Vec<DiscoveredServer>> {
@@ -102,14 +89,7 @@ impl<S: ListenerSource> DiscoveryEngine<S> {
             .filter(|c| seen.insert((c.endpoint.host.clone(), c.endpoint.port)))
             .collect::<Vec<_>>();
         let results = stream::iter(candidates.into_iter().map(|candidate| async move {
-            self.classifier
-                .classify(&candidate)
-                .await
-                .ok()
-                .map(|classification| DiscoveredServer {
-                    candidate,
-                    classification,
-                })
+            self.classifier.classify(&candidate).await.ok().map(|classification| DiscoveredServer { candidate, classification })
         }))
         .buffer_unordered(self.concurrency)
         .filter_map(|x| async move { x })
@@ -120,12 +100,7 @@ impl<S: ListenerSource> DiscoveryEngine<S> {
 }
 
 fn is_loopback_host(host: &str) -> bool {
-    host == "localhost"
-        || host == "::1"
-        || host
-            .parse::<IpAddr>()
-            .map(|ip| ip.is_loopback())
-            .unwrap_or(false)
+    host == "localhost" || host == "::1" || host.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
 }
 
 pub fn classify_response(status: u16, headers: &http::HeaderMap, body: &str) -> Classification {
@@ -135,46 +110,21 @@ pub fn classify_response(status: u16, headers: &http::HeaderMap, body: &str) -> 
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let html = content_type.contains("text/html")
-        || lower.contains("<html")
-        || lower.contains("<!doctype html");
+    let html = content_type.contains("text/html") || lower.contains("<html") || lower.contains("<!doctype html");
     let mut evidence = smallvec::SmallVec::new();
-    if html {
-        evidence.push("html-document".to_string());
-    }
-    if status < 500 {
-        evidence.push(format!("http-{status}"));
-    }
+    if html { evidence.push("html-document".to_string()); }
+    if status < 500 { evidence.push(format!("http-{status}")); }
     let markers: [(&str, &str); 10] = [
-        ("/@vite/client", "Vite"),
-        ("__next", "Next.js"),
-        ("/_next/", "Next.js"),
-        ("__nuxt", "Nuxt"),
-        ("/_nuxt/", "Nuxt"),
-        ("svelte", "Svelte/SvelteKit"),
-        ("astro-island", "Astro"),
-        ("ng-version", "Angular"),
-        ("webpack", "Webpack"),
+        ("/@vite/client", "Vite"), ("__next", "Next.js"), ("/_next/", "Next.js"),
+        ("__nuxt", "Nuxt"), ("/_nuxt/", "Nuxt"), ("svelte", "Svelte/SvelteKit"),
+        ("astro-island", "Astro"), ("ng-version", "Angular"), ("webpack", "Webpack"),
         ("storybook", "Storybook"),
     ];
-    let framework = markers
-        .iter()
-        .find(|(needle, _)| lower.contains(needle))
-        .map(|(_, name)| (*name).to_string());
-    if let Some(name) = &framework {
-        evidence.push(format!("framework:{name}"));
-    }
-    let hmr = lower.contains("/@vite/client")
-        || lower.contains("webpackhotupdat")
-        || lower.contains("hot-update")
-        || lower.contains("__vite__");
-    if hmr {
-        evidence.push("hmr-marker".to_string());
-    }
-    let api_like = !html
-        && (content_type.contains("json")
-            || lower.trim_start().starts_with('{')
-            || lower.trim_start().starts_with('['));
+    let framework = markers.iter().find(|(needle, _)| lower.contains(needle)).map(|(_, name)| (*name).to_string());
+    if let Some(name) = &framework { evidence.push(format!("framework:{name}")); }
+    let hmr = lower.contains("/@vite/client") || lower.contains("webpackhotupdat") || lower.contains("hot-update") || lower.contains("__vite__");
+    if hmr { evidence.push("hmr-marker".to_string()); }
+    let api_like = !html && (content_type.contains("json") || lower.trim_start().starts_with('{') || lower.trim_start().starts_with('['));
     let kind = if framework.as_deref() == Some("Storybook") {
         ServerKind::Storybook
     } else if html && (framework.is_some() || hmr) {
@@ -192,14 +142,7 @@ pub fn classify_response(status: u16, headers: &http::HeaderMap, body: &str) -> 
         ServerKind::ApiServer => 0.88,
         ServerKind::UnknownHttp => 0.45,
     };
-    Classification {
-        kind,
-        confidence,
-        framework,
-        title: extract_title(body),
-        hmr_detected: hmr,
-        evidence,
-    }
+    Classification { kind, confidence, framework, title: extract_title(body), hmr_detected: hmr, evidence }
 }
 
 fn extract_title(body: &str) -> Option<String> {
@@ -211,105 +154,52 @@ fn extract_title(body: &str) -> Option<String> {
 }
 
 pub fn parse_windows_netstat(input: &str) -> Vec<ListenerCandidate> {
-    input
-        .lines()
-        .filter_map(|line| {
-            let parts = line.split_whitespace().collect::<Vec<_>>();
-            if parts.len() < 5
-                || !parts[0].eq_ignore_ascii_case("TCP")
-                || !parts[3].eq_ignore_ascii_case("LISTENING")
-            {
-                return None;
-            }
-            let (host, port) = split_addr(parts[1])?;
-            Some(candidate(host, port, parts[4].parse().ok()))
-        })
-        .collect()
+    input.lines().filter_map(|line| {
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.len() < 5 || !parts[0].eq_ignore_ascii_case("TCP") || !parts[3].eq_ignore_ascii_case("LISTENING") { return None; }
+        let (host, port) = split_addr(parts[1])?;
+        Some(candidate(host, port, parts[4].parse().ok()))
+    }).collect()
 }
 
 pub fn parse_linux_ss(input: &str) -> Vec<ListenerCandidate> {
     let pid_re = Regex::new(r"pid=(\d+)").expect("static regex");
-    input
-        .lines()
-        .filter_map(|line| {
-            let parts = line.split_whitespace().collect::<Vec<_>>();
-            if parts.len() < 4 {
-                return None;
-            }
-            let addr = parts.iter().find(|p| {
-                p.rsplit(':')
-                    .next()
-                    .and_then(|x| x.parse::<u16>().ok())
-                    .is_some()
-            })?;
-            let (host, port) = split_addr(addr)?;
-            let pid = pid_re
-                .captures(line)
-                .and_then(|c| c.get(1))
-                .and_then(|m| m.as_str().parse().ok());
-            Some(candidate(host, port, pid))
-        })
-        .collect()
+    input.lines().filter_map(|line| {
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.len() < 4 { return None; }
+        let addr = parts.iter().find(|p| p.rsplit(':').next().and_then(|x| x.parse::<u16>().ok()).is_some())?;
+        let (host, port) = split_addr(addr)?;
+        let pid = pid_re.captures(line).and_then(|c| c.get(1)).and_then(|m| m.as_str().parse().ok());
+        Some(candidate(host, port, pid))
+    }).collect()
 }
 
 pub fn parse_macos_lsof(input: &str) -> Vec<ListenerCandidate> {
-    input
-        .lines()
-        .skip(1)
-        .filter_map(|line| {
-            let parts = line.split_whitespace().collect::<Vec<_>>();
-            if parts.len() < 9 || !line.contains("(LISTEN)") {
-                return None;
-            }
-            let addr = parts
-                .iter()
-                .find(|p| p.contains(':') && !p.starts_with("TCP"))?;
-            let (host, port) = split_addr(addr.trim_end_matches("(LISTEN)"))?;
-            Some(ListenerCandidate {
-                endpoint: Endpoint {
-                    host,
-                    port,
-                    scheme: "http".into(),
-                },
-                pid: parts.get(1).and_then(|x| x.parse().ok()),
-                process_name: parts.first().map(|x| (*x).to_string()),
-                command: None,
-                cwd: None,
-            })
+    input.lines().skip(1).filter_map(|line| {
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.len() < 9 || !line.contains("(LISTEN)") { return None; }
+        let addr = parts.iter().find(|p| p.contains(':') && !p.starts_with("TCP"))?;
+        let (host, port) = split_addr(addr.trim_end_matches("(LISTEN)"))?;
+        Some(ListenerCandidate {
+            endpoint: Endpoint { host, port, scheme: "http".into() },
+            pid: parts.get(1).and_then(|x| x.parse().ok()),
+            process_name: parts.first().map(|x| (*x).to_string()),
+            command: None,
+            cwd: None,
         })
-        .collect()
+    }).collect()
 }
 
 fn split_addr(raw: &str) -> Option<(String, u16)> {
     let raw = raw.trim().trim_matches('[').trim_matches(']');
     let idx = raw.rfind(':')?;
-    let host = raw[..idx]
-        .trim_matches('[')
-        .trim_matches(']')
-        .replace('*', "127.0.0.1");
+    let host = raw[..idx].trim_matches('[').trim_matches(']').replace('*', "127.0.0.1");
     let port = raw[idx + 1..].parse().ok()?;
-    Some((
-        if host == "0.0.0.0" || host == "::" {
-            "127.0.0.1".into()
-        } else {
-            host
-        },
-        port,
-    ))
+    Some((if host == "0.0.0.0" || host == "::" { "127.0.0.1".into() } else { host }, port))
 }
 
 fn candidate(host: String, port: u16, pid: Option<u32>) -> ListenerCandidate {
-    ListenerCandidate {
-        endpoint: Endpoint {
-            host,
-            port,
-            scheme: "http".into(),
-        },
-        pid,
-        process_name: None,
-        command: None,
-        cwd: None,
-    }
+    ListenerCandidate { endpoint: Endpoint { host, port, scheme: "http".into() }, pid, process_name: None, command: None, cwd: None }
 }
 
 #[cfg(test)]
@@ -318,8 +208,7 @@ mod tests {
 
     #[test]
     fn parses_windows_listener() {
-        let rows =
-            parse_windows_netstat("  TCP    127.0.0.1:5173   0.0.0.0:0   LISTENING   4242\n");
+        let rows = parse_windows_netstat("  TCP    127.0.0.1:5173   0.0.0.0:0   LISTENING   4242\n");
         assert_eq!(rows[0].endpoint.port, 5173);
         assert_eq!(rows[0].pid, Some(4242));
     }
@@ -328,11 +217,7 @@ mod tests {
     fn detects_vite_frontend() {
         let mut headers = http::HeaderMap::new();
         headers.insert(http::header::CONTENT_TYPE, "text/html".parse().unwrap());
-        let c = classify_response(
-            200,
-            &headers,
-            "<html><title>App</title><script type=module src='/@vite/client'></script></html>",
-        );
+        let c = classify_response(200, &headers, "<html><title>App</title><script type=module src='/@vite/client'></script></html>");
         assert_eq!(c.kind, ServerKind::FrontendDevServer);
         assert_eq!(c.framework.as_deref(), Some("Vite"));
         assert!(c.hmr_detected);
@@ -341,13 +226,7 @@ mod tests {
     #[test]
     fn detects_json_api() {
         let mut headers = http::HeaderMap::new();
-        headers.insert(
-            http::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
-        );
-        assert_eq!(
-            classify_response(200, &headers, "{\"ok\":true}").kind,
-            ServerKind::ApiServer
-        );
+        headers.insert(http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        assert_eq!(classify_response(200, &headers, "{\"ok\":true}").kind, ServerKind::ApiServer);
     }
 }

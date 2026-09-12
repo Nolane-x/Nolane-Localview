@@ -116,8 +116,7 @@ impl FakeProvider {
         }
 
         let node_count = nodes.len();
-        let mut cache =
-            SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
+        let mut cache = SemanticSnapshotCache::for_lineage(self.provider.clone(), self.target.clone());
         cache
             .publish(NativeSemanticSnapshotDraft {
                 provider_incarnation_ref: self.provider.clone(),
@@ -151,10 +150,7 @@ impl WindowsObserveProvider for FakeProvider {
         self.provider.clone()
     }
 
-    fn attach(
-        &self,
-        _selection: UserSelectedWindowTarget,
-    ) -> Result<Self::Attachment, Self::Error> {
+    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
         Ok(FakeAttachment(self.target.clone()))
     }
 
@@ -268,8 +264,7 @@ fn selection() -> UserSelectedWindowTarget {
 }
 
 #[tokio::test]
-async fn realization_receipt_requires_a_fresh_runtime_reconciliation_cut_before_current_authority()
-{
+async fn realization_receipt_requires_a_fresh_runtime_reconciliation_cut_before_current_authority() {
     let provider = FakeProvider::new();
     let runtime = WindowsObserveRuntimeManager::new(
         Arc::new(provider.clone()),
@@ -304,9 +299,7 @@ async fn realization_receipt_requires_a_fresh_runtime_reconciliation_cut_before_
     let receipt = runtime
         .realize_virtualized_item_and_refresh(session(), query)
         .await
-        .expect(
-            "runtime must realize under session authority and immediately reconcile a fresh cut",
-        );
+        .expect("runtime must realize under session authority and immediately reconcile a fresh cut");
 
     assert_eq!(
         receipt.query_receipt.placeholder_element_ref.realization,
@@ -317,10 +310,7 @@ async fn realization_receipt_requires_a_fresh_runtime_reconciliation_cut_before_
         receipt.query_receipt.placeholder_element_ref,
         "realization receipt must preserve the old non-actionable placeholder identity"
     );
-    assert_ne!(
-        receipt.fresh_snapshot.snapshot_cut_ref(),
-        before.snapshot_cut_ref()
-    );
+    assert_ne!(receipt.fresh_snapshot.snapshot_cut_ref(), before.snapshot_cut_ref());
     assert!(
         receipt
             .fresh_snapshot
@@ -335,10 +325,7 @@ async fn realization_receipt_requires_a_fresh_runtime_reconciliation_cut_before_
         .iter()
         .find(|node| node.name.as_deref() == Some("LocalView Virtual Item 255"))
         .expect("fresh reconciliation must observe the newly realized item");
-    assert_eq!(
-        realized.element_ref.realization,
-        ProviderElementRealization::RealizedCurrent
-    );
+    assert_eq!(realized.element_ref.realization, ProviderElementRealization::RealizedCurrent);
     assert_eq!(
         realized.element_ref.acquisition_cut_ref,
         receipt.fresh_snapshot.snapshot_cut_ref()
@@ -348,9 +335,6 @@ async fn realization_receipt_requires_a_fresh_runtime_reconciliation_cut_before_
         .current_semantic_snapshot(session())
         .await
         .expect("fresh realization snapshot must become runtime current state");
-    assert_eq!(
-        current.observed_digest(),
-        receipt.fresh_snapshot.observed_digest()
-    );
+    assert_eq!(current.observed_digest(), receipt.fresh_snapshot.observed_digest());
     assert_eq!(provider.counts(), (1, 1, 2));
 }

@@ -129,7 +129,11 @@ impl ArtifactStore {
             restored.push((modified, id, meta));
         }
 
-        restored.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        restored.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
         for (_, id, meta) in restored {
             self.used = self.used.saturating_add(meta.bytes);
             self.lru.push_back(id.clone());

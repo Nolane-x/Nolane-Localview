@@ -11,18 +11,9 @@ fn canonical_identity_refs_are_distinct_transparent_wire_types() {
     let provider = ProviderIncarnationRef::from("provider:webview:7");
     let target = TargetIncarnationRef::from("target:session:42");
 
-    assert_eq!(
-        serde_json::to_value(&principal).unwrap(),
-        json!("principal:agent-a")
-    );
-    assert_eq!(
-        serde_json::to_value(&provider).unwrap(),
-        json!("provider:webview:7")
-    );
-    assert_eq!(
-        serde_json::to_value(&target).unwrap(),
-        json!("target:session:42")
-    );
+    assert_eq!(serde_json::to_value(&principal).unwrap(), json!("principal:agent-a"));
+    assert_eq!(serde_json::to_value(&provider).unwrap(), json!("provider:webview:7"));
+    assert_eq!(serde_json::to_value(&target).unwrap(), json!("target:session:42"));
     assert_ne!(principal.as_str(), provider.as_str());
     assert_ne!(provider.as_str(), target.as_str());
 }
@@ -69,10 +60,7 @@ fn reconnect_is_not_continuity_and_reconciliation_is_a_separate_axis() {
         serde_json::to_value(EventContinuityState::ReconnectedUnreconciled).unwrap(),
         json!("reconnected_unreconciled")
     );
-    assert_eq!(
-        receipt.completeness,
-        ReconciliationCompleteness::Established
-    );
+    assert_eq!(receipt.completeness, ReconciliationCompleteness::Established);
 }
 
 #[test]
@@ -94,8 +82,5 @@ fn provider_element_identity_is_bound_to_provider_and_target_incarnations() {
     };
 
     assert_ne!(old, reincarnated);
-    assert_eq!(
-        old.opaque_provider_element_id,
-        reincarnated.opaque_provider_element_id
-    );
+    assert_eq!(old.opaque_provider_element_id, reincarnated.opaque_provider_element_id);
 }

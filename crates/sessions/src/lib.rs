@@ -4,10 +4,10 @@ mod identity;
 
 pub use identity::{
     MAX_ENDPOINT_HOST_BYTES, MAX_ENDPOINT_SCHEME_BYTES, MAX_NORMALIZED_PROJECT_PATH_BYTES,
-    MAX_SESSION_IDENTITY_RECORDS, MAX_SESSION_IDENTITY_REGISTRY_BYTES, ResolvedSessionIdentity,
-    SESSION_IDENTITY_REGISTRY_FILE, SessionIdentityDurability, SessionIdentityError,
-    SessionIdentityHealth, SessionIdentityResolver, SessionLineage, SessionLineageAnchorV1,
-    SessionLineageV1, SessionServerKind, session_lineage,
+    MAX_SESSION_IDENTITY_RECORDS, MAX_SESSION_IDENTITY_REGISTRY_BYTES,
+    SESSION_IDENTITY_REGISTRY_FILE, ResolvedSessionIdentity, SessionIdentityDurability,
+    SessionIdentityError, SessionIdentityHealth, SessionIdentityResolver, SessionLineage,
+    SessionLineageAnchorV1, SessionLineageV1, SessionServerKind, session_lineage,
 };
 
 use std::{
@@ -78,8 +78,9 @@ impl SessionManager {
     pub async fn list(&self) -> Vec<Session> {
         let state = self.state.read().await;
         let mut sessions = state.sessions.values().cloned().collect::<Vec<_>>();
-        sessions
-            .sort_by_key(|session| (session.project.display_name.clone(), session.endpoint.port));
+        sessions.sort_by_key(|session| {
+            (session.project.display_name.clone(), session.endpoint.port)
+        });
         sessions
     }
 
@@ -240,8 +241,8 @@ impl SessionManager {
             }
         }
 
-        let grace =
-            chrono::Duration::from_std(self.grace).unwrap_or_else(|_| chrono::Duration::seconds(3));
+        let grace = chrono::Duration::from_std(self.grace)
+            .unwrap_or_else(|_| chrono::Duration::seconds(3));
         let ids = state.sessions.keys().copied().collect::<Vec<_>>();
         for id in ids {
             if seen.contains(&id) {
@@ -256,8 +257,7 @@ impl SessionManager {
                         result.disconnected.push(id);
                     }
                     Some(disconnected_at) => {
-                        should_remove =
-                            now.signed_duration_since(disconnected_at.to_owned()) >= grace;
+                        should_remove = now.signed_duration_since(disconnected_at.to_owned()) >= grace;
                     }
                 }
             }
@@ -358,7 +358,10 @@ fn id_available_for_lineage(
     }
 }
 
-fn fresh_volatile_session_id(state: &SessionState, assigned: &HashSet<SessionId>) -> SessionId {
+fn fresh_volatile_session_id(
+    state: &SessionState,
+    assigned: &HashSet<SessionId>,
+) -> SessionId {
     loop {
         let candidate = Uuid::new_v4();
         if candidate != Uuid::nil()
@@ -417,12 +420,7 @@ mod tests {
             .await;
         assert!(moved.created.is_empty());
         assert_eq!(
-            manager
-                .get(id)
-                .await
-                .expect("session should exist")
-                .endpoint
-                .port,
+            manager.get(id).await.expect("session should exist").endpoint.port,
             5174
         );
     }

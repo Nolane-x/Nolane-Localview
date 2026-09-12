@@ -19,10 +19,7 @@ fn equality_relation_passes_only_when_generated_pair_is_invariant() {
     assert_eq!(pass.result_evidence, ResultEvidence::PreregisteredSeedPass);
     assert!(pass.relation_satisfied);
     assert_eq!(
-        pass.observation
-            .evidence_refs
-            .into_iter()
-            .collect::<Vec<_>>(),
+        pass.observation.evidence_refs.into_iter().collect::<Vec<_>>(),
         vec!["evidence-a".to_owned(), "evidence-b".to_owned()]
     );
 

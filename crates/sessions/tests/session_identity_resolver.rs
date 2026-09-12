@@ -78,10 +78,7 @@ async fn durable_result_is_backed_by_committed_registry_before_return() {
     let resolved = resolver.resolve_new(&lineage).await;
 
     assert_eq!(resolved.durability, SessionIdentityDurability::Durable);
-    assert!(
-        path.is_file(),
-        "durable result must already have an on-disk registry"
-    );
+    assert!(path.is_file(), "durable result must already have an on-disk registry");
     let reopened = SessionIdentityResolver::open_file(path.clone()).await;
     assert_eq!(reopened.existing(&lineage).await, Some(resolved.session_id));
 
@@ -104,10 +101,7 @@ async fn commit_failure_returns_volatile_uuid_without_publishing_mapping() {
     assert_ne!(resolved.session_id, Uuid::nil());
     assert_eq!(resolver.health(), SessionIdentityHealth::VolatileDegraded);
     assert_eq!(resolver.existing(&lineage).await, None);
-    assert!(
-        !path.exists(),
-        "failed commit must not publish a registry entry"
-    );
+    assert!(!path.exists(), "failed commit must not publish a registry entry");
 
     cleanup_path(&dir);
 }
@@ -147,9 +141,7 @@ async fn full_registry_returns_volatile_without_evicting_existing_records() {
     assert_eq!(resolved.durability, SessionIdentityDurability::Volatile);
     assert_eq!(resolver.existing(&new_lineage).await, None);
     assert_eq!(
-        resolver
-            .existing(&first_lineage.expect("first lineage"))
-            .await,
+        resolver.existing(&first_lineage.expect("first lineage")).await,
         first_id
     );
     assert_eq!(std::fs::read(&path).unwrap(), bytes);

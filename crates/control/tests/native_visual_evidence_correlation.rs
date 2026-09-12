@@ -1,22 +1,20 @@
 #![recursion_limit = "256"]
 
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{
-    body::{Body, to_bytes},
-    http::{Method, Request, StatusCode, header},
+    body::{to_bytes, Body},
+    http::{header, Method, Request, StatusCode},
 };
 use chrono::Utc;
-use localview_control::{ControlState, router};
+use localview_control::{router, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{LiveBridge, ObserverBatch, ObserverEvent, ObserverEventKind};
 use localview_observation::ObservationBus;
-use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
-};
+use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
 use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -226,5 +224,8 @@ async fn native_visual_result_must_correlate_to_the_exact_reported_evidence_ids(
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["error"], "native_visual_executor_failed");
-    assert_eq!(body["reason"], "native visual evidence correlation failed");
+    assert_eq!(
+        body["reason"],
+        "native visual evidence correlation failed"
+    );
 }
