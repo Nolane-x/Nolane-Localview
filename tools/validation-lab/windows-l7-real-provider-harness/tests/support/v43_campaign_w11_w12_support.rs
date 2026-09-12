@@ -1,7 +1,10 @@
-use std::{collections::BTreeSet, fs, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use localview_validation_lab::{LabMetricKind, LabSeedIdentity};
-use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -46,12 +49,12 @@ pub fn artifact_dir() -> PathBuf {
     path
 }
 
-pub fn write_json<T: Serialize>(path: &Path, value: &T) {
+pub fn write_value(path: &Path, value: &Value) {
     fs::write(
         path,
-        serde_json::to_vec_pretty(value).expect("serialize bounded L7 artifact"),
+        serde_json::to_vec_pretty(value).expect("serialize bounded L7 JSON artifact"),
     )
-    .expect("persist bounded L7 artifact");
+    .expect("persist bounded L7 JSON artifact");
 }
 
 pub fn environment_manifest(
