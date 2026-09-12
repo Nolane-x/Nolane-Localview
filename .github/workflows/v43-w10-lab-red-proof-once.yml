@@ -1,4 +1,4 @@
-name: V4.3 W10 Lab RED Proof Once
+name: V4.3 W10 Lab GREEN Proof Once
 
 on:
   push:
@@ -8,14 +8,85 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  w10-lab-red:
+  w10-lab-green:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Prove W10 variant is missing before implementation
-        run: cargo test -p localview-validation-lab --test real_provider_w10 -- --nocapture
+      - name: Apply minimal W10 Lab implementation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/validation-lab/src/real_provider_adapter.rs')
+          text = path.read_text()
+          enum_anchor = '''    W09ModifierInterference {
+                  conflicting_modifier_observed: bool,
+                  input_state_conflict_blocked: bool,
+                  input_inserted: bool,
+              },
+              W11ModalBeforeDispatch {'''
+          enum_replacement = '''    W09ModifierInterference {
+                  conflicting_modifier_observed: bool,
+                  input_state_conflict_blocked: bool,
+                  input_inserted: bool,
+              },
+              W10MixedDpiGeometry {
+                  distinct_effective_dpi_observed: bool,
+                  coordinate_space_explicit: bool,
+                  first_rect_matches_oracle: bool,
+                  second_rect_matches_oracle: bool,
+                  double_scaling_observed: bool,
+              },
+              W11ModalBeforeDispatch {'''
+          match_anchor = '''        RealProviderCaseKind::W09ModifierInterference {
+                      conflicting_modifier_observed,
+                      input_state_conflict_blocked,
+                      input_inserted,
+                  } => !*conflicting_modifier_observed || !*input_state_conflict_blocked || *input_inserted,
+                  RealProviderCaseKind::W11ModalBeforeDispatch {'''
+          match_replacement = '''        RealProviderCaseKind::W09ModifierInterference {
+                      conflicting_modifier_observed,
+                      input_state_conflict_blocked,
+                      input_inserted,
+                  } => !*conflicting_modifier_observed || !*input_state_conflict_blocked || *input_inserted,
+                  RealProviderCaseKind::W10MixedDpiGeometry {
+                      distinct_effective_dpi_observed,
+                      coordinate_space_explicit,
+                      first_rect_matches_oracle,
+                      second_rect_matches_oracle,
+                      double_scaling_observed,
+                  } => {
+                      !*distinct_effective_dpi_observed
+                          || !*coordinate_space_explicit
+                          || !*first_rect_matches_oracle
+                          || !*second_rect_matches_oracle
+                          || *double_scaling_observed
+                  }
+                  RealProviderCaseKind::W11ModalBeforeDispatch {'''
+          if text.count(enum_anchor) != 1:
+              raise SystemExit('enum anchor mismatch')
+          if text.count(match_anchor) != 1:
+              raise SystemExit('match anchor mismatch')
+          text = text.replace(enum_anchor, enum_replacement)
+          text = text.replace(match_anchor, match_replacement)
+          path.write_text(text)
+          PY
+      - name: Verify W10 and adjacent real-provider Lab semantics
+        run: |
+          cargo test -p localview-validation-lab --test real_provider_w10 -- --nocapture
+          cargo test -p localview-validation-lab --test real_provider_w11_w12 -- --nocapture
+          cargo test -p localview-validation-lab --test real_provider_adapter -- --nocapture
+      - name: Commit only after GREEN
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/validation-lab/src/real_provider_adapter.rs
+          git diff --cached --check
+          git commit -m "test(v43): define W10 mixed-DPI Lab semantics"
+          git push origin HEAD:feat/v43-l7-windows-w10-mixed-dpi-authority
