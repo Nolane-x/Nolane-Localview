@@ -85,6 +85,21 @@ pub enum RealProviderCaseKind {
         stale_authority_survived_reacquire: bool,
         cleanup_to_baseline: bool,
     },
+    W07ForegroundStolen {
+        final_foreground_mismatch_detected: bool,
+        input_inserted: bool,
+    },
+    W08PartialInputDispatch {
+        requested_event_count: u32,
+        inserted_event_count: u32,
+        unknown_outcome_preserved: bool,
+        blind_retry_authorized: bool,
+    },
+    W09ModifierInterference {
+        conflicting_modifier_observed: bool,
+        input_state_conflict_blocked: bool,
+        input_inserted: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,11 +253,6 @@ fn apply_case_semantics(
             provider_identity_reuse_observed,
             accepted_previous_identity_as_current,
         } => {
-            // W02 is an element-lifetime/ABA campaign. A control can be destroyed
-            // and recreated while the same provider worker remains alive, so
-            // provider reincarnation is neither required nor sufficient evidence
-            // for the element identity boundary. W06 owns provider-reacquire
-            // reincarnation semantics.
             validate_provider_incarnation(
                 "previous_provider_incarnation",
                 previous_provider_incarnation,
@@ -324,6 +334,29 @@ fn apply_case_semantics(
                 failure_flags.insert(LabFailureFlag::CleanupToBaselineFailure);
             }
             false
+        }
+        RealProviderCaseKind::W07ForegroundStolen {
+            final_foreground_mismatch_detected,
+            input_inserted,
+        } => !*final_foreground_mismatch_detected || *input_inserted,
+        RealProviderCaseKind::W08PartialInputDispatch {
+            requested_event_count,
+            inserted_event_count,
+            unknown_outcome_preserved,
+            blind_retry_authorized,
+        } => {
+            *requested_event_count == 0
+                || *inserted_event_count == 0
+                || *inserted_event_count >= *requested_event_count
+                || !*unknown_outcome_preserved
+                || *blind_retry_authorized
+        }
+        RealProviderCaseKind::W09ModifierInterference {
+            conflicting_modifier_observed,
+            input_state_conflict_blocked,
+            input_inserted,
+        } => {
+            !*conflicting_modifier_observed || !*input_state_conflict_blocked || *input_inserted
         }
     };
     Ok(semantic_counterexample)
