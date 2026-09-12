@@ -1,0 +1,25 @@
+name: V4.3 W11 RED Proof Once
+
+on:
+  push:
+    branches: [feat/v43-l7-windows-w11-w12-race-authority]
+    paths:
+      - .github/workflows/v43-w11-red-proof-once.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  w11-real-provider-red:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prove W11 test requires missing modal fixture
+        shell: pwsh
+        run: |
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w11 -- --list
