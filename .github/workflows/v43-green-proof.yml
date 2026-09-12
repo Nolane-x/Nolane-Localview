@@ -20,3 +20,11 @@ jobs:
         run: cargo test -p localview-windows-uia-provider --test verified_input_worker_contract -- --nocapture
       - name: Run W07 W08 W09 lab contract
         run: cargo test -p localview-validation-lab --test real_provider_w07_w08_w09 -- --nocapture
+
+  windows-verified-input-backend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run Windows verified input backend contract
+        run: cargo test -p localview-windows-uia-provider --test windows_verified_input_backend_contract -- --nocapture
