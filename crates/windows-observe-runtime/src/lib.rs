@@ -9,6 +9,7 @@ mod prepared_dispatch;
 mod runtime_manager {
     include!("runtime_manager.rs");
     include!("fresh_action_evidence.rs");
+    include!("virtualized_item_runtime.rs");
 }
 mod semantic_postcondition;
 mod set_value_execution;

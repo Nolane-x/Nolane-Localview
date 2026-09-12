@@ -14,12 +14,13 @@ permissions:
 
 jobs:
   windows-real-provider-seeds:
-    name: V4.3 L7 Windows real-provider seeds W01/W02/W04/W06
+    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W05/W06
     runs-on: windows-latest
     timeout-minutes: 10
     env:
       LOCALVIEW_UIA_SMOKE: "1"
       LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
       LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
     steps:
@@ -29,8 +30,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
+      - name: Build WPF edge seed for W03/W05
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
       - name: Bind hosted Windows environment authority
         shell: pwsh
         run: |
@@ -84,13 +90,31 @@ jobs:
             throw "required W04 real-provider test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w04 $testName -- --ignored --exact --nocapture --test-threads=1
-      - name: Prospective L7 campaign binds W01/W02/W06 to exact candidate
+      - name: W03 virtualized item requires Realize then fresh observation
         shell: pwsh
         run: |
-          $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_w02_w06_to_exact_candidate"
+          $testName = "windows_real_provider_w03::w03_virtualized_item_requires_realize_then_fresh_observation"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w03 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W03 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w03 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W05 provider hang quarantines worker then requires fresh reacquire
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w05::w05_provider_hang_poison_requires_fresh_provider_reacquire"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w05 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W05 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w05 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Prospective six-seed campaign binds exact W01 through W06 evidence
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_through_w06_to_exact_candidate"
           $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign -- --list
           if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
-            throw "required prospective L7 campaign test is not registered: $testName"
+            throw "required bound six-seed L7 campaign test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign $testName -- --ignored --exact --nocapture --test-threads=1
       - name: Publish bounded L7 Lab artifacts

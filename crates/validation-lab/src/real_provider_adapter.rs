@@ -63,6 +63,22 @@ pub enum RealProviderCaseKind {
         provider_identity_reuse_observed: bool,
         accepted_previous_identity_as_current: bool,
     },
+    W03VirtualizedItemRealization {
+        placeholder_blocked_before_realization: bool,
+        fresh_cut_after_realization: bool,
+        realized_current_after_fresh_cut: bool,
+    },
+    W04UnsupportedInvoke {
+        invoke_support_unsupported: bool,
+        dispatch_attempted: bool,
+        side_effect_observed: bool,
+    },
+    W05ProviderHang {
+        caller_returned_bounded: bool,
+        poisoned_worker_reused: bool,
+        provider_reacquired: bool,
+        stale_authority_survived_reacquire: bool,
+    },
     W06ProviderReacquire {
         previous_provider_incarnation: ProviderIncarnationRef,
         current_provider_incarnation: ProviderIncarnationRef,
@@ -113,7 +129,7 @@ pub fn adapt_real_provider_case(
     let mut eligible_metrics = BTreeSet::new();
     let mut failure_flags = BTreeSet::new();
 
-    apply_case_semantics(
+    let semantic_counterexample = apply_case_semantics(
         &input.case_kind,
         &mut eligible_metrics,
         &mut failure_flags,
@@ -126,7 +142,7 @@ pub fn adapt_real_provider_case(
         }
     }
 
-    let result_evidence = if !failure_flags.is_empty() {
+    let result_evidence = if semantic_counterexample || !failure_flags.is_empty() {
         Some(ResultEvidence::CounterexampleFound)
     } else if input.observed_outcome.asserted_value().is_some() {
         Some(ResultEvidence::RealProviderIntegrationPass)
@@ -189,8 +205,8 @@ fn apply_case_semantics(
     case_kind: &RealProviderCaseKind,
     eligible_metrics: &mut BTreeSet<LabMetricKind>,
     failure_flags: &mut BTreeSet<LabFailureFlag>,
-) -> Result<(), LabError> {
-    match case_kind {
+) -> Result<bool, LabError> {
+    let semantic_counterexample = match case_kind {
         RealProviderCaseKind::W01MissingPropertyEvent {
             continuity,
             reconciliation,
@@ -213,6 +229,7 @@ fn apply_case_semantics(
             if *accepted_as_reconciled && !reconciliation_established {
                 failure_flags.insert(LabFailureFlag::ReconciliationMiss);
             }
+            false
         }
         RealProviderCaseKind::W02RecreatedElement {
             previous_provider_incarnation,
@@ -245,6 +262,38 @@ fn apply_case_semantics(
                     failure_flags.insert(LabFailureFlag::ProviderIdAbaEscape);
                 }
             }
+            false
+        }
+        RealProviderCaseKind::W03VirtualizedItemRealization {
+            placeholder_blocked_before_realization,
+            fresh_cut_after_realization,
+            realized_current_after_fresh_cut,
+        } => {
+            !*placeholder_blocked_before_realization
+                || !*fresh_cut_after_realization
+                || !*realized_current_after_fresh_cut
+        }
+        RealProviderCaseKind::W04UnsupportedInvoke {
+            invoke_support_unsupported,
+            dispatch_attempted,
+            side_effect_observed,
+        } => {
+            !*invoke_support_unsupported || *dispatch_attempted || *side_effect_observed
+        }
+        RealProviderCaseKind::W05ProviderHang {
+            caller_returned_bounded,
+            poisoned_worker_reused,
+            provider_reacquired,
+            stale_authority_survived_reacquire,
+        } => {
+            if *stale_authority_survived_reacquire {
+                eligible_metrics.insert(LabMetricKind::Scar);
+                failure_flags.insert(LabFailureFlag::StaleCacheAuthority);
+            }
+            !*caller_returned_bounded
+                || *poisoned_worker_reused
+                || !*provider_reacquired
+                || *stale_authority_survived_reacquire
         }
         RealProviderCaseKind::W06ProviderReacquire {
             previous_provider_incarnation,
@@ -274,9 +323,10 @@ fn apply_case_semantics(
             if !*cleanup_to_baseline {
                 failure_flags.insert(LabFailureFlag::CleanupToBaselineFailure);
             }
+            false
         }
-    }
-    Ok(())
+    };
+    Ok(semantic_counterexample)
 }
 
 fn validate_authority_field(field: &'static str, value: &str) -> Result<(), LabError> {
