@@ -3,6 +3,7 @@
 mod action_capability;
 mod dispatch_context;
 mod event_buffer;
+mod geometry;
 mod pattern_dispatch;
 mod set_value_dispatch;
 #[cfg(windows)]
@@ -22,6 +23,7 @@ mod worker_health;
 pub use action_capability::*;
 pub use dispatch_context::*;
 pub use event_buffer::*;
+pub use geometry::*;
 pub use pattern_dispatch::*;
 pub use set_value_dispatch::*;
 pub use subscription::*;
