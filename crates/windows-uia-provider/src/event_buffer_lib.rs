@@ -11,6 +11,8 @@ mod subscription;
 #[path = "subscription_stub.rs"]
 mod subscription;
 mod verified_input;
+#[cfg(windows)]
+mod verified_input_windows;
 mod virtualized_item;
 #[path = "lib.rs"]
 mod worker;
@@ -24,6 +26,8 @@ pub use pattern_dispatch::*;
 pub use set_value_dispatch::*;
 pub use subscription::*;
 pub use verified_input::*;
+#[cfg(windows)]
+pub use verified_input_windows::*;
 pub use virtualized_item::*;
 pub use worker::{
     WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
