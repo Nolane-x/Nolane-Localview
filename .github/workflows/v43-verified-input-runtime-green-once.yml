@@ -1,0 +1,48 @@
+name: V4.3 Verified Input Runtime GREEN Once
+
+on:
+  push:
+    branches:
+      - feat/v43-l7-windows-w07-w08-w09-input-authority
+
+permissions:
+  contents: write
+
+jobs:
+  runtime-authority-green:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feat/v43-l7-windows-w07-w08-w09-input-authority
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Apply exact-anchor Task 4 GREEN patch
+        run: python .github/scripts/v43_verified_input_runtime_green.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Verified-input runtime authority contract
+        run: cargo test -p localview-windows-observe-runtime --test verified_input_execution_contract -- --nocapture
+      - name: Shared execution coordinator behavior
+        run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior -- --nocapture
+      - name: Verified-input dispatch classification regression
+        run: cargo test -p localview-windows-observe-runtime --test verified_input_dispatch_classification -- --nocapture
+      - name: Consequential journal regressions
+        run: cargo test -p localview-live-bridge --lib -- --nocapture
+      - name: Provider authority binding regression
+        run: cargo test -p localview-windows-uia-provider --test verified_input_authority_binding_contract -- --nocapture
+      - name: Provider pure verified-input regression
+        run: cargo test -p localview-windows-uia-provider --test verified_input_contract -- --nocapture
+      - name: Runtime compile gate
+        run: cargo check -p localview-windows-observe-runtime
+      - name: Remove one-shot machinery and commit GREEN
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/v43-verified-input-runtime-green-once.yml .github/scripts/v43_verified_input_runtime_green.py
+          git add -A
+          git diff --cached --check
+          git commit -m "feat(v43): linearize verified input through canonical journal"
+          git push origin HEAD:feat/v43-l7-windows-w07-w08-w09-input-authority
