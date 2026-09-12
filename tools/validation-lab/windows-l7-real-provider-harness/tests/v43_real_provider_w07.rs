@@ -1,12 +1,14 @@
 #[cfg(windows)]
-mod windows_real_provider_w07 {
-    #[path = "support/v43_verified_input_seed.rs"]
-    mod support;
+#[path = "support/v43_verified_input_seed.rs"]
+mod verified_input_seed;
 
+#[cfg(windows)]
+mod windows_real_provider_w07 {
     use localview_windows_uia_provider::{
         WindowsUiaDispatchContextBlocker, WindowsUiaWorkerError,
     };
-    use support::{
+
+    use super::verified_input_seed::{
         EdgeSeedProcess, INPUT_TARGET_AUTOMATION_ID, attach_and_snapshot,
         mint_verified_input_authority, spawn_worker, truth_bool, truth_u64,
     };
@@ -41,11 +43,19 @@ mod windows_real_provider_w07 {
             .iter()
             .find(|node| node.automation_id.as_deref() == Some(INPUT_TARGET_AUTOMATION_ID))
             .expect("production UIA snapshot must retain the deterministic W07 input target");
-        let authority = mint_verified_input_authority(&attachment, snapshot.as_ref(), target.element_ref.clone()).await;
+        let authority = mint_verified_input_authority(
+            &attachment,
+            snapshot.as_ref(),
+            target.element_ref.clone(),
+        )
+        .await;
 
         let stolen = seed.steal_foreground();
         let thief_window = truth_u64(&stolen, "thief_window_handle");
-        assert_ne!(thief_window, target_window, "W07 thief must be a distinct real HWND");
+        assert_ne!(
+            thief_window, target_window,
+            "W07 thief must be a distinct real HWND"
+        );
         assert_eq!(
             truth_u64(&stolen, "foreground_window_handle"),
             thief_window,
