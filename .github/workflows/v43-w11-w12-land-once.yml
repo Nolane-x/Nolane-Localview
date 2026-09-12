@@ -1,0 +1,99 @@
+name: V4.3 W11 W12 Campaign Landing Once
+
+on:
+  push:
+    branches: [tmp-v43-w11-w12-patch-test]
+    paths:
+      - .github/workflows/v43-w11-w12-land-once.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prove-and-land:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Apply bounded wiring transformer
+        run: python tools/validation-lab/v43_w11_w12_wire.py
+      - name: Format Rust changes
+        run: cargo fmt --all
+      - name: Reject unexpected edits
+        shell: pwsh
+        run: |
+          git diff --check
+          $allowed = @(
+            ".github/workflows/windows-real-provider-seeds.yml",
+            "tools/validation-lab/windows-l7-real-provider-harness/tests/v43_real_provider_campaign.rs",
+            "tools/validation-lab/windows-l7-real-provider-harness/tests/support/v43_verified_input_cases_w11_w12.rs"
+          )
+          $changed = @(git diff --name-only)
+          $unexpected = @($changed | Where-Object { $_ -notin $allowed })
+          if ($unexpected.Count -ne 0) {
+            throw "unexpected transformed files: $($unexpected -join ', ')"
+          }
+          if ($changed.Count -lt 2) {
+            throw "expected campaign and permanent workflow edits are missing"
+          }
+      - name: Validate pure W11 W12 Lab semantics
+        run: cargo test -p localview-validation-lab --test real_provider_w11_w12 -- --nocapture
+      - name: Build Windows provider seeds
+        shell: pwsh
+        run: |
+          cargo build --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml
+          dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+          $artifactDir = Join-Path $env:RUNNER_TEMP "localview-l7-w11-w12-landing"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          "LOCALVIEW_L7_ARTIFACT_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_WINDOWS_BUILD=$([System.Environment]::OSVersion.VersionString)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_LOCALE_INPUT_METHOD=unknown:landing-runner" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_DISPLAY_TOPOLOGY=unknown:landing-runner" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_DPI_SCALE=unknown:landing-runner" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_PERMISSION_STATE=unknown:landing-runner" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Prove W11 real modal race
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w11::w11_modal_before_dispatch_is_blocked_before_any_real_input_effect"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w11 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) { throw "W11 test not registered" }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w11 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Prove W12 real restart race
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w12::w12_restart_rejects_pre_restart_authority_before_any_replacement_effect"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w12 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) { throw "W12 test not registered" }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w12 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Prove exact 11-case prospective campaign
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_w09_w11_w12_to_exact_candidate"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) { throw "11-case campaign test not registered" }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Commit only after all proofs pass
+        shell: pwsh
+        run: |
+          git config user.name "Nolane-x"
+          git config user.email "casioreview20@gmail.com"
+          git add .github/workflows/windows-real-provider-seeds.yml
+          git add tools/validation-lab/windows-l7-real-provider-harness/tests/v43_real_provider_campaign.rs
+          git add tools/validation-lab/windows-l7-real-provider-harness/tests/support/v43_verified_input_cases_w11_w12.rs
+          git commit -m "test(v43): extend L7 campaign and permanent W11 W12 gates"
+          git push origin HEAD:tmp-v43-w11-w12-patch-test
