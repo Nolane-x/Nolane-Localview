@@ -1,6 +1,4 @@
-using System.Diagnostics;
 using System.Text.Json;
-using System.Windows.Interop;
 
 namespace LocalView.WindowsUiaEdgeSeed;
 
@@ -54,6 +52,37 @@ internal sealed class OracleProtocol
                 case "get_virtual_item_state":
                     Write(ReadVirtualItemState());
                     break;
+                case "prepare_verified_input_target":
+                    Write(_window.Dispatcher.Invoke(() =>
+                    {
+                        _window.PrepareVerifiedInputTarget();
+                        return ReadVerifiedInputStateOnUiThread("prepare_verified_input_target");
+                    }));
+                    break;
+                case "get_verified_input_state":
+                    Write(ReadVerifiedInputState("get_verified_input_state"));
+                    break;
+                case "steal_foreground":
+                    Write(_window.Dispatcher.Invoke(() =>
+                    {
+                        _window.StealForeground();
+                        return ReadVerifiedInputStateOnUiThread("steal_foreground");
+                    }));
+                    break;
+                case "hold_shift":
+                    Write(_window.Dispatcher.Invoke(() =>
+                    {
+                        _window.HoldShiftFixture();
+                        return ReadVerifiedInputStateOnUiThread("hold_shift");
+                    }));
+                    break;
+                case "release_shift":
+                    Write(_window.Dispatcher.Invoke(() =>
+                    {
+                        _window.ReleaseShiftFixture();
+                        return ReadVerifiedInputStateOnUiThread("release_shift");
+                    }));
+                    break;
                 case "arm_provider_hang":
                     _window.ArmProviderHang();
                     Write(new
@@ -83,6 +112,7 @@ internal sealed class OracleProtocol
                     break;
                 case "shutdown":
                     _window.ReleaseProviderHang();
+                    _window.Dispatcher.Invoke(_window.CleanupVerifiedInputFixture);
                     Write(new { ok = true, command = "shutdown" });
                     _window.Dispatcher.BeginInvoke(() => _window.Close());
                     break;
@@ -98,6 +128,7 @@ internal sealed class OracleProtocol
                 ok = false,
                 error = "oracle_exception",
                 detail = error.GetType().Name,
+                message = error.Message,
             });
         }
     }
@@ -110,7 +141,7 @@ internal sealed class OracleProtocol
             command = "get_ground_truth",
             seed_run_id = _seedRunId,
             process_id = Environment.ProcessId,
-            window_handle = WindowHandle(),
+            window_handle = _window.WindowHandle(),
             virtual_item_index = EdgeWindow.VirtualItemIndex,
             virtual_item_name = EdgeWindow.VirtualItemName,
             virtual_item_container_generated = _window.IsVirtualItemContainerGenerated(),
@@ -130,9 +161,28 @@ internal sealed class OracleProtocol
         });
     }
 
-    private long WindowHandle()
+    private object ReadVerifiedInputState(string command)
     {
-        return new WindowInteropHelper(_window).Handle.ToInt64();
+        return _window.Dispatcher.Invoke(() => ReadVerifiedInputStateOnUiThread(command));
+    }
+
+    private object ReadVerifiedInputStateOnUiThread(string command)
+    {
+        return new
+        {
+            ok = true,
+            command,
+            seed_run_id = _seedRunId,
+            process_id = Environment.ProcessId,
+            target_automation_id = EdgeWindow.VerifiedInputTargetAutomationId,
+            window_handle = _window.WindowHandle(),
+            thief_window_handle = _window.ForegroundThiefWindowHandle(),
+            foreground_window_handle = _window.ForegroundWindowHandle(),
+            target_is_foreground = _window.IsTargetForeground(),
+            thief_is_foreground = _window.IsThiefForeground(),
+            shift_down = _window.IsShiftDown(),
+            effect_count = _window.VerifiedInputEffectCount(),
+        };
     }
 
     private static void Write(object response)
