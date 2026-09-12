@@ -260,6 +260,7 @@ pub struct WindowsUiaVerifiedInputReceipt {
 }
 
 impl WindowsUiaVerifiedInputReceipt {
+    #[cfg(windows)]
     pub(crate) fn from_request(
         request: WindowsUiaVerifiedInputRequest,
         boundary: WindowsVerifiedInputBoundaryReceipt,
