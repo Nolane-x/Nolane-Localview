@@ -35,7 +35,7 @@ jobs:
           dotnet-version: 8.0.x
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
-      - name: Build WPF edge seed for W03/W05
+      - name: Build WPF edge seed for W03/W05/W07/W09
         run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
       - name: Bind hosted Windows environment authority
         shell: pwsh
@@ -108,6 +108,24 @@ jobs:
             throw "required W05 real-provider test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w05 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W07 foreground theft is blocked before any real input effect
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w07::w07_foreground_theft_is_blocked_before_any_real_input_effect"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w07 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W07 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w07 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W09 held modifier is blocked without normalization or input effect
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w09::w09_user_held_modifier_is_blocked_without_normalization_or_input_effect"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w09 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W09 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w09 $testName -- --ignored --exact --nocapture --test-threads=1
       - name: Prospective six-seed campaign binds exact W01 through W06 evidence
         shell: pwsh
         run: |
