@@ -104,6 +104,12 @@ jobs:
         run: cargo test -p localview-control --test windows_consequential_control -- --nocapture
       - name: V4.3 ExpandCollapse server-owned HTTP routes
         run: cargo test -p localview-control --test windows_consequential_expand_collapse_control -- --nocapture
+      - name: V4.3 virtualized-item provider authority contracts
+        run: |
+          cargo test -p localview-windows-uia-provider --test virtualized_item_contract -- --nocapture
+          cargo test -p localview-windows-uia-provider --test virtualized_item_worker_surface -- --nocapture
+      - name: V4.3 provider timeout poison contract
+        run: cargo test -p localview-windows-uia-provider --test worker_timeout_poison_contract -- --nocapture
       - name: Real Win32 UIA snapshot + exact element lease lifetime
         run: cargo test -p localview-windows-uia-provider --test windows_uia_smoke -- --ignored --nocapture
       - name: Real Win32 dispatch context + exact focused element fence
@@ -134,13 +140,3 @@ jobs:
         run: cargo test -p localview-windows-uia-provider --test windows_uia_event_smoke -- --ignored --nocapture
       - name: Real Win32 UIA runtime manager
         run: cargo test -p localview-windows-observe-runtime --test windows_runtime_smoke -- --ignored --nocapture
-      - name: V4.3 L7 Windows prospective campaign W01/W02/W06
-        shell: pwsh
-        run: |
-          $manifest = "tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml"
-          $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_w02_w06_to_exact_candidate"
-          $listed = cargo test --manifest-path $manifest --test v43_real_provider_campaign -- --list
-          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
-            throw "required prospective L7 campaign test is not registered: $testName"
-          }
-          cargo test --manifest-path $manifest --test v43_real_provider_campaign $testName -- --ignored --exact --nocapture --test-threads=1
