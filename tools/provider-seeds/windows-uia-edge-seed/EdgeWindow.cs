@@ -1,9 +1,12 @@
 using System.Collections.ObjectModel;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
 
 namespace LocalView.WindowsUiaEdgeSeed;
 
@@ -15,23 +18,53 @@ internal sealed class EdgeWindow : Window
     public const string VirtualizedListName = "LocalView W03 Virtualized Items";
     public const string HostileProviderAutomationId = "LocalViewW05HostileProvider";
     public const string HostileProviderName = "LocalView W05 Hostile Provider";
+    public const string VerifiedInputTargetAutomationId = "LocalViewW07W09VerifiedInputTarget";
+
+    private const byte VkShift = 0x10;
+    private const uint KeyEventKeyUp = 0x0002;
 
     private readonly ListBox _virtualizedList;
+    private readonly Button _verifiedInputTarget;
     private readonly ManualResetEventSlim _providerHangRelease = new(false);
+    private Window? _foregroundThief;
     private int _providerHangArmed;
     private int _providerCallEntered;
+    private int _verifiedInputEffectCount;
+    private bool _shiftFixtureOwned;
 
     public EdgeWindow()
     {
         Title = "LocalView Windows UIA Edge Seed";
         Width = 520;
-        Height = 240;
+        Height = 320;
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         var items = new ObservableCollection<string>(
             Enumerable.Range(0, VirtualItemIndex + 1)
                 .Select(index => $"LocalView Virtual Item {index}"));
+
+        _verifiedInputTarget = new Button
+        {
+            Name = "VerifiedInputTarget",
+            Content = "LocalView W07/W09 verified input target",
+            Height = 32,
+            Margin = new Thickness(16, 8, 16, 0),
+            Focusable = true,
+        };
+        AutomationProperties.SetAutomationId(
+            _verifiedInputTarget,
+            VerifiedInputTargetAutomationId);
+        AutomationProperties.SetName(
+            _verifiedInputTarget,
+            "LocalView W07/W09 verified input target");
+        _verifiedInputTarget.PreviewKeyDown += (_, eventArgs) =>
+        {
+            if (eventArgs.Key == Key.Space)
+            {
+                Interlocked.Increment(ref _verifiedInputEffectCount);
+            }
+        };
 
         _virtualizedList = new ListBox
         {
@@ -58,19 +91,162 @@ internal sealed class EdgeWindow : Window
 
         var content = new StackPanel();
         content.Children.Add(hostileProvider);
+        content.Children.Add(_verifiedInputTarget);
         content.Children.Add(_virtualizedList);
         Content = content;
 
         Loaded += (_, _) =>
         {
             UpdateLayout();
+            _verifiedInputTarget.UpdateLayout();
             _virtualizedList.UpdateLayout();
+        };
+        Closed += (_, _) =>
+        {
+            ReleaseProviderHang();
+            CleanupVerifiedInputFixture();
         };
     }
 
     public bool IsVirtualItemContainerGenerated()
     {
         return _virtualizedList.ItemContainerGenerator.ContainerFromIndex(VirtualItemIndex) is not null;
+    }
+
+    public void PrepareVerifiedInputTarget()
+    {
+        if (_shiftFixtureOwned)
+        {
+            ReleaseShiftFixture();
+        }
+        CloseForegroundThief();
+        Interlocked.Exchange(ref _verifiedInputEffectCount, 0);
+
+        Show();
+        Activate();
+        var handle = WindowHandle();
+        if (handle != 0)
+        {
+            _ = SetForegroundWindow((nint)handle);
+        }
+        _verifiedInputTarget.BringIntoView();
+        _verifiedInputTarget.Focus();
+        Keyboard.Focus(_verifiedInputTarget);
+    }
+
+    public void StealForeground()
+    {
+        CloseForegroundThief();
+        _foregroundThief = new Window
+        {
+            Title = "LocalView W07 foreground thief",
+            Width = 320,
+            Height = 140,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ShowInTaskbar = false,
+            Topmost = true,
+            Content = new TextBlock
+            {
+                Text = "LocalView W07 deterministic foreground thief",
+                Margin = new Thickness(16),
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            },
+        };
+        _foregroundThief.Show();
+        _foregroundThief.Activate();
+        var thiefHandle = ForegroundThiefWindowHandle();
+        if (thiefHandle != 0)
+        {
+            _ = SetForegroundWindow((nint)thiefHandle);
+        }
+    }
+
+    public void CloseForegroundThief()
+    {
+        if (_foregroundThief is null)
+        {
+            return;
+        }
+        var thief = _foregroundThief;
+        _foregroundThief = null;
+        thief.Close();
+    }
+
+    public void HoldShiftFixture()
+    {
+        if (_shiftFixtureOwned)
+        {
+            return;
+        }
+        if (IsShiftDown())
+        {
+            throw new InvalidOperationException("shift_already_down");
+        }
+
+        keybd_event(VkShift, 0, 0, UIntPtr.Zero);
+        _shiftFixtureOwned = true;
+        if (!IsShiftDown())
+        {
+            ReleaseShiftFixture();
+            throw new InvalidOperationException("shift_keydown_not_observed");
+        }
+    }
+
+    public void ReleaseShiftFixture()
+    {
+        if (!_shiftFixtureOwned)
+        {
+            return;
+        }
+        keybd_event(VkShift, 0, KeyEventKeyUp, UIntPtr.Zero);
+        _shiftFixtureOwned = false;
+    }
+
+    public void CleanupVerifiedInputFixture()
+    {
+        ReleaseShiftFixture();
+        CloseForegroundThief();
+    }
+
+    public long WindowHandle()
+    {
+        return new WindowInteropHelper(this).Handle.ToInt64();
+    }
+
+    public long ForegroundThiefWindowHandle()
+    {
+        return _foregroundThief is null
+            ? 0
+            : new WindowInteropHelper(_foregroundThief).Handle.ToInt64();
+    }
+
+    public long ForegroundWindowHandle()
+    {
+        return GetForegroundWindow().ToInt64();
+    }
+
+    public bool IsTargetForeground()
+    {
+        var handle = WindowHandle();
+        return handle != 0 && ForegroundWindowHandle() == handle;
+    }
+
+    public bool IsThiefForeground()
+    {
+        var handle = ForegroundThiefWindowHandle();
+        return handle != 0 && ForegroundWindowHandle() == handle;
+    }
+
+    public bool IsShiftDown()
+    {
+        return (GetAsyncKeyState(VkShift) & 0x8000) != 0;
+    }
+
+    public int VerifiedInputEffectCount()
+    {
+        return Volatile.Read(ref _verifiedInputEffectCount);
     }
 
     public void ArmProviderHang()
@@ -106,6 +282,23 @@ internal sealed class EdgeWindow : Window
         Interlocked.Exchange(ref _providerCallEntered, 1);
         _providerHangRelease.Wait();
     }
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(nint hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int virtualKey);
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(
+        byte virtualKey,
+        byte scanCode,
+        uint flags,
+        UIntPtr extraInfo);
 }
 
 internal sealed class HostileProviderElement : FrameworkElement
