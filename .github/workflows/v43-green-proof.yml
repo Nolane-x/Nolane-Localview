@@ -28,3 +28,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run Windows verified input backend contract
         run: cargo test -p localview-windows-uia-provider --test windows_verified_input_backend_contract -- --nocapture
+      - name: Run exact UIA worker verified input boundary contract
+        run: cargo test -p localview-windows-uia-provider --test windows_verified_input_worker_mta_contract -- --nocapture
