@@ -1,0 +1,21 @@
+name: V4.3 W10 Lab RED Proof Once
+
+on:
+  push:
+    branches: [feat/v43-l7-windows-w10-mixed-dpi-authority]
+    paths:
+      - .github/workflows/v43-w10-lab-red-proof-once.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  w10-lab-red:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prove W10 variant is missing before implementation
+        run: cargo test -p localview-validation-lab --test real_provider_w10 -- --nocapture
