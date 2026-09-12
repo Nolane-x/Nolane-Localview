@@ -28,8 +28,8 @@ jobs:
 
           old_import = """    WindowsUiaVerifiedInputExecutionCoordinatorError, WindowsUiaVerifiedInputExecutor,\n    WindowsUiaVerifiedInputProviderReceipt, arm_uia_dispatch_execution, execute_armed_uia_dispatch,\n"""
           new_import = """    WindowsUiaVerifiedInputExecutionCoordinatorError, WindowsUiaVerifiedInputExecutionRequest,\n    WindowsUiaVerifiedInputExecutor, WindowsUiaVerifiedInputProviderReceipt,\n    arm_uia_dispatch_execution, execute_armed_uia_dispatch,\n"""
-          old_call = """        session(),\n        armed,\n        verified_input_batch(),\n        &executor,\n"""
-          new_call = """        session(),\n        WindowsUiaVerifiedInputExecutionRequest {\n            armed,\n            batch: verified_input_batch(),\n        },\n        &executor,\n"""
+          old_call = """    let outcome = execute_armed_uia_verified_input_verified(\n        &bridge,\n        &journal,\n        &runtime,\n        session(),\n        armed,\n        verified_input_batch(),\n        &executor,\n        &verifier,\n    )\n"""
+          new_call = """    let outcome = execute_armed_uia_verified_input_verified(\n        &bridge,\n        &journal,\n        &runtime,\n        session(),\n        WindowsUiaVerifiedInputExecutionRequest {\n            armed,\n            batch: verified_input_batch(),\n        },\n        &executor,\n        &verifier,\n    )\n"""
 
           if old_import in text:
               assert text.count(old_import) == 1, "verified-input import anchor must be unique"
@@ -44,8 +44,8 @@ jobs:
               assert new_call in text, "verified-input verified-call anchor missing"
 
           path.write_text(text)
-      - name: Format exact test file
-        run: cargo fmt -- crates/windows-observe-runtime/tests/execution_coordinator_behavior.rs
+      - name: Check formatting
+        run: cargo fmt --all -- --check
       - name: Compile coordinator behavior
         run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior --no-run
       - name: Clippy affected crates
