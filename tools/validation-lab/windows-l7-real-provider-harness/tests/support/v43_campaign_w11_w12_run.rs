@@ -21,7 +21,7 @@ pub async fn run_exact_campaign() {
         &classic_seed_digest,
         &edge_seed_digest,
     );
-    support::write_json(&artifact_dir.join("environment-manifest.json"), &environment);
+    support::write_value(&artifact_dir.join("environment-manifest.json"), &environment);
     let environment_digest =
         canonical_digest(&environment).expect("digest eleven-seed environment manifest");
     let seed_catalog_digest = canonical_digest(&json!({
@@ -65,10 +65,12 @@ pub async fn run_exact_campaign() {
         logical_sequence: 90,
         persistence_ref: prereg_path.to_string_lossy().into_owned(),
     };
-    support::write_json(
-        &artifact_dir.join("LAB-PREREGISTRATION-RECEIPT.json"),
-        &persisted_receipt,
-    );
+    fs::write(
+        artifact_dir.join("LAB-PREREGISTRATION-RECEIPT.json"),
+        serde_json::to_vec_pretty(&persisted_receipt)
+            .expect("serialize preregistration receipt"),
+    )
+    .expect("persist preregistration receipt");
     let receipt = validate_persisted_receipt(&prepared, persisted_receipt)
         .expect("validate persisted preregistration receipt");
     let authority = ActualExecutionAuthority {
@@ -95,8 +97,16 @@ pub async fn run_exact_campaign() {
     )
     .await;
     campaign_records::validate_records(&records);
-    support::write_json(&artifact_dir.join("W11-REAL-PROVIDER-RECORD.json"), &records[9]);
-    support::write_json(&artifact_dir.join("W12-REAL-PROVIDER-RECORD.json"), &records[10]);
+    fs::write(
+        artifact_dir.join("W11-REAL-PROVIDER-RECORD.json"),
+        serde_json::to_vec_pretty(&records[9]).expect("serialize W11 real-provider record"),
+    )
+    .expect("persist W11 real-provider record");
+    fs::write(
+        artifact_dir.join("W12-REAL-PROVIDER-RECORD.json"),
+        serde_json::to_vec_pretty(&records[10]).expect("serialize W12 real-provider record"),
+    )
+    .expect("persist W12 real-provider record");
     for record in &records {
         run.append_observation(record.observation.clone())
             .expect("append exact provider observation");
@@ -114,10 +124,17 @@ pub async fn run_exact_campaign() {
         .expect("RPOMR metric");
     assert_eq!((rpomr.numerator, rpomr.denominator), (0, 11));
     assert_eq!(completed.payload.observation_digests.len(), 11);
-    assert_eq!(completed.payload.result_class, ResearchResultClass::RealProviderIntegrationPass);
+    assert_eq!(
+        completed.payload.result_class,
+        ResearchResultClass::RealProviderIntegrationPass
+    );
     assert_eq!(
         completed.payload.actual_execution_authority.seed_catalog_digest,
         preregistration.seed_catalog_digest
     );
-    support::write_json(&artifact_dir.join("LAB-RESULT.json"), &completed);
+    fs::write(
+        artifact_dir.join("LAB-RESULT.json"),
+        serde_json::to_vec_pretty(&completed).expect("serialize completed eleven-seed result"),
+    )
+    .expect("persist completed eleven-seed result");
 }
