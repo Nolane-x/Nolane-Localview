@@ -7,13 +7,15 @@ use localview_live_bridge::{
 };
 use localview_native_provider::NativeSemanticSnapshotRevision;
 use localview_protocol::{DispatchResult, SessionId, WorldOutcome};
+use localview_windows_uia_provider::WindowsVerifiedKeyboardBatch;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
     WindowsObserveProvider, WindowsObserveRuntimeManager,
     WindowsUiaDispatchExecutionCoordinatorError, WindowsUiaDispatchExecutionPermit,
-    WindowsUiaDispatchExecutor, execute_armed_uia_dispatch,
+    WindowsUiaDispatchExecutor, WindowsUiaVerifiedInputExecutionCoordinatorError,
+    WindowsUiaVerifiedInputExecutor, execute_armed_uia_dispatch, execute_armed_uia_verified_input,
 };
 
 /// Independent predicate authority for consequential postconditions.
@@ -96,6 +98,8 @@ pub enum WindowsUiaConsequentialRecoveryOutcome {
 pub enum WindowsUiaVerifiedExecutionError {
     #[error(transparent)]
     Dispatch(#[from] WindowsUiaDispatchExecutionCoordinatorError),
+    #[error(transparent)]
+    VerifiedInputDispatch(#[from] WindowsUiaVerifiedInputExecutionCoordinatorError),
     #[error("post-dispatch observation authority failed: {message}")]
     ObservationAuthority { message: String },
     #[error("post-dispatch runtime capture failed: {message}")]
@@ -124,16 +128,7 @@ pub enum WindowsUiaVerifiedExecutionError {
     },
 }
 
-/// Execute one armed consequential UIA action through world verification.
-///
-/// `DispatchedFull` is intentionally not a terminal success here. Any outcome
-/// that may have reached the provider must pass a fresh causal observation,
-/// independent typed predicate verification, and durable reconciliation before
-/// `Committed` can be returned. Known-not-dispatched outcomes terminate without
-/// invoking the verifier because no world-side postcondition needs proving.
-/// Pre-executor authority rejection is handled by the lower dispatch coordinator,
-/// which releases only the process-local execution grant and preserves durable
-/// PREPARED uncertainty for same-process reconciliation.
+/// Execute one armed consequential semantic UIA action through world verification.
 pub async fn execute_armed_uia_dispatch_verified<P, E, V>(
     bridge: &LiveBridge,
     journal: &ConsequentialJournal,
@@ -149,10 +144,68 @@ where
     V: WindowsUiaPostconditionVerifier,
 {
     let dispatch = execute_armed_uia_dispatch(bridge, journal, session_id, armed, executor).await?;
-    let action_id = dispatch.provider_receipt.action_id;
-    let dispatch_result = dispatch.provider_receipt.dispatch_result;
-    let dispatch_journal_sequence = dispatch.journal_entry.journal_sequence;
+    complete_uia_dispatch_verification(
+        bridge,
+        journal,
+        runtime,
+        session_id,
+        dispatch.provider_receipt.action_id,
+        dispatch.provider_receipt.dispatch_result,
+        dispatch.journal_entry.journal_sequence,
+        verifier,
+    )
+    .await
+}
 
+/// Execute one armed verified-keyboard fallback through the exact same
+/// post-dispatch observation, predicate verification, reconciliation and commit
+/// path as semantic UIA. Full platform insertion is therefore never world
+/// success by itself, and partial insertion remains reconciliation-only.
+pub async fn execute_armed_uia_verified_input_verified<P, E, V>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    session_id: SessionId,
+    armed: WindowsUiaDispatchExecutionPermit,
+    batch: WindowsVerifiedKeyboardBatch,
+    executor: &E,
+    verifier: &V,
+) -> Result<WindowsUiaVerifiedExecutionOutcome, WindowsUiaVerifiedExecutionError>
+where
+    P: WindowsObserveProvider,
+    E: WindowsUiaVerifiedInputExecutor,
+    V: WindowsUiaPostconditionVerifier,
+{
+    let dispatch =
+        execute_armed_uia_verified_input(bridge, journal, session_id, armed, batch, executor)
+            .await?;
+    complete_uia_dispatch_verification(
+        bridge,
+        journal,
+        runtime,
+        session_id,
+        dispatch.provider_receipt.action_id,
+        crate::dispatch_result_for_verified_input(&dispatch.provider_receipt.boundary),
+        dispatch.journal_entry.journal_sequence,
+        verifier,
+    )
+    .await
+}
+
+async fn complete_uia_dispatch_verification<P, V>(
+    bridge: &LiveBridge,
+    journal: &ConsequentialJournal,
+    runtime: &WindowsObserveRuntimeManager<P>,
+    session_id: SessionId,
+    action_id: Uuid,
+    dispatch_result: DispatchResult,
+    dispatch_journal_sequence: u64,
+    verifier: &V,
+) -> Result<WindowsUiaVerifiedExecutionOutcome, WindowsUiaVerifiedExecutionError>
+where
+    P: WindowsObserveProvider,
+    V: WindowsUiaPostconditionVerifier,
+{
     let state = journal.recovery_state(action_id).await;
     if state == Some(ConsequentialRecoveryState::KnownNotDispatched) {
         return Ok(WindowsUiaVerifiedExecutionOutcome::KnownNotDispatched {

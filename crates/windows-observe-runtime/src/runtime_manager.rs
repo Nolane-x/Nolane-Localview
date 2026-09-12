@@ -391,6 +391,69 @@ impl crate::WindowsUiaDispatchExecutor for WindowsUiaRuntimeDispatchExecutor {
 }
 
 
+impl crate::WindowsUiaVerifiedInputExecutor for WindowsUiaRuntimeDispatchExecutor {
+    type Error = WindowsObserveRuntimeError;
+
+    async fn execute_verified_input(
+        &self,
+        request: localview_windows_uia_provider::WindowsUiaVerifiedInputRequest,
+    ) -> Result<crate::WindowsUiaVerifiedInputProviderReceipt, Self::Error> {
+        if request.provider_incarnation_ref() != &self.provider_incarnation_ref
+            || request.target_incarnation_ref() != &self.target_incarnation_ref
+        {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "dispatch_verified_input_executor_lineage_validation",
+                message: "verified-input request lineage differs from the resolved runtime executor"
+                    .into(),
+            });
+        }
+
+        let _gate = self.operation_gate.lock().await;
+        let attachment = self
+            .active
+            .lock()
+            .await
+            .get(&self.session_id)
+            .map(|observation| observation.attachment.clone())
+            .ok_or(WindowsObserveRuntimeError::NotAttached {
+                session_id: self.session_id,
+            })?;
+        if attachment.provider_incarnation_ref() != &self.provider_incarnation_ref
+            || attachment.target_incarnation_ref() != &self.target_incarnation_ref
+        {
+            return Err(WindowsObserveRuntimeError::Provider {
+                operation: "dispatch_verified_input_session_revalidation",
+                message: "attached Windows UIA session lineage changed after verified-input executor resolution"
+                    .into(),
+            });
+        }
+
+        let provider = self.provider.clone();
+        let dispatch_attachment = attachment.clone();
+        let receipt = run_provider("dispatch_verified_input", move || {
+            provider
+                .worker
+                .dispatch_verified_input(&dispatch_attachment, request)
+        })
+        .await?;
+
+        Ok(crate::WindowsUiaVerifiedInputProviderReceipt {
+            dispatch_attempt_ref: receipt.dispatch_attempt_ref(),
+            action_id: receipt.action_id(),
+            preparation_journal_sequence: receipt.preparation_journal_sequence(),
+            preparation_receipt_ref: receipt.preparation_receipt_ref().to_owned(),
+            snapshot_cut_ref: receipt.snapshot_cut_ref().to_owned(),
+            provider_incarnation_ref: receipt.provider_incarnation_ref().clone(),
+            target_incarnation_ref: receipt.target_incarnation_ref().clone(),
+            element_ref: receipt.element_ref().clone(),
+            batch_digest: receipt.batch_digest().to_owned(),
+            transport_result: localview_protocol::TransportResult::DeliveredToExecutor,
+            boundary: receipt.boundary().clone(),
+        })
+    }
+}
+
+
 impl crate::WindowsUiaSetValueExecutor for WindowsUiaRuntimeDispatchExecutor {
     type Error = WindowsObserveRuntimeError;
 
