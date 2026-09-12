@@ -1,0 +1,82 @@
+name: V4.3 Scope Cleanup Once
+
+on:
+  push:
+    branches:
+      - feat/v43-l7-windows-w07-w08-w09-input-authority
+    paths:
+      - .github/workflows/v43-scope-cleanup-once.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  clean-scope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Restore repository-wide formatting noise outside verified-input scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=c357f172df93b869a87583a0fd9be469326ea020
+          PRE_OFFENDER=2d302aaaf787d65e37d8f0d176a9b6dbfa344aa5
+          OFFENDER=c6b68ec6ecedef562c7d259b63d89681dc782168
+
+          git cat-file -e "$BASE^{commit}"
+          git cat-file -e "$PRE_OFFENDER^{commit}"
+          git cat-file -e "$OFFENDER^{commit}"
+
+          before_count=$(git diff --name-only "$BASE"...HEAD | wc -l | tr -d ' ')
+          echo "changed files before cleanup: $before_count"
+
+          {
+            git diff --name-only "$BASE" "$PRE_OFFENDER"
+            printf '%s\n' \
+              crates/windows-uia-provider/src/verified_input.rs \
+              crates/windows-uia-provider/src/lib.rs \
+              crates/windows-uia-provider/src/subscription.rs \
+              crates/windows-observe-runtime/src/verified_input_execution.rs \
+              crates/windows-observe-runtime/src/lib.rs
+            git diff --name-only "$OFFENDER" HEAD
+          } | sort -u > /tmp/v43-allowlist.txt
+
+          git diff --name-only "$BASE"...HEAD > /tmp/v43-current-diff.txt
+          while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
+            if grep -Fxq "$path" /tmp/v43-allowlist.txt; then
+              continue
+            fi
+            echo "restore out-of-scope path: $path"
+            if git cat-file -e "$BASE:$path" 2>/dev/null; then
+              git checkout "$BASE" -- "$path"
+            else
+              rm -rf -- "$path"
+            fi
+          done < /tmp/v43-current-diff.txt
+
+          after_worktree_count=$(git diff --name-only "$BASE" | wc -l | tr -d ' ')
+          echo "changed files after restoration in worktree: $after_worktree_count"
+          if (( after_worktree_count > 80 )); then
+            echo "scope cleanup failed closed: expected <= 80 changed files, got $after_worktree_count" >&2
+            exit 1
+          fi
+
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git reset -- .github/workflows
+
+          if git diff --cached --quiet; then
+            echo 'No source cleanup required.'
+            exit 0
+          fi
+
+          echo 'staged cleanup summary:'
+          git diff --cached --stat
+          git commit -m 'chore(v43): remove repository-wide format noise'
+          git push origin HEAD:feat/v43-l7-windows-w07-w08-w09-input-authority
