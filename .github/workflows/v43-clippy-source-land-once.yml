@@ -1,0 +1,66 @@
+name: V4.3 Clippy Source Land Once
+
+on:
+  push:
+    branches:
+      - feat/v43-l7-windows-w07-w08-w09-input-authority
+
+permissions:
+  contents: write
+
+jobs:
+  land-test-callsite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-l7-windows-w07-w08-w09-input-authority
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - name: Update exact verified-input call site
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("crates/windows-observe-runtime/tests/execution_coordinator_behavior.rs")
+          text = path.read_text()
+
+          old_import = """    WindowsUiaVerifiedInputExecutionCoordinatorError, WindowsUiaVerifiedInputExecutor,\n    WindowsUiaVerifiedInputProviderReceipt, arm_uia_dispatch_execution, execute_armed_uia_dispatch,\n"""
+          new_import = """    WindowsUiaVerifiedInputExecutionCoordinatorError, WindowsUiaVerifiedInputExecutionRequest,\n    WindowsUiaVerifiedInputExecutor, WindowsUiaVerifiedInputProviderReceipt,\n    arm_uia_dispatch_execution, execute_armed_uia_dispatch,\n"""
+          old_call = """        session(),\n        armed,\n        verified_input_batch(),\n        &executor,\n"""
+          new_call = """        session(),\n        WindowsUiaVerifiedInputExecutionRequest {\n            armed,\n            batch: verified_input_batch(),\n        },\n        &executor,\n"""
+
+          if old_import in text:
+              assert text.count(old_import) == 1, "verified-input import anchor must be unique"
+              text = text.replace(old_import, new_import, 1)
+          else:
+              assert new_import in text, "verified-input import anchor missing"
+
+          if old_call in text:
+              assert text.count(old_call) == 1, "verified-input verified-call anchor must be unique"
+              text = text.replace(old_call, new_call, 1)
+          else:
+              assert new_call in text, "verified-input verified-call anchor missing"
+
+          path.write_text(text)
+      - name: Format exact test file
+        run: cargo fmt -- crates/windows-observe-runtime/tests/execution_coordinator_behavior.rs
+      - name: Compile coordinator behavior
+        run: cargo test -p localview-windows-observe-runtime --test execution_coordinator_behavior --no-run
+      - name: Clippy affected crates
+        run: cargo clippy -p localview-windows-uia-provider -p localview-windows-observe-runtime --all-targets -- -D warnings
+      - name: Commit source-only test update
+        shell: bash
+        run: |
+          if git diff --quiet -- crates/windows-observe-runtime/tests/execution_coordinator_behavior.rs; then
+            echo "call site already landed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/windows-observe-runtime/tests/execution_coordinator_behavior.rs
+          git diff --cached --check
+          test "$(git diff --cached --name-only)" = "crates/windows-observe-runtime/tests/execution_coordinator_behavior.rs"
+          git commit -m "test(v43): bind verified input verification request"
+          git push origin HEAD:feat/v43-l7-windows-w07-w08-w09-input-authority
