@@ -99,6 +99,18 @@ pub enum RealProviderCaseKind {
         input_state_conflict_blocked: bool,
         input_inserted: bool,
     },
+    W11ModalBeforeDispatch {
+        modal_blocker_observed: bool,
+        input_inserted: bool,
+        target_effect_observed: bool,
+    },
+    W12TargetRestartAfterAuthorization {
+        original_target_gone: bool,
+        replacement_target_present: bool,
+        stale_authority_rejected: bool,
+        replacement_effect_observed: bool,
+        fresh_reacquire_required: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -345,6 +357,24 @@ fn apply_case_semantics(
             input_state_conflict_blocked,
             input_inserted,
         } => !*conflicting_modifier_observed || !*input_state_conflict_blocked || *input_inserted,
+        RealProviderCaseKind::W11ModalBeforeDispatch {
+            modal_blocker_observed,
+            input_inserted,
+            target_effect_observed,
+        } => !*modal_blocker_observed || *input_inserted || *target_effect_observed,
+        RealProviderCaseKind::W12TargetRestartAfterAuthorization {
+            original_target_gone,
+            replacement_target_present,
+            stale_authority_rejected,
+            replacement_effect_observed,
+            fresh_reacquire_required,
+        } => {
+            !*original_target_gone
+                || !*replacement_target_present
+                || !*stale_authority_rejected
+                || *replacement_effect_observed
+                || !*fresh_reacquire_required
+        }
     };
     Ok(semantic_counterexample)
 }

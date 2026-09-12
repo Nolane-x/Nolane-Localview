@@ -27,6 +27,7 @@ internal sealed class EdgeWindow : Window
     private readonly Button _verifiedInputTarget;
     private readonly ManualResetEventSlim _providerHangRelease = new(false);
     private Window? _foregroundThief;
+    private Window? _modalBlocker;
     private int _providerHangArmed;
     private int _providerCallEntered;
     private int _verifiedInputEffectCount;
@@ -119,23 +120,17 @@ internal sealed class EdgeWindow : Window
         {
             ReleaseShiftFixture();
         }
+        CloseModalBlocker();
         CloseForegroundThief();
         Interlocked.Exchange(ref _verifiedInputEffectCount, 0);
 
         Show();
-        Activate();
-        var handle = WindowHandle();
-        if (handle != 0)
-        {
-            _ = SetForegroundWindow((nint)handle);
-        }
-        _verifiedInputTarget.BringIntoView();
-        _verifiedInputTarget.Focus();
-        Keyboard.Focus(_verifiedInputTarget);
+        RestoreVerifiedInputTargetForeground();
     }
 
     public void StealForeground()
     {
+        CloseModalBlocker();
         CloseForegroundThief();
         _foregroundThief = new Window
         {
@@ -174,6 +169,71 @@ internal sealed class EdgeWindow : Window
         thief.Close();
     }
 
+    public void OpenModalBlocker()
+    {
+        CloseForegroundThief();
+        CloseModalBlocker();
+        _modalBlocker = new Window
+        {
+            Owner = this,
+            Title = "LocalView W11 owned modal blocker",
+            Width = 360,
+            Height = 160,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar = false,
+            Topmost = true,
+            Content = new TextBlock
+            {
+                Text = "LocalView W11 deterministic owned modal blocker",
+                Margin = new Thickness(16),
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            },
+        };
+        _modalBlocker.Show();
+        _modalBlocker.Activate();
+
+        // Register the owned window as the target's last active popup, then
+        // deliberately restore target foreground/focus. This isolates W11's
+        // modal-blocker fence from W07's foreground-mismatch fence.
+        RestoreVerifiedInputTargetForeground();
+    }
+
+    public void CloseModalBlocker()
+    {
+        if (_modalBlocker is null)
+        {
+            return;
+        }
+        var modal = _modalBlocker;
+        _modalBlocker = null;
+        modal.Close();
+        if (IsLoaded)
+        {
+            RestoreVerifiedInputTargetForeground();
+        }
+    }
+
+    public long ModalBlockerWindowHandle()
+    {
+        return _modalBlocker is null
+            ? 0
+            : new WindowInteropHelper(_modalBlocker).Handle.ToInt64();
+    }
+
+    public long ModalBlockerOwnerWindowHandle()
+    {
+        return _modalBlocker is null
+            ? 0
+            : new WindowInteropHelper(_modalBlocker).Owner.ToInt64();
+    }
+
+    public bool IsModalBlockerOpen()
+    {
+        return _modalBlocker is not null && _modalBlocker.IsVisible;
+    }
+
     public void HoldShiftFixture()
     {
         if (_shiftFixtureOwned)
@@ -207,6 +267,7 @@ internal sealed class EdgeWindow : Window
     public void CleanupVerifiedInputFixture()
     {
         ReleaseShiftFixture();
+        CloseModalBlocker();
         CloseForegroundThief();
     }
 
@@ -281,6 +342,19 @@ internal sealed class EdgeWindow : Window
 
         Interlocked.Exchange(ref _providerCallEntered, 1);
         _providerHangRelease.Wait();
+    }
+
+    private void RestoreVerifiedInputTargetForeground()
+    {
+        Activate();
+        var handle = WindowHandle();
+        if (handle != 0)
+        {
+            _ = SetForegroundWindow((nint)handle);
+        }
+        _verifiedInputTarget.BringIntoView();
+        _verifiedInputTarget.Focus();
+        Keyboard.Focus(_verifiedInputTarget);
     }
 
     [DllImport("user32.dll")]

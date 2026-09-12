@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/v43-l7-windows-w07-w08-w09-input-authority
+      - feat/v43-l7-windows-w11-w12-race-authority
 
 permissions:
   contents: read
@@ -22,6 +23,8 @@ jobs:
         run: cargo test -p localview-windows-uia-provider --test verified_input_worker_contract -- --nocapture
       - name: Run W07 W08 W09 lab contract
         run: cargo test -p localview-validation-lab --test real_provider_w07_w08_w09 -- --nocapture
+      - name: Run W11 W12 lab contract
+        run: cargo test -p localview-validation-lab --test real_provider_w11_w12 -- --nocapture
       - name: Run verified input runtime dispatch classification
         run: cargo test -p localview-windows-observe-runtime --test verified_input_dispatch_classification -- --nocapture
       - name: Run verified input runtime authority contract
