@@ -1,0 +1,37 @@
+name: V4.3 W12 Restart RED Proof Once
+
+on:
+  push:
+    branches: [feat/v43-l7-windows-w11-w12-race-authority]
+    paths:
+      - .github/workflows/v43-w12-red-proof-once.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  w12-real-provider-red:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build W12 WPF edge seed
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+      - name: Prove W12 stale authority is rejected
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w12::w12_restart_rejects_pre_restart_authority_before_any_replacement_effect"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w12 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W12 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w12 $testName -- --ignored --exact --nocapture --test-threads=1
