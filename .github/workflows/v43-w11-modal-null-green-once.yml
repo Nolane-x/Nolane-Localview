@@ -7,7 +7,7 @@ on:
       - .github/workflows/v43-w11-modal-null-green-once.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   prove-modal-null-semantics:
@@ -18,6 +18,7 @@ jobs:
       LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
       LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
       LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -89,10 +90,32 @@ jobs:
         run: |
           $testName = "windows_real_provider_w11::w11_modal_before_dispatch_is_blocked_before_any_real_input_effect"
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w11 $testName -- --ignored --exact --nocapture --test-threads=1
-      - name: Upload proven patched provider source
+      - name: Create detached commit object from proven source
+        shell: pwsh
+        run: |
+          $sourcePath = "crates/windows-uia-provider/src/lib.rs"
+          $content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($sourcePath))
+          $blobPayload = @{ content = $content; encoding = "base64" } | ConvertTo-Json -Compress
+          $blob = $blobPayload | gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/blobs" --input - | ConvertFrom-Json
+          $base = gh api "repos/$env:GITHUB_REPOSITORY/git/commits/$env:GITHUB_SHA" | ConvertFrom-Json
+          $treePayload = @{
+            base_tree = $base.tree.sha
+            tree = @(@{ path = $sourcePath; mode = "100644"; type = "blob"; sha = $blob.sha })
+          } | ConvertTo-Json -Depth 6 -Compress
+          $tree = $treePayload | gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/trees" --input - | ConvertFrom-Json
+          $commitPayload = @{
+            message = "fix(v43): treat absent enabled popup as no modal blocker"
+            tree = $tree.sha
+            parents = @($env:GITHUB_SHA)
+          } | ConvertTo-Json -Depth 4 -Compress
+          $commit = $commitPayload | gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/commits" --input - | ConvertFrom-Json
+          if (-not $commit.sha) { throw "detached proven commit SHA was not returned" }
+          $commit.sha | Set-Content -Path "$env:RUNNER_TEMP\proven-commit-sha.txt" -Encoding ascii
+          Write-Host "Detached proven commit: $($commit.sha)"
+      - name: Upload detached commit proof
         uses: actions/upload-artifact@v4
         with:
-          name: v43-w11-modal-null-proven-source-${{ github.sha }}
-          path: crates/windows-uia-provider/src/lib.rs
+          name: v43-w11-modal-null-detached-commit-${{ github.sha }}
+          path: ${{ runner.temp }}\proven-commit-sha.txt
           if-no-files-found: error
           retention-days: 1
