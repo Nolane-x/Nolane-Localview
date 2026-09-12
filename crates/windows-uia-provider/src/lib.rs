@@ -1629,6 +1629,19 @@ mod platform {
             &self,
             attachment: &WindowsUiaAttachment,
         ) -> Result<(), WindowsUiaWorkerError> {
+            let hwnd = hwnd_from_u64(attachment.selection.native_window_handle);
+            let mut current_process_id = 0_u32;
+            let current_thread_id = unsafe {
+                // SAFETY: this is a read-only lifetime check for the exact selected HWND.
+                GetWindowThreadProcessId(hwnd, Some(&mut current_process_id))
+            };
+            if current_thread_id == 0
+                || current_process_id == 0
+                || current_process_id != attachment.selection.expected_process_id
+            {
+                return Err(WindowsUiaWorkerError::TargetReincarnated);
+            }
+
             let current_fingerprint = self.fingerprint(&attachment.selection)?;
             let current_target =
                 derive_windows_target_incarnation(&attachment.selection, &current_fingerprint)?;
