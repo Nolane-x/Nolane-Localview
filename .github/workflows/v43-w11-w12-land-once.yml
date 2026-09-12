@@ -43,7 +43,13 @@ jobs:
             "tools/validation-lab/windows-l7-real-provider-harness/tests/v43_real_provider_campaign.rs",
             "tools/validation-lab/windows-l7-real-provider-harness/tests/support/v43_verified_input_cases_w11_w12.rs"
           )
-          $changed = @(git diff --name-only)
+          $changed = @(
+            git diff --name-only |
+              ForEach-Object { $_.Trim() } |
+              Where-Object { $_.Length -gt 0 }
+          )
+          Write-Host "changed files after transformer + rustfmt:"
+          $changed | ForEach-Object { Write-Host " - $_" }
           $unexpected = @($changed | Where-Object { $_ -notin $allowed })
           if ($unexpected.Count -ne 0) {
             throw "unexpected transformed files: $($unexpected -join ', ')"
