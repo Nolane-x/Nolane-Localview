@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   windows-real-provider-seeds:
-    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W05/W06/W07/W08/W09
+    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W05/W06/W07/W08/W09/W11/W12
     runs-on: windows-latest
     timeout-minutes: 15
     env:
@@ -35,7 +35,7 @@ jobs:
           dotnet-version: 8.0.x
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
-      - name: Build WPF edge seed for W03/W05/W07/W08/W09
+      - name: Build WPF edge seed for W03/W05/W07/W08/W09/W11/W12
         run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
       - name: Bind hosted Windows environment authority
         shell: pwsh
@@ -144,15 +144,33 @@ jobs:
             throw "required W09 real-provider test is not registered: $testName"
           }
           cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w09 $testName -- --ignored --exact --nocapture --test-threads=1
-      - name: Prospective nine-seed campaign binds exact W01 through W09 evidence
+      - name: W11 owned modal is blocked before any real input effect
         shell: pwsh
         run: |
-          $testName = "windows_l7_real_provider_campaign::prospective_l7_campaign_binds_w01_through_w09_to_exact_candidate"
-          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign -- --list
+          $testName = "windows_real_provider_w11::w11_modal_before_dispatch_is_blocked_before_any_real_input_effect"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w11 -- --list
           if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
-            throw "required bound nine-seed L7 campaign test is not registered: $testName"
+            throw "required W11 real-provider test is not registered: $testName"
           }
-          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign $testName -- --ignored --exact --nocapture --test-threads=1
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w11 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: W12 restart rejects stale authority before replacement effect
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w12::w12_restart_rejects_pre_restart_authority_before_any_replacement_effect"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w12 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W12 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w12 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Prospective eleven-seed campaign binds exact W01-W09 plus W11-W12 evidence
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign_w11_w12::prospective_l7_campaign_binds_w01_w09_w11_w12_to_exact_candidate"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign_w11_w12 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required bound eleven-seed L7 campaign test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign_w11_w12 $testName -- --ignored --exact --nocapture --test-threads=1
       - name: Publish bounded L7 Lab artifacts
         uses: actions/upload-artifact@v4
         with:
