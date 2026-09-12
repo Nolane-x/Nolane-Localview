@@ -38,7 +38,7 @@ jobs:
           }
           $text = $text.Replace($oldImport, $newImport)
           $oldCall = "GetLastActivePopup(target_hwnd)"
-          $newCall = "GetWindow(target_hwnd, GW_ENABLEDPOPUP)"
+          $newCall = "GetWindow(target_hwnd, GW_ENABLEDPOPUP)`r`n                        .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?"
           if (-not $text.Contains($oldCall)) {
             throw "expected worker GetLastActivePopup call not found"
           }
