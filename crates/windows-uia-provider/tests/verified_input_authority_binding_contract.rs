@@ -12,8 +12,10 @@ fn raw_verified_input_request_fields_are_not_publicly_constructible() {
         .find("pub struct WindowsUiaVerifiedInputRequest {")
         .expect("verified-input request must exist");
     let tail = &source[start..];
+    // Match the opening newline before the closing brace only. This remains
+    // stable for both LF and CRLF checkouts without weakening the visibility guard.
     let end = tail
-        .find("\n}\n")
+        .find("\n}")
         .expect("verified-input request body must close");
     let request_body = &tail[..end];
 
