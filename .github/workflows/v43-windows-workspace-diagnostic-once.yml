@@ -1,0 +1,48 @@
+name: V4.3 Windows Workspace Diagnostic Once
+
+on:
+  push:
+    branches:
+      - feat/v43-l7-windows-w07-w08-w09-input-authority
+    paths:
+      - .github/workflows/v43-windows-workspace-diagnostic-once.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=$(cargo metadata --no-deps --format-version 1 | jq -c '[.packages[] | select(.name != "localview-desktop") | .name]')
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+          echo "$packages" | jq .
+
+  windows-package-tests:
+    needs: packages
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        package: ${{ fromJson(needs.packages.outputs.matrix) }}
+    name: Windows package / ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: v43-windows-diagnostic
+      - name: Test ${{ matrix.package }}
+        shell: pwsh
+        run: cargo test -p "${{ matrix.package }}" -- --nocapture
