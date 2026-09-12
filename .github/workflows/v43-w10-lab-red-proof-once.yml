@@ -1,4 +1,4 @@
-name: V4.3 W10 Geometry Worker RED Proof Once
+name: V4.3 W10 Geometry Worker GREEN Proof Once
 
 on:
   push:
@@ -8,14 +8,41 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  geometry-worker-red:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  geometry-worker-green:
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Prove exact-element geometry worker surface is absent
-        run: cargo test -p localview-windows-uia-provider --test geometry_worker_contract -- --nocapture
+        with:
+          components: rustfmt, clippy
+      - name: Apply bounded geometry worker implementation
+        run: python .github/scripts/v43_w10_geometry_worker_green.py
+      - name: Verify formatting and Windows provider compile
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo check -p localview-windows-uia-provider
+      - name: Verify geometry worker and pure contracts
+        shell: pwsh
+        run: |
+          cargo test -p localview-windows-uia-provider --test geometry_worker_contract -- --nocapture
+          cargo test -p localview-windows-uia-provider --test geometry_contract -- --nocapture
+      - name: Verify full Windows UIA provider regression suite
+        run: cargo test -p localview-windows-uia-provider -- --nocapture --test-threads=1
+      - name: Commit only after Windows GREEN
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/windows-uia-provider/src/lib.rs crates/windows-uia-provider/Cargo.toml
+          git diff --cached --check
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "feat(v43): bind UIA physical geometry to exact retained element"
+            git push origin HEAD:feat/v43-l7-windows-w10-mixed-dpi-authority
+          } else {
+            throw "geometry worker transformer produced no source change"
+          }
