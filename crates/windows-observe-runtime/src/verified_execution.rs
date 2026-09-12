@@ -128,6 +128,21 @@ pub enum WindowsUiaVerifiedExecutionError {
     },
 }
 
+/// One-shot verified-input execution authority plus the exact bounded keyboard
+/// batch authorized for that dispatch attempt.
+#[derive(Debug)]
+pub struct WindowsUiaVerifiedInputExecutionRequest {
+    pub armed: WindowsUiaDispatchExecutionPermit,
+    pub batch: WindowsVerifiedKeyboardBatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsUiaDispatchVerificationContext {
+    action_id: Uuid,
+    dispatch_result: DispatchResult,
+    dispatch_journal_sequence: u64,
+}
+
 /// Execute one armed consequential semantic UIA action through world verification.
 pub async fn execute_armed_uia_dispatch_verified<P, E, V>(
     bridge: &LiveBridge,
@@ -149,9 +164,11 @@ where
         journal,
         runtime,
         session_id,
-        dispatch.provider_receipt.action_id,
-        dispatch.provider_receipt.dispatch_result,
-        dispatch.journal_entry.journal_sequence,
+        WindowsUiaDispatchVerificationContext {
+            action_id: dispatch.provider_receipt.action_id,
+            dispatch_result: dispatch.provider_receipt.dispatch_result,
+            dispatch_journal_sequence: dispatch.journal_entry.journal_sequence,
+        },
         verifier,
     )
     .await
@@ -166,8 +183,7 @@ pub async fn execute_armed_uia_verified_input_verified<P, E, V>(
     journal: &ConsequentialJournal,
     runtime: &WindowsObserveRuntimeManager<P>,
     session_id: SessionId,
-    armed: WindowsUiaDispatchExecutionPermit,
-    batch: WindowsVerifiedKeyboardBatch,
+    request: WindowsUiaVerifiedInputExecutionRequest,
     executor: &E,
     verifier: &V,
 ) -> Result<WindowsUiaVerifiedExecutionOutcome, WindowsUiaVerifiedExecutionError>
@@ -176,17 +192,27 @@ where
     E: WindowsUiaVerifiedInputExecutor,
     V: WindowsUiaPostconditionVerifier,
 {
-    let dispatch =
-        execute_armed_uia_verified_input(bridge, journal, session_id, armed, batch, executor)
-            .await?;
+    let dispatch = execute_armed_uia_verified_input(
+        bridge,
+        journal,
+        session_id,
+        request.armed,
+        request.batch,
+        executor,
+    )
+    .await?;
     complete_uia_dispatch_verification(
         bridge,
         journal,
         runtime,
         session_id,
-        dispatch.provider_receipt.action_id,
-        crate::dispatch_result_for_verified_input(&dispatch.provider_receipt.boundary),
-        dispatch.journal_entry.journal_sequence,
+        WindowsUiaDispatchVerificationContext {
+            action_id: dispatch.provider_receipt.action_id,
+            dispatch_result: crate::dispatch_result_for_verified_input(
+                &dispatch.provider_receipt.boundary,
+            ),
+            dispatch_journal_sequence: dispatch.journal_entry.journal_sequence,
+        },
         verifier,
     )
     .await
@@ -197,21 +223,20 @@ async fn complete_uia_dispatch_verification<P, V>(
     journal: &ConsequentialJournal,
     runtime: &WindowsObserveRuntimeManager<P>,
     session_id: SessionId,
-    action_id: Uuid,
-    dispatch_result: DispatchResult,
-    dispatch_journal_sequence: u64,
+    dispatch: WindowsUiaDispatchVerificationContext,
     verifier: &V,
 ) -> Result<WindowsUiaVerifiedExecutionOutcome, WindowsUiaVerifiedExecutionError>
 where
     P: WindowsObserveProvider,
     V: WindowsUiaPostconditionVerifier,
 {
+    let action_id = dispatch.action_id;
     let state = journal.recovery_state(action_id).await;
     if state == Some(ConsequentialRecoveryState::KnownNotDispatched) {
         return Ok(WindowsUiaVerifiedExecutionOutcome::KnownNotDispatched {
             action_id,
-            dispatch_result,
-            dispatch_journal_sequence,
+            dispatch_result: dispatch.dispatch_result,
+            dispatch_journal_sequence: dispatch.dispatch_journal_sequence,
         });
     }
     if state != Some(ConsequentialRecoveryState::PossiblyDispatched) {
@@ -290,7 +315,7 @@ where
         return Ok(WindowsUiaVerifiedExecutionOutcome::Committed {
             action_id,
             world_outcome: reconciliation.world_outcome,
-            dispatch_journal_sequence,
+            dispatch_journal_sequence: dispatch.dispatch_journal_sequence,
             reconciliation_journal_sequence,
             commit_journal_sequence: commit.journal_sequence,
         });
@@ -300,7 +325,7 @@ where
         WindowsUiaVerifiedExecutionOutcome::PostconditionNotVerified {
             action_id,
             world_outcome: reconciliation.world_outcome,
-            dispatch_journal_sequence,
+            dispatch_journal_sequence: dispatch.dispatch_journal_sequence,
             reconciliation_journal_sequence,
         },
     )
