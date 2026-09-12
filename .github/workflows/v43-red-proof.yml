@@ -1,0 +1,18 @@
+name: V4.3 RED Proof
+
+on:
+  push:
+    branches:
+      - ci/v43-w07-w09-red-proof
+
+permissions:
+  contents: read
+
+jobs:
+  verified-input-red:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run verified input contract
+        run: cargo test -p localview-windows-uia-provider --test verified_input_contract -- --nocapture
