@@ -45,9 +45,9 @@ pub(crate) fn classify_custom_semantic_coverage(
     }
 
     let capabilities = WindowsUiaActionCapabilities::from_node(node);
-    let has_supported_pattern = WindowsUiaPattern::ALL.into_iter().any(|pattern| {
-        capabilities.support_for(pattern) == WindowsUiaPatternSupport::Supported
-    });
+    let has_supported_pattern = WindowsUiaPattern::ALL
+        .into_iter()
+        .any(|pattern| capabilities.support_for(pattern) == WindowsUiaPatternSupport::Supported);
     if has_observed_child || has_supported_pattern {
         return Some(WindowsUiaCustomSemanticCoverage::CustomSemantic);
     }

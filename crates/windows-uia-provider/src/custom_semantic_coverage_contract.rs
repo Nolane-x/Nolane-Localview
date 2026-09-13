@@ -117,7 +117,10 @@ fn identity_only_custom_leaf_is_partial_after_complete_traversal() {
 fn metadata_free_custom_leaf_is_opaque_after_complete_traversal() {
     let observed = node("uia_control_type:50025", None, None, None, None);
     let coverage = classify_custom_semantic_coverage(&observed, false, true);
-    assert_eq!(coverage, Some(WindowsUiaCustomSemanticCoverage::CustomOpaque));
+    assert_eq!(
+        coverage,
+        Some(WindowsUiaCustomSemanticCoverage::CustomOpaque)
+    );
     assert_eq!(
         coverage.and_then(WindowsUiaCustomSemanticCoverage::incompleteness_debt),
         Some("uia_accessibility_opaque_custom_control")

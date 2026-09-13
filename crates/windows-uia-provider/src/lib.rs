@@ -2011,6 +2011,31 @@ mod platform {
         }
 
         let usage = guard.finish();
+        let observed_child_by_parent = (0..nodes.len())
+            .map(|index| {
+                nodes
+                    .iter()
+                    .any(|candidate| candidate.parent_index == Some(index))
+            })
+            .collect::<Vec<_>>();
+        let traversal_complete = !usage.incomplete;
+        for (index, node) in nodes.iter_mut().enumerate() {
+            if let Some(coverage) =
+                crate::custom_semantic_coverage::classify_custom_semantic_coverage(
+                    node,
+                    observed_child_by_parent[index],
+                    traversal_complete,
+                )
+            {
+                node.attributes.insert(
+                    crate::WINDOWS_UIA_CUSTOM_SEMANTIC_COVERAGE_ATTRIBUTE.into(),
+                    coverage.as_wire_value().into(),
+                );
+                if let Some(custom_debt) = coverage.incompleteness_debt() {
+                    debt.push(custom_debt.into());
+                }
+            }
+        }
         if usage.incomplete {
             for limit in &usage.exhausted {
                 debt.push(format!("snapshot_budget_exhausted:{limit:?}"));
