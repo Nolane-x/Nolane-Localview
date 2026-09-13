@@ -14,6 +14,9 @@ mod verified_input;
 #[cfg(windows)]
 mod verified_input_windows;
 mod virtualized_item;
+mod w13_semantic_text_protection;
+#[cfg(test)]
+mod w13_semantic_text_protection_contract;
 #[path = "lib.rs"]
 mod worker;
 #[cfg(windows)]
