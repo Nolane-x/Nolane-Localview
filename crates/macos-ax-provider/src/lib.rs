@@ -14,6 +14,9 @@ use thiserror::Error;
 
 static AX_PERMISSION_CHECK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+const AX_ERROR_SUCCESS: i32 = 0;
+const AX_ERROR_API_DISABLED: i32 = -25211;
+
 /// Current knowledge about macOS Accessibility trust.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AxPermissionState {
@@ -273,21 +276,70 @@ fn dispatch_decision_from_revision(
     }
 }
 
+fn classify_permission_observation(
+    process_trusted: bool,
+    messaging_error: i32,
+) -> AxPermissionState {
+    if !process_trusted || messaging_error == AX_ERROR_API_DISABLED {
+        AxPermissionState::Untrusted
+    } else if messaging_error == AX_ERROR_SUCCESS {
+        AxPermissionState::Trusted
+    } else {
+        // A trust boolean without a usable AX messaging path is not strong
+        // enough to mint consequential semantic-control authority.
+        AxPermissionState::Unknown
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn platform_permission_state() -> AxPermissionState {
+    use std::{ffi::c_void, ptr};
+
+    type AxUiElementRef = *const c_void;
+    type CfArrayRef = *const c_void;
+    type CfTypeRef = *const c_void;
+
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
         // AXUIElement.h declares `Boolean AXIsProcessTrusted(void)`. Core
         // Foundation's Boolean is an unsigned byte, so bind it as `u8` rather
         // than relying on Rust `bool` FFI layout.
         fn AXIsProcessTrusted() -> u8;
+        fn AXUIElementCreateSystemWide() -> AxUiElementRef;
+        fn AXUIElementCopyAttributeNames(
+            element: AxUiElementRef,
+            names: *mut CfArrayRef,
+        ) -> i32;
     }
 
-    if unsafe { AXIsProcessTrusted() } != 0 {
-        AxPermissionState::Trusted
-    } else {
-        AxPermissionState::Untrusted
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(value: CfTypeRef);
     }
+
+    let process_trusted = unsafe { AXIsProcessTrusted() } != 0;
+    if !process_trusted {
+        return AxPermissionState::Untrusted;
+    }
+
+    // AXIsProcessTrusted is necessary but not sufficient for a dispatch fence:
+    // after a mid-session TCC change the boolean can lag the usability of the
+    // live AX messaging path. Probe a system-wide AX object without performing
+    // any user action. kAXErrorAPIDisabled is direct evidence that semantic AX
+    // control is no longer available to this process.
+    let system_wide = unsafe { AXUIElementCreateSystemWide() };
+    if system_wide.is_null() {
+        return AxPermissionState::Unknown;
+    }
+
+    let mut names: CfArrayRef = ptr::null();
+    let messaging_error = unsafe { AXUIElementCopyAttributeNames(system_wide, &mut names) };
+    if !names.is_null() {
+        unsafe { CFRelease(names.cast()) };
+    }
+    unsafe { CFRelease(system_wide.cast()) };
+
+    classify_permission_observation(process_trusted, messaging_error)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -396,5 +448,37 @@ mod tests {
 
         assert_eq!(dispatch.permit(), None);
         assert_eq!(dispatch.denial(), Some(AxPermissionError::PermissionUnknown));
+    }
+
+    #[test]
+    fn api_disabled_overrides_a_stale_trusted_boolean() {
+        assert_eq!(
+            classify_permission_observation(true, AX_ERROR_API_DISABLED),
+            AxPermissionState::Untrusted
+        );
+    }
+
+    #[test]
+    fn usable_ax_messaging_confirms_trusted_permission() {
+        assert_eq!(
+            classify_permission_observation(true, AX_ERROR_SUCCESS),
+            AxPermissionState::Trusted
+        );
+    }
+
+    #[test]
+    fn untrusted_boolean_never_becomes_trusted_from_messaging_success() {
+        assert_eq!(
+            classify_permission_observation(false, AX_ERROR_SUCCESS),
+            AxPermissionState::Untrusted
+        );
+    }
+
+    #[test]
+    fn unexpected_messaging_failure_is_inconclusive_not_authorized() {
+        assert_eq!(
+            classify_permission_observation(true, -25204),
+            AxPermissionState::Unknown
+        );
     }
 }
