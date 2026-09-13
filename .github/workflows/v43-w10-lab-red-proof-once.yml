@@ -5,6 +5,7 @@ on:
     branches: [feat/v43-l7-windows-w10-mixed-dpi-authority]
     paths:
       - .github/workflows/v43-w10-lab-red-proof-once.yml
+      - .github/scripts/v43_w10_geometry_worker_green.py
   workflow_dispatch:
 
 permissions:
