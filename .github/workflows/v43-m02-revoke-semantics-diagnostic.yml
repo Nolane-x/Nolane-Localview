@@ -74,10 +74,14 @@ jobs:
       - name: Seed isolated user TCC grant with exact probe designated requirement
         run: |
           set -euo pipefail
-          requirement="$(codesign -d -r- "$PROBE_APP" 2>&1 | sed -n 's/^designated => //p' | head -1)"
+          codesign -d -r- "$PROBE_APP" > "$RUNNER_TEMP/probe-requirement.raw" 2>&1 || true
+          cat "$RUNNER_TEMP/probe-requirement.raw"
+          requirement="$(sed -n 's/^[[:space:]]*designated => //p' "$RUNNER_TEMP/probe-requirement.raw" | head -1)"
           test -n "$requirement"
+          printf 'M02_ISOLATED_REQUIREMENT=%s\n' "$requirement"
           printf '%s\n' "$requirement" > "$RUNNER_TEMP/probe-designated-requirement.txt"
           /usr/bin/csreq -r "$requirement" -b "$RUNNER_TEMP/probe.csreq"
+          test -s "$RUNNER_TEMP/probe.csreq"
           python3 - "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$RUNNER_TEMP/probe.csreq" "$PROBE_BUNDLE_ID" <<'PY'
           import sqlite3, sys, time
           db, req_path, bundle_id = sys.argv[1:]
