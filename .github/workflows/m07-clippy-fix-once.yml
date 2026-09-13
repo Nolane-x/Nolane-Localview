@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   patch-once:
-    if: github.event.head_commit.message != 'fix(v43): gate native M07 callback plumbing by platform'
+    if: ${{ !contains(github.event.head_commit.message, 'gate native M07 callback plumbing by platform') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
