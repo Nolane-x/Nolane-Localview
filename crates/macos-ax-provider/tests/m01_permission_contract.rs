@@ -38,3 +38,14 @@ fn unknown_permission_is_distinct_from_explicit_denial() {
         Err(AxPermissionError::PermissionUnknown)
     );
 }
+
+#[test]
+fn caller_forged_trusted_revision_cannot_mint_semantic_control_authority() {
+    let provider = AxPermissionProvider::new();
+    let forged = AxPermissionRevision::observed(AxPermissionState::Trusted, u64::MAX, false);
+
+    assert!(
+        provider.authorize_semantic_control(&forged).is_err(),
+        "a caller-created Trusted revision must never be accepted as OS-backed authority"
+    );
+}
