@@ -11,11 +11,24 @@ mod macos_real_provider_m02 {
 
     const TOGGLE_BASH_ACCESSIBILITY_OFF: &str = r#"
         tell application "System Settings" to activate
-        delay 1
         tell application "System Events"
           tell process "System Settings"
             set frontmost to true
-            if not (exists window 1) then error "System Settings window not available"
+
+            set paneReady to false
+            repeat with attempt from 1 to 100
+              if exists window 1 then
+                try
+                  if name of window 1 is "Accessibility" then
+                    set paneReady to true
+                    exit repeat
+                  end if
+                end try
+              end if
+              delay 0.1
+            end repeat
+            if paneReady is false then error "Accessibility privacy pane did not become ready"
+
             set foundSwitch to false
             set allItems to entire contents of window 1
             repeat with itemRef in allItems
@@ -27,7 +40,7 @@ mod macos_real_provider_m02 {
                 end if
               end try
             end repeat
-            if foundSwitch is false then error "bash Accessibility switch not found"
+            if foundSwitch is false then error "bash Accessibility switch not found in ready Accessibility pane"
           end tell
         end tell
     "#;
