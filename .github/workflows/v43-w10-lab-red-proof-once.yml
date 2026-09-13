@@ -35,13 +35,28 @@ jobs:
         shell: pwsh
         run: |
           $log = Join-Path $env:RUNNER_TEMP "w10-full-provider.log"
+          $diag = ".github/w10-failure-diagnostic.txt"
           & cargo test -p localview-windows-uia-provider -- --nocapture --test-threads=1 *> $log
           $code = $LASTEXITCODE
           if ($code -ne 0) {
+            "W10 full provider regression diagnostic`nexit_code=$code`n" | Set-Content $diag
+            Select-String -Path $log -Pattern 'FAILED|failures:|panicked at|assertion|left:|right:|error: test failed' -Context 8,16 | ForEach-Object { $_.ToString() } | Add-Content $diag
             Write-Host "::group::W10 concise failure diagnostics"
-            Select-String -Path $log -Pattern 'FAILED|failures:|panicked at|assertion|left:|right:|error: test failed' -Context 6,12 | ForEach-Object { $_.ToString() }
+            Get-Content $diag
             Write-Host "::endgroup::"
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -- $diag
+            git diff --cached --check
+            if (-not (git diff --cached --quiet)) {
+              git commit -m "test(v43): capture W10 provider regression"
+              git push origin HEAD:feat/v43-l7-windows-w10-mixed-dpi-authority
+            }
             exit $code
+          }
+          if (Test-Path $diag) {
+            Remove-Item $diag
           }
           Get-Content $log | Select-Object -Last 40
       - name: Commit only after Windows GREEN
