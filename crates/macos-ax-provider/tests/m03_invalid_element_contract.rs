@@ -1,14 +1,18 @@
 use localview_macos_ax_provider::{
-    AxElementBindingProvider, AxElementIdentity, AxElementOperationDecision,
-    AxElementReacquireDirective, AxElementRebindError,
+    AxApplicationIncarnation, AxElementBindingProvider, AxElementIdentity,
+    AxElementOperationDecision, AxElementReacquireDirective, AxElementRebindError,
 };
 
 const AX_ERROR_SUCCESS: i32 = 0;
 const AX_ERROR_INVALID_UI_ELEMENT: i32 = -25202;
 
+fn application() -> AxApplicationIncarnation {
+    AxApplicationIncarnation::new("com.nolane.localview.m03-seed", 4242, 1)
+}
+
 fn identity() -> AxElementIdentity {
     AxElementIdentity::new(
-        4242,
+        application(),
         "window:localview-m03-seed",
         "ax-identifier:localview-m03-target",
     )
@@ -64,7 +68,7 @@ fn reacquire_cannot_silently_switch_to_a_different_semantic_identity() {
     };
 
     let different = AxElementIdentity::new(
-        4242,
+        application(),
         "window:localview-m03-seed",
         "ax-identifier:different-target",
     );

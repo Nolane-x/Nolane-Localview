@@ -1,0 +1,110 @@
+name: V4.3 M06 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m06-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m06-real-provider:
+    name: M06 observer application restart invalidates old observer authority
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_MACOS_AX_SMOKE: "1"
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M06 candidate and artifact directory
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M06 checkout SHA mismatch: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          artifact_dir="$RUNNER_TEMP/localview-v43-m06"
+          mkdir -p "$artifact_dir"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Build exact-head AppKit M06 seed
+        run: |
+          set -euo pipefail
+          seed_src="tools/validation-lab/macos-l7-real-provider-harness/fixtures/m06-restart-seed.swift"
+          seed_bin="$RUNNER_TEMP/localview-m06-restart-seed"
+          set +e
+          xcrun swiftc "$seed_src" -framework AppKit -o "$seed_bin" \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M06-SEED-COMPILE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          test -x "$seed_bin"
+          echo "LOCALVIEW_M06_SEED_EXECUTABLE=$seed_bin" >> "$GITHUB_ENV"
+      - name: Require exact M06 real-provider registration
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m06::m06_relaunch_retires_old_observer_application_incarnation"
+          listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m06 -- --list)"
+          printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Run M06 real AppKit application-restart oracle
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m06::m06_relaunch_retires_old_observer_application_incarnation"
+          set +e
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m06 "$test_name" -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M06-ORACLE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
+      - name: Verify M06 evidence is exact-head and incarnation-safe
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M06 head moved during proof: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M06-REAL-PROVIDER-RECORD.json"
+          test -f "$record_path"
+          python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
+          import json, sys
+          path, expected_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+          assert record["schema"] == "localview-v43-m06-real-provider-record-v1"
+          assert record["case_id"] == "M06"
+          assert record["candidate_sha"] == expected_sha
+          assert record["application_identity"] == "com.nolane.localview.m06-seed"
+          assert record["first_observer_create_ax_error"] == 0
+          assert record["first_registration_ax_error"] == 0
+          assert record["second_observer_create_ax_error"] == 0
+          assert record["second_registration_ax_error"] == 0
+          assert record["application_incarnation_changed"] is True
+          assert record["first_launch_marker"] != record["second_launch_marker"]
+          assert record["old_observer_binding_consumed"] is True
+          assert record["recreate_directive"] == "create_observer_for_current_application"
+          assert record["fresh_observer_revision_is_newer"] is True
+          assert record["second_observer_creation_revision"] > record["first_observer_creation_revision"]
+          assert record["run_loop_delivery_claimed"] is False
+          assert record["ground_truth_source"] == "real_appkit_kill_relaunch_plus_seed_launch_marker_plus_ax_observer_registration"
+          PY
+      - name: Publish M06 real-provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-m06-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
