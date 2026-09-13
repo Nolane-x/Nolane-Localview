@@ -1,0 +1,30 @@
+name: V4.3 M02 Signal Diagnostic
+
+on:
+  pull_request:
+
+concurrency:
+  group: localview-v43-m02-signal-diagnostic-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m02-signal-diagnostic:
+    name: M02 compare trust boolean with live AX messaging
+    runs-on: macos-latest
+    timeout-minutes: 10
+    env:
+      LOCALVIEW_MACOS_AX_SMOKE: "1"
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run exact M02 signal diagnostic
+        run: |
+          set -euo pipefail
+          test_name="macos_m02_signal_diagnostic::compare_trust_boolean_with_live_ax_messaging_after_tcc_reset"
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_m02_signal_diagnostic "$test_name" -- --ignored --exact --nocapture --test-threads=1
