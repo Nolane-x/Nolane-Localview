@@ -37,6 +37,13 @@ jobs:
           artifact_dir="$RUNNER_TEMP/localview-v43-m02"
           mkdir -p "$artifact_dir"
           echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Build exact-head fresh-process permission probe
+        run: |
+          set -euo pipefail
+          cargo build -p localview-macos-ax-provider --bin localview-ax-permission-probe
+          probe="$(pwd -P)/target/debug/localview-ax-permission-probe"
+          test -x "$probe"
+          echo "LOCALVIEW_AX_PERMISSION_PROBE_EXECUTABLE=$probe" >> "$GITHUB_ENV"
       - name: Require exact M02 real-provider registration
         run: |
           set -euo pipefail
@@ -64,27 +71,29 @@ jobs:
           record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M02-REAL-PROVIDER-RECORD.json"
           test -f "$record_path"
           python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
-          import json, sys
+          import json, os, sys
           path, expected_sha = sys.argv[1:]
           with open(path, encoding="utf-8") as handle:
               record = json.load(handle)
-          assert record["schema"] == "localview-v43-m02-real-provider-record-v2"
+          assert record["schema"] == "localview-v43-m02-real-provider-record-v3"
           assert record["case_id"] == "M02"
           assert record["candidate_sha"] == expected_sha
           assert record["initial_permission_state"] == "trusted"
           assert int(record["initial_permission_check_sequence"]) > 0
           assert record["initial_semantic_control_permit_minted"] is True
+          assert os.path.realpath(record["fresh_probe_executable"]) == os.path.realpath(os.environ["LOCALVIEW_AX_PERMISSION_PROBE_EXECUTABLE"])
+          assert record["pre_revoke_fresh_probe_state"] == "trusted"
+          assert int(record["pre_revoke_fresh_probe_check_sequence"]) > int(record["initial_permission_check_sequence"])
+          assert record["pre_revoke_refreshed_permit_minted"] is True
           assert record["revocation_mechanism"] == "macos_tccutil_reset_accessibility"
           assert record["tccutil_reset_succeeded"] is True
-          assert record["effective_revocation_observed"] is True
-          assert int(record["effective_revocation_probe_sequence"]) > int(record["initial_permission_check_sequence"])
           assert record["dispatch_permission_state"] == "untrusted"
-          assert int(record["dispatch_permission_check_sequence"]) > int(record["effective_revocation_probe_sequence"])
-          assert int(record["admitted_permission_check_sequence"]) == int(record["initial_permission_check_sequence"])
+          assert int(record["dispatch_permission_check_sequence"]) > int(record["pre_revoke_fresh_probe_check_sequence"])
+          assert int(record["admitted_permission_check_sequence"]) == int(record["pre_revoke_fresh_probe_check_sequence"])
           assert record["dispatch_semantic_control_permit_minted"] is False
           assert record["typed_permission_revocation"] is True
           assert record["denial"] == "permission_revoked"
-          assert record["authority_source"] == "provider_owned_dispatch_recheck_after_real_tcc_revocation"
+          assert record["authority_source"] == "fresh_process_provider_owned_dispatch_recheck_after_real_tcc_revocation"
           PY
       - name: Publish M02 real-provider evidence
         if: always()
