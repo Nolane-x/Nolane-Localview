@@ -11,6 +11,7 @@ path = "src/provider.rs"
 [features]
 default = []
 validation-pid-identity = []
+validation-observer-callback = []
 
 [dependencies]
 thiserror.workspace = true
