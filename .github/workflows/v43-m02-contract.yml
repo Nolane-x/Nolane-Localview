@@ -22,5 +22,5 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run M02 permission revocation contract
-        run: cargo test -p localview-macos-ax-provider --test m02_permission_revocation_contract -- --nocapture
+      - name: Run macOS AX provider authority contracts including M02
+        run: cargo test -p localview-macos-ax-provider -- --nocapture
