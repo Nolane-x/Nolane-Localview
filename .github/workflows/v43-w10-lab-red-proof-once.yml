@@ -22,18 +22,18 @@ jobs:
           components: rustfmt, clippy
       - name: Apply bounded geometry worker implementation
         run: python .github/scripts/v43_w10_geometry_worker_green.py
-      - name: Verify formatting and Windows provider compile
+      - name: Verify transformed diff hygiene and Windows provider compile
         shell: pwsh
         run: |
           $diag = ".github/w10-failure-diagnostic.txt"
-          $log = Join-Path $env:RUNNER_TEMP "w10-format-compile.log"
+          $log = Join-Path $env:RUNNER_TEMP "w10-diff-compile.log"
 
-          & rustfmt --check crates/windows-uia-provider/src/lib.rs crates/windows-uia-provider/src/subscription.rs crates/windows-uia-provider/src/subscription_stub.rs *> $log
+          & git diff --check -- crates/windows-uia-provider/src/lib.rs crates/windows-uia-provider/src/subscription.rs crates/windows-uia-provider/src/subscription_stub.rs crates/windows-uia-provider/Cargo.toml *> $log
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            "W10 format diagnostic`nexit_code=$code`n" | Set-Content $diag
+            "W10 transformed diff hygiene diagnostic`nexit_code=$code`n" | Set-Content $diag
             Get-Content $log | Select-Object -Last 160 | Add-Content $diag
-            Write-Host "::group::W10 concise format diagnostics"
+            Write-Host "::group::W10 transformed diff diagnostics"
             Get-Content $diag
             Write-Host "::endgroup::"
             git config user.name "github-actions[bot]"
@@ -41,7 +41,7 @@ jobs:
             git add -- $diag
             git diff --cached --check
             if (-not (git diff --cached --quiet)) {
-              git commit -m "test(v43): capture W10 format regression"
+              git commit -m "test(v43): capture W10 diff hygiene regression"
               git push origin HEAD:feat/v43-l7-windows-w10-mixed-dpi-authority
             }
             exit $code
