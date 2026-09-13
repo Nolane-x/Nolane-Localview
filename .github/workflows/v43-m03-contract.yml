@@ -1,0 +1,26 @@
+name: V4.3 M03 Invalid Element Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m03-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m03-invalid-element-contract:
+    name: M03 AX invalid-element binding contract
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run macOS AX provider contracts through M03
+        run: cargo test -p localview-macos-ax-provider -- --nocapture
