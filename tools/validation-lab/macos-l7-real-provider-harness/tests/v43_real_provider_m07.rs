@@ -233,7 +233,7 @@ mod macos_real_provider_m07 {
 
     fn remove_observer_source(run_loop: CfRunLoopRef, source: CfRunLoopSourceRef) -> bool {
         unsafe { CFRunLoopRemoveSource(run_loop, source, run_loop_mode()) };
-        unsafe { CFRunLoopContainsSource(run_loop, source, run_loop_mode()) } == 0
+        (unsafe { CFRunLoopContainsSource(run_loop, source, run_loop_mode()) }) == 0
     }
 
     fn pump_until_callbacks(minimum: u64, timeout: Duration) -> bool {
@@ -316,10 +316,11 @@ mod macos_real_provider_m07 {
 
         let first_binding = observer_authority.bind_current(application_incarnation.clone());
         let first_observer_revision = first_binding.observer_creation_revision();
-        let (first_observer, first_create_error) = create_observer(pid).expect("create M07 observer 1");
+        let (first_observer, first_create_error) =
+            create_observer(pid).expect("create M07 observer 1");
         assert_eq!(first_create_error, AX_ERROR_SUCCESS);
-        let first_registration_error =
-            register_title_notification(&first_observer, &window).expect("register M07 title notification 1");
+        let first_registration_error = register_title_notification(&first_observer, &window)
+            .expect("register M07 title notification 1");
         assert_eq!(
             first_registration_error, AX_ERROR_SUCCESS,
             "M07 positive-control AXTitleChanged notification must register"
@@ -383,10 +384,11 @@ mod macos_real_provider_m07 {
         let fresh_binding = observer_authority.bind_current(application_incarnation.clone());
         let second_observer_revision = fresh_binding.observer_creation_revision();
         assert!(second_observer_revision > first_observer_revision);
-        let (second_observer, second_create_error) = create_observer(pid).expect("create M07 observer 2");
+        let (second_observer, second_create_error) =
+            create_observer(pid).expect("create M07 observer 2");
         assert_eq!(second_create_error, AX_ERROR_SUCCESS);
-        let second_registration_error =
-            register_title_notification(&second_observer, &window).expect("register M07 title notification 2");
+        let second_registration_error = register_title_notification(&second_observer, &window)
+            .expect("register M07 title notification 2");
         assert_eq!(second_registration_error, AX_ERROR_SUCCESS);
         let (second_run_loop, second_os_source) =
             add_observer_source(&second_observer).expect("attach second M07 observer source");
