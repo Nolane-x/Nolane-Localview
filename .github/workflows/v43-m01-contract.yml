@@ -23,4 +23,4 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Run M01 permission authority contract
-        run: cargo test -p localview-macos-ax-provider --test m01_permission_contract -- --nocapture
+        run: cargo test -p localview-macos-ax-provider -- --nocapture
