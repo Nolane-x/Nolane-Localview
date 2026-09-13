@@ -1,51 +1,52 @@
 use localview_macos_ax_provider::{
-    AxPermissionError, AxPermissionProvider, AxPermissionRevision, AxPermissionState,
+    AxPermissionError, AxPermissionProvider, AxPermissionState, AxSemanticControlOutcome,
 };
 
 #[test]
-fn untrusted_accessibility_permission_cannot_mint_semantic_control_authority() {
+fn permission_revisions_are_provider_owned_and_monotonic() {
     let provider = AxPermissionProvider::new();
-    let revision = AxPermissionRevision::observed(AxPermissionState::Untrusted, 1, false);
+    let first = provider.current_permission_revision(false);
+    let second = provider.current_permission_revision(true);
 
-    let error = provider
-        .authorize_semantic_control(&revision)
-        .expect_err("untrusted Accessibility permission must not mint semantic-control authority");
-
-    assert_eq!(error, AxPermissionError::PermissionRequired);
-}
-
-#[test]
-fn prompt_requested_is_not_permission_granted() {
-    let provider = AxPermissionProvider::new();
-    let revision = AxPermissionRevision::observed(AxPermissionState::Untrusted, 2, true);
-
-    assert!(revision.prompt_requested());
-    assert_eq!(revision.state(), AxPermissionState::Untrusted);
-    assert_eq!(
-        provider.authorize_semantic_control(&revision),
-        Err(AxPermissionError::PermissionRequired),
-        "requesting the OS prompt must never be projected into trusted authority"
-    );
-}
-
-#[test]
-fn unknown_permission_is_distinct_from_explicit_denial() {
-    let provider = AxPermissionProvider::new();
-    let revision = AxPermissionRevision::observed(AxPermissionState::Unknown, 3, false);
-
-    assert_eq!(
-        provider.authorize_semantic_control(&revision),
-        Err(AxPermissionError::PermissionUnknown)
-    );
-}
-
-#[test]
-fn caller_forged_trusted_revision_cannot_mint_semantic_control_authority() {
-    let provider = AxPermissionProvider::new();
-    let forged = AxPermissionRevision::observed(AxPermissionState::Trusted, u64::MAX, false);
-
+    assert!(!first.prompt_requested());
+    assert!(second.prompt_requested());
     assert!(
-        provider.authorize_semantic_control(&forged).is_err(),
-        "a caller-created Trusted revision must never be accepted as OS-backed authority"
+        second.check_sequence() > first.check_sequence(),
+        "each OS permission observation must advance the revision sequence"
     );
+}
+
+#[test]
+fn semantic_control_decision_is_bound_to_its_own_fresh_permission_revision() {
+    let provider = AxPermissionProvider::new();
+    let decision = provider.semantic_control_decision(false);
+    let revision = decision.revision();
+
+    assert!(!revision.prompt_requested());
+    assert!(revision.check_sequence() > 0);
+
+    match revision.state() {
+        AxPermissionState::Trusted => {
+            let permit = decision
+                .permit()
+                .expect("trusted OS observation must be the only permit-producing state");
+            assert_eq!(
+                permit.permission_check_sequence(),
+                revision.check_sequence(),
+                "permit must bind the exact OS-backed permission revision"
+            );
+            assert_eq!(
+                decision.outcome(),
+                AxSemanticControlOutcome::Authorized(permit)
+            );
+        }
+        AxPermissionState::Untrusted => {
+            assert_eq!(decision.permit(), None);
+            assert_eq!(decision.denial(), Some(AxPermissionError::PermissionRequired));
+        }
+        AxPermissionState::Unknown => {
+            assert_eq!(decision.permit(), None);
+            assert_eq!(decision.denial(), Some(AxPermissionError::PermissionUnknown));
+        }
+    }
 }
