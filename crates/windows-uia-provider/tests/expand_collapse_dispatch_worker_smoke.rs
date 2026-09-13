@@ -126,13 +126,11 @@ mod windows_smoke {
             .recv_timeout(Duration::from_secs(2))
             .expect("receive ExpandCollapse fixture HWND");
         let worker = WindowsUiaWorker::spawn(WindowsUiaWorkerConfig {
-            snapshot_budget: SnapshotBudget {
-                max_nodes: 32,
-                max_depth: 4,
-                // Keep the property ceiling aligned with the explicit node ceiling:
-                // 32 bounded nodes × 19 tracked properties per semantic node.
-                max_properties: 608,
-            },
+            // This is an Expand/Collapse behavior smoke, not a resource-pressure
+            // test. Use the normal bounded provider budget so an expanded native
+            // ComboBox tree is not accidentally truncated by a test-only 32-node
+            // ceiling. W15 owns the deliberately resource-bounded proof surface.
+            snapshot_budget: SnapshotBudget::default(),
             command_timeout: Duration::from_secs(5),
         })
         .expect("spawn dedicated Windows UIA MTA worker");
