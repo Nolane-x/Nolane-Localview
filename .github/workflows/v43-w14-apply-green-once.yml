@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
 
+# Armed after the workflow already exists in branch history so this push is observable.
 jobs:
   apply-w14-post-pass:
     if: github.event.head_commit.message == 'chore(v43): apply W14 post-pass once'
