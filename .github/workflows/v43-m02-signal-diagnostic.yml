@@ -12,14 +12,52 @@ permissions:
 
 jobs:
   m02-signal-diagnostic:
-    name: M02 inspect Accessibility revoke UI topology
+    name: M02 characterize live Accessibility change signals
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - name: Inspect Accessibility TCC identities
+      - name: Observe distributed Accessibility change notification across TCC reset
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/m02-notification-probe.swift" <<'SWIFT'
+          import Foundation
+
+          let name = Notification.Name("com.apple.accessibility.api")
+          var observed = false
+          let token = DistributedNotificationCenter.default().addObserver(
+              forName: name,
+              object: nil,
+              queue: .main
+          ) { note in
+              observed = true
+              print("M02_DISTRIBUTED_NOTIFICATION name=\(note.name.rawValue)")
+          }
+          defer { DistributedNotificationCenter.default().removeObserver(token) }
+
+          let reset = Process()
+          reset.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+          reset.arguments = ["/usr/bin/tccutil", "reset", "Accessibility"]
+          try reset.run()
+          reset.waitUntilExit()
+          guard reset.terminationStatus == 0 else {
+              fatalError("tccutil reset Accessibility failed")
+          }
+
+          let deadline = Date().addingTimeInterval(3.0)
+          while Date() < deadline && !observed {
+              RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+          }
+          print("M02_DISTRIBUTED_NOTIFICATION observed=\(observed)")
+          if !observed {
+              exit(23)
+          }
+          SWIFT
+          swift "$RUNNER_TEMP/m02-notification-probe.swift"
+      - name: Inspect Accessibility TCC identities after notification probe
+        if: always()
         run: |
           set -u
           echo '=== SYSTEM TCC ACCESSIBILITY ROWS ==='
@@ -29,6 +67,7 @@ jobs:
           sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
             "SELECT client,client_type,auth_value,auth_reason,flags FROM access WHERE service='kTCCServiceAccessibility' ORDER BY client;" || true
       - name: Reveal exact Privacy Accessibility pane
+        if: always()
         run: |
           set -euo pipefail
           osascript <<'APPLESCRIPT'
@@ -39,10 +78,10 @@ jobs:
           delay 4
           APPLESCRIPT
       - name: Inspect exact Accessibility pane controls
+        if: always()
         run: |
           set -euo pipefail
           osascript -l JavaScript <<'JXA'
-          ObjC.import('stdlib');
           const se = Application('System Events');
           const proc = se.processes.byName('System Settings');
           proc.frontmost = true;
@@ -53,7 +92,6 @@ jobs:
             try { const v = fn(); return v === undefined || v === null ? '' : String(v); }
             catch (_) { return ''; }
           }
-
           function walk(node, depth) {
             if (depth > 12) return;
             const role = safe(() => node.role());
@@ -72,6 +110,5 @@ jobs:
             try { children = node.uiElements(); } catch (_) {}
             for (const child of children) walk(child, depth + 1);
           }
-
           walk(wins[0], 0);
           JXA
