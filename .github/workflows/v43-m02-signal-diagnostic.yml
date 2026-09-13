@@ -28,16 +28,13 @@ jobs:
           echo '=== USER TCC ACCESSIBILITY ROWS ==='
           sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
             "SELECT client,client_type,auth_value,auth_reason,flags FROM access WHERE service='kTCCServiceAccessibility' ORDER BY client;" || true
-      - name: Reveal exact Privacy Accessibility pane while automation is still trusted
+      - name: Open exact Privacy Accessibility deep link while automation is still trusted
         run: |
           set -euo pipefail
-          osascript <<'APPLESCRIPT'
-          tell application "System Settings"
-            activate
-            reveal anchor "Privacy_Accessibility" of pane id "com.apple.settings.PrivacySecurity.extension"
-          end tell
-          delay 5
-          APPLESCRIPT
+          osascript -e 'tell application "System Settings" to quit' || true
+          sleep 2
+          open 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility'
+          sleep 6
       - name: Dump exact Accessibility pane controls before any revoke/reset
         run: |
           set -euo pipefail
