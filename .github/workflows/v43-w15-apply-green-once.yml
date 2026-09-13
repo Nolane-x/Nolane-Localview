@@ -26,107 +26,114 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          def unique_index(lines, predicate, label):
+              matches = [i for i, line in enumerate(lines) if predicate(line)]
+              if len(matches) != 1:
+                  raise SystemExit(f'expected exactly one {label}, found {len(matches)}')
+              return matches[0]
+
           runtime = Path('crates/windows-observe-runtime/src/runtime_manager.rs')
-          text = runtime.read_text()
-          marker = 'ResourceBounded {'
-          if marker not in text:
-              anchor = '''    #[error("Windows observe resource governor denied {work_kind:?} at {pressure:?} pressure")]
-              ResourceDenied {
-                  work_kind: ResourceWorkKind,
-                  pressure: PressureLevel,
-                  reasons: Vec<String>,
-              },
-          '''
-              replacement = anchor + '''    #[error("Windows observe reconciliation is resource-bounded during {operation}: exhausted={exhausted:?}")]
-              ResourceBounded {
-                  operation: &'static str,
-                  exhausted: Vec<localview_native_provider::SnapshotBudgetLimit>,
-                  incompleteness_debt: Vec<String>,
-              },
-          '''
-              if text.count(anchor) != 1:
-                  raise SystemExit(f'expected exactly one runtime error anchor, found {text.count(anchor)}')
-              text = text.replace(anchor, replacement, 1)
-              runtime.write_text(text)
+          lines = runtime.read_text().splitlines()
+          if not any('ResourceBounded {' in line for line in lines):
+              insert_at = unique_index(
+                  lines,
+                  lambda line: 'Windows observe subscription provider lineage does not match the worker' in line,
+                  'runtime subscription-provider error anchor',
+              )
+              block = [
+                  '    #[error("Windows observe reconciliation is resource-bounded during {operation}: exhausted={exhausted:?}")]',
+                  '    ResourceBounded {',
+                  "        operation: &'static str,",
+                  '        exhausted: Vec<localview_native_provider::SnapshotBudgetLimit>,',
+                  '        incompleteness_debt: Vec<String>,',
+                  '    },',
+              ]
+              lines[insert_at:insert_at] = block
+              runtime.write_text('\n'.join(lines) + '\n')
 
           fresh = Path('crates/windows-observe-runtime/src/fresh_action_evidence.rs')
-          text = fresh.read_text()
-          old = '''        if snapshot.completeness() != ReconciliationCompleteness::Established
-              || snapshot.resource_usage().incomplete
-              || !snapshot.incompleteness_debt().is_empty()
-          {
-              return Err(WindowsObserveRuntimeError::Provider {
-                  operation: "fresh_action_evidence_snapshot_incomplete",
-                  message: format!(
-                      "fresh planning observation {} is incomplete and cannot authorize action binding",
-                      snapshot.snapshot_cut_ref()
-                  ),
-              });
-          }
-          '''
-          new = '''        if snapshot.resource_usage().incomplete
-              && !snapshot.resource_usage().exhausted.is_empty()
-          {
-              return Err(WindowsObserveRuntimeError::ResourceBounded {
-                  operation: "fresh_action_evidence_snapshot",
-                  exhausted: snapshot.resource_usage().exhausted.clone(),
-                  incompleteness_debt: snapshot.incompleteness_debt().to_vec(),
-              });
-          }
-
-          if snapshot.completeness() != ReconciliationCompleteness::Established
-              || !snapshot.incompleteness_debt().is_empty()
-          {
-              return Err(WindowsObserveRuntimeError::Provider {
-                  operation: "fresh_action_evidence_snapshot_incomplete",
-                  message: format!(
-                      "fresh planning observation {} is incomplete and cannot authorize action binding",
-                      snapshot.snapshot_cut_ref()
-                  ),
-              });
-          }
-          '''
-          if 'WindowsObserveRuntimeError::ResourceBounded' not in text:
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected exactly one fresh-action incomplete anchor, found {text.count(old)}')
-              text = text.replace(old, new, 1)
-              fresh.write_text(text)
+          lines = fresh.read_text().splitlines()
+          if not any('WindowsObserveRuntimeError::ResourceBounded' in line for line in lines):
+              start = unique_index(
+                  lines,
+                  lambda line: line.strip() == 'if snapshot.completeness() != ReconciliationCompleteness::Established',
+                  'fresh-action incomplete-start anchor',
+              )
+              end = unique_index(
+                  lines,
+                  lambda line: line.strip().startswith('let mut matches = snapshot.nodes().iter().filter'),
+                  'fresh-action rebind anchor',
+              )
+              if not start < end:
+                  raise SystemExit('fresh-action incomplete block must precede rebind block')
+              block = [
+                  '        if snapshot.resource_usage().incomplete',
+                  '            && !snapshot.resource_usage().exhausted.is_empty()',
+                  '        {',
+                  '            return Err(WindowsObserveRuntimeError::ResourceBounded {',
+                  '                operation: "fresh_action_evidence_snapshot",',
+                  '                exhausted: snapshot.resource_usage().exhausted.clone(),',
+                  '                incompleteness_debt: snapshot.incompleteness_debt().to_vec(),',
+                  '            });',
+                  '        }',
+                  '',
+                  '        if snapshot.completeness() != ReconciliationCompleteness::Established',
+                  '            || !snapshot.incompleteness_debt().is_empty()',
+                  '        {',
+                  '            return Err(WindowsObserveRuntimeError::Provider {',
+                  '                operation: "fresh_action_evidence_snapshot_incomplete",',
+                  '                message: format!(',
+                  '                    "fresh planning observation {} is incomplete and cannot authorize action binding",',
+                  '                    snapshot.snapshot_cut_ref()',
+                  '                ),',
+                  '            });',
+                  '        }',
+                  '',
+              ]
+              lines[start:end] = block
+              fresh.write_text('\n'.join(lines) + '\n')
 
           test = Path('crates/windows-observe-runtime/tests/w15_resource_bounded_contract.rs')
-          text = test.read_text()
-          old_import = '''use localview_windows_observe_runtime::{
-              WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
-              WindowsObserveSubscriptionLineage,
-          };
-          '''
-          new_import = '''use localview_windows_observe_runtime::{
-              WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeError,
-              WindowsObserveRuntimeManager, WindowsObserveSubscriptionLineage,
-          };
-          '''
-          if 'WindowsObserveRuntimeError,' not in text:
-              if text.count(old_import) != 1:
-                  raise SystemExit(f'expected exactly one W15 import anchor, found {text.count(old_import)}')
-              text = text.replace(old_import, new_import, 1)
-          old_assert = '''    assert!(
-              error.to_string().contains("resource-bounded"),
-              "W15 requires a typed resource-bounded outcome, got: {error}"
-          );
-          '''
-          new_assert = '''    assert_eq!(
-              error,
-              WindowsObserveRuntimeError::ResourceBounded {
-                  operation: "fresh_action_evidence_snapshot",
-                  exhausted: vec![SnapshotBudgetLimit::Nodes],
-                  incompleteness_debt: vec!["snapshot_budget_exhausted:Nodes".into()],
-              }
-          );
-          '''
-          if 'WindowsObserveRuntimeError::ResourceBounded {' not in text:
-              if text.count(old_assert) != 1:
-                  raise SystemExit(f'expected exactly one W15 RED assertion anchor, found {text.count(old_assert)}')
-              text = text.replace(old_assert, new_assert, 1)
-          test.write_text(text)
+          lines = test.read_text().splitlines()
+          if not any('WindowsObserveRuntimeError,' in line for line in lines):
+              idx = unique_index(
+                  lines,
+                  lambda line: 'WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,' in line,
+                  'W15 runtime import anchor',
+              )
+              lines[idx:idx + 1] = [
+                  '    WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeError,',
+                  '    WindowsObserveRuntimeManager, WindowsObserveSubscriptionLineage,',
+              ]
+
+          if not any('WindowsObserveRuntimeError::ResourceBounded {' in line for line in lines):
+              marker = unique_index(
+                  lines,
+                  lambda line: 'error.to_string().contains("resource-bounded")' in line,
+                  'W15 RED assertion marker',
+              )
+              start = marker
+              while start >= 0 and lines[start].strip() != 'assert!(':
+                  start -= 1
+              if start < 0:
+                  raise SystemExit('W15 RED assertion start not found')
+              end = marker
+              while end < len(lines) and lines[end].strip() != ');':
+                  end += 1
+              if end >= len(lines):
+                  raise SystemExit('W15 RED assertion end not found')
+              replacement = [
+                  '    assert_eq!(',
+                  '        error,',
+                  '        WindowsObserveRuntimeError::ResourceBounded {',
+                  '            operation: "fresh_action_evidence_snapshot",',
+                  '            exhausted: vec![SnapshotBudgetLimit::Nodes],',
+                  '            incompleteness_debt: vec!["snapshot_budget_exhausted:Nodes".into()],',
+                  '        }',
+                  '    );',
+              ]
+              lines[start:end + 1] = replacement
+          test.write_text('\n'.join(lines) + '\n')
           PY
       - name: Format and verify focused W15 GREEN
         run: |
