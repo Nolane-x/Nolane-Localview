@@ -47,7 +47,12 @@ jobs:
         run: |
           set -euo pipefail
           test_name="macos_real_provider_m02::m02_permission_revoked_mid_session_invalidates_prior_semantic_authority"
-          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m02 "$test_name" -- --ignored --exact --nocapture --test-threads=1
+          set +e
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m02 "$test_name" -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M02-ORACLE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
       - name: Verify M02 evidence is exact-head and revocation-safe
         run: |
           set -euo pipefail
