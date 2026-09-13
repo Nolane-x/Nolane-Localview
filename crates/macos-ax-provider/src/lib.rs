@@ -3,12 +3,20 @@
 //! M01 establishes provider-owned live Accessibility trust observation before
 //! semantic-control admission. M02 extends that authority boundary to dispatch:
 //! a permit admitted under an earlier trusted revision never authorizes a
-//! consequential AX dispatch by itself; dispatch rechecks live OS trust and
-//! either refreshes authority or fails closed if permission was revoked.
+//! consequential AX dispatch by itself; dispatch rechecks effective OS trust
+//! through a fresh process and either refreshes authority or fails closed if
+//! permission was revoked or cannot be observed conclusively.
 //! Application attachment, AX snapshots, observers, concrete AX action
 //! dispatch, and capture/input fallback remain outside this slice.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
+    thread,
+    time::{Duration, Instant},
+};
 
 use thiserror::Error;
 
@@ -16,6 +24,12 @@ static AX_PERMISSION_CHECK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const AX_ERROR_SUCCESS: i32 = 0;
 const AX_ERROR_API_DISABLED: i32 = -25211;
+const AX_PERMISSION_PROBE_ARG: &str = "--localview-internal-ax-permission-probe-v1";
+const AX_PERMISSION_PROBE_ENV: &str = "LOCALVIEW_INTERNAL_AX_PERMISSION_PROBE_V1";
+const AX_PERMISSION_PROBE_ENV_VALUE: &str = "1";
+const AX_PERMISSION_PROBE_PREFIX: &str = "LOCALVIEW_AX_PERMISSION_STATE_V1=";
+const AX_PERMISSION_PROBE_TIMEOUT: Duration = Duration::from_millis(2_000);
+const AX_PERMISSION_PROBE_POLL: Duration = Duration::from_millis(10);
 
 /// Current knowledge about macOS Accessibility trust.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,34 +192,59 @@ impl AxSemanticDispatchDecision {
 }
 
 /// Production boundary for observing and authorizing macOS Accessibility use.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct AxPermissionProvider;
+///
+/// Admission reads the current process directly. Consequential dispatch uses a
+/// fresh child process because macOS can retain a stale Accessibility trust
+/// result in a process that was already running when TCC authorization changed.
+/// Production hosts must call [`run_permission_probe_if_requested`] before
+/// normal application startup so the default self-reexec probe can terminate
+/// without constructing the UI/runtime.
+#[derive(Debug, Clone)]
+pub struct AxPermissionProvider {
+    dispatch_probe_executable: Option<PathBuf>,
+}
+
+impl Default for AxPermissionProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl AxPermissionProvider {
     pub const fn new() -> Self {
-        Self
+        Self {
+            dispatch_probe_executable: None,
+        }
     }
 
-    /// Reads current process trust from the operating system.
+    /// Overrides the executable used for the fresh-process dispatch probe.
     ///
-    /// The boolean records whether a caller requested prompting in a wider
-    /// flow; it does not alter the OS observation or grant authority by itself.
+    /// This is primarily for provider integration tests and narrowly scoped
+    /// hosts. Production desktop use normally leaves this unset so LocalView
+    /// re-executes its own current executable and therefore preserves the host
+    /// identity whose TCC capability is being fenced.
+    pub fn with_dispatch_probe_executable(path: impl Into<PathBuf>) -> Self {
+        Self {
+            dispatch_probe_executable: Some(path.into()),
+        }
+    }
+
+    /// Reads current-process trust from the operating system.
+    ///
+    /// This is suitable for initial admission and diagnostics. Dispatch does
+    /// not use this same-process observation because macOS may keep it stale
+    /// after a mid-session TCC change.
     pub fn current_permission_revision(
         &self,
         prompt_requested: bool,
     ) -> AxPermissionRevision {
-        let check_sequence = AX_PERMISSION_CHECK_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
-        AxPermissionRevision::observed(
-            platform_permission_state(),
-            check_sequence,
-            prompt_requested,
-        )
+        permission_revision(platform_permission_state(), prompt_requested)
     }
 
-    /// Takes a fresh OS-backed permission observation and derives semantic-
-    /// control admission authority from that exact revision. Callers never
-    /// submit a revision to this method, so a fabricated `Trusted` state cannot
-    /// cross the authority boundary.
+    /// Takes an OS-backed permission observation and derives semantic-control
+    /// admission authority from that exact revision. Callers never submit a
+    /// revision to this method, so a fabricated `Trusted` state cannot cross
+    /// the authority boundary.
     pub fn semantic_control_decision(
         &self,
         prompt_requested: bool,
@@ -216,21 +255,139 @@ impl AxPermissionProvider {
     /// Revalidates Accessibility trust immediately before semantic dispatch.
     ///
     /// The previously admitted permit is evidence that admission once
-    /// succeeded; it is not dispatch authority. This method always reads a new
-    /// OS-backed permission revision. If permission is still trusted, callers
-    /// receive a refreshed permit bound to that newer revision. If permission
-    /// is now untrusted, the old authority is invalidated with a typed
-    /// [`AxPermissionError::PermissionRevoked`] denial and no fallback authority
-    /// is minted.
+    /// succeeded; it is not dispatch authority. A bounded fresh process probes
+    /// effective TCC state. Spawn failure, timeout, malformed output, or any
+    /// other inconclusive probe becomes `Unknown`, which fails closed rather
+    /// than reusing the old permit.
     pub fn semantic_dispatch_decision(
         &self,
         admitted_permit: AxSemanticControlPermit,
     ) -> AxSemanticDispatchDecision {
+        let state = self.fresh_dispatch_permission_state();
         dispatch_decision_from_revision(
             admitted_permit,
-            self.current_permission_revision(false),
+            permission_revision(state, false),
         )
     }
+
+    fn fresh_dispatch_permission_state(&self) -> AxPermissionState {
+        let executable = match self.dispatch_probe_executable.as_deref() {
+            Some(path) => path.to_path_buf(),
+            None => match std::env::current_exe() {
+                Ok(path) => path,
+                Err(_) => return AxPermissionState::Unknown,
+            },
+        };
+
+        run_fresh_permission_probe(&executable)
+    }
+}
+
+/// Handles the internal self-reexec permission-probe mode.
+///
+/// A macOS host using [`AxPermissionProvider::new`] must call this before
+/// constructing its normal runtime. The two-part marker (reserved argument +
+/// reserved environment variable) avoids accidentally entering probe mode from
+/// an ordinary launch. Probe mode prints one versioned machine-readable line
+/// and returns `true`; the host should then exit immediately.
+pub fn run_permission_probe_if_requested() -> bool {
+    let env_enabled = std::env::var(AX_PERMISSION_PROBE_ENV)
+        .ok()
+        .as_deref()
+        == Some(AX_PERMISSION_PROBE_ENV_VALUE);
+    let arg_enabled = std::env::args_os().any(|arg| arg == AX_PERMISSION_PROBE_ARG);
+
+    if !(env_enabled && arg_enabled) {
+        return false;
+    }
+
+    println!(
+        "{AX_PERMISSION_PROBE_PREFIX}{}",
+        encode_permission_state(platform_permission_state())
+    );
+    true
+}
+
+fn permission_revision(
+    state: AxPermissionState,
+    prompt_requested: bool,
+) -> AxPermissionRevision {
+    let check_sequence = AX_PERMISSION_CHECK_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
+    AxPermissionRevision::observed(state, check_sequence, prompt_requested)
+}
+
+fn run_fresh_permission_probe(executable: &Path) -> AxPermissionState {
+    let mut child = match Command::new(executable)
+        .arg(AX_PERMISSION_PROBE_ARG)
+        .env(AX_PERMISSION_PROBE_ENV, AX_PERMISSION_PROBE_ENV_VALUE)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return AxPermissionState::Unknown,
+    };
+
+    let deadline = Instant::now() + AX_PERMISSION_PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return AxPermissionState::Unknown;
+                }
+
+                let mut stdout = String::new();
+                let Some(mut pipe) = child.stdout.take() else {
+                    return AxPermissionState::Unknown;
+                };
+                if pipe.read_to_string(&mut stdout).is_err() {
+                    return AxPermissionState::Unknown;
+                }
+                return parse_permission_probe_output(&stdout)
+                    .unwrap_or(AxPermissionState::Unknown);
+            }
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(AX_PERMISSION_PROBE_POLL);
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return AxPermissionState::Unknown;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return AxPermissionState::Unknown;
+            }
+        }
+    }
+}
+
+fn encode_permission_state(state: AxPermissionState) -> &'static str {
+    match state {
+        AxPermissionState::Trusted => "trusted",
+        AxPermissionState::Untrusted => "untrusted",
+        AxPermissionState::Unknown => "unknown",
+    }
+}
+
+fn parse_permission_probe_output(output: &str) -> Option<AxPermissionState> {
+    let mut states = output.lines().filter_map(|line| {
+        let value = line.strip_prefix(AX_PERMISSION_PROBE_PREFIX)?;
+        match value {
+            "trusted" => Some(AxPermissionState::Trusted),
+            "untrusted" => Some(AxPermissionState::Untrusted),
+            "unknown" => Some(AxPermissionState::Unknown),
+            _ => None,
+        }
+    });
+
+    let state = states.next()?;
+    if states.next().is_some() {
+        return None;
+    }
+    Some(state)
 }
 
 fn decision_from_revision(revision: AxPermissionRevision) -> AxSemanticControlDecision {
@@ -322,11 +479,10 @@ fn platform_permission_state() -> AxPermissionState {
         return AxPermissionState::Untrusted;
     }
 
-    // AXIsProcessTrusted is necessary but not sufficient for a dispatch fence:
-    // after a mid-session TCC change the boolean can lag the usability of the
-    // live AX messaging path. Probe a system-wide AX object without performing
-    // any user action. kAXErrorAPIDisabled is direct evidence that semantic AX
-    // control is no longer available to this process.
+    // AXIsProcessTrusted is necessary but not sufficient for a dispatch fence.
+    // The fresh-process boundary above fixes process-lifetime TCC staleness;
+    // this non-mutating AX messaging probe additionally refuses authority if
+    // the current process cannot use the API despite a favorable trust bit.
     let system_wide = unsafe { AXUIElementCreateSystemWide() };
     if system_wide.is_null() {
         return AxPermissionState::Unknown;
@@ -448,6 +604,37 @@ mod tests {
 
         assert_eq!(dispatch.permit(), None);
         assert_eq!(dispatch.denial(), Some(AxPermissionError::PermissionUnknown));
+    }
+
+    #[test]
+    fn permission_probe_protocol_accepts_exact_single_state() {
+        assert_eq!(
+            parse_permission_probe_output("LOCALVIEW_AX_PERMISSION_STATE_V1=trusted\n"),
+            Some(AxPermissionState::Trusted)
+        );
+        assert_eq!(
+            parse_permission_probe_output("LOCALVIEW_AX_PERMISSION_STATE_V1=untrusted\n"),
+            Some(AxPermissionState::Untrusted)
+        );
+        assert_eq!(
+            parse_permission_probe_output("LOCALVIEW_AX_PERMISSION_STATE_V1=unknown\n"),
+            Some(AxPermissionState::Unknown)
+        );
+    }
+
+    #[test]
+    fn permission_probe_protocol_rejects_missing_duplicate_or_invalid_state() {
+        assert_eq!(parse_permission_probe_output("trusted\n"), None);
+        assert_eq!(
+            parse_permission_probe_output(
+                "LOCALVIEW_AX_PERMISSION_STATE_V1=trusted\nLOCALVIEW_AX_PERMISSION_STATE_V1=trusted\n"
+            ),
+            None
+        );
+        assert_eq!(
+            parse_permission_probe_output("LOCALVIEW_AX_PERMISSION_STATE_V1=maybe\n"),
+            None
+        );
     }
 
     #[test]
