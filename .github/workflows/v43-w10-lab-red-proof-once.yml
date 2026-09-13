@@ -35,14 +35,15 @@ jobs:
         shell: pwsh
         run: |
           $log = Join-Path $env:RUNNER_TEMP "w10-full-provider.log"
-          cargo test -p localview-windows-uia-provider -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath $log
+          & cargo test -p localview-windows-uia-provider -- --nocapture --test-threads=1 *> $log
           $code = $LASTEXITCODE
           if ($code -ne 0) {
             Write-Host "::group::W10 concise failure diagnostics"
-            Select-String -Path $log -Pattern 'FAILED|failures:|panicked at|assertion|left:|right:|error: test failed' -Context 4,8 | ForEach-Object { $_.ToString() }
+            Select-String -Path $log -Pattern 'FAILED|failures:|panicked at|assertion|left:|right:|error: test failed' -Context 6,12 | ForEach-Object { $_.ToString() }
             Write-Host "::endgroup::"
             exit $code
           }
+          Get-Content $log | Select-Object -Last 40
       - name: Commit only after Windows GREEN
         shell: pwsh
         run: |
