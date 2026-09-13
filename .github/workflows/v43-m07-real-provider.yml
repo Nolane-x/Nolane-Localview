@@ -83,12 +83,14 @@ jobs:
           path, expected_sha = sys.argv[1:]
           with open(path, encoding="utf-8") as handle:
               record = json.load(handle)
-          assert record["schema"] == "localview-v43-m07-real-provider-record-v2"
+          assert record["schema"] == "localview-v43-m07-real-provider-record-v3"
           assert record["case_id"] == "M07"
           assert record["candidate_sha"] == expected_sha
           assert record["application_identity"] == "com.nolane.localview.m07-seed"
           assert record["notification"] == "AXTitleChanged"
           assert record["caller_supplied_serviced_liveness"] is False
+          assert record["raw_callback_bridge_exposed"] is False
+          assert record["native_observer_authority"] == "provider_owned_ax_tracked_observer"
           assert record["service_evidence_authority"] == "provider_owned_callback_tracker"
 
           assert record["first_observer_create_ax_error"] == 0
@@ -126,7 +128,7 @@ jobs:
           assert record["event_continuity_restored"] is True
           assert record["second_run_loop_source_removed_on_cleanup"] is True
           assert record["run_loop_delivery_proven"] is True
-          assert record["ground_truth_source"] == "real_appkit_title_mutations_plus_provider_owned_axobserver_callback_tracker_and_cfrunloop_source_removal_recreation"
+          assert record["ground_truth_source"] == "real_appkit_title_mutations_plus_provider_owned_axtrackedobserver_callback_tracker_and_cfrunloop_source_removal_recreation"
           PY
       - name: Publish M07 real-provider evidence
         if: always()
