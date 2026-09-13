@@ -4,10 +4,12 @@ use thiserror::Error;
 
 const AX_ERROR_SUCCESS: i32 = 0;
 const AX_ERROR_INVALID_UI_ELEMENT: i32 = -25202;
+const AX_ERROR_CANNOT_COMPLETE: i32 = -25204;
 static AX_ELEMENT_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Stable semantic coordinates used to reacquire a current AX element after
-/// the provider reports that an earlier `AXUIElementRef` is invalid.
+/// the provider reports that an earlier native handle can no longer safely
+/// carry semantic-control authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AxElementIdentity {
     application_pid: i32,
@@ -44,7 +46,8 @@ impl AxElementIdentity {
 /// Provider-owned capability binding for one live AX element incarnation.
 ///
 /// This token is deliberately not `Clone`/`Copy`. An AX operation consumes it,
-/// so an invalid-element result cannot return the same live binding for retry.
+/// so neither an invalid-element result nor an inconclusive timeout can return
+/// the same live binding for a blind retry.
 #[derive(Debug, PartialEq, Eq)]
 pub struct AxElementBinding {
     identity: AxElementIdentity,
@@ -61,7 +64,8 @@ impl AxElementBinding {
     }
 }
 
-/// Tombstone proving which binding was invalidated by the provider.
+/// Tombstone proving which binding was invalidated because the native AX
+/// element itself was stale.
 #[derive(Debug, PartialEq, Eq)]
 pub struct AxStaleElementBinding {
     identity: AxElementIdentity,
@@ -69,6 +73,32 @@ pub struct AxStaleElementBinding {
 }
 
 impl AxStaleElementBinding {
+    pub const fn invalidated_binding_sequence(&self) -> u64 {
+        self.invalidated_binding_sequence
+    }
+
+    pub const fn reacquire_directive(&self) -> AxElementReacquireDirective {
+        AxElementReacquireDirective::ReacquireCurrentIdentity
+    }
+
+    pub fn identity(&self) -> &AxElementIdentity {
+        &self.identity
+    }
+}
+
+/// Tombstone proving which binding encountered `kAXErrorCannotComplete`.
+///
+/// A cannot-complete result is deliberately not called stale: macOS documents
+/// it as a messaging/unresponsive condition and the action may or may not have
+/// reached the target. LocalView therefore consumes the old authority and
+/// requires a current-identity reconciliation before any later attempt.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AxUnresponsiveElementBinding {
+    identity: AxElementIdentity,
+    invalidated_binding_sequence: u64,
+}
+
+impl AxUnresponsiveElementBinding {
     pub const fn invalidated_binding_sequence(&self) -> u64 {
         self.invalidated_binding_sequence
     }
@@ -91,6 +121,7 @@ pub enum AxElementReacquireDirective {
 pub enum AxElementOperationDecision {
     Current(AxElementBinding),
     StaleTarget(AxStaleElementBinding),
+    UnresponsiveTarget(AxUnresponsiveElementBinding),
     ProviderError { ax_error: i32 },
 }
 
@@ -100,7 +131,8 @@ pub enum AxElementRebindError {
     IdentityChanged,
 }
 
-/// M03 authority boundary for AX element lifetime.
+/// M03/M04 authority boundary for AX element lifetime and inconclusive native
+/// messaging outcomes.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AxElementBindingProvider;
 
@@ -119,8 +151,10 @@ impl AxElementBindingProvider {
     /// Consumes the current binding together with the raw result of the AX
     /// operation performed through its native handle.
     ///
-    /// `kAXErrorInvalidUIElement` never returns a live binding. Recovery must
-    /// resolve a new native AX object from the tombstone's semantic identity.
+    /// `kAXErrorInvalidUIElement` never returns a live binding because the
+    /// handle is stale. `kAXErrorCannotComplete` also never returns a live
+    /// binding because delivery/effect is inconclusive; blindly repeating an
+    /// action could duplicate a consequential world effect.
     pub fn observe_operation(
         &self,
         binding: AxElementBinding,
@@ -134,26 +168,55 @@ impl AxElementBindingProvider {
                     invalidated_binding_sequence: binding.binding_sequence,
                 })
             }
+            AX_ERROR_CANNOT_COMPLETE => {
+                AxElementOperationDecision::UnresponsiveTarget(AxUnresponsiveElementBinding {
+                    identity: binding.identity,
+                    invalidated_binding_sequence: binding.binding_sequence,
+                })
+            }
             other => AxElementOperationDecision::ProviderError { ax_error: other },
         }
     }
 
     /// Mints a new binding only after the caller has reacquired an AX element
-    /// matching the same application/window/semantic identity.
+    /// matching the same application/window/semantic identity after a stale
+    /// native handle.
     pub fn rebind_after_reacquire(
         &self,
         stale: AxStaleElementBinding,
         current_identity: AxElementIdentity,
     ) -> Result<AxElementBinding, AxElementRebindError> {
-        if stale.identity != current_identity {
-            return Err(AxElementRebindError::IdentityChanged);
-        }
-
-        Ok(AxElementBinding {
-            identity: current_identity,
-            binding_sequence: next_binding_sequence(),
-        })
+        rebind_same_identity(stale.identity, current_identity)
     }
+
+    /// Mints a new binding only after an unresponsive/cannot-complete outcome
+    /// has been reconciled by resolving the current target and proving that its
+    /// application/window/semantic identity is unchanged.
+    ///
+    /// This intentionally requires a different consumed tombstone type from
+    /// M03 so callers cannot mistake a messaging timeout for proof that the
+    /// native element was stale.
+    pub fn rebind_after_unresponsive_reacquire(
+        &self,
+        unresponsive: AxUnresponsiveElementBinding,
+        current_identity: AxElementIdentity,
+    ) -> Result<AxElementBinding, AxElementRebindError> {
+        rebind_same_identity(unresponsive.identity, current_identity)
+    }
+}
+
+fn rebind_same_identity(
+    invalidated_identity: AxElementIdentity,
+    current_identity: AxElementIdentity,
+) -> Result<AxElementBinding, AxElementRebindError> {
+    if invalidated_identity != current_identity {
+        return Err(AxElementRebindError::IdentityChanged);
+    }
+
+    Ok(AxElementBinding {
+        identity: current_identity,
+        binding_sequence: next_binding_sequence(),
+    })
 }
 
 fn next_binding_sequence() -> u64 {
@@ -165,13 +228,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unrelated_provider_error_consumes_binding_without_claiming_staleness() {
+    fn unrelated_provider_error_consumes_binding_without_claiming_staleness_or_timeout() {
         let provider = AxElementBindingProvider::new();
         let binding = provider.bind_current(AxElementIdentity::new(7, "window", "target"));
 
         assert_eq!(
-            provider.observe_operation(binding, -25204),
-            AxElementOperationDecision::ProviderError { ax_error: -25204 }
+            provider.observe_operation(binding, -25205),
+            AxElementOperationDecision::ProviderError { ax_error: -25205 }
         );
     }
 }

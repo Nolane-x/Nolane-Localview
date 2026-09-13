@@ -1,0 +1,112 @@
+name: V4.3 M04 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m04-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m04-real-provider:
+    name: M04 unresponsive AX target requires fresh authority
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_MACOS_AX_SMOKE: "1"
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M04 candidate and artifact directory
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M04 checkout SHA mismatch: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          artifact_dir="$RUNNER_TEMP/localview-v43-m04"
+          mkdir -p "$artifact_dir"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Build exact-head AppKit M04 seed
+        run: |
+          set -euo pipefail
+          seed_src="tools/validation-lab/macos-l7-real-provider-harness/fixtures/m04-unresponsive-seed.swift"
+          seed_bin="$RUNNER_TEMP/localview-m04-unresponsive-seed"
+          set +e
+          xcrun swiftc "$seed_src" -framework AppKit -o "$seed_bin" \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M04-SEED-COMPILE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          test -x "$seed_bin"
+          echo "LOCALVIEW_M04_SEED_EXECUTABLE=$seed_bin" >> "$GITHUB_ENV"
+      - name: Require exact M04 real-provider registration
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m04::m04_unresponsive_target_returns_cannot_complete_and_requires_reacquire"
+          listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m04 -- --list)"
+          printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Run M04 real AX unresponsive-target oracle
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m04::m04_unresponsive_target_returns_cannot_complete_and_requires_reacquire"
+          set +e
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m04 "$test_name" -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M04-ORACLE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
+      - name: Verify M04 evidence is exact-head and timeout-safe
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M04 head moved during proof: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M04-REAL-PROVIDER-RECORD.json"
+          test -f "$record_path"
+          python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
+          import json, sys
+          path, expected_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+          assert record["schema"] == "localview-v43-m04-real-provider-record-v1"
+          assert record["case_id"] == "M04"
+          assert record["candidate_sha"] == expected_sha
+          assert record["stall_ground_truth"] is True
+          assert int(record["stall_count"]) == 1
+          assert int(record["stall_duration_ms"]) == 2000
+          assert int(record["configured_ax_timeout_ms"]) == 250
+          assert int(record["cannot_complete_ax_error"]) == -25204
+          assert record["cannot_complete_observed"] is True
+          assert int(record["timeout_elapsed_ms"]) < 1500
+          assert record["old_binding_retried"] is False
+          assert record["operation_effect_during_timeout"] is False
+          assert record["reacquire_directive"] == "reacquire_current_identity"
+          assert int(record["fresh_binding_sequence"]) > int(record["old_binding_sequence"])
+          assert record["fresh_binding_is_newer"] is True
+          assert int(record["fresh_ax_press_error"]) == 0
+          assert int(record["fresh_world_press_count"]) == 1
+          assert record["ground_truth_source"] == "seed_state_file_test_only"
+          PY
+      - name: Publish M04 real-provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-m04-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
