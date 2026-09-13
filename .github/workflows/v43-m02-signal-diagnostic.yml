@@ -12,103 +12,19 @@ permissions:
 
 jobs:
   m02-signal-diagnostic:
-    name: M02 characterize live Accessibility change signals
+    name: M02 fresh process permission incarnation probe
     runs-on: macos-latest
     timeout-minutes: 10
+    env:
+      LOCALVIEW_MACOS_AX_SMOKE: "1"
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - name: Observe distributed Accessibility change notification across TCC reset
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run exact M02 fresh-incarnation diagnostic
         run: |
           set -euo pipefail
-          cat > "$RUNNER_TEMP/m02-notification-probe.swift" <<'SWIFT'
-          import Foundation
-
-          let name = Notification.Name("com.apple.accessibility.api")
-          var observed = false
-          let token = DistributedNotificationCenter.default().addObserver(
-              forName: name,
-              object: nil,
-              queue: .main
-          ) { note in
-              observed = true
-              print("M02_DISTRIBUTED_NOTIFICATION name=\(note.name.rawValue)")
-          }
-          defer { DistributedNotificationCenter.default().removeObserver(token) }
-
-          let reset = Process()
-          reset.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-          reset.arguments = ["/usr/bin/tccutil", "reset", "Accessibility"]
-          try reset.run()
-          reset.waitUntilExit()
-          guard reset.terminationStatus == 0 else {
-              fatalError("tccutil reset Accessibility failed")
-          }
-
-          let deadline = Date().addingTimeInterval(3.0)
-          while Date() < deadline && !observed {
-              RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-          }
-          print("M02_DISTRIBUTED_NOTIFICATION observed=\(observed)")
-          if !observed {
-              exit(23)
-          }
-          SWIFT
-          swift "$RUNNER_TEMP/m02-notification-probe.swift"
-      - name: Inspect Accessibility TCC identities after notification probe
-        if: always()
-        run: |
-          set -u
-          echo '=== SYSTEM TCC ACCESSIBILITY ROWS ==='
-          sudo sqlite3 '/Library/Application Support/com.apple.TCC/TCC.db' \
-            "SELECT client,client_type,auth_value,auth_reason,flags FROM access WHERE service='kTCCServiceAccessibility' ORDER BY client;" || true
-          echo '=== USER TCC ACCESSIBILITY ROWS ==='
-          sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
-            "SELECT client,client_type,auth_value,auth_reason,flags FROM access WHERE service='kTCCServiceAccessibility' ORDER BY client;" || true
-      - name: Reveal exact Privacy Accessibility pane
-        if: always()
-        run: |
-          set -euo pipefail
-          osascript <<'APPLESCRIPT'
-          tell application "System Settings"
-            activate
-            reveal anchor "Privacy_Accessibility" of pane id "com.apple.settings.PrivacySecurity.extension"
-          end tell
-          delay 4
-          APPLESCRIPT
-      - name: Inspect exact Accessibility pane controls
-        if: always()
-        run: |
-          set -euo pipefail
-          osascript -l JavaScript <<'JXA'
-          const se = Application('System Events');
-          const proc = se.processes.byName('System Settings');
-          proc.frontmost = true;
-          const wins = proc.windows();
-          if (wins.length === 0) throw new Error('System Settings window not available');
-
-          function safe(fn) {
-            try { const v = fn(); return v === undefined || v === null ? '' : String(v); }
-            catch (_) { return ''; }
-          }
-          function walk(node, depth) {
-            if (depth > 12) return;
-            const role = safe(() => node.role());
-            const subrole = safe(() => node.subrole());
-            const name = safe(() => node.name());
-            const desc = safe(() => node.description());
-            const value = safe(() => node.value());
-            const help = safe(() => node.help());
-            if ([
-              'AXWindow','AXGroup','AXScrollArea','AXTable','AXRow','AXCell',
-              'AXSwitch','AXCheckBox','AXButton','AXStaticText'
-            ].includes(role)) {
-              console.log(`${'  '.repeat(depth)}${role} | sub=${subrole} | name=${name} | desc=${desc} | value=${value} | help=${help}`);
-            }
-            let children = [];
-            try { children = node.uiElements(); } catch (_) {}
-            for (const child of children) walk(child, depth + 1);
-          }
-          walk(wins[0], 0);
-          JXA
+          test_name="macos_m02_signal_diagnostic::fresh_process_incarnation_observes_reset_while_existing_incarnation_stays_stale"
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_m02_signal_diagnostic "$test_name" -- --ignored --exact --nocapture --test-threads=1
