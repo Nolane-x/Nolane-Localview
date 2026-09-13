@@ -106,6 +106,6 @@ guard let statePath = ProcessInfo.processInfo.environment["LOCALVIEW_M03_STATE_P
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
-let delegate = SeedDelegate(statePath: statePath, commandPath: commandPath)
+private let delegate = SeedDelegate(statePath: statePath, commandPath: commandPath)
 app.delegate = delegate
 app.run()
