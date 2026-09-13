@@ -1,10 +1,12 @@
 //! macOS Accessibility permission authority boundary for LocalView V4.3.
 //!
-//! M01 is intentionally narrow: it observes whether the current LocalView
-//! process is trusted as an Accessibility client and decides whether that
-//! observation may mint semantic-control authority. It does not yet attach to
-//! applications, build AX snapshots, install observers, dispatch actions, or
-//! request capture/input fallbacks.
+//! M01 establishes provider-owned live Accessibility trust observation before
+//! semantic-control admission. M02 extends that authority boundary to dispatch:
+//! a permit admitted under an earlier trusted revision never authorizes a
+//! consequential AX dispatch by itself; dispatch rechecks live OS trust and
+//! either refreshes authority or fails closed if permission was revoked.
+//! Application attachment, AX snapshots, observers, concrete AX action
+//! dispatch, and capture/input fallback remain outside this slice.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -70,8 +72,9 @@ impl AxPermissionRevision {
 }
 
 /// Capability token proving the permission revision that admitted AX semantic
-/// control. Later macOS action slices can bind this sequence into stronger
-/// application/observer/action authority instead of reusing a bare boolean.
+/// control. The token is intentionally opaque and cannot directly authorize a
+/// dispatch; callers must submit it to [`AxPermissionProvider::semantic_dispatch_decision`]
+/// for a fresh OS-backed permission fence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AxSemanticControlPermit {
     permission_check_sequence: u64,
@@ -87,18 +90,20 @@ impl AxSemanticControlPermit {
 pub enum AxPermissionError {
     #[error("macOS Accessibility permission is required")]
     PermissionRequired,
+    #[error("macOS Accessibility permission was revoked after semantic-control admission")]
+    PermissionRevoked,
     #[error("macOS Accessibility permission state is unknown")]
     PermissionUnknown,
 }
 
-/// Result of one provider-owned semantic-control admission check.
+/// Result of one provider-owned semantic-control authority check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AxSemanticControlOutcome {
     Authorized(AxSemanticControlPermit),
     Denied(AxPermissionError),
 }
 
-/// One coherent permission observation plus the semantic-control authority
+/// One coherent permission observation plus the semantic-control admission
 /// decision derived from that same observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AxSemanticControlDecision {
@@ -107,6 +112,45 @@ pub struct AxSemanticControlDecision {
 }
 
 impl AxSemanticControlDecision {
+    pub const fn revision(&self) -> AxPermissionRevision {
+        self.revision
+    }
+
+    pub const fn outcome(&self) -> AxSemanticControlOutcome {
+        self.outcome
+    }
+
+    pub const fn permit(&self) -> Option<AxSemanticControlPermit> {
+        match self.outcome {
+            AxSemanticControlOutcome::Authorized(permit) => Some(permit),
+            AxSemanticControlOutcome::Denied(_) => None,
+        }
+    }
+
+    pub const fn denial(&self) -> Option<AxPermissionError> {
+        match self.outcome {
+            AxSemanticControlOutcome::Authorized(_) => None,
+            AxSemanticControlOutcome::Denied(error) => Some(error),
+        }
+    }
+}
+
+/// Dispatch-time permission fence. It records which previously admitted
+/// permission revision was presented, the newer live revision observed before
+/// dispatch, and the refreshed or denied authority derived from that new
+/// observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AxSemanticDispatchDecision {
+    admitted_permission_check_sequence: u64,
+    revision: AxPermissionRevision,
+    outcome: AxSemanticControlOutcome,
+}
+
+impl AxSemanticDispatchDecision {
+    pub const fn admitted_permission_check_sequence(&self) -> u64 {
+        self.admitted_permission_check_sequence
+    }
+
     pub const fn revision(&self) -> AxPermissionRevision {
         self.revision
     }
@@ -141,9 +185,8 @@ impl AxPermissionProvider {
 
     /// Reads current process trust from the operating system.
     ///
-    /// M01 deliberately does not display a system prompt. The boolean records
-    /// whether a caller requested prompting in a wider flow; it does not alter
-    /// the OS observation or grant authority by itself.
+    /// The boolean records whether a caller requested prompting in a wider
+    /// flow; it does not alter the OS observation or grant authority by itself.
     pub fn current_permission_revision(
         &self,
         prompt_requested: bool,
@@ -157,14 +200,33 @@ impl AxPermissionProvider {
     }
 
     /// Takes a fresh OS-backed permission observation and derives semantic-
-    /// control authority from that exact revision. Callers never submit a
-    /// revision to this method, so a fabricated `Trusted` state cannot cross
-    /// the authority boundary.
+    /// control admission authority from that exact revision. Callers never
+    /// submit a revision to this method, so a fabricated `Trusted` state cannot
+    /// cross the authority boundary.
     pub fn semantic_control_decision(
         &self,
         prompt_requested: bool,
     ) -> AxSemanticControlDecision {
         decision_from_revision(self.current_permission_revision(prompt_requested))
+    }
+
+    /// Revalidates Accessibility trust immediately before semantic dispatch.
+    ///
+    /// The previously admitted permit is evidence that admission once
+    /// succeeded; it is not dispatch authority. This method always reads a new
+    /// OS-backed permission revision. If permission is still trusted, callers
+    /// receive a refreshed permit bound to that newer revision. If permission
+    /// is now untrusted, the old authority is invalidated with a typed
+    /// [`AxPermissionError::PermissionRevoked`] denial and no fallback authority
+    /// is minted.
+    pub fn semantic_dispatch_decision(
+        &self,
+        admitted_permit: AxSemanticControlPermit,
+    ) -> AxSemanticDispatchDecision {
+        dispatch_decision_from_revision(
+            admitted_permit,
+            self.current_permission_revision(false),
+        )
     }
 }
 
@@ -184,6 +246,31 @@ fn decision_from_revision(revision: AxPermissionRevision) -> AxSemanticControlDe
     };
 
     AxSemanticControlDecision { revision, outcome }
+}
+
+fn dispatch_decision_from_revision(
+    admitted_permit: AxSemanticControlPermit,
+    revision: AxPermissionRevision,
+) -> AxSemanticDispatchDecision {
+    let outcome = match revision.state {
+        AxPermissionState::Trusted => {
+            AxSemanticControlOutcome::Authorized(AxSemanticControlPermit {
+                permission_check_sequence: revision.check_sequence,
+            })
+        }
+        AxPermissionState::Untrusted => {
+            AxSemanticControlOutcome::Denied(AxPermissionError::PermissionRevoked)
+        }
+        AxPermissionState::Unknown => {
+            AxSemanticControlOutcome::Denied(AxPermissionError::PermissionUnknown)
+        }
+    };
+
+    AxSemanticDispatchDecision {
+        admitted_permission_check_sequence: admitted_permit.permission_check_sequence,
+        revision,
+        outcome,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -261,5 +348,53 @@ mod tests {
         let permit = decision.permit().expect("trusted observation should authorize");
         assert_eq!(permit.permission_check_sequence(), 41);
         assert_eq!(decision.denial(), None);
+    }
+
+    #[test]
+    fn revoked_permission_invalidates_prior_permit_at_dispatch() {
+        let admitted = AxSemanticControlPermit {
+            permission_check_sequence: 50,
+        };
+        let dispatch = dispatch_decision_from_revision(
+            admitted,
+            AxPermissionRevision::observed(AxPermissionState::Untrusted, 51, false),
+        );
+
+        assert_eq!(dispatch.admitted_permission_check_sequence(), 50);
+        assert_eq!(dispatch.revision().check_sequence(), 51);
+        assert_eq!(dispatch.permit(), None);
+        assert_eq!(dispatch.denial(), Some(AxPermissionError::PermissionRevoked));
+    }
+
+    #[test]
+    fn still_trusted_dispatch_refreshes_authority_to_newer_revision() {
+        let admitted = AxSemanticControlPermit {
+            permission_check_sequence: 60,
+        };
+        let dispatch = dispatch_decision_from_revision(
+            admitted,
+            AxPermissionRevision::observed(AxPermissionState::Trusted, 61, false),
+        );
+
+        let refreshed = dispatch
+            .permit()
+            .expect("still-trusted dispatch should refresh authority");
+        assert_eq!(dispatch.admitted_permission_check_sequence(), 60);
+        assert_eq!(refreshed.permission_check_sequence(), 61);
+        assert_eq!(dispatch.denial(), None);
+    }
+
+    #[test]
+    fn unknown_dispatch_state_never_reuses_prior_permit() {
+        let admitted = AxSemanticControlPermit {
+            permission_check_sequence: 70,
+        };
+        let dispatch = dispatch_decision_from_revision(
+            admitted,
+            AxPermissionRevision::observed(AxPermissionState::Unknown, 71, false),
+        );
+
+        assert_eq!(dispatch.permit(), None);
+        assert_eq!(dispatch.denial(), Some(AxPermissionError::PermissionUnknown));
     }
 }
