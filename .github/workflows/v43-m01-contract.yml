@@ -1,0 +1,26 @@
+name: V4.3 M01 Permission Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m01-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m01-permission-contract:
+    name: M01 AX permission authority contract
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run M01 permission authority contract
+        run: cargo test -p localview-macos-ax-provider --test m01_permission_contract -- --nocapture
