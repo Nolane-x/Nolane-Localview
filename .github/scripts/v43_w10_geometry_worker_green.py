@@ -205,18 +205,39 @@ text = replace_once(
 
 lib_path.write_text(text)
 
-for wrapper_path in (
-    Path("crates/windows-uia-provider/src/subscription.rs"),
-    Path("crates/windows-uia-provider/src/subscription_stub.rs"),
-):
-    wrapper = wrapper_path.read_text()
-    wrapper = replace_once(
-        wrapper,
-        '''    pub fn revalidate_dispatch_context(
+windows_wrapper_path = Path("crates/windows-uia-provider/src/subscription.rs")
+windows_wrapper = windows_wrapper_path.read_text()
+windows_wrapper = replace_once(
+    windows_wrapper,
+    '''        pub fn revalidate_dispatch_context(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaDispatchContextRequest,''',
+    '''        pub fn observe_geometry(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: crate::WindowsUiaGeometryRequest,
+        ) -> Result<crate::WindowsUiaGeometryReceipt, WindowsUiaWorkerError> {
+            self.inner.observe_geometry(attachment, request)
+        }
+
+        pub fn revalidate_dispatch_context(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaDispatchContextRequest,''',
+    "public geometry wrapper (subscription.rs)",
+)
+windows_wrapper_path.write_text(windows_wrapper)
+
+stub_wrapper_path = Path("crates/windows-uia-provider/src/subscription_stub.rs")
+stub_wrapper = stub_wrapper_path.read_text()
+stub_wrapper = replace_once(
+    stub_wrapper,
+    '''    pub fn revalidate_dispatch_context(
         &self,
         attachment: &WindowsUiaAttachment,
         request: WindowsUiaDispatchContextRequest,''',
-        '''    pub fn observe_geometry(
+    '''    pub fn observe_geometry(
         &self,
         attachment: &WindowsUiaAttachment,
         request: crate::WindowsUiaGeometryRequest,
@@ -228,9 +249,9 @@ for wrapper_path in (
         &self,
         attachment: &WindowsUiaAttachment,
         request: WindowsUiaDispatchContextRequest,''',
-        f"public geometry wrapper ({wrapper_path.name})",
-    )
-    wrapper_path.write_text(wrapper)
+    "public geometry wrapper (subscription_stub.rs)",
+)
+stub_wrapper_path.write_text(stub_wrapper)
 
 cargo_path = Path("crates/windows-uia-provider/Cargo.toml")
 cargo = cargo_path.read_text()
