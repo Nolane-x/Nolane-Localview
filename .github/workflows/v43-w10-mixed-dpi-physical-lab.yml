@@ -1,0 +1,107 @@
+name: V4.3 W10 Physical Mixed-DPI L7 Closure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v43-w10-physical-mixed-dpi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  w10-physical-mixed-dpi-closure:
+    name: W10 physical mixed-DPI oracle + exact W01-W12 campaign
+    runs-on: [self-hosted, Windows, X64, localview-mixed-dpi]
+    timeout-minutes: 30
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-seed\target\debug\localview-windows-uia-seed.exe
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+      LOCALVIEW_DISPLAY_TOPOLOGY: physical-self-hosted;validated-at-runtime-by-w10-independent-oracle
+      LOCALVIEW_DPI_SCALE: distinct-effective-dpi;validated-at-runtime-by-w10-independent-oracle
+      LOCALVIEW_PERMISSION_STATE: interactive-self-hosted-windows-session
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Bind exact physical-lab candidate
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($head -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "physical-lab checkout drift: expected $env:LOCALVIEW_CANDIDATE_SHA, got $head"
+          }
+          $artifactDir = Join-Path $env:RUNNER_TEMP "localview-v43-w10-physical-$head"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          "LOCALVIEW_L7_ARTIFACT_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALVIEW_WINDOWS_BUILD=$([System.Environment]::OSVersion.VersionString)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $culture = (Get-Culture).Name
+          $uiCulture = (Get-UICulture).Name
+          "LOCALVIEW_LOCALE_INPUT_METHOD=culture=$culture;ui-culture=$uiCulture;input-method=physical-lab" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build exact provider seeds
+        shell: pwsh
+        run: |
+          cargo build --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require exact W10 physical oracle registration
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w10::w10_mixed_dpi_move_refreshes_live_physical_geometry_without_stale_coordinates"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w10 -- --list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W10 physical real-provider test is not registered: $testName"
+          }
+      - name: Run exact W10 physical mixed-DPI oracle
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w10::w10_mixed_dpi_move_refreshes_live_physical_geometry_without_stale_coordinates"
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w10 $testName -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require exact twelve-case campaign registration
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign_w10_w12::prospective_l7_campaign_binds_w01_w12_to_exact_candidate"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign_w10_w12 -- --list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required exact W01-W12 physical campaign is not registered: $testName"
+          }
+      - name: Run exact W01-W12 physical provider campaign
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign_w10_w12::prospective_l7_campaign_binds_w01_w12_to_exact_candidate"
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign_w10_w12 $testName -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify final exact head remains immutable
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "physical evidence is not bound to one exact head: expected $env:LOCALVIEW_CANDIDATE_SHA, got $head"
+          }
+          if (-not (Test-Path (Join-Path $env:LOCALVIEW_L7_ARTIFACT_DIR "W10-REAL-PROVIDER-RECORD.json"))) {
+            throw "W10 physical evidence record is missing"
+          }
+          if (-not (Test-Path (Join-Path $env:LOCALVIEW_L7_ARTIFACT_DIR "LAB-RESULT-W01-W12.json"))) {
+            throw "W01-W12 campaign result is missing"
+          }
+      - name: Publish exact W10 physical closure artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-w10-physical-w01-w12-${{ github.sha }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
