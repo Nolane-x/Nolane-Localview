@@ -154,3 +154,22 @@ fn capability_boolean_wire_values_are_strict_and_unknown_by_default() {
         WindowsUiaBooleanCapabilityFact::Unknown
     );
 }
+
+#[test]
+fn password_capability_emits_explicit_semantic_text_protection_fact() {
+    let facts = WindowsUiaValueCapabilityFacts::new(
+        WindowsUiaPatternSupport::Supported,
+        WindowsUiaBooleanCapabilityFact::True,
+        WindowsUiaBooleanCapabilityFact::Unknown,
+    );
+    let mut attributes = BTreeMap::new();
+    facts.write_attributes(&mut attributes);
+
+    assert_eq!(
+        attributes
+            .get("windows_uia.semantic_text_protection")
+            .map(String::as_str),
+        Some("protected_password"),
+        "W13 requires an explicit provider protection fact so downstream persistence/model exposure can prove why semantic text is opaque without reading the secret"
+    );
+}

@@ -19,12 +19,14 @@ internal sealed class EdgeWindow : Window
     public const string HostileProviderAutomationId = "LocalViewW05HostileProvider";
     public const string HostileProviderName = "LocalView W05 Hostile Provider";
     public const string VerifiedInputTargetAutomationId = "LocalViewW07W09VerifiedInputTarget";
+    public const string SensitiveFieldAutomationId = "LocalViewW13SensitiveField";
 
     private const byte VkShift = 0x10;
     private const uint KeyEventKeyUp = 0x0002;
 
     private readonly ListBox _virtualizedList;
     private readonly Button _verifiedInputTarget;
+    private readonly SensitiveFieldElement _sensitiveFieldTarget;
     private readonly ManualResetEventSlim _providerHangRelease = new(false);
     private Window? _foregroundThief;
     private Window? _modalBlocker;
@@ -37,13 +39,26 @@ internal sealed class EdgeWindow : Window
     {
         Title = "LocalView Windows UIA Edge Seed";
         Width = 520;
-        Height = 320;
+        Height = 360;
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         var items = new ObservableCollection<string>(
             Enumerable.Range(0, VirtualItemIndex + 1)
                 .Select(index => $"LocalView Virtual Item {index}"));
+
+        _sensitiveFieldTarget = new SensitiveFieldElement
+        {
+            Height = 28,
+            Margin = new Thickness(16, 8, 16, 0),
+            Focusable = false,
+        };
+        AutomationProperties.SetAutomationId(
+            _sensitiveFieldTarget,
+            SensitiveFieldAutomationId);
+        AutomationProperties.SetName(
+            _sensitiveFieldTarget,
+            "LocalView W13 protected field");
 
         _verifiedInputTarget = new Button
         {
@@ -92,6 +107,7 @@ internal sealed class EdgeWindow : Window
 
         var content = new StackPanel();
         content.Children.Add(hostileProvider);
+        content.Children.Add(_sensitiveFieldTarget);
         content.Children.Add(_verifiedInputTarget);
         content.Children.Add(_virtualizedList);
         Content = content;
@@ -99,6 +115,7 @@ internal sealed class EdgeWindow : Window
         Loaded += (_, _) =>
         {
             UpdateLayout();
+            _sensitiveFieldTarget.UpdateLayout();
             _verifiedInputTarget.UpdateLayout();
             _virtualizedList.UpdateLayout();
         };
@@ -112,6 +129,24 @@ internal sealed class EdgeWindow : Window
     public bool IsVirtualItemContainerGenerated()
     {
         return _virtualizedList.ItemContainerGenerator.ContainerFromIndex(VirtualItemIndex) is not null;
+    }
+
+    public void PrepareSensitiveField(string canary)
+    {
+        _sensitiveFieldTarget.Prepare(canary);
+        Show();
+        UpdateLayout();
+        _sensitiveFieldTarget.UpdateLayout();
+    }
+
+    public int SensitiveFieldValueReadCount()
+    {
+        return _sensitiveFieldTarget.ValueReadCount;
+    }
+
+    public int SensitiveFieldSecretLength()
+    {
+        return _sensitiveFieldTarget.SecretLength;
     }
 
     public void PrepareVerifiedInputTarget()

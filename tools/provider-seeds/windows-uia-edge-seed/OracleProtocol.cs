@@ -52,6 +52,27 @@ internal sealed class OracleProtocol
                 case "get_virtual_item_state":
                     Write(ReadVirtualItemState());
                     break;
+                case "prepare_sensitive_field":
+                    if (!document.RootElement.TryGetProperty("canary", out var canaryElement))
+                    {
+                        Write(new { ok = false, error = "missing_sensitive_canary" });
+                        break;
+                    }
+                    var canary = canaryElement.GetString();
+                    if (string.IsNullOrWhiteSpace(canary))
+                    {
+                        Write(new { ok = false, error = "invalid_sensitive_canary" });
+                        break;
+                    }
+                    Write(_window.Dispatcher.Invoke(() =>
+                    {
+                        _window.PrepareSensitiveField(canary);
+                        return ReadSensitiveFieldStateOnUiThread("prepare_sensitive_field");
+                    }));
+                    break;
+                case "get_sensitive_field_state":
+                    Write(ReadSensitiveFieldState("get_sensitive_field_state"));
+                    break;
                 case "prepare_verified_input_target":
                     Write(_window.Dispatcher.Invoke(() =>
                     {
@@ -173,6 +194,27 @@ internal sealed class OracleProtocol
             virtual_item_name = EdgeWindow.VirtualItemName,
             virtual_item_container_generated = _window.IsVirtualItemContainerGenerated(),
         });
+    }
+
+    private object ReadSensitiveFieldState(string command)
+    {
+        return _window.Dispatcher.Invoke(() => ReadSensitiveFieldStateOnUiThread(command));
+    }
+
+    private object ReadSensitiveFieldStateOnUiThread(string command)
+    {
+        return new
+        {
+            ok = true,
+            command,
+            seed_run_id = _seedRunId,
+            process_id = Environment.ProcessId,
+            window_handle = _window.WindowHandle(),
+            target_automation_id = EdgeWindow.SensitiveFieldAutomationId,
+            is_password = true,
+            secret_length = _window.SensitiveFieldSecretLength(),
+            value_read_count = _window.SensitiveFieldValueReadCount(),
+        };
     }
 
     private object ReadVerifiedInputState(string command)

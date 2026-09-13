@@ -1,0 +1,92 @@
+name: V4.3 W13 Real Provider Seed
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v43-w13-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  w13-sensitive-field-redaction:
+    name: W13 protected field never exposes plaintext
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          clean: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Bind exact W13 candidate and artifact directory
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "W13 checkout drift: expected $env:LOCALVIEW_CANDIDATE_SHA, got $head"
+          }
+          $artifactDir = Join-Path $env:RUNNER_TEMP "localview-v43-w13-$head"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          "LOCALVIEW_L7_ARTIFACT_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build WPF W13 adversarial edge seed
+        shell: pwsh
+        run: |
+          dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require exact W13 real-provider registration
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w13::w13_sensitive_password_never_enters_semantic_snapshot_or_artifact"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w13 -- --list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W13 real-provider test is not registered: $testName"
+          }
+      - name: Run W13 protected-field real-provider oracle
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w13::w13_sensitive_password_never_enters_semantic_snapshot_or_artifact"
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w13 $testName -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify W13 evidence is exact-head and secret-safe
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "W13 evidence is not bound to one exact head: expected $env:LOCALVIEW_CANDIDATE_SHA, got $head"
+          }
+          $record = Join-Path $env:LOCALVIEW_L7_ARTIFACT_DIR "W13-REAL-PROVIDER-RECORD.json"
+          if (-not (Test-Path $record)) {
+            throw "W13 real-provider evidence record is missing"
+          }
+          $json = Get-Content -Raw $record | ConvertFrom-Json
+          if ($json.candidate_sha -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "W13 evidence candidate drift: expected $env:LOCALVIEW_CANDIDATE_SHA, got $($json.candidate_sha)"
+          }
+          if ($json.provider_value_read_count -ne 0) {
+            throw "W13 provider value getter was read: $($json.provider_value_read_count)"
+          }
+          if ($json.semantic_snapshot_contains_plaintext -ne $false -or $json.oracle_response_contains_plaintext -ne $false) {
+            throw "W13 evidence reports plaintext exposure"
+          }
+          if ($json.semantic_text_protection -ne "protected_password") {
+            throw "W13 protection fact missing or downgraded"
+          }
+      - name: Publish W13 real-provider evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-w13-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
