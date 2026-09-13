@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 mod macos_real_provider_m05 {
     use std::{
-        ffi::{c_char, c_void, CString},
+        ffi::{c_char, c_void, CStr, CString},
         fs,
         path::{Path, PathBuf},
         process::{Child, Command, Stdio},
@@ -20,18 +20,32 @@ mod macos_real_provider_m05 {
     type AxObserverRef = *const c_void;
     type CfTypeRef = *const c_void;
     type CfStringRef = *const c_void;
+    type CfArrayRef = *const c_void;
 
     const AX_ERROR_SUCCESS: i32 = 0;
     const AX_ERROR_NOTIFICATION_UNSUPPORTED: i32 = -25207;
     const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
-    const NOTIFICATION: &str = "AXFocusedUIElementChanged";
-    const DIRECT_READ_ATTRIBUTE: &str = "AXFocusedApplication";
+    const POSITIVE_NOTIFICATION: &str = "AXFocusedUIElementChanged";
+    const DIRECT_READ_ATTRIBUTE: &str = "AXRole";
     const WINDOW_TITLE: &str = "LocalView M05 Notification Seed";
+    const MAX_AX_DEPTH: usize = 12;
+    const MAX_AX_NODES: usize = 256;
+    const NOTIFICATION_CANDIDATES: &[&str] = &[
+        "AXSelectedRowsChanged",
+        "AXSelectedColumnsChanged",
+        "AXRowCountChanged",
+        "AXMenuOpened",
+        "AXMenuClosed",
+        "AXValueChanged",
+        "AXTitleChanged",
+        "AXWindowMoved",
+        "AXWindowResized",
+        "AXFocusedWindowChanged",
+    ];
 
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
         fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
-        fn AXUIElementCreateSystemWide() -> AxUiElementRef;
         fn AXUIElementCopyAttributeValue(
             element: AxUiElementRef,
             attribute: CfStringRef,
@@ -62,6 +76,18 @@ mod macos_real_provider_m05 {
             c_string: *const c_char,
             encoding: u32,
         ) -> CfStringRef;
+        fn CFGetTypeID(value: CfTypeRef) -> usize;
+        fn CFStringGetTypeID() -> usize;
+        fn CFArrayGetTypeID() -> usize;
+        fn CFArrayGetCount(array: CfArrayRef) -> isize;
+        fn CFArrayGetValueAtIndex(array: CfArrayRef, index: isize) -> *const c_void;
+        fn CFStringGetCString(
+            string: CfStringRef,
+            buffer: *mut c_char,
+            buffer_size: isize,
+            encoding: u32,
+        ) -> u8;
+        fn CFRetain(value: CfTypeRef) -> CfTypeRef;
         fn CFRelease(value: CfTypeRef);
     }
 
@@ -102,6 +128,28 @@ mod macos_real_provider_m05 {
         }
     }
 
+    struct AxNames {
+        children: OwnedCf,
+        role: OwnedCf,
+        title: OwnedCf,
+    }
+
+    impl AxNames {
+        fn new() -> Result<Self, String> {
+            Ok(Self {
+                children: cf_string("AXChildren")?,
+                role: cf_string("AXRole")?,
+                title: cf_string("AXTitle")?,
+            })
+        }
+    }
+
+    struct ProbeTarget {
+        element: OwnedCf,
+        role: String,
+        title: Option<String>,
+    }
+
     fn cf_string(value: &str) -> Result<OwnedCf, String> {
         let value = CString::new(value)
             .map_err(|_| "CoreFoundation string contains interior NUL".to_owned())?;
@@ -113,6 +161,92 @@ mod macos_real_provider_m05 {
             )
         };
         OwnedCf::new(string).ok_or_else(|| "CFStringCreateWithCString returned null".to_owned())
+    }
+
+    fn copy_attribute_result(
+        element: AxUiElementRef,
+        attribute: CfStringRef,
+    ) -> (i32, Option<OwnedCf>) {
+        let mut value: CfTypeRef = ptr::null();
+        let error = unsafe { AXUIElementCopyAttributeValue(element, attribute, &mut value) };
+        let value = if error == AX_ERROR_SUCCESS {
+            OwnedCf::new(value)
+        } else {
+            None
+        };
+        (error, value)
+    }
+
+    fn cf_string_value(value: CfTypeRef) -> Option<String> {
+        if value.is_null() || unsafe { CFGetTypeID(value) } != unsafe { CFStringGetTypeID() } {
+            return None;
+        }
+        let mut buffer = [0 as c_char; 512];
+        let copied = unsafe {
+            CFStringGetCString(
+                value.cast(),
+                buffer.as_mut_ptr(),
+                buffer.len() as isize,
+                CF_STRING_ENCODING_UTF8,
+            )
+        };
+        if copied == 0 {
+            return None;
+        }
+        Some(
+            unsafe { CStr::from_ptr(buffer.as_ptr()) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+
+    fn string_attribute(element: AxUiElementRef, attribute: CfStringRef) -> Option<String> {
+        let (error, value) = copy_attribute_result(element, attribute);
+        if error != AX_ERROR_SUCCESS {
+            return None;
+        }
+        value.and_then(|value| cf_string_value(value.raw()))
+    }
+
+    fn collect_targets(
+        element: AxUiElementRef,
+        names: &AxNames,
+        depth: usize,
+        visited: &mut usize,
+        targets: &mut Vec<ProbeTarget>,
+    ) {
+        if element.is_null() || depth > MAX_AX_DEPTH || *visited >= MAX_AX_NODES {
+            return;
+        }
+        *visited += 1;
+
+        if let Some(role) = string_attribute(element, names.role.raw().cast()) {
+            let retained = unsafe { CFRetain(element.cast()) };
+            if let Some(element) = OwnedCf::new(retained) {
+                targets.push(ProbeTarget {
+                    element,
+                    role,
+                    title: string_attribute(element.raw().cast(), names.title.raw().cast()),
+                });
+            }
+        }
+
+        let (error, children) = copy_attribute_result(element, names.children.raw().cast());
+        if error != AX_ERROR_SUCCESS {
+            return;
+        }
+        let Some(children) = children else {
+            return;
+        };
+        if unsafe { CFGetTypeID(children.raw()) } != unsafe { CFArrayGetTypeID() } {
+            return;
+        }
+        let array: CfArrayRef = children.raw().cast();
+        let count = unsafe { CFArrayGetCount(array) };
+        for index in 0..count {
+            let child = unsafe { CFArrayGetValueAtIndex(array, index) }.cast::<c_void>();
+            collect_targets(child, names, depth + 1, visited, targets);
+        }
     }
 
     fn read_seed_state(path: &Path) -> Result<serde_json::Value, String> {
@@ -177,25 +311,22 @@ mod macos_real_provider_m05 {
 
         let application = OwnedCf::new(unsafe { AXUIElementCreateApplication(pid) }.cast())
             .expect("AXUIElementCreateApplication returned null");
-        let system_wide = OwnedCf::new(unsafe { AXUIElementCreateSystemWide() }.cast())
-            .expect("AXUIElementCreateSystemWide returned null");
 
         let mut observer: AxObserverRef = ptr::null();
-        let observer_create_error = unsafe {
-            AXObserverCreate(pid, observer_callback, &mut observer)
-        };
+        let observer_create_error = unsafe { AXObserverCreate(pid, observer_callback, &mut observer) };
         assert_eq!(
             observer_create_error, AX_ERROR_SUCCESS,
             "M05 requires a real AX observer for the seed application"
         );
         let observer = OwnedCf::new(observer.cast()).expect("AXObserverCreate returned null observer");
 
-        let notification = cf_string(NOTIFICATION).expect("build M05 notification name");
+        let positive_notification =
+            cf_string(POSITIVE_NOTIFICATION).expect("build M05 positive notification name");
         let supported_registration_error = unsafe {
             AXObserverAddNotification(
                 observer.raw().cast(),
                 application.raw().cast(),
-                notification.raw().cast(),
+                positive_notification.raw().cast(),
                 ptr::null_mut(),
             )
         };
@@ -204,48 +335,99 @@ mod macos_real_provider_m05 {
             "seed application must provide a positive-control supported AX notification registration"
         );
 
-        // Apple explicitly documents that the system-wide accessibility object
-        // does not support notifications. This is a real OS negative control,
-        // not a fabricated provider error.
-        let unsupported_registration_error = unsafe {
-            AXObserverAddNotification(
-                observer.raw().cast(),
-                system_wide.raw().cast(),
-                notification.raw().cast(),
-                ptr::null_mut(),
-            )
-        };
-        assert_eq!(
-            unsupported_registration_error, AX_ERROR_NOTIFICATION_UNSUPPORTED,
-            "system-wide AX element must expose real notification-unsupported evidence"
+        // Stay strictly within the observer's seed PID. Probe only documented
+        // AX notification names against real AppKit accessibility nodes and
+        // preserve every raw result. This diagnostic exists solely to locate a
+        // stable real kAXErrorNotificationUnsupported pair; the final oracle
+        // will lock that pair and remove the matrix.
+        let names = AxNames::new().expect("build M05 AX names");
+        let mut visited = 0;
+        let mut targets = Vec::new();
+        collect_targets(
+            application.raw().cast(),
+            &names,
+            0,
+            &mut visited,
+            &mut targets,
+        );
+        assert!(
+            !targets.is_empty(),
+            "M05 diagnostic requires real same-PID AppKit AX targets"
         );
 
-        // Unsupported notifications do not mean the AX element is generally
-        // unreadable. Prove a real direct read remains available on that same
-        // system-wide element while event coverage is incomplete.
-        let focused_application = cf_string(DIRECT_READ_ATTRIBUTE)
-            .expect("build M05 direct-read attribute name");
-        let mut focused_application_value: CfTypeRef = ptr::null();
+        let mut probe_results = Vec::new();
+        let mut unsupported = None;
+        'targets: for target in &targets {
+            for notification_name in NOTIFICATION_CANDIDATES {
+                let notification = cf_string(notification_name)
+                    .expect("build M05 candidate notification name");
+                let ax_error = unsafe {
+                    AXObserverAddNotification(
+                        observer.raw().cast(),
+                        target.element.raw().cast(),
+                        notification.raw().cast(),
+                        ptr::null_mut(),
+                    )
+                };
+                eprintln!(
+                    "M05_NOTIFICATION_PROBE role={:?} title={:?} notification={} ax_error={}",
+                    target.role, target.title, notification_name, ax_error
+                );
+                probe_results.push((
+                    target.role.clone(),
+                    target.title.clone(),
+                    (*notification_name).to_owned(),
+                    ax_error,
+                ));
+                if ax_error == AX_ERROR_NOTIFICATION_UNSUPPORTED {
+                    unsupported = Some((
+                        target.element.raw().cast::<c_void>(),
+                        target.role.clone(),
+                        target.title.clone(),
+                        (*notification_name).to_owned(),
+                        ax_error,
+                    ));
+                    break 'targets;
+                }
+            }
+        }
+
+        let (unsupported_element, unsupported_role, unsupported_title, unsupported_notification_name, unsupported_registration_error) =
+            unsupported.unwrap_or_else(|| {
+                panic!(
+                    "M05 same-PID diagnostic found no real kAXErrorNotificationUnsupported; visited={visited} targets={} results={probe_results:?}",
+                    targets.len()
+                )
+            });
+
+        // Prove that notification incompleteness is not equivalent to loss of
+        // direct observation on the exact same accessibility element.
+        let direct_read_attribute =
+            cf_string(DIRECT_READ_ATTRIBUTE).expect("build M05 direct-read attribute name");
+        let mut direct_read_value: CfTypeRef = ptr::null();
         let direct_read_error = unsafe {
             AXUIElementCopyAttributeValue(
-                system_wide.raw().cast(),
-                focused_application.raw().cast(),
-                &mut focused_application_value,
+                unsupported_element,
+                direct_read_attribute.raw().cast(),
+                &mut direct_read_value,
             )
         };
         assert_eq!(
             direct_read_error, AX_ERROR_SUCCESS,
-            "system-wide AX element must remain directly observable after unsupported registration"
+            "same target must remain directly observable after unsupported notification registration"
         );
-        let _focused_application_value = OwnedCf::new(focused_application_value)
-            .expect("AXFocusedApplication direct read returned null");
+        let _direct_read_value =
+            OwnedCf::new(direct_read_value).expect("M05 AXRole direct read returned null");
 
         let supported_registration = AxNotificationRegistration::from_ax_error(
-            AxNotificationRequest::new(NOTIFICATION, "application.focused_element"),
+            AxNotificationRequest::new(POSITIVE_NOTIFICATION, "application.focused_element"),
             supported_registration_error,
         );
         let unsupported_registration = AxNotificationRegistration::from_ax_error(
-            AxNotificationRequest::new(NOTIFICATION, "system.focused_element_events"),
+            AxNotificationRequest::new(
+                unsupported_notification_name.clone(),
+                "diagnostic.unsupported_event_dimension",
+            ),
             unsupported_registration_error,
         );
         assert_eq!(
@@ -259,10 +441,13 @@ mod macos_real_provider_m05 {
         ]);
         assert_eq!(profile.assurance(), AxEventAssurance::Incomplete);
         assert!(profile.requires_snapshot_reconciliation());
-        assert_eq!(profile.unsupported_notifications(), vec![NOTIFICATION]);
+        assert_eq!(
+            profile.unsupported_notifications(),
+            vec![unsupported_notification_name.as_str()]
+        );
         assert_eq!(
             profile.incomplete_semantic_dimensions(),
-            vec!["system.focused_element_events"]
+            vec!["diagnostic.unsupported_event_dimension"]
         );
 
         let record = serde_json::json!({
@@ -274,21 +459,23 @@ mod macos_real_provider_m05 {
             "seed_window_title": WINDOW_TITLE,
             "observer_create_ax_error": observer_create_error,
             "supported_target": "seed_application",
-            "supported_notification": NOTIFICATION,
+            "supported_notification": POSITIVE_NOTIFICATION,
             "supported_registration_ax_error": supported_registration_error,
-            "unsupported_target": "system_wide",
-            "unsupported_notification": NOTIFICATION,
+            "unsupported_target_role": unsupported_role,
+            "unsupported_target_title": unsupported_title,
+            "unsupported_notification": unsupported_notification_name,
             "unsupported_registration_ax_error": unsupported_registration_error,
             "unsupported_registration_outcome": "unsupported",
             "incomplete_semantic_dimensions": profile.incomplete_semantic_dimensions(),
             "event_assurance": "incomplete",
             "snapshot_reconciliation_required": profile.requires_snapshot_reconciliation(),
-            "direct_read_target": "system_wide",
             "direct_read_attribute": DIRECT_READ_ATTRIBUTE,
             "direct_read_ax_error": direct_read_error,
             "direct_read_after_unsupported_succeeded": direct_read_error == AX_ERROR_SUCCESS,
             "run_loop_delivery_claimed": false,
-            "ground_truth_source": "real_ax_registration_results_plus_seed_identity",
+            "diagnostic_matrix_retained": true,
+            "ax_nodes_visited": visited,
+            "ground_truth_source": "real_same_pid_ax_registration_results_plus_seed_identity",
         });
         fs::write(
             artifact_dir.join("M05-REAL-PROVIDER-RECORD.json"),
