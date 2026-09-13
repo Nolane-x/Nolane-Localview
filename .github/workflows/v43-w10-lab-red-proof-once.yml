@@ -68,12 +68,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- \
-            crates/windows-uia-provider/src/lib.rs \
-            crates/windows-uia-provider/src/subscription.rs \
-            crates/windows-uia-provider/src/subscription_stub.rs \
-            crates/windows-uia-provider/Cargo.toml \
-            .github/w10-failure-diagnostic.txt
+          git add -- crates/windows-uia-provider/src/lib.rs crates/windows-uia-provider/src/subscription.rs crates/windows-uia-provider/src/subscription_stub.rs crates/windows-uia-provider/Cargo.toml .github/w10-failure-diagnostic.txt
           git diff --cached --check
           if (-not (git diff --cached --quiet)) {
             git commit -m "feat(v43): bind UIA physical geometry to exact retained element"
