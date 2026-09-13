@@ -51,17 +51,13 @@ mod macos_real_provider_m02 {
         const before = Number(safe(() => bashSwitch.value()));
         if (before !== 1) throw new Error(`bash Accessibility switch precondition expected ON, got ${before}`);
 
-        const press = safe(() => bashSwitch.actions['AXPress']);
-        if (press === null) throw new Error('bash Accessibility switch does not expose AXPress');
-        press.perform();
-
-        let after = Number(safe(() => bashSwitch.value()));
-        for (let attempt = 0; attempt < 50 && after !== 0; attempt++) {
-          host.delay(0.1);
-          after = Number(safe(() => bashSwitch.value()));
-        }
-        if (after !== 0) throw new Error(`bash Accessibility switch did not turn OFF, got ${after}`);
-        console.log('M02_UI_REVOKE bash_switch_before=1 bash_switch_after=0');
+        const actions = safe(() => bashSwitch.actions()) || [];
+        const actionNames = actions.map(action => String(safe(() => action.name()) || ''));
+        const byNameExists = Boolean(safe(() => bashSwitch.actions.byName('AXPress').exists()));
+        console.log(
+          `M02_ACTION_DIAGNOSTIC role=${String(safe(() => bashSwitch.role()) || '')} name=${String(safe(() => bashSwitch.name()) || '')} before=${before} actions=${JSON.stringify(actionNames)} axpress_by_name_exists=${byNameExists}`
+        );
+        throw new Error('M02_ACTION_DIAGNOSTIC_COMPLETE');
     "#;
 
     #[test]
