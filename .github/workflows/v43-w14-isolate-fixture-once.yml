@@ -1,0 +1,65 @@
+name: V4.3 W14 Isolate Fixture Once
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  prove-and-apply-fixture-isolation:
+    if: github.event.pull_request.head.ref == 'feat/v43-l7-windows-w14-weak-accessibility'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      LOCALVIEW_UIA_SMOKE: 1
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-l7-windows-w14-weak-accessibility
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Detach W14 fixture until explicit prepare
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path("tools/provider-seeds/windows-uia-edge-seed/EdgeWindow.cs")
+          text = path.read_text(encoding="utf-8")
+          old_children = '''        content.Children.Add(_sensitiveFieldTarget);\n        content.Children.Add(_weakAccessibilityTarget);\n        content.Children.Add(_verifiedInputTarget);'''
+          new_children = '''        content.Children.Add(_sensitiveFieldTarget);\n        content.Children.Add(_verifiedInputTarget);'''
+          old_prepare = '''    public void PrepareWeakAccessibility()\n    {\n        _weakAccessibilityTarget.Reset();\n        Show();\n        UpdateLayout();\n        _weakAccessibilityTarget.UpdateLayout();\n    }'''
+          new_prepare = '''    public void PrepareWeakAccessibility()\n    {\n        if (Content is not StackPanel content)\n        {\n            throw new InvalidOperationException("W14 weak-accessibility host panel is unavailable");\n        }\n        if (!content.Children.Contains(_weakAccessibilityTarget))\n        {\n            content.Children.Insert(2, _weakAccessibilityTarget);\n        }\n        _weakAccessibilityTarget.Reset();\n        Show();\n        UpdateLayout();\n        _weakAccessibilityTarget.UpdateLayout();\n    }'''
+          if text.count(old_children) != 1:
+              raise SystemExit(f"expected one W14 child attachment anchor, found {text.count(old_children)}")
+          if text.count(old_prepare) != 1:
+              raise SystemExit(f"expected one W14 prepare anchor, found {text.count(old_prepare)}")
+          text = text.replace(old_children, new_children).replace(old_prepare, new_prepare)
+          path.write_text(text, encoding="utf-8")
+          '@ | python -
+      - name: Build isolated WPF edge seed
+        shell: pwsh
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+      - name: Prove W03 regains complete current snapshot
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w03::w03_virtualized_item_requires_realize_then_fresh_observation"
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w03 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Commit proven fixture isolation
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/provider-seeds/windows-uia-edge-seed/EdgeWindow.cs
+          if (git diff --cached --quiet) { throw "W14 fixture isolation produced no staged change" }
+          git commit -m "fix(v43): detach W14 fixture outside W14 seed"
+          git push origin HEAD:feat/v43-l7-windows-w14-weak-accessibility
