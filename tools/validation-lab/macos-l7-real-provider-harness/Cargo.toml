@@ -15,6 +15,10 @@ path = "tests/v43_real_provider_m01.rs"
 name = "v43_real_provider_m02"
 path = "tests/v43_real_provider_m02.rs"
 
+[[test]]
+name = "v43_m02_signal_diagnostic"
+path = "tests/v43_m02_signal_diagnostic.rs"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 localview-macos-ax-provider = { path = "../../../crates/macos-ax-provider" }
 serde_json = "1"
