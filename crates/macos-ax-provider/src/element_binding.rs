@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use thiserror::Error;
 
-use crate::application_incarnation::AxApplicationIncarnation;
+use crate::application_incarnation::{AxApplicationIncarnation, IntoAxApplicationIncarnation};
 
 const AX_ERROR_SUCCESS: i32 = 0;
 const AX_ERROR_INVALID_UI_ELEMENT: i32 = -25202;
@@ -21,12 +21,12 @@ pub struct AxElementIdentity {
 
 impl AxElementIdentity {
     pub fn new(
-        application_incarnation: AxApplicationIncarnation,
+        application_incarnation: impl IntoAxApplicationIncarnation,
         window_identity: impl Into<String>,
         semantic_identity: impl Into<String>,
     ) -> Self {
         Self {
-            application_incarnation,
+            application_incarnation: application_incarnation.into_ax_application_incarnation(),
             window_identity: window_identity.into(),
             semantic_identity: semantic_identity.into(),
         }
