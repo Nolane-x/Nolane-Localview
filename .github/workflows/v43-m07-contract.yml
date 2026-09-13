@@ -22,5 +22,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
+      - name: Prove shipping callback injection surface is absent
+        run: cargo test -p localview-macos-ax-provider --doc -- --nocapture
       - name: Run macOS AX provider authority contracts through M07
-        run: cargo test -p localview-macos-ax-provider -- --nocapture
+        run: cargo test -p localview-macos-ax-provider --lib --tests --features validation-observer-callback -- --nocapture
