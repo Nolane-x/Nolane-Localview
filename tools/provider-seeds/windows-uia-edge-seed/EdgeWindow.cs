@@ -20,6 +20,7 @@ internal sealed class EdgeWindow : Window
     public const string HostileProviderName = "LocalView W05 Hostile Provider";
     public const string VerifiedInputTargetAutomationId = "LocalViewW07W09VerifiedInputTarget";
     public const string SensitiveFieldAutomationId = "LocalViewW13SensitiveField";
+    public const string WeakAccessibilityAutomationId = "LocalViewW14WeakAccessibility";
 
     private const byte VkShift = 0x10;
     private const uint KeyEventKeyUp = 0x0002;
@@ -27,6 +28,7 @@ internal sealed class EdgeWindow : Window
     private readonly ListBox _virtualizedList;
     private readonly Button _verifiedInputTarget;
     private readonly SensitiveFieldElement _sensitiveFieldTarget;
+    private readonly WeakAccessibilityElement _weakAccessibilityTarget;
     private readonly ManualResetEventSlim _providerHangRelease = new(false);
     private Window? _foregroundThief;
     private Window? _modalBlocker;
@@ -39,7 +41,7 @@ internal sealed class EdgeWindow : Window
     {
         Title = "LocalView Windows UIA Edge Seed";
         Width = 520;
-        Height = 360;
+        Height = 430;
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
@@ -59,6 +61,19 @@ internal sealed class EdgeWindow : Window
         AutomationProperties.SetName(
             _sensitiveFieldTarget,
             "LocalView W13 protected field");
+
+        _weakAccessibilityTarget = new WeakAccessibilityElement
+        {
+            Height = 56,
+            Margin = new Thickness(16, 8, 16, 0),
+            Focusable = false,
+        };
+        AutomationProperties.SetAutomationId(
+            _weakAccessibilityTarget,
+            WeakAccessibilityAutomationId);
+        AutomationProperties.SetName(
+            _weakAccessibilityTarget,
+            "LocalView W14 owner-drawn surface");
 
         _verifiedInputTarget = new Button
         {
@@ -108,6 +123,7 @@ internal sealed class EdgeWindow : Window
         var content = new StackPanel();
         content.Children.Add(hostileProvider);
         content.Children.Add(_sensitiveFieldTarget);
+        content.Children.Add(_weakAccessibilityTarget);
         content.Children.Add(_verifiedInputTarget);
         content.Children.Add(_virtualizedList);
         Content = content;
@@ -116,6 +132,7 @@ internal sealed class EdgeWindow : Window
         {
             UpdateLayout();
             _sensitiveFieldTarget.UpdateLayout();
+            _weakAccessibilityTarget.UpdateLayout();
             _verifiedInputTarget.UpdateLayout();
             _virtualizedList.UpdateLayout();
         };
@@ -147,6 +164,24 @@ internal sealed class EdgeWindow : Window
     public int SensitiveFieldSecretLength()
     {
         return _sensitiveFieldTarget.SecretLength;
+    }
+
+    public void PrepareWeakAccessibility()
+    {
+        _weakAccessibilityTarget.Reset();
+        Show();
+        UpdateLayout();
+        _weakAccessibilityTarget.UpdateLayout();
+    }
+
+    public int WeakAccessibilityVisualEffectCount()
+    {
+        return _weakAccessibilityTarget.VisualEffectCount;
+    }
+
+    public string WeakAccessibilityVisualLabel()
+    {
+        return WeakAccessibilityElement.VisualOnlyLabel;
     }
 
     public void PrepareVerifiedInputTarget()
