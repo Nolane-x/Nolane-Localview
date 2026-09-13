@@ -8,5 +8,9 @@ license.workspace = true
 [lib]
 path = "src/provider.rs"
 
+[features]
+default = []
+validation-pid-identity = []
+
 [dependencies]
 thiserror.workspace = true
