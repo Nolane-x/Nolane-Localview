@@ -27,6 +27,10 @@ path = "tests/v43_real_provider_m04.rs"
 name = "v43_real_provider_m05"
 path = "tests/v43_real_provider_m05.rs"
 
+[[test]]
+name = "v43_real_provider_m06"
+path = "tests/v43_real_provider_m06.rs"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 localview-macos-ax-provider = { path = "../../../crates/macos-ax-provider", features = ["validation-pid-identity"] }
 serde_json = "1"
