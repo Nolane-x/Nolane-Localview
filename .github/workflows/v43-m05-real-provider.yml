@@ -87,14 +87,23 @@ jobs:
           assert record["case_id"] == "M05"
           assert record["candidate_sha"] == expected_sha
           assert record["observer_create_ax_error"] == 0
+          assert record["supported_target"] == "seed_application"
+          assert record["supported_notification"] == "AXFocusedUIElementChanged"
           assert record["supported_registration_ax_error"] == 0
+          assert record["unsupported_target_role"] == "AXStaticText"
+          assert record["unsupported_target_value"] == "M05 AX observer registration seed"
+          assert record["unsupported_notification"] == "AXSelectedRowsChanged"
           assert record["unsupported_registration_ax_error"] == -25207
           assert record["unsupported_registration_outcome"] == "unsupported"
+          assert record["incomplete_semantic_dimensions"] == ["seed_label.selected_rows"]
           assert record["event_assurance"] == "incomplete"
           assert record["snapshot_reconciliation_required"] is True
+          assert record["direct_read_attribute"] == "AXValue"
+          assert record["direct_read_value"] == "M05 AX observer registration seed"
           assert record["direct_read_after_unsupported_succeeded"] is True
           assert record["direct_read_ax_error"] == 0
           assert record["run_loop_delivery_claimed"] is False
+          assert record["diagnostic_matrix_retained"] is False
           assert record["ground_truth_source"] == "real_ax_registration_results_plus_seed_identity"
           PY
       - name: Publish M05 real-provider evidence
