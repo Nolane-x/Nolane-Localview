@@ -60,6 +60,30 @@ jobs:
           probe_name="macos_m02_fresh_process_probe::m02_fresh_process_permission_state_after_revoke"
           cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_m02_fresh_process_probe "$probe_name" -- --ignored --exact --nocapture --test-threads=1 \
             2>&1 | tee -a "$LOCALVIEW_L7_ARTIFACT_DIR/M02-ORACLE.log"
+      - name: Diagnose hosted-runner TCC authority after UI revoke
+        if: failure()
+        run: |
+          set -euo pipefail
+          {
+            echo '=== M02 user TCC rows after System Settings switch OFF ==='
+            sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
+              "SELECT service,client,client_type,auth_value,auth_reason,flags,last_modified FROM access WHERE service='kTCCServiceAccessibility' AND (client LIKE '%bash%' OR client LIKE '%Terminal%');" \
+              || true
+            echo '=== M02 public tccutil reset Accessibility ==='
+            tccutil reset Accessibility || true
+            sleep 1
+            echo '=== M02 user TCC rows after tccutil reset ==='
+            sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
+              "SELECT service,client,client_type,auth_value,auth_reason,flags,last_modified FROM access WHERE service='kTCCServiceAccessibility' AND (client LIKE '%bash%' OR client LIKE '%Terminal%');" \
+              || true
+          } 2>&1 | tee -a "$LOCALVIEW_L7_ARTIFACT_DIR/M02-ORACLE.log"
+      - name: Probe fresh-process permission after tccutil reset
+        if: failure()
+        run: |
+          set -euo pipefail
+          probe_name="macos_m02_fresh_process_probe::m02_fresh_process_permission_state_after_revoke"
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_m02_fresh_process_probe "$probe_name" -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee -a "$LOCALVIEW_L7_ARTIFACT_DIR/M02-ORACLE.log"
       - name: Verify M02 evidence is exact-head and revocation-safe
         run: |
           set -euo pipefail
