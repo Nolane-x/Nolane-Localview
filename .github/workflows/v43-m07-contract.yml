@@ -1,0 +1,28 @@
+name: V4.3 M07 Observer Continuity Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m07-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m07-observer-continuity-contract:
+    name: M07 observer/run-loop continuity contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prove shipping callback injection surface is absent
+        run: cargo test -p localview-macos-ax-provider --doc -- --nocapture
+      - name: Run macOS AX provider authority contracts through M07
+        run: cargo test -p localview-macos-ax-provider --lib --tests -- --nocapture
