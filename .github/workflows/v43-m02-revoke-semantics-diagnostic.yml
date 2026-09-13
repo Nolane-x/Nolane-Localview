@@ -1,0 +1,185 @@
+name: V4.3 M02 Revoke Semantics Diagnostic
+
+on:
+  pull_request:
+
+concurrency:
+  group: localview-v43-m02-revoke-semantics-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: M02 characterize live Accessibility revoke semantics
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Open exact Accessibility privacy pane
+        run: |
+          set -euo pipefail
+          open 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility'
+          for i in {1..100}; do
+            pid="$(pgrep -x 'System Settings' | head -1 || true)"
+            if [ -n "$pid" ]; then
+              echo "SYSTEM_SETTINGS_PID=$pid" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 0.1
+          done
+          echo 'System Settings did not start' >&2
+          exit 1
+      - name: Compile native revoke semantics probe
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/m02_revoke_probe.swift" <<'SWIFT'
+          import ApplicationServices
+          import Foundation
+
+          func copyAttribute(_ element: AXUIElement, _ attribute: CFString) -> (AXError, CFTypeRef?) {
+              var value: CFTypeRef?
+              let error = AXUIElementCopyAttributeValue(element, attribute, &value)
+              return (error, value)
+          }
+
+          func stringValue(_ value: CFTypeRef?) -> String? {
+              guard let value else { return nil }
+              if CFGetTypeID(value) == CFStringGetTypeID() {
+                  return value as? String
+              }
+              return nil
+          }
+
+          func strings(_ element: AXUIElement) -> [String] {
+              return [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap { attr in
+                  let (_, value) = copyAttribute(element, attr as CFString)
+                  return stringValue(value)
+              }.filter { !$0.isEmpty }
+          }
+
+          func children(_ element: AXUIElement) -> [AXUIElement] {
+              let (error, value) = copyAttribute(element, kAXChildrenAttribute as CFString)
+              guard error == .success, let value else { return [] }
+              return value as? [AXUIElement] ?? []
+          }
+
+          func parent(_ element: AXUIElement) -> AXUIElement? {
+              let (error, value) = copyAttribute(element, kAXParentAttribute as CFString)
+              guard error == .success, let value else { return nil }
+              return unsafeBitCast(value, to: AXUIElement.self)
+          }
+
+          func role(_ element: AXUIElement) -> String? {
+              let (_, value) = copyAttribute(element, kAXRoleAttribute as CFString)
+              return stringValue(value)
+          }
+
+          func subtreeContains(_ element: AXUIElement, wanted: String, depth: Int = 0) -> Bool {
+              if depth > 5 { return false }
+              if strings(element).contains(wanted) { return true }
+              return children(element).contains { subtreeContains($0, wanted: wanted, depth: depth + 1) }
+          }
+
+          func findBashSwitch(_ element: AXUIElement, depth: Int = 0, visited: inout Int) -> AXUIElement? {
+              if depth > 24 || visited >= 12_000 { return nil }
+              visited += 1
+              if role(element) == kAXCheckBoxRole as String {
+                  if strings(element).contains("bash") { return element }
+                  if let p = parent(element), subtreeContains(p, wanted: "bash") { return element }
+              }
+              for child in children(element) {
+                  if let found = findBashSwitch(child, depth: depth + 1, visited: &visited) { return found }
+              }
+              return nil
+          }
+
+          func valueProbe(_ element: AXUIElement) -> String {
+              let (error, value) = copyAttribute(element, kAXValueAttribute as CFString)
+              if error != .success { return "error=\(error.rawValue)" }
+              guard let value else { return "success:nil" }
+              if let number = value as? NSNumber { return "success:number=\(number.intValue)" }
+              if let string = value as? String { return "success:string=\(string)" }
+              return "success:type=\(CFGetTypeID(value))"
+          }
+
+          func messagingProbe() -> AXError {
+              let systemWide = AXUIElementCreateSystemWide()
+              var names: CFArray?
+              return AXUIElementCopyAttributeNames(systemWide, &names)
+          }
+
+          if CommandLine.arguments.contains("--child") {
+              print("M02_FRESH_CHILD trusted=\(AXIsProcessTrusted()) messaging_error=\(messagingProbe().rawValue)")
+              exit(0)
+          }
+
+          guard CommandLine.arguments.count >= 2, let pid = pid_t(CommandLine.arguments[1]) else {
+              fputs("missing System Settings pid\n", stderr)
+              exit(2)
+          }
+
+          print("M02_PARENT_INITIAL trusted=\(AXIsProcessTrusted()) messaging_error=\(messagingProbe().rawValue)")
+          guard AXIsProcessTrusted() else {
+              fputs("diagnostic requires initially trusted topology\n", stderr)
+              exit(3)
+          }
+
+          let application = AXUIElementCreateApplication(pid)
+          var target: AXUIElement?
+          var visited = 0
+          for _ in 0..<100 {
+              visited = 0
+              target = findBashSwitch(application, visited: &visited)
+              if target != nil { break }
+              Thread.sleep(forTimeInterval: 0.1)
+          }
+          guard let toggle = target else {
+              fputs("bash switch not found; visited=\(visited)\n", stderr)
+              exit(4)
+          }
+
+          var actionNames: CFArray?
+          let actionError = AXUIElementCopyActionNames(toggle, &actionNames)
+          print("M02_SWITCH_FOUND visited=\(visited) value_before=\(valueProbe(toggle)) action_error=\(actionError.rawValue) actions=\(String(describing: actionNames))")
+          guard actionError == .success else { exit(5) }
+
+          let pressError = AXUIElementPerformAction(toggle, kAXPressAction as CFString)
+          print("M02_PRESS error=\(pressError.rawValue)")
+          guard pressError == .success else { exit(6) }
+
+          let delays: [TimeInterval] = [0.0, 0.05, 0.20, 0.50, 1.0, 2.0]
+          var elapsed: TimeInterval = 0
+          for delay in delays {
+              if delay > elapsed { Thread.sleep(forTimeInterval: delay - elapsed) }
+              elapsed = delay
+              print("M02_AFTER t=\(String(format: "%.2f", delay)) switch=\(valueProbe(toggle)) trusted=\(AXIsProcessTrusted()) messaging_error=\(messagingProbe().rawValue)")
+          }
+
+          let process = Process()
+          process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+          process.arguments = ["--child"]
+          process.standardOutput = FileHandle.standardOutput
+          process.standardError = FileHandle.standardError
+          try process.run()
+          process.waitUntilExit()
+          print("M02_FRESH_CHILD_EXIT status=\(process.terminationStatus)")
+          SWIFT
+          xcrun swiftc "$RUNNER_TEMP/m02_revoke_probe.swift" -o "$RUNNER_TEMP/m02_revoke_probe"
+      - name: Run native revoke semantics probe
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/m02_revoke_probe" "$SYSTEM_SETTINGS_PID"
+      - name: Inspect bash TCC row after native UI revoke
+        if: always()
+        run: |
+          set -u
+          echo '=== SYSTEM TCC ACCESSIBILITY bash row ==='
+          sudo sqlite3 '/Library/Application Support/com.apple.TCC/TCC.db' \
+            "SELECT client,client_type,auth_value,auth_reason,flags FROM access WHERE service='kTCCServiceAccessibility' AND client='/bin/bash';" || true
+          echo '=== USER TCC ACCESSIBILITY bash row ==='
+          sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
+            "SELECT client,client_type,auth_value,auth_reason,flags FROM access WHERE service='kTCCServiceAccessibility' AND client='/bin/bash';" || true
