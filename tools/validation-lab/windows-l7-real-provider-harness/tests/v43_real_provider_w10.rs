@@ -29,10 +29,10 @@ mod windows_real_provider_w10 {
             "W10 shipping geometry must remain explicitly physical-screen-pixel authority"
         );
         assert_eq!(receipt.target_window_dpi, truth_u64(truth, "window_dpi") as u32);
-        assert_eq!(receipt.bounding_rect.left, truth_i32(truth, "uia_left"));
-        assert_eq!(receipt.bounding_rect.top, truth_i32(truth, "uia_top"));
-        assert_eq!(receipt.bounding_rect.right, truth_i32(truth, "uia_right"));
-        assert_eq!(receipt.bounding_rect.bottom, truth_i32(truth, "uia_bottom"));
+        assert_eq!(receipt.bounding_rect.left, truth_i32(truth, "window_left"));
+        assert_eq!(receipt.bounding_rect.top, truth_i32(truth, "window_top"));
+        assert_eq!(receipt.bounding_rect.right, truth_i32(truth, "window_right"));
+        assert_eq!(receipt.bounding_rect.bottom, truth_i32(truth, "window_bottom"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
