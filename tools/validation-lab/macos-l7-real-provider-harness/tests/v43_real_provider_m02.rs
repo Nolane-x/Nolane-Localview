@@ -50,14 +50,13 @@ mod macos_real_provider_m02 {
 
         const before = Number(safe(() => bashSwitch.value()));
         if (before !== 1) throw new Error(`bash Accessibility switch precondition expected ON, got ${before}`);
+        console.log(`M02_ACTION_BRIDGE_STAGE element_ready role=${String(safe(() => bashSwitch.role()) || '')} name=${String(safe(() => bashSwitch.name()) || '')} before=${before}`);
 
-        const actions = safe(() => bashSwitch.actions()) || [];
-        const actionNames = actions.map(action => String(safe(() => action.name()) || ''));
-        const byNameExists = Boolean(safe(() => bashSwitch.actions.byName('AXPress').exists()));
-        console.log(
-          `M02_ACTION_DIAGNOSTIC role=${String(safe(() => bashSwitch.role()) || '')} name=${String(safe(() => bashSwitch.name()) || '')} before=${before} actions=${JSON.stringify(actionNames)} axpress_by_name_exists=${byNameExists}`
-        );
-        throw new Error('M02_ACTION_DIAGNOSTIC_COMPLETE');
+        const press = bashSwitch.actions.byName('AXPress');
+        console.log('M02_ACTION_BRIDGE_STAGE by_name_acquired');
+        const pressName = String(safe(() => press.name()) || '');
+        console.log(`M02_ACTION_BRIDGE_STAGE press_name=${pressName}`);
+        throw new Error('M02_ACTION_BRIDGE_DIAGNOSTIC_COMPLETE');
     "#;
 
     #[test]
