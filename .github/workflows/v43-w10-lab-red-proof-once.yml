@@ -25,12 +25,16 @@ jobs:
         shell: pwsh
         run: |
           cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo check -p localview-windows-uia-provider
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify geometry worker and pure contracts
         shell: pwsh
         run: |
           cargo test -p localview-windows-uia-provider --test geometry_worker_contract -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p localview-windows-uia-provider --test geometry_contract -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify full Windows UIA provider regression suite
         shell: pwsh
         run: |
@@ -64,7 +68,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/windows-uia-provider/src/lib.rs crates/windows-uia-provider/Cargo.toml
+          git add -- \
+            crates/windows-uia-provider/src/lib.rs \
+            crates/windows-uia-provider/src/subscription.rs \
+            crates/windows-uia-provider/src/subscription_stub.rs \
+            crates/windows-uia-provider/Cargo.toml \
+            .github/w10-failure-diagnostic.txt
           git diff --cached --check
           if (-not (git diff --cached --quiet)) {
             git commit -m "feat(v43): bind UIA physical geometry to exact retained element"
