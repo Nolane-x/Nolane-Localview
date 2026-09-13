@@ -12,19 +12,51 @@ permissions:
 
 jobs:
   m02-signal-diagnostic:
-    name: M02 compare trust boolean with live AX messaging
+    name: M02 inspect Accessibility revoke UI topology
     runs-on: macos-latest
     timeout-minutes: 10
-    env:
-      LOCALVIEW_MACOS_AX_SMOKE: "1"
-      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Run exact M02 signal diagnostic
+      - name: Inspect Accessibility TCC identities
+        run: |
+          set -u
+          echo '=== SYSTEM TCC ACCESSIBILITY ROWS ==='
+          sudo sqlite3 '/Library/Application Support/com.apple.TCC/TCC.db' \
+            "SELECT client,client_type,auth_value,auth_reason,flags FROM access WHERE service='kTCCServiceAccessibility' ORDER BY client;" || true
+          echo '=== USER TCC ACCESSIBILITY ROWS ==='
+          sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
+            "SELECT client,client_type,auth_value,auth_reason,flags FROM access WHERE service='kTCCServiceAccessibility' ORDER BY client;" || true
+      - name: Inspect live Privacy Accessibility UI controls
         run: |
           set -euo pipefail
-          test_name="macos_m02_signal_diagnostic::compare_trust_boolean_with_live_ax_messaging_after_tcc_reset"
-          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_m02_signal_diagnostic "$test_name" -- --ignored --exact --nocapture --test-threads=1
+          open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
+          sleep 3
+          osascript <<'APPLESCRIPT'
+          tell application "System Settings" to activate
+          delay 1
+          tell application "System Events"
+            tell process "System Settings"
+              set frontmost to true
+              if not (exists window 1) then error "System Settings window not available"
+              set allItems to entire contents of window 1
+              repeat with itemRef in allItems
+                try
+                  set itemRole to role of itemRef
+                  if itemRole is "AXCheckBox" or itemRole is "AXButton" or itemRole is "AXStaticText" or itemRole is "AXSwitch" then
+                    set itemName to ""
+                    set itemValue to ""
+                    try
+                      set itemName to name of itemRef as text
+                    end try
+                    try
+                      set itemValue to value of itemRef as text
+                    end try
+                    log itemRole & " | " & itemName & " | " & itemValue
+                  end if
+                end try
+              end repeat
+            end tell
+          end tell
+          APPLESCRIPT
