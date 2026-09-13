@@ -13,6 +13,11 @@ internal sealed class WeakAccessibilityElement : FrameworkElement
 
     private int _visualEffectCount;
 
+    public WeakAccessibilityElement()
+    {
+        Visibility = Visibility.Collapsed;
+    }
+
     public int VisualEffectCount => Volatile.Read(ref _visualEffectCount);
 
     public Rect VisualHotspotBounds
@@ -28,6 +33,7 @@ internal sealed class WeakAccessibilityElement : FrameworkElement
     public void Reset()
     {
         Interlocked.Exchange(ref _visualEffectCount, 0);
+        Visibility = Visibility.Visible;
         InvalidateVisual();
     }
 
