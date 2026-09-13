@@ -1986,27 +1986,31 @@ mod platform {
             });
             debt.extend(node_debt);
 
-            if depth >= budget.max_depth || nodes.len() >= budget.max_nodes {
-                continue;
-            }
-
+            // Traverse normally within budget, but retain one child beyond the
+            // node/depth boundary as a bounded probe so the guard records the
+            // exhausted dimension instead of silently claiming completeness.
+            let child_depth = depth.saturating_add(1);
             let mut child = unsafe {
                 // SAFETY: walker and element are apartment-owned COM interfaces.
                 walker.GetFirstChildElement(&element)
             }
             .ok();
             while let Some(current_child) = child {
-                if nodes.len().saturating_add(queue.len()) >= budget.max_nodes {
+                let observed_or_queued = nodes.len().saturating_add(queue.len());
+                if observed_or_queued > budget.max_nodes {
                     break;
                 }
-                let next = unsafe {
-                    // SAFETY: current_child remains live in this MTA while asking
-                    // the same walker for its next sibling.
+                let boundary_probe =
+                    child_depth > budget.max_depth || observed_or_queued >= budget.max_nodes;
+                queue.push_back((current_child.clone(), Some(index), child_depth));
+                if boundary_probe {
+                    break;
+                }
+                child = unsafe {
+                    // SAFETY: current_child remains live in this MTA.
                     walker.GetNextSiblingElement(&current_child)
                 }
                 .ok();
-                queue.push_back((current_child, Some(index), depth.saturating_add(1)));
-                child = next;
             }
         }
 
