@@ -42,7 +42,14 @@ jobs:
           set -euo pipefail
           seed_src="tools/validation-lab/macos-l7-real-provider-harness/fixtures/m03-recreate-seed.swift"
           seed_bin="$RUNNER_TEMP/localview-m03-recreate-seed"
-          xcrun swiftc "$seed_src" -framework AppKit -o "$seed_bin"
+          set +e
+          xcrun swiftc "$seed_src" -framework AppKit -o "$seed_bin" \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M03-SEED-COMPILE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
           test -x "$seed_bin"
           echo "LOCALVIEW_M03_SEED_EXECUTABLE=$seed_bin" >> "$GITHUB_ENV"
       - name: Require exact M03 real-provider registration
