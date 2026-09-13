@@ -1,0 +1,150 @@
+name: V4.3 W15 Apply GREEN Once
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/v43-w15-apply-green-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-green:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply exact W15 typed resource-bounded patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime = Path('crates/windows-observe-runtime/src/runtime_manager.rs')
+          text = runtime.read_text()
+          marker = 'ResourceBounded {'
+          if marker not in text:
+              anchor = '''    #[error("Windows observe resource governor denied {work_kind:?} at {pressure:?} pressure")]
+              ResourceDenied {
+                  work_kind: ResourceWorkKind,
+                  pressure: PressureLevel,
+                  reasons: Vec<String>,
+              },
+          '''
+              replacement = anchor + '''    #[error("Windows observe reconciliation is resource-bounded during {operation}: exhausted={exhausted:?}")]
+              ResourceBounded {
+                  operation: &'static str,
+                  exhausted: Vec<localview_native_provider::SnapshotBudgetLimit>,
+                  incompleteness_debt: Vec<String>,
+              },
+          '''
+              if text.count(anchor) != 1:
+                  raise SystemExit(f'expected exactly one runtime error anchor, found {text.count(anchor)}')
+              text = text.replace(anchor, replacement, 1)
+              runtime.write_text(text)
+
+          fresh = Path('crates/windows-observe-runtime/src/fresh_action_evidence.rs')
+          text = fresh.read_text()
+          old = '''        if snapshot.completeness() != ReconciliationCompleteness::Established
+              || snapshot.resource_usage().incomplete
+              || !snapshot.incompleteness_debt().is_empty()
+          {
+              return Err(WindowsObserveRuntimeError::Provider {
+                  operation: "fresh_action_evidence_snapshot_incomplete",
+                  message: format!(
+                      "fresh planning observation {} is incomplete and cannot authorize action binding",
+                      snapshot.snapshot_cut_ref()
+                  ),
+              });
+          }
+          '''
+          new = '''        if snapshot.resource_usage().incomplete
+              && !snapshot.resource_usage().exhausted.is_empty()
+          {
+              return Err(WindowsObserveRuntimeError::ResourceBounded {
+                  operation: "fresh_action_evidence_snapshot",
+                  exhausted: snapshot.resource_usage().exhausted.clone(),
+                  incompleteness_debt: snapshot.incompleteness_debt().to_vec(),
+              });
+          }
+
+          if snapshot.completeness() != ReconciliationCompleteness::Established
+              || !snapshot.incompleteness_debt().is_empty()
+          {
+              return Err(WindowsObserveRuntimeError::Provider {
+                  operation: "fresh_action_evidence_snapshot_incomplete",
+                  message: format!(
+                      "fresh planning observation {} is incomplete and cannot authorize action binding",
+                      snapshot.snapshot_cut_ref()
+                  ),
+              });
+          }
+          '''
+          if 'WindowsObserveRuntimeError::ResourceBounded' not in text:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one fresh-action incomplete anchor, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+              fresh.write_text(text)
+
+          test = Path('crates/windows-observe-runtime/tests/w15_resource_bounded_contract.rs')
+          text = test.read_text()
+          old_import = '''use localview_windows_observe_runtime::{
+              WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
+              WindowsObserveSubscriptionLineage,
+          };
+          '''
+          new_import = '''use localview_windows_observe_runtime::{
+              WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeError,
+              WindowsObserveRuntimeManager, WindowsObserveSubscriptionLineage,
+          };
+          '''
+          if 'WindowsObserveRuntimeError,' not in text:
+              if text.count(old_import) != 1:
+                  raise SystemExit(f'expected exactly one W15 import anchor, found {text.count(old_import)}')
+              text = text.replace(old_import, new_import, 1)
+          old_assert = '''    assert!(
+              error.to_string().contains("resource-bounded"),
+              "W15 requires a typed resource-bounded outcome, got: {error}"
+          );
+          '''
+          new_assert = '''    assert_eq!(
+              error,
+              WindowsObserveRuntimeError::ResourceBounded {
+                  operation: "fresh_action_evidence_snapshot",
+                  exhausted: vec![SnapshotBudgetLimit::Nodes],
+                  incompleteness_debt: vec!["snapshot_budget_exhausted:Nodes".into()],
+              }
+          );
+          '''
+          if 'WindowsObserveRuntimeError::ResourceBounded {' not in text:
+              if text.count(old_assert) != 1:
+                  raise SystemExit(f'expected exactly one W15 RED assertion anchor, found {text.count(old_assert)}')
+              text = text.replace(old_assert, new_assert, 1)
+          test.write_text(text)
+          PY
+      - name: Format and verify focused W15 GREEN
+        run: |
+          cargo fmt --all
+          cargo check -p localview-windows-observe-runtime --all-targets
+          cargo test -p localview-windows-observe-runtime --test w15_resource_bounded_contract -- --nocapture
+          cargo test -p localview-windows-observe-runtime --test fresh_action_evidence_contract -- --nocapture
+      - name: Commit verified W15 GREEN patch
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'W15 GREEN patch already present; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/windows-observe-runtime/src/runtime_manager.rs \
+                  crates/windows-observe-runtime/src/fresh_action_evidence.rs \
+                  crates/windows-observe-runtime/tests/w15_resource_bounded_contract.rs
+          git commit -m 'feat(v43): type resource-bounded reconciliation outcome'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
