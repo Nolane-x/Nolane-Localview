@@ -5,5 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+path = "src/provider.rs"
+
 [dependencies]
 thiserror.workspace = true
