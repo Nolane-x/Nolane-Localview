@@ -1,0 +1,54 @@
+name: V4.3 M08 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m08-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m08-real-provider:
+    name: M08 real permission separation
+    runs-on: macos-latest
+    timeout-minutes: 10
+    env:
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M08 candidate and artifact directory
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$LOCALVIEW_CANDIDATE_SHA"
+          artifact_dir="$RUNNER_TEMP/localview-v43-m08"
+          mkdir -p "$artifact_dir"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Require exact M08 real-provider registration
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m08::m08_visual_and_ax_permissions_are_independently_os_observed"
+          listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m08 -- --list)"
+          printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Run M08 real permission-separation oracle
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m08::m08_visual_and_ax_permissions_are_independently_os_observed"
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m08 "$test_name" -- --ignored --exact --nocapture --test-threads=1
+      - name: Publish M08 real-provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-m08-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: ignore
+          retention-days: 30
