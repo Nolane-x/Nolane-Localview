@@ -27,50 +27,62 @@ jobs:
 
           path = Path("crates/windows-uia-provider/src/lib.rs")
           text = path.read_text(encoding="utf-8")
-          old = '''        let usage = guard.finish();
-          if usage.incomplete {
-              for limit in &usage.exhausted {
-                  debt.push(format!("snapshot_budget_exhausted:{limit:?}"));
-              }
-          }
-          (nodes, retained_elements, usage, debt)
-          '''
-          new = '''        let usage = guard.finish();
-          let observed_child_by_parent = (0..nodes.len())
-              .map(|index| {
-                  nodes
-                      .iter()
-                      .any(|candidate| candidate.parent_index == Some(index))
-              })
-              .collect::<Vec<_>>();
-          let traversal_complete = !usage.incomplete;
-          for (index, node) in nodes.iter_mut().enumerate() {
-              if let Some(coverage) =
-                  crate::custom_semantic_coverage::classify_custom_semantic_coverage(
-                      node,
-                      observed_child_by_parent[index],
-                      traversal_complete,
-                  )
-              {
-                  node.attributes.insert(
-                      crate::WINDOWS_UIA_CUSTOM_SEMANTIC_COVERAGE_ATTRIBUTE.into(),
-                      coverage.as_wire_value().into(),
-                  );
-                  if let Some(custom_debt) = coverage.incompleteness_debt() {
-                      debt.push(custom_debt.into());
-                  }
-              }
-          }
-          if usage.incomplete {
-              for limit in &usage.exhausted {
-                  debt.push(format!("snapshot_budget_exhausted:{limit:?}"));
-              }
-          }
-          (nodes, retained_elements, usage, debt)
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f"expected exactly one W14 patch anchor, found {text.count(old)}")
-          path.write_text(text.replace(old, new), encoding="utf-8")
+          had_final_newline = text.endswith("\n")
+          lines = text.splitlines()
+          anchor = "        let usage = guard.finish();"
+          anchors = [index for index, line in enumerate(lines) if line == anchor]
+          if len(anchors) != 1:
+              raise SystemExit(f"expected exactly one W14 guard.finish anchor, found {len(anchors)}")
+          index = anchors[0]
+          expected = [
+              "        let usage = guard.finish();",
+              "        if usage.incomplete {",
+              "            for limit in &usage.exhausted {",
+              "                debt.push(format!(\"snapshot_budget_exhausted:{limit:?}\"));",
+              "            }",
+              "        }",
+              "        (nodes, retained_elements, usage, debt)",
+          ]
+          actual = lines[index:index + len(expected)]
+          if actual != expected:
+              raise SystemExit(f"W14 patch context mismatch at line {index + 1}: {actual!r}")
+          replacement = [
+              "        let usage = guard.finish();",
+              "        let observed_child_by_parent = (0..nodes.len())",
+              "            .map(|index| {",
+              "                nodes",
+              "                    .iter()",
+              "                    .any(|candidate| candidate.parent_index == Some(index))",
+              "            })",
+              "            .collect::<Vec<_>>();",
+              "        let traversal_complete = !usage.incomplete;",
+              "        for (index, node) in nodes.iter_mut().enumerate() {",
+              "            if let Some(coverage) =",
+              "                crate::custom_semantic_coverage::classify_custom_semantic_coverage(",
+              "                    node,",
+              "                    observed_child_by_parent[index],",
+              "                    traversal_complete,",
+              "                )",
+              "            {",
+              "                node.attributes.insert(",
+              "                    crate::WINDOWS_UIA_CUSTOM_SEMANTIC_COVERAGE_ATTRIBUTE.into(),",
+              "                    coverage.as_wire_value().into(),",
+              "                );",
+              "                if let Some(custom_debt) = coverage.incompleteness_debt() {",
+              "                    debt.push(custom_debt.into());",
+              "                }",
+              "            }",
+              "        }",
+              "        if usage.incomplete {",
+              "            for limit in &usage.exhausted {",
+              "                debt.push(format!(\"snapshot_budget_exhausted:{limit:?}\"));",
+              "            }",
+              "        }",
+              "        (nodes, retained_elements, usage, debt)",
+          ]
+          lines[index:index + len(expected)] = replacement
+          rendered = "\n".join(lines) + ("\n" if had_final_newline else "")
+          path.write_text(rendered, encoding="utf-8")
           '@ | python -
       - name: Format and verify focused W14 contracts
         shell: pwsh
