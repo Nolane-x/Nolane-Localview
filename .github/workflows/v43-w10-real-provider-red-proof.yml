@@ -1,0 +1,45 @@
+name: V4.3 W10 Real Provider RED Proof
+
+on:
+  push:
+    branches:
+      - feat/v43-l7-windows-w10-mixed-dpi-authority
+    paths:
+      - .github/workflows/v43-w10-real-provider-red-proof.yml
+      - tools/provider-seeds/windows-uia-edge-seed/**
+      - tools/validation-lab/windows-l7-real-provider-harness/**
+      - crates/windows-uia-provider/**
+
+permissions:
+  contents: read
+
+jobs:
+  w10-real-provider-red-proof:
+    name: W10 mixed-DPI real-provider oracle
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build WPF edge seed
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+      - name: Require and run exact W10 oracle
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w10::w10_mixed_dpi_move_refreshes_live_physical_geometry_without_stale_coordinates"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w10 -- --list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W10 real-provider test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w10 $testName -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
