@@ -40,6 +40,7 @@ internal static class GeometryOracle
                 window_dpi = before.WindowDpi,
                 monitor_count = monitors.Count,
                 distinct_dpi_count = monitors.Select(monitor => monitor.DpiX).Distinct().Count(),
+                effective_dpi_values = EffectiveDpiValues(monitors),
                 mixed_dpi_capable = false,
             };
         }
@@ -77,6 +78,7 @@ internal static class GeometryOracle
                 window_dpi = after.WindowDpi,
                 monitor_count = afterMonitors.Count,
                 distinct_dpi_count = afterMonitors.Select(monitor => monitor.DpiX).Distinct().Count(),
+                effective_dpi_values = EffectiveDpiValues(afterMonitors),
                 mixed_dpi_capable = MixedDpiCapable(afterMonitors),
             };
         }
@@ -92,6 +94,7 @@ internal static class GeometryOracle
                 window_dpi = after.WindowDpi,
                 monitor_count = afterMonitors.Count,
                 distinct_dpi_count = afterMonitors.Select(monitor => monitor.DpiX).Distinct().Count(),
+                effective_dpi_values = EffectiveDpiValues(afterMonitors),
                 mixed_dpi_capable = MixedDpiCapable(afterMonitors),
             };
         }
@@ -118,8 +121,18 @@ internal static class GeometryOracle
             window_bottom = capture.Rect.Bottom,
             monitor_count = monitors.Count,
             distinct_dpi_count = monitors.Select(monitor => monitor.DpiX).Distinct().Count(),
+            effective_dpi_values = EffectiveDpiValues(monitors),
             mixed_dpi_capable = MixedDpiCapable(monitors),
         };
+    }
+
+    private static uint[] EffectiveDpiValues(IReadOnlyList<MonitorSnapshot> monitors)
+    {
+        return monitors
+            .Select(monitor => monitor.DpiX)
+            .Distinct()
+            .OrderBy(dpi => dpi)
+            .ToArray();
     }
 
     private static GeometryCapture Capture(
