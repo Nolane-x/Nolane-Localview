@@ -1,16 +1,14 @@
 name: V4.3 W14 Apply GREEN Once
 
 on:
-  push:
-    branches: [feat/v43-l7-windows-w14-weak-accessibility]
+  pull_request:
 
 permissions:
   contents: write
 
-# Armed after the workflow already exists in branch history so this push is observable.
 jobs:
   apply-w14-post-pass:
-    if: github.event.head_commit.message == 'chore(v43): apply W14 post-pass once'
+    if: github.event.pull_request.head.ref == 'feat/v43-l7-windows-w14-weak-accessibility'
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
