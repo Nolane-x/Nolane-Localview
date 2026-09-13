@@ -69,14 +69,16 @@ jobs:
           assert record["initial_permission_state"] == "trusted"
           assert int(record["initial_permission_check_sequence"]) > 0
           assert record["initial_semantic_control_permit_minted"] is True
-          assert record["tcc_reset_applied_mid_session"] is True
+          assert record["system_settings_accessibility_pane_opened"] is True
+          assert record["responsible_process_switch"] == "bash"
+          assert record["system_settings_bash_switch_toggled_off_mid_session"] is True
           assert record["dispatch_permission_state"] == "untrusted"
           assert int(record["dispatch_permission_check_sequence"]) > int(record["initial_permission_check_sequence"])
           assert int(record["admitted_permission_check_sequence"]) == int(record["initial_permission_check_sequence"])
           assert record["dispatch_semantic_control_permit_minted"] is False
           assert record["typed_permission_revocation"] is True
           assert record["denial"] == "permission_revoked"
-          assert record["authority_source"] == "provider_owned_dispatch_recheck"
+          assert record["authority_source"] == "provider_owned_dispatch_recheck_after_user_equivalent_system_settings_revoke"
           PY
       - name: Publish M02 real-provider evidence
         uses: actions/upload-artifact@v4
