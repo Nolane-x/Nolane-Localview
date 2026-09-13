@@ -1,12 +1,163 @@
-W10 full provider regression diagnostic
-exit_code=101
+W10 format diagnostic
+exit_code=1
 
-  D:\a\_temp\w10-full-provider.log:24:error[E0599]: no associated function or constant named `observe_geometry` found for struct `WindowsUiaWorker` in the current scope
-  D:\a\_temp\w10-full-provider.log:25:  --> crates\windows-uia-provider\tests\geometry_worker_contract.rs:12:87
-  D:\a\_temp\w10-full-provider.log:26:   |
-  D:\a\_temp\w10-full-provider.log:27:12 |     ) -> Result<WindowsUiaGeometryReceipt, WindowsUiaWorkerError> = WindowsUiaWorker::observe_geometry;
-  D:\a\_temp\w10-full-provider.log:28:   |                                                                                       ^^^^^^^^^^^^^^^^ associated function or constant not found in `WindowsUiaWorker`
-  D:\a\_temp\w10-full-provider.log:29:
-  D:\a\_temp\w10-full-provider.log:30:For more information about this error, try `rustc --explain E0599`.
-  D:\a\_temp\w10-full-provider.log:31:error: could not compile `localview-windows-uia-provider` (test "geometry_worker_contract") due to 1 previous error
-> D:\a\_temp\w10-full-provider.log:32:warning: build failed, waiting for other jobs to finish...
+ 
+     assert_eq!(facts.is_password(), WindowsUiaBooleanCapabilityFact::False);
+[31m-    assert_eq!(
+[0m[31m-        facts.is_read_only(),
+[0m[31m-        WindowsUiaBooleanCapabilityFact::False
+[0m[31m-    );
+[0m[32m+    assert_eq!(facts.is_read_only(), WindowsUiaBooleanCapabilityFact::False);
+[0m     assert!(
+         facts.permits_set_value(),
+         "SetValue admission requires exact Value support plus explicit non-password and writable facts"
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\tests\virtualized_item_contract.rs:2:
+     ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef,
+ };
+ use localview_windows_uia_provider::{
+[31m-    WindowsUiaItemLookupProperty, WindowsUiaVirtualizedItemRequestError,
+[0m[31m-    WindowsUiaVirtualizedItemQueryRequest, WindowsUiaVirtualizedItemRealizeRequest,
+[0m[32m+    WindowsUiaItemLookupProperty, WindowsUiaVirtualizedItemQueryRequest,
+[0m[32m+    WindowsUiaVirtualizedItemRealizeRequest, WindowsUiaVirtualizedItemRequestError,
+[0m };
+ 
+ fn element(cut: &str, realization: ProviderElementRealization) -> ProviderElementRef {
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\tests\virtualized_item_contract.rs:54:
+     assert_eq!(
+         WindowsUiaVirtualizedItemQueryRequest::new(
+             "cut:w03:1",
+[31m-            element(
+[0m[31m-                "cut:w03:1",
+[0m[31m-                ProviderElementRealization::RealizationRequired,
+[0m[31m-            ),
+[0m[32m+            element("cut:w03:1", ProviderElementRealization::RealizationRequired,),
+[0m             WindowsUiaItemLookupProperty::Name,
+             "LocalView Virtual Item 255",
+         ),
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\tests\virtualized_item_contract.rs:67:
+ 
+ #[test]
+ fn realization_request_accepts_only_exact_realization_required_placeholder() {
+[31m-    let placeholder = element(
+[0m[31m-        "cut:w03:1",
+[0m[31m-        ProviderElementRealization::RealizationRequired,
+[0m[31m-    );
+[0m[32m+    let placeholder = element("cut:w03:1", ProviderElementRealization::RealizationRequired);
+[0m     let request = WindowsUiaVirtualizedItemRealizeRequest::new("cut:w03:1", placeholder.clone())
+         .expect("virtual placeholder should be realizable");
+     assert_eq!(request.snapshot_cut_ref(), "cut:w03:1");
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\tests\virtualized_item_contract.rs:79:
+     assert_eq!(
+         WindowsUiaVirtualizedItemRealizeRequest::new(
+             "cut:w03:2",
+[31m-            element(
+[0m[31m-                "cut:w03:1",
+[0m[31m-                ProviderElementRealization::RealizationRequired,
+[0m[31m-            ),
+[0m[32m+            element("cut:w03:1", ProviderElementRealization::RealizationRequired,),
+[0m         ),
+         Err(WindowsUiaVirtualizedItemRequestError::AcquisitionCutMismatch),
+     );
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:7:
+ 
+ use anyhow::{Context, Result};
+ use serde::{Deserialize, Serialize};
+[31m-use serde_json::{json, Value};
+[0m[32m+use serde_json::{Value, json};
+[0m 
+ #[derive(Debug, Deserialize)]
+ struct RpcRequest {
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:137:
+         .get("arguments")
+         .cloned()
+         .unwrap_or_else(|| json!({}));
+[31m-    let base = std::env::var("LOCALVIEW_CONTROL")
+[0m[31m-        .unwrap_or_else(|_| "http://127.0.0.1:45454".into());
+[0m[32m+    let base =
+[0m[32m+        std::env::var("LOCALVIEW_CONTROL").unwrap_or_else(|_| "http://127.0.0.1:45454".into());
+[0m     let token = read_token().await?;
+     let client = reqwest::Client::new();
+ 
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:153:
+         let snapshot = fresh_page_snapshot(&client, &base, &token, session).await?;
+         let node = find_semantic_node(&snapshot, reference)
+             .cloned()
+[31m-            .with_context(|| format!("element reference not found in fresh snapshot: {reference}"))?;
+[0m[32m+            .with_context(|| {
+[0m[32m+                format!("element reference not found in fresh snapshot: {reference}")
+[0m[32m+            })?;
+[0m         return tool_content(json!({
+             "reference": reference,
+             "version": snapshot.get("version"),
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:169:
+             let id = string_arg(&args, "id")?;
+             authed_get(&client, &base, &token, &format!("/v1/sessions/{id}")).await?
+         }
+[31m-        "session.project_state" => session_get(&client, &base, &token, &args, "project-state").await?,
+[0m[32m+        "session.project_state" => {
+[0m[32m+            session_get(&client, &base, &token, &args, "project-state").await?
+[0m[32m+        }
+[0m         "session.analysis" => session_get(&client, &base, &token, &args, "analysis").await?,
+         "session.diagnose" => session_get(&client, &base, &token, &args, "diagnose").await?,
+         "session.verify" => session_get(&client, &base, &token, &args, "verify").await?,
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:191:
+         }
+         "evidence.trace" => {
+             let id = string_arg(&args, "id")?;
+[31m-            authed_get(
+[0m[31m-                &client,
+[0m[31m-                &base,
+[0m[31m-                &token,
+[0m[31m-                &format!("/v1/evidence/{id}/trace"),
+[0m[31m-            )
+[0m[31m-            .await?
+[0m[32m+            authed_get(&client, &base, &token, &format!("/v1/evidence/{id}/trace")).await?
+[0m         }
+         "proof.staleness" => {
+             let id = string_arg(&args, "id")?;
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:204:
+[31m-            authed_get(
+[0m[31m-                &client,
+[0m[31m-                &base,
+[0m[31m-                &token,
+[0m[31m-                &format!("/v1/proof/{id}/staleness"),
+[0m[31m-            )
+[0m[31m-            .await?
+[0m[32m+            authed_get(&client, &base, &token, &format!("/v1/proof/{id}/staleness")).await?
+[0m         }
+         "runtime.pause" => authed_post(&client, &base, &token, "/v1/runtime/pause").await?,
+         "runtime.resume" => authed_post(&client, &base, &token, "/v1/runtime/resume").await?,
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:248:
+             let session = string_arg(&args, "session")?;
+             let key = string_arg(&args, "key")?;
+             let reference = args.get("reference").and_then(Value::as_str);
+[31m-            let modifiers = args
+[0m[31m-                .get("modifiers")
+[0m[31m-                .cloned()
+[0m[31m-                .unwrap_or_else(|| json!([]));
+[0m[32m+            let modifiers = args.get("modifiers").cloned().unwrap_or_else(|| json!([]));
+[0m             post_action(
+                 &client,
+                 &base,
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:308:
+     let status = response.status();
+     if !status.is_success() {
+         let body = response.text().await.unwrap_or_default();
+[31m-        return Err(anyhow::anyhow!("LocalView control returned {status}: {body}"));
+[0m[32m+        return Err(anyhow::anyhow!(
+[0m[32m+            "LocalView control returned {status}: {body}"
+[0m[32m+        ));
+[0m     }
+     let content = if status == reqwest::StatusCode::NO_CONTENT {
+         json!({"ok": true})
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:396:
+             .and_then(|children| children.iter().find_map(|child| visit(child, reference)))
+     }
+ 
+[31m-    snapshot.get("semantic_tree").and_then(|root| visit(root, reference))
+[0m[32m+    snapshot
+[0m[32m+        .get("semantic_tree")
+[0m[32m+        .and_then(|root| visit(root, reference))
+[0m }
+ 
+ fn tool_content(content: Value) -> Result<Value> {
