@@ -1,0 +1,26 @@
+name: V4.3 M05 Event Reliability Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m05-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m05-event-reliability-contract:
+    name: M05 AX notification reliability contract
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run macOS AX provider contracts through M05
+        run: cargo test -p localview-macos-ax-provider -- --nocapture
