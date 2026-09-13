@@ -6,6 +6,32 @@ mod macos_real_provider_m02 {
         AxPermissionError, AxPermissionProvider, AxPermissionState, AxSemanticControlOutcome,
     };
 
+    const ACCESSIBILITY_DEEP_LINK: &str =
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility";
+
+    const TOGGLE_BASH_ACCESSIBILITY_OFF: &str = r#"
+        tell application "System Settings" to activate
+        delay 1
+        tell application "System Events"
+          tell process "System Settings"
+            set frontmost to true
+            if not (exists window 1) then error "System Settings window not available"
+            set foundSwitch to false
+            set allItems to entire contents of window 1
+            repeat with itemRef in allItems
+              try
+                if role of itemRef is "AXCheckBox" and name of itemRef is "bash" then
+                  if value of itemRef is 1 then click itemRef
+                  set foundSwitch to true
+                  exit repeat
+                end if
+              end try
+            end repeat
+            if foundSwitch is false then error "bash Accessibility switch not found"
+          end tell
+        end tell
+    "#;
+
     #[test]
     #[ignore = "requires the real macOS Accessibility permission regime"]
     fn m02_permission_revoked_mid_session_invalidates_prior_semantic_authority() {
@@ -39,13 +65,22 @@ mod macos_real_provider_m02 {
             "admitted permit must bind the exact initially trusted revision"
         );
 
-        let reset = Command::new("sudo")
-            .args(["/usr/bin/tccutil", "reset", "Accessibility"])
+        let open_settings = Command::new("/usr/bin/open")
+            .arg(ACCESSIBILITY_DEEP_LINK)
             .status()
-            .expect("invoke real Accessibility TCC reset inside the same M02 process");
+            .expect("open real Privacy & Security > Accessibility pane");
         assert!(
-            reset.success(),
-            "M02 requires a successful real Accessibility TCC reset after admission"
+            open_settings.success(),
+            "M02 requires the real Accessibility privacy pane to open"
+        );
+
+        let toggle = Command::new("/usr/bin/osascript")
+            .args(["-e", TOGGLE_BASH_ACCESSIBILITY_OFF])
+            .status()
+            .expect("toggle the real bash Accessibility switch off through System Settings UI");
+        assert!(
+            toggle.success(),
+            "M02 requires a user-equivalent mid-session Accessibility revoke of the responsible bash process"
         );
 
         let dispatch = provider.semantic_dispatch_decision(admitted_permit);
@@ -63,7 +98,7 @@ mod macos_real_provider_m02 {
         assert_eq!(
             dispatch_revision.state(),
             AxPermissionState::Untrusted,
-            "real TCC reset must be observed as revoked before dispatch"
+            "the real System Settings Accessibility revoke must be observed before dispatch"
         );
         assert_eq!(
             dispatch.outcome(),
@@ -88,14 +123,16 @@ mod macos_real_provider_m02 {
             "initial_permission_state": "trusted",
             "initial_permission_check_sequence": admitted_revision.check_sequence(),
             "initial_semantic_control_permit_minted": true,
-            "tcc_reset_applied_mid_session": true,
+            "system_settings_accessibility_pane_opened": true,
+            "responsible_process_switch": "bash",
+            "system_settings_bash_switch_toggled_off_mid_session": true,
             "dispatch_permission_state": "untrusted",
             "dispatch_permission_check_sequence": dispatch_revision.check_sequence(),
             "admitted_permission_check_sequence": dispatch.admitted_permission_check_sequence(),
             "dispatch_semantic_control_permit_minted": false,
             "typed_permission_revocation": true,
             "denial": "permission_revoked",
-            "authority_source": "provider_owned_dispatch_recheck",
+            "authority_source": "provider_owned_dispatch_recheck_after_user_equivalent_system_settings_revoke",
         });
         fs::write(
             artifact_dir.join("M02-REAL-PROVIDER-RECORD.json"),
