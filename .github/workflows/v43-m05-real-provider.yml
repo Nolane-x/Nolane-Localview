@@ -1,0 +1,91 @@
+name: V4.3 M05 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m05-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m05-real-provider:
+    name: M05 unsupported notification lowers event assurance
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_MACOS_AX_SMOKE: "1"
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M05 candidate and artifact directory
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M05 checkout SHA mismatch: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          artifact_dir="$RUNNER_TEMP/localview-v43-m05"
+          mkdir -p "$artifact_dir"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Require exact M05 real-provider registration
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m05::m05_unsupported_notification_forces_incomplete_event_assurance"
+          listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m05 -- --list)"
+          printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Run M05 real AX notification-registration oracle
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m05::m05_unsupported_notification_forces_incomplete_event_assurance"
+          set +e
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m05 "$test_name" -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M05-ORACLE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
+      - name: Verify M05 evidence is exact-head and fail-closed
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M05 head moved during proof: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M05-REAL-PROVIDER-RECORD.json"
+          test -f "$record_path"
+          python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
+          import json, sys
+          path, expected_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+          assert record["schema"] == "localview-v43-m05-real-provider-record-v1"
+          assert record["case_id"] == "M05"
+          assert record["candidate_sha"] == expected_sha
+          assert record["observer_create_ax_error"] == 0
+          assert record["supported_registration_ax_error"] == 0
+          assert record["unsupported_registration_ax_error"] == -25207
+          assert record["unsupported_registration_outcome"] == "unsupported"
+          assert record["event_assurance"] == "incomplete"
+          assert record["snapshot_reconciliation_required"] is True
+          assert record["direct_read_after_unsupported_succeeded"] is True
+          assert record["direct_read_ax_error"] == 0
+          assert record["ground_truth_source"] == "real_ax_registration_results_plus_seed_identity"
+          PY
+      - name: Publish M05 real-provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-m05-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
