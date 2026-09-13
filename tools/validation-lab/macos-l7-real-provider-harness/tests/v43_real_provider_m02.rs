@@ -1,6 +1,6 @@
 #[cfg(target_os = "macos")]
 mod macos_real_provider_m02 {
-    use std::{fs, path::PathBuf, process::Command, thread, time::Duration};
+    use std::{fs, path::PathBuf, process::Command};
 
     use localview_macos_ax_provider::{
         AxPermissionError, AxPermissionProvider, AxPermissionState, AxSemanticControlOutcome,
@@ -30,31 +30,6 @@ mod macos_real_provider_m02 {
         Ok(())
     }
 
-    fn wait_for_effective_revocation(
-        provider: &AxPermissionProvider,
-    ) -> Result<u64, String> {
-        let mut last_state = AxPermissionState::Unknown;
-        let mut last_sequence = 0;
-
-        for _ in 0..50 {
-            let revision = provider.current_permission_revision(false);
-            last_state = revision.state();
-            last_sequence = revision.check_sequence();
-            if revision.state() == AxPermissionState::Untrusted {
-                eprintln!(
-                    "M02_EFFECTIVE_REVOCATION state=Untrusted check_sequence={}",
-                    revision.check_sequence()
-                );
-                return Ok(revision.check_sequence());
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-
-        Err(format!(
-            "effective Accessibility revocation was not observed within 5s; last_state={last_state:?} last_sequence={last_sequence}"
-        ))
-    }
-
     #[test]
     #[ignore = "requires the real macOS Accessibility permission regime"]
     fn m02_permission_revoked_mid_session_invalidates_prior_semantic_authority() {
@@ -70,10 +45,12 @@ mod macos_real_provider_m02 {
             "candidate SHA must not be empty"
         );
 
-        let provider = AxPermissionProvider::new();
+        let probe_executable = std::env::var("LOCALVIEW_AX_PERMISSION_PROBE_EXECUTABLE")
+            .expect("M02 requires an exact-head fresh-process permission probe executable");
+        let provider = AxPermissionProvider::with_dispatch_probe_executable(&probe_executable);
+
         let admission = provider.semantic_control_decision(false);
         let admitted_revision = admission.revision();
-
         assert_eq!(
             admitted_revision.state(),
             AxPermissionState::Trusted,
@@ -88,33 +65,52 @@ mod macos_real_provider_m02 {
             "admitted permit must bind the exact initially trusted revision"
         );
 
-        // The GitHub-hosted macOS image exposes a pre-authorized Accessibility
-        // fixture. Its System Settings checkbox can visually flip OFF without
-        // changing the effective TCC authorization. For the real-provider M02
-        // oracle, use macOS's own test/reset boundary instead: this changes the
-        // actual TCC authorization observed by AXIsProcessTrusted while the
-        // LocalView test process remains alive.
+        // Prove the independent dispatch fence agrees with the trusted
+        // precondition before revocation. This prevents a helper with a
+        // different TCC identity from manufacturing a false M02 pass.
+        let pre_revoke_dispatch = provider.semantic_dispatch_decision(admitted_permit);
+        let pre_revoke_revision = pre_revoke_dispatch.revision();
+        assert_eq!(
+            pre_revoke_revision.state(),
+            AxPermissionState::Trusted,
+            "fresh-process dispatch fence must observe the trusted pre-revoke topology"
+        );
+        let pre_revoke_permit = pre_revoke_dispatch
+            .permit()
+            .expect("trusted fresh-process fence must refresh semantic authority");
+        assert!(
+            pre_revoke_permit.permission_check_sequence()
+                > admitted_permit.permission_check_sequence(),
+            "fresh-process pre-revoke permit must bind a newer provider-owned revision"
+        );
+
+        // GitHub-hosted macOS can display a checkbox transition that does not
+        // change effective TCC state. Use macOS's own tccutil reset boundary so
+        // the seed mutates effective Accessibility authorization rather than
+        // treating UI transport as world-state proof.
         reset_accessibility_permission()
             .expect("M02 requires a real mid-session TCC Accessibility revocation");
-        let revocation_probe_sequence = wait_for_effective_revocation(&provider)
-            .expect("M02 must observe the OS revocation before dispatch");
 
-        let dispatch = provider.semantic_dispatch_decision(admitted_permit);
+        // This is the consequential dispatch fence. The already-running test
+        // process may still report stale trust, so the provider must derive the
+        // decision from a new process. No action is dispatched unless this
+        // fresh observation remains trusted.
+        let dispatch = provider.semantic_dispatch_decision(pre_revoke_permit);
         let dispatch_revision = dispatch.revision();
 
         assert_eq!(
             dispatch.admitted_permission_check_sequence(),
-            admitted_permit.permission_check_sequence(),
+            pre_revoke_permit.permission_check_sequence(),
             "dispatch fence must identify the exact authority revision being invalidated"
         );
         assert!(
-            dispatch_revision.check_sequence() > revocation_probe_sequence,
-            "dispatch must take a provider-owned permission observation newer than the observed revoke"
+            dispatch_revision.check_sequence() > pre_revoke_revision.check_sequence(),
+            "post-revoke dispatch must bind a newer provider-owned permission observation"
         );
         assert_eq!(
             dispatch_revision.state(),
             AxPermissionState::Untrusted,
-            "the effective TCC Accessibility revoke must still be observed at dispatch"
+            "fresh process must observe the effective TCC Accessibility revoke before dispatch"
         );
         assert_eq!(
             dispatch.outcome(),
@@ -133,23 +129,25 @@ mod macos_real_provider_m02 {
         );
         fs::create_dir_all(&artifact_dir).expect("create M02 artifact directory");
         let record = serde_json::json!({
-            "schema": "localview-v43-m02-real-provider-record-v2",
+            "schema": "localview-v43-m02-real-provider-record-v3",
             "case_id": "M02",
             "candidate_sha": candidate_sha,
             "initial_permission_state": "trusted",
             "initial_permission_check_sequence": admitted_revision.check_sequence(),
             "initial_semantic_control_permit_minted": true,
+            "fresh_probe_executable": probe_executable,
+            "pre_revoke_fresh_probe_state": "trusted",
+            "pre_revoke_fresh_probe_check_sequence": pre_revoke_revision.check_sequence(),
+            "pre_revoke_refreshed_permit_minted": true,
             "revocation_mechanism": "macos_tccutil_reset_accessibility",
             "tccutil_reset_succeeded": true,
-            "effective_revocation_observed": true,
-            "effective_revocation_probe_sequence": revocation_probe_sequence,
             "dispatch_permission_state": "untrusted",
             "dispatch_permission_check_sequence": dispatch_revision.check_sequence(),
             "admitted_permission_check_sequence": dispatch.admitted_permission_check_sequence(),
             "dispatch_semantic_control_permit_minted": false,
             "typed_permission_revocation": true,
             "denial": "permission_revoked",
-            "authority_source": "provider_owned_dispatch_recheck_after_real_tcc_revocation",
+            "authority_source": "fresh_process_provider_owned_dispatch_recheck_after_real_tcc_revocation",
         });
         fs::write(
             artifact_dir.join("M02-REAL-PROVIDER-RECORD.json"),
