@@ -140,9 +140,22 @@ fn decision_from_revision(
     VisualObservationDecision { revision, outcome }
 }
 
-// The real macOS OS-backed observation is intentionally added only after the
-// dedicated real-provider RED proves the missing binding. Until then this
-// authority fails closed rather than inferring permission from AX trust.
+#[cfg(target_os = "macos")]
+fn platform_visual_permission_state() -> VisualObservationPermissionState {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        #[link_name = "CGPreflightScreenCaptureAccess"]
+        fn preflight_visual_observation_access() -> bool;
+    }
+
+    if unsafe { preflight_visual_observation_access() } {
+        VisualObservationPermissionState::Granted
+    } else {
+        VisualObservationPermissionState::Denied
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 fn platform_visual_permission_state() -> VisualObservationPermissionState {
     VisualObservationPermissionState::Unknown
 }
@@ -155,7 +168,9 @@ mod tests {
     fn granted_visual_revision_mints_only_visual_authority() {
         let revision = permission_revision(VisualObservationPermissionState::Granted);
         let decision = decision_from_revision(revision);
-        let permit = decision.permit().expect("granted visual permission must mint visual authority");
+        let permit = decision
+            .permit()
+            .expect("granted visual permission must mint visual authority");
         assert_eq!(permit.permission_check_sequence(), revision.check_sequence());
     }
 
