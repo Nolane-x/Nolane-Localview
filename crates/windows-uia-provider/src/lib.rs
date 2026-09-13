@@ -86,6 +86,8 @@ pub enum WindowsUiaWorkerError {
     InvalidSnapshotRequest,
     #[error("Windows UI Automation element lease request is invalid")]
     InvalidElementLeaseRequest,
+    #[error("Windows UI Automation geometry request is invalid")]
+    InvalidGeometryRequest,
     #[error("Windows UI Automation dispatch context request is invalid")]
     InvalidDispatchContextRequest,
     #[error("Windows UI Automation pattern dispatch request is invalid")]
@@ -189,6 +191,7 @@ mod platform {
                 UIA_SelectionItemPatternId, UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId,
                 UIA_ValuePatternId, UIA_VirtualizedItemPatternId,
             },
+            HiDpi::GetDpiForWindow,
             WindowsAndMessaging::{
                 GW_ENABLEDPOPUP, GetForegroundWindow, GetWindow, GetWindowThreadProcessId,
                 IsWindowVisible,
@@ -201,7 +204,9 @@ mod platform {
     use crate::worker_health::{WorkerHealth, WorkerReceiveError};
     use crate::{
         WindowsInputDispatchBlocker, WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact,
-        WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
+        WindowsUiaCoordinateSpace, WindowsUiaDispatchContextObservation,
+        WindowsUiaDispatchContextReceipt, WindowsUiaGeometryReceipt, WindowsUiaGeometryRequest,
+        WindowsUiaPhysicalRect,
         WindowsUiaDispatchContextRequest, WindowsUiaItemLookupProperty, WindowsUiaPattern,
         WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchReceipt,
         WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport,
@@ -238,6 +243,11 @@ mod platform {
             attachment: WindowsUiaAttachment,
             request: WindowsUiaElementLeaseRequest,
             reply: Sender<Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError>>,
+        },
+        ObserveGeometry {
+            attachment: WindowsUiaAttachment,
+            request: WindowsUiaGeometryRequest,
+            reply: Sender<Result<WindowsUiaGeometryReceipt, WindowsUiaWorkerError>>,
         },
         RevalidateDispatchContext {
             attachment: WindowsUiaAttachment,
@@ -441,6 +451,32 @@ mod platform {
             self.ensure_healthy()?;
             self.sender
                 .send(WorkerCommand::BindElementLease {
+                    attachment: attachment.clone(),
+                    request,
+                    reply: reply_tx,
+                })
+                .map_err(|_| WindowsUiaWorkerError::WorkerUnavailable)?;
+            self.receive(&reply_rx)
+        }
+
+        pub fn observe_geometry(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaGeometryRequest,
+        ) -> Result<WindowsUiaGeometryReceipt, WindowsUiaWorkerError> {
+            let element_ref = request.element_ref();
+            if attachment.provider_incarnation_ref != self.provider_incarnation_ref
+                || element_ref.provider_incarnation_ref != self.provider_incarnation_ref
+                || element_ref.target_incarnation_ref != attachment.target_incarnation_ref
+                || element_ref.acquisition_cut_ref != request.snapshot_cut_ref()
+            {
+                return Err(WindowsUiaWorkerError::InvalidGeometryRequest);
+            }
+
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.ensure_healthy()?;
+            self.sender
+                .send(WorkerCommand::ObserveGeometry {
                     attachment: attachment.clone(),
                     request,
                     reply: reply_tx,
@@ -747,6 +783,13 @@ mod platform {
                 } => {
                     let _ = reply.send(state.bind_element_lease(&attachment, request));
                 }
+                WorkerCommand::ObserveGeometry {
+                    attachment,
+                    request,
+                    reply,
+                } => {
+                    let _ = reply.send(state.observe_geometry(&attachment, request));
+                }
                 WorkerCommand::RevalidateDispatchContext {
                     attachment,
                     request,
@@ -925,6 +968,49 @@ mod platform {
                 provider_incarnation_ref: self.provider_incarnation_ref.clone(),
                 target_incarnation_ref: attachment.target_incarnation_ref.clone(),
                 element_ref: retained.element_ref.clone(),
+            })
+        }
+
+        fn observe_geometry(
+            &self,
+            attachment: &WindowsUiaAttachment,
+            request: WindowsUiaGeometryRequest,
+        ) -> Result<WindowsUiaGeometryReceipt, WindowsUiaWorkerError> {
+            let retained = self.exact_retained_element(
+                attachment,
+                request.snapshot_cut_ref(),
+                request.element_ref(),
+            )?;
+            let rect = unsafe {
+                // SAFETY: the exact retained UIA element remains owned by this worker MTA.
+                retained.element.CurrentBoundingRectangle()
+            }
+            .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+            let bounding_rect = WindowsUiaPhysicalRect::new(
+                rect.left,
+                rect.top,
+                rect.right,
+                rect.bottom,
+            )
+            .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+            let target_window_dpi = unsafe {
+                // SAFETY: exact_retained_element revalidated this attachment HWND immediately above.
+                GetDpiForWindow(hwnd_from_u64(attachment.selection.native_window_handle))
+            };
+            if target_window_dpi == 0 {
+                return Err(WindowsUiaWorkerError::ProviderFailure(
+                    "GetDpiForWindow returned zero for the exact attached HWND".into(),
+                ));
+            }
+
+            Ok(WindowsUiaGeometryReceipt {
+                snapshot_cut_ref: request.snapshot_cut_ref().to_owned(),
+                provider_incarnation_ref: self.provider_incarnation_ref.clone(),
+                target_incarnation_ref: attachment.target_incarnation_ref.clone(),
+                element_ref: retained.element_ref.clone(),
+                coordinate_space: WindowsUiaCoordinateSpace::PhysicalScreenPixels,
+                bounding_rect,
+                target_window_dpi,
             })
         }
 
@@ -2227,6 +2313,14 @@ impl WindowsUiaWorker {
         _attachment: &WindowsUiaAttachment,
         _request: WindowsUiaElementLeaseRequest,
     ) -> Result<WindowsUiaElementLeaseReceipt, WindowsUiaWorkerError> {
+        Err(WindowsUiaWorkerError::UnsupportedPlatform)
+    }
+
+    pub fn observe_geometry(
+        &self,
+        _attachment: &WindowsUiaAttachment,
+        _request: crate::WindowsUiaGeometryRequest,
+    ) -> Result<crate::WindowsUiaGeometryReceipt, WindowsUiaWorkerError> {
         Err(WindowsUiaWorkerError::UnsupportedPlatform)
     }
 
