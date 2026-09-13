@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use thiserror::Error;
 
+use crate::application_incarnation::AxApplicationIncarnation;
+
 const AX_ERROR_SUCCESS: i32 = 0;
 const AX_ERROR_INVALID_UI_ELEMENT: i32 = -25202;
 const AX_ERROR_CANNOT_COMPLETE: i32 = -25204;
@@ -12,26 +14,30 @@ static AX_ELEMENT_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// carry semantic-control authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AxElementIdentity {
-    application_pid: i32,
+    application_incarnation: AxApplicationIncarnation,
     window_identity: String,
     semantic_identity: String,
 }
 
 impl AxElementIdentity {
     pub fn new(
-        application_pid: i32,
+        application_incarnation: AxApplicationIncarnation,
         window_identity: impl Into<String>,
         semantic_identity: impl Into<String>,
     ) -> Self {
         Self {
-            application_pid,
+            application_incarnation,
             window_identity: window_identity.into(),
             semantic_identity: semantic_identity.into(),
         }
     }
 
+    pub fn application_incarnation(&self) -> &AxApplicationIncarnation {
+        &self.application_incarnation
+    }
+
     pub const fn application_pid(&self) -> i32 {
-        self.application_pid
+        self.application_incarnation.pid()
     }
 
     pub fn window_identity(&self) -> &str {
@@ -230,7 +236,8 @@ mod tests {
     #[test]
     fn unrelated_provider_error_consumes_binding_without_claiming_staleness_or_timeout() {
         let provider = AxElementBindingProvider::new();
-        let binding = provider.bind_current(AxElementIdentity::new(7, "window", "target"));
+        let app = AxApplicationIncarnation::new("test.application", 7, 1);
+        let binding = provider.bind_current(AxElementIdentity::new(app, "window", "target"));
 
         assert_eq!(
             provider.observe_operation(binding, -25205),
