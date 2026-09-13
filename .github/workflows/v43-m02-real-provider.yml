@@ -1,0 +1,87 @@
+name: V4.3 M02 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m02-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m02-real-provider:
+    name: M02 Accessibility revocation invalidates prior authority
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_MACOS_AX_SMOKE: "1"
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M02 candidate and artifact directory
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M02 checkout SHA mismatch: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          artifact_dir="$RUNNER_TEMP/localview-v43-m02"
+          mkdir -p "$artifact_dir"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Require exact M02 real-provider registration
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m02::m02_permission_revoked_mid_session_invalidates_prior_semantic_authority"
+          listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m02 -- --list)"
+          printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Run M02 trusted-to-revoked real-provider oracle
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m02::m02_permission_revoked_mid_session_invalidates_prior_semantic_authority"
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m02 "$test_name" -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify M02 evidence is exact-head and revocation-safe
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M02 head moved during proof: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M02-REAL-PROVIDER-RECORD.json"
+          test -f "$record_path"
+          python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
+          import json, sys
+          path, expected_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+          assert record["schema"] == "localview-v43-m02-real-provider-record-v1"
+          assert record["case_id"] == "M02"
+          assert record["candidate_sha"] == expected_sha
+          assert record["initial_permission_state"] == "trusted"
+          assert int(record["initial_permission_check_sequence"]) > 0
+          assert record["initial_semantic_control_permit_minted"] is True
+          assert record["tcc_reset_applied_mid_session"] is True
+          assert record["dispatch_permission_state"] == "untrusted"
+          assert int(record["dispatch_permission_check_sequence"]) > int(record["initial_permission_check_sequence"])
+          assert int(record["admitted_permission_check_sequence"]) == int(record["initial_permission_check_sequence"])
+          assert record["dispatch_semantic_control_permit_minted"] is False
+          assert record["typed_permission_revocation"] is True
+          assert record["denial"] == "permission_revoked"
+          assert record["authority_source"] == "provider_owned_dispatch_recheck"
+          PY
+      - name: Publish M02 real-provider evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-m02-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
