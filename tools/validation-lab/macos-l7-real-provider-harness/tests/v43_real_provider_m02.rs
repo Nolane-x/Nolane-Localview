@@ -9,40 +9,56 @@ mod macos_real_provider_m02 {
     const ACCESSIBILITY_DEEP_LINK: &str =
         "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility";
 
-    const TOGGLE_BASH_ACCESSIBILITY_OFF: &str = r#"
-        tell application "System Settings" to activate
-        tell application "System Events"
-          tell process "System Settings"
-            set frontmost to true
+    const TOGGLE_BASH_ACCESSIBILITY_OFF_JXA: &str = r#"
+        const host = Application.currentApplication();
+        host.includeStandardAdditions = true;
+        const se = Application('System Events');
+        const proc = se.processes.byName('System Settings');
+        proc.frontmost = true;
 
-            set paneReady to false
-            repeat with attempt from 1 to 100
-              if exists window 1 then
-                try
-                  if name of window 1 is "Accessibility" then
-                    set paneReady to true
-                    exit repeat
-                  end if
-                end try
-              end if
-              delay 0.1
-            end repeat
-            if paneReady is false then error "Accessibility privacy pane did not become ready"
+        function safe(fn) {
+          try { return fn(); } catch (_) { return null; }
+        }
 
-            set foundSwitch to false
-            set allItems to entire contents of window 1
-            repeat with itemRef in allItems
-              try
-                if role of itemRef is "AXCheckBox" and name of itemRef is "bash" then
-                  if value of itemRef is 1 then click itemRef
-                  set foundSwitch to true
-                  exit repeat
-                end if
-              end try
-            end repeat
-            if foundSwitch is false then error "bash Accessibility switch not found in ready Accessibility pane"
-          end tell
-        end tell
+        let win = null;
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const wins = safe(() => proc.windows()) || [];
+          if (wins.length > 0 && String(safe(() => wins[0].name()) || '') === 'Accessibility') {
+            win = wins[0];
+            break;
+          }
+          host.delay(0.1);
+        }
+        if (win === null) throw new Error('Accessibility privacy pane did not become ready');
+
+        function findBashSwitch(node, depth) {
+          if (depth > 16) return null;
+          const role = String(safe(() => node.role()) || '');
+          const name = String(safe(() => node.name()) || '');
+          if (role === 'AXCheckBox' && name === 'bash') return node;
+
+          const children = safe(() => node.uiElements()) || [];
+          for (const child of children) {
+            const found = findBashSwitch(child, depth + 1);
+            if (found !== null) return found;
+          }
+          return null;
+        }
+
+        const bashSwitch = findBashSwitch(win, 0);
+        if (bashSwitch === null) throw new Error('bash Accessibility switch not found in ready Accessibility pane');
+
+        const before = Number(safe(() => bashSwitch.value()));
+        if (before !== 1) throw new Error(`bash Accessibility switch precondition expected ON, got ${before}`);
+        bashSwitch.click();
+
+        let after = Number(safe(() => bashSwitch.value()));
+        for (let attempt = 0; attempt < 50 && after !== 0; attempt++) {
+          host.delay(0.1);
+          after = Number(safe(() => bashSwitch.value()));
+        }
+        if (after !== 0) throw new Error(`bash Accessibility switch did not turn OFF, got ${after}`);
+        console.log('M02_UI_REVOKE bash_switch_before=1 bash_switch_after=0');
     "#;
 
     #[test]
@@ -88,7 +104,7 @@ mod macos_real_provider_m02 {
         );
 
         let toggle = Command::new("/usr/bin/osascript")
-            .args(["-e", TOGGLE_BASH_ACCESSIBILITY_OFF])
+            .args(["-l", "JavaScript", "-e", TOGGLE_BASH_ACCESSIBILITY_OFF_JXA])
             .status()
             .expect("toggle the real bash Accessibility switch off through System Settings UI");
         assert!(
