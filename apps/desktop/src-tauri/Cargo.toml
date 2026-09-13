@@ -43,4 +43,4 @@ url.workspace = true
 uuid.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-localview-macos-ax-provider.workspace = true
+localview-macos-ax-provider = { path = "../../../crates/macos-ax-provider" }
