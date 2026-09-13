@@ -22,7 +22,9 @@ use thiserror::Error;
 
 static AX_PERMISSION_CHECK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(any(target_os = "macos", test))]
 const AX_ERROR_SUCCESS: i32 = 0;
+#[cfg(any(target_os = "macos", test))]
 const AX_ERROR_API_DISABLED: i32 = -25211;
 const AX_PERMISSION_PROBE_ARG: &str = "--localview-internal-ax-permission-probe-v1";
 const AX_PERMISSION_PROBE_ENV: &str = "LOCALVIEW_INTERNAL_AX_PERMISSION_PROBE_V1";
@@ -433,6 +435,7 @@ fn dispatch_decision_from_revision(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn classify_permission_observation(
     process_trusted: bool,
     messaging_error: i32,
