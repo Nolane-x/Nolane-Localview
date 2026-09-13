@@ -25,10 +25,46 @@ jobs:
       - name: Verify formatting and Windows provider compile
         shell: pwsh
         run: |
-          cargo fmt --all -- --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo check -p localview-windows-uia-provider
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $diag = ".github/w10-failure-diagnostic.txt"
+          $log = Join-Path $env:RUNNER_TEMP "w10-format-compile.log"
+
+          & cargo fmt --all -- --check *> $log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            "W10 format diagnostic`nexit_code=$code`n" | Set-Content $diag
+            Get-Content $log | Select-Object -Last 160 | Add-Content $diag
+            Write-Host "::group::W10 concise format diagnostics"
+            Get-Content $diag
+            Write-Host "::endgroup::"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -- $diag
+            git diff --cached --check
+            if (-not (git diff --cached --quiet)) {
+              git commit -m "test(v43): capture W10 format regression"
+              git push origin HEAD:feat/v43-l7-windows-w10-mixed-dpi-authority
+            }
+            exit $code
+          }
+
+          & cargo check -p localview-windows-uia-provider *> $log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            "W10 compile diagnostic`nexit_code=$code`n" | Set-Content $diag
+            Select-String -Path $log -Pattern 'error\[|error:|warning:|subscription\.rs|subscription_stub\.rs|lib\.rs' -Context 6,12 | ForEach-Object { $_.ToString() } | Add-Content $diag
+            Write-Host "::group::W10 concise compile diagnostics"
+            Get-Content $diag
+            Write-Host "::endgroup::"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -- $diag
+            git diff --cached --check
+            if (-not (git diff --cached --quiet)) {
+              git commit -m "test(v43): capture W10 compile regression"
+              git push origin HEAD:feat/v43-l7-windows-w10-mixed-dpi-authority
+            }
+            exit $code
+          }
       - name: Verify geometry worker and pure contracts
         shell: pwsh
         run: |
