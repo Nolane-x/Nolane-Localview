@@ -1,0 +1,102 @@
+name: V4.3 W15 Traversal Fix Verify
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/v43-w15-traversal-fix-verify.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_CANDIDATE_SHA: local-read-only-verification
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Apply exact local W15 one-overflow probe
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path('crates/windows-uia-provider/src/lib.rs')
+          lines = path.read_text().splitlines()
+          starts = [i for i, line in enumerate(lines) if line.strip() == 'if depth >= budget.max_depth || nodes.len() >= budget.max_nodes {']
+          if len(starts) != 1:
+              raise SystemExit(f'expected one traversal boundary start, found {len(starts)}')
+          start = starts[0]
+          ends = [i for i, line in enumerate(lines[start + 1:], start + 1) if line.strip() == 'let usage = guard.finish();']
+          if len(ends) != 1:
+              raise SystemExit(f'expected one usage boundary, found {len(ends)}')
+          end = ends[0]
+          old_region = '\n'.join(lines[start:end])
+          for needle in [
+              'walker.GetFirstChildElement(&element)',
+              'walker.GetNextSiblingElement(&current_child)',
+              'nodes.len().saturating_add(queue.len()) >= budget.max_nodes',
+              'queue.push_back((current_child, Some(index), depth.saturating_add(1)))',
+          ]:
+              if old_region.count(needle) != 1:
+                  raise SystemExit(f'missing unique traversal anchor: {needle}')
+
+          i = '            '
+          replacement = [
+              i + '// Traverse normally within budget, but retain one child beyond the',
+              i + '// node/depth boundary as a bounded probe so the guard records the',
+              i + '// exhausted dimension instead of silently claiming completeness.',
+              i + 'let child_depth = depth.saturating_add(1);',
+              i + 'let mut child = unsafe {',
+              i + '    // SAFETY: walker and element are apartment-owned COM interfaces.',
+              i + '    walker.GetFirstChildElement(&element)',
+              i + '}',
+              i + '.ok();',
+              i + 'while let Some(current_child) = child {',
+              i + '    let observed_or_queued = nodes.len().saturating_add(queue.len());',
+              i + '    if observed_or_queued > budget.max_nodes {',
+              i + '        break;',
+              i + '    }',
+              i + '    let boundary_probe = child_depth > budget.max_depth',
+              i + '        || observed_or_queued >= budget.max_nodes;',
+              i + '    queue.push_back((current_child.clone(), Some(index), child_depth));',
+              i + '    if boundary_probe {',
+              i + '        break;',
+              i + '    }',
+              i + '    child = unsafe {',
+              i + '        // SAFETY: current_child remains live in this MTA.',
+              i + '        walker.GetNextSiblingElement(&current_child)',
+              i + '    }',
+              i + '    .ok();',
+              i + '}',
+              '        }',
+              '',
+          ]
+          lines[start:end] = replacement
+          path.write_text('\n'.join(lines) + '\n')
+          '@ | python -
+      - name: Verify provider contracts
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo check -p localview-windows-uia-provider
+          cargo test -p localview-native-provider snapshot_budget -- --nocapture
+          cargo test -p localview-windows-uia-provider custom_semantic_coverage_contract -- --nocapture
+      - name: Build real WPF seed
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+      - name: Prove real W15 GREEN locally
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w15::w15_low_resource_reconciliation_stays_incomplete_and_typed"
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w15 $testName -- --ignored --exact --nocapture --test-threads=1
