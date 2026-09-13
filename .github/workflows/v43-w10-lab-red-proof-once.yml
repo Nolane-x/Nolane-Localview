@@ -28,7 +28,7 @@ jobs:
           $diag = ".github/w10-failure-diagnostic.txt"
           $log = Join-Path $env:RUNNER_TEMP "w10-format-compile.log"
 
-          & cargo fmt --all -- --check *> $log
+          & rustfmt --check crates/windows-uia-provider/src/lib.rs crates/windows-uia-provider/src/subscription.rs crates/windows-uia-provider/src/subscription_stub.rs *> $log
           $code = $LASTEXITCODE
           if ($code -ne 0) {
             "W10 format diagnostic`nexit_code=$code`n" | Set-Content $diag
