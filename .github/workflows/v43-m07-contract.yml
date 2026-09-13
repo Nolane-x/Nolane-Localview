@@ -15,12 +15,12 @@ permissions:
 jobs:
   m07-observer-continuity-contract:
     name: M07 observer/run-loop continuity contract
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run macOS AX provider contracts through M07
+      - name: Run macOS AX provider authority contracts through M07
         run: cargo test -p localview-macos-ax-provider -- --nocapture
