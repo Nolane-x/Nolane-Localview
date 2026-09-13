@@ -39,3 +39,30 @@ impl AxApplicationIncarnation {
         self.application_identity == other.application_identity
     }
 }
+
+/// Conversion boundary used by `AxElementIdentity::new`.
+///
+/// Shipping callers provide an explicit strong `AxApplicationIncarnation`.
+/// The only PID-only conversion is compiled behind the validation-harness
+/// feature so retained pre-M06 real-provider fixtures can be migrated without
+/// exposing PID-only authority in the default production build.
+pub trait IntoAxApplicationIncarnation {
+    fn into_ax_application_incarnation(self) -> AxApplicationIncarnation;
+}
+
+impl IntoAxApplicationIncarnation for AxApplicationIncarnation {
+    fn into_ax_application_incarnation(self) -> AxApplicationIncarnation {
+        self
+    }
+}
+
+#[cfg(feature = "validation-pid-identity")]
+impl IntoAxApplicationIncarnation for i32 {
+    fn into_ax_application_incarnation(self) -> AxApplicationIncarnation {
+        AxApplicationIncarnation::new(
+            format!("validation-harness-pid:{self}"),
+            self,
+            self as u64,
+        )
+    }
+}
