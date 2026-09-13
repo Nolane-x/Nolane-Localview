@@ -1,0 +1,12 @@
+W10 full provider regression diagnostic
+exit_code=101
+
+  D:\a\_temp\w10-full-provider.log:24:error[E0599]: no associated function or constant named `observe_geometry` found for struct `WindowsUiaWorker` in the current scope
+  D:\a\_temp\w10-full-provider.log:25:  --> crates\windows-uia-provider\tests\geometry_worker_contract.rs:12:87
+  D:\a\_temp\w10-full-provider.log:26:   |
+  D:\a\_temp\w10-full-provider.log:27:12 |     ) -> Result<WindowsUiaGeometryReceipt, WindowsUiaWorkerError> = WindowsUiaWorker::observe_geometry;
+  D:\a\_temp\w10-full-provider.log:28:   |                                                                                       ^^^^^^^^^^^^^^^^ associated function or constant not found in `WindowsUiaWorker`
+  D:\a\_temp\w10-full-provider.log:29:
+  D:\a\_temp\w10-full-provider.log:30:For more information about this error, try `rustc --explain E0599`.
+  D:\a\_temp\w10-full-provider.log:31:error: could not compile `localview-windows-uia-provider` (test "geometry_worker_contract") due to 1 previous error
+> D:\a\_temp\w10-full-provider.log:32:warning: build failed, waiting for other jobs to finish...
