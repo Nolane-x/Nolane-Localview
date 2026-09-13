@@ -1,11 +1,13 @@
 use std::{
     collections::HashMap,
-    ffi::c_void,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, OnceLock, Weak,
     },
 };
+
+#[cfg(any(target_os = "macos", test))]
+use std::ffi::c_void;
 
 use thiserror::Error;
 
@@ -32,6 +34,7 @@ impl AxRunLoopSourceIncarnation {
     }
 }
 
+#[cfg(target_os = "macos")]
 type AxObserverCallbackFn = unsafe extern "C" fn(
     *const c_void,
     *const c_void,
@@ -87,6 +90,7 @@ impl AxRunLoopCallbackTracker {
         self.state.delivered_callback_count.load(Ordering::Acquire)
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn callback_refcon(&self) -> *mut c_void {
         self.tracker_id as *mut c_void
     }
@@ -517,6 +521,7 @@ fn callback_registry() -> &'static Mutex<HashMap<usize, Weak<AxRunLoopCallbackSt
     AX_CALLBACK_TRACKERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(any(target_os = "macos", test))]
 unsafe extern "C" fn tracked_ax_observer_callback(
     _observer: *const c_void,
     _element: *const c_void,
