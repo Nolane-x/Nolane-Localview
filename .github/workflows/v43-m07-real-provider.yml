@@ -26,7 +26,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Bind exact M07 candidate
+      - name: Bind exact M07 candidate and artifact directory
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
@@ -34,9 +34,92 @@ jobs:
             echo "M07 checkout SHA mismatch: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
             exit 1
           fi
+          artifact_dir="$RUNNER_TEMP/localview-v43-m07"
+          mkdir -p "$artifact_dir"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Build exact-head AppKit M07 seed
+        run: |
+          set -euo pipefail
+          seed_src="tools/validation-lab/macos-l7-real-provider-harness/fixtures/m07-run-loop-seed.swift"
+          seed_bin="$RUNNER_TEMP/localview-m07-run-loop-seed"
+          set +e
+          xcrun swiftc "$seed_src" -framework AppKit -o "$seed_bin" \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M07-SEED-COMPILE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          test -x "$seed_bin"
+          echo "LOCALVIEW_M07_SEED_EXECUTABLE=$seed_bin" >> "$GITHUB_ENV"
       - name: Require exact M07 real-provider registration
         run: |
           set -euo pipefail
           test_name="macos_real_provider_m07::m07_run_loop_interruption_breaks_and_recreation_restores_callback_continuity"
           listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m07 -- --list)"
           printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Run M07 real AX observer/run-loop oracle
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m07::m07_run_loop_interruption_breaks_and_recreation_restores_callback_continuity"
+          set +e
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m07 "$test_name" -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M07-ORACLE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
+      - name: Verify M07 evidence is exact-head and continuity-safe
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M07 head moved during proof: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M07-REAL-PROVIDER-RECORD.json"
+          test -f "$record_path"
+          python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
+          import json, sys
+          path, expected_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+          assert record["schema"] == "localview-v43-m07-real-provider-record-v1"
+          assert record["case_id"] == "M07"
+          assert record["candidate_sha"] == expected_sha
+          assert record["application_identity"] == "com.nolane.localview.m07-seed"
+          assert record["notification"] == "AXTitleChanged"
+          assert record["first_observer_create_ax_error"] == 0
+          assert record["first_registration_ax_error"] == 0
+          assert record["initial_callback_delivered"] is True
+          assert record["callback_count_before_interruption"] >= 1
+          assert record["run_loop_source_removed_before_gap"] is True
+          assert record["interrupted_title_generation"] == 2
+          assert record["callback_delivery_absent_during_interruption"] is True
+          assert record["callback_count_after_interruption"] == record["callback_count_before_interruption"]
+          assert record["continuity_broken"] is True
+          assert record["break_reason"] == "run_loop_interrupted"
+          assert record["snapshot_reconciliation_required"] is True
+          assert record["observer_recreation_required"] is True
+          assert record["second_observer_create_ax_error"] == 0
+          assert record["second_registration_ax_error"] == 0
+          assert record["fresh_observer_revision_is_newer"] is True
+          assert record["second_observer_creation_revision"] > record["first_observer_creation_revision"]
+          assert record["fresh_run_loop_source_incarnation"] is True
+          assert record["second_run_loop_source_incarnation"] != record["first_run_loop_source_incarnation"]
+          assert record["restored_continuity_revision_is_newer"] is True
+          assert record["restored_continuity_revision"] > record["first_continuity_revision"]
+          assert record["restored_callback_delivered"] is True
+          assert record["callback_count_after_recovery"] > record["callback_count_after_interruption"]
+          assert record["event_continuity_restored"] is True
+          assert record["second_run_loop_source_removed_on_cleanup"] is True
+          assert record["run_loop_delivery_proven"] is True
+          assert record["ground_truth_source"] == "real_appkit_title_mutations_plus_real_axobserver_cfrunloop_source_removal_and_recreation"
+          PY
+      - name: Publish M07 real-provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-m07-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
