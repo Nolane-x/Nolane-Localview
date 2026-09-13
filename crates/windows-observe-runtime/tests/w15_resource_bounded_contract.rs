@@ -32,9 +32,17 @@ struct Subscription(WindowsObserveSubscriptionLineage);
 #[error("W15 provider failure")]
 struct ProviderError;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum FreshIncompleteKind {
+    #[default]
+    ResourceBounded,
+    ProviderSemantic,
+}
+
 #[derive(Debug, Default)]
 struct ProviderState {
     snapshots: usize,
+    fresh_incomplete_kind: FreshIncompleteKind,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +59,10 @@ impl Provider {
             target: TargetIncarnationRef::from("target:windows:w15-resource-bounded"),
             state: Arc::new(Mutex::new(ProviderState::default())),
         }
+    }
+
+    fn set_fresh_incomplete_kind(&self, kind: FreshIncompleteKind) {
+        self.state.lock().unwrap().fresh_incomplete_kind = kind;
     }
 
     fn semantic_node(&self, cut: &str) -> NativeSemanticNodeObservation {
@@ -88,20 +100,24 @@ impl Provider {
     }
 
     fn snapshot(&self, cut: String) -> Arc<NativeSemanticSnapshotRevision> {
-        let capture_sequence = {
+        let (capture_sequence, fresh_incomplete_kind) = {
             let mut state = self.state.lock().unwrap();
             state.snapshots += 1;
-            state.snapshots as u64
+            (state.snapshots as u64, state.fresh_incomplete_kind)
         };
         let incomplete = capture_sequence > 1;
         let nodes = vec![self.semantic_node(&cut)];
-        let exhausted = if incomplete {
+        let resource_bounded = incomplete
+            && fresh_incomplete_kind == FreshIncompleteKind::ResourceBounded;
+        let exhausted = if resource_bounded {
             vec![SnapshotBudgetLimit::Nodes]
         } else {
             Vec::new()
         };
-        let incompleteness_debt = if incomplete {
+        let incompleteness_debt = if resource_bounded {
             vec!["snapshot_budget_exhausted:Nodes".into()]
+        } else if incomplete {
+            vec!["uia_accessibility_partial_custom_control".into()]
         } else {
             Vec::new()
         };
@@ -122,7 +138,7 @@ impl Provider {
                     properties_read: nodes.len().saturating_mul(19),
                     max_depth_observed: 0,
                     exhausted,
-                    incomplete,
+                    incomplete: resource_bounded,
                 },
                 nodes,
                 completeness: if incomplete {
@@ -201,12 +217,17 @@ impl WindowsObserveProvider for Provider {
     }
 }
 
-#[tokio::test]
-async fn w15_resource_bounded_reconciliation_is_current_but_never_action_authority() {
-    let session_id = SessionId::from_u128(0x1501);
+async fn fixture(
+    session_id: SessionId,
+) -> (
+    Provider,
+    WindowsObserveRuntimeManager<Provider>,
+    Arc<NativeSemanticSnapshotRevision>,
+    ProviderElementRef,
+) {
     let provider = Provider::new();
     let runtime = WindowsObserveRuntimeManager::new(
-        Arc::new(provider),
+        Arc::new(provider.clone()),
         LiveBridge::new(64, 8),
         WindowsObserveRuntimeConfig {
             event_capacity: 16,
@@ -233,6 +254,13 @@ async fn w15_resource_bounded_reconciliation_is_current_but_never_action_authori
         ReconciliationCompleteness::Established
     );
     let previous_element_ref = before.nodes()[0].element_ref.clone();
+    (provider, runtime, before, previous_element_ref)
+}
+
+#[tokio::test]
+async fn w15_resource_bounded_reconciliation_is_current_but_never_action_authority() {
+    let session_id = SessionId::from_u128(0x1501);
+    let (_provider, runtime, before, previous_element_ref) = fixture(session_id).await;
 
     let error = runtime
         .refresh_uia_action_evidence(session_id, previous_element_ref)
@@ -272,4 +300,36 @@ async fn w15_resource_bounded_reconciliation_is_current_but_never_action_authori
             incompleteness_debt: vec!["snapshot_budget_exhausted:Nodes".into()],
         }
     );
+}
+
+#[tokio::test]
+async fn w15_non_resource_provider_debt_is_not_laundered_as_resource_pressure() {
+    let session_id = SessionId::from_u128(0x1511);
+    let (provider, runtime, before, previous_element_ref) = fixture(session_id).await;
+    provider.set_fresh_incomplete_kind(FreshIncompleteKind::ProviderSemantic);
+
+    let error = runtime
+        .refresh_uia_action_evidence(session_id, previous_element_ref)
+        .await
+        .expect_err("provider semantic incompleteness must still block fresh action authority");
+
+    let current = runtime.current_semantic_snapshot(session_id).await.unwrap();
+    assert_ne!(current.snapshot_cut_ref(), before.snapshot_cut_ref());
+    assert_eq!(current.completeness(), ReconciliationCompleteness::Incomplete);
+    assert!(!current.resource_usage().incomplete);
+    assert!(current.resource_usage().exhausted.is_empty());
+    assert!(
+        current
+            .incompleteness_debt()
+            .iter()
+            .any(|debt| debt == "uia_accessibility_partial_custom_control")
+    );
+
+    assert!(matches!(
+        error,
+        WindowsObserveRuntimeError::Provider {
+            operation: "fresh_action_evidence_snapshot_incomplete",
+            ..
+        }
+    ));
 }
