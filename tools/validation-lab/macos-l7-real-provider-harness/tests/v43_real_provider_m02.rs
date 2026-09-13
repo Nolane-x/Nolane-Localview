@@ -1,6 +1,7 @@
 #[cfg(target_os = "macos")]
 mod macos_real_provider_m02 {
     use std::{
+        collections::BTreeMap,
         ffi::{c_char, c_void, CStr},
         fs,
         path::PathBuf,
@@ -83,6 +84,7 @@ mod macos_real_provider_m02 {
         children: OwnedCf,
         role: OwnedCf,
         title: OwnedCf,
+        description: OwnedCf,
         press: OwnedCf,
     }
 
@@ -92,9 +94,19 @@ mod macos_real_provider_m02 {
                 children: cf_string_literal(b"AXChildren\0")?,
                 role: cf_string_literal(b"AXRole\0")?,
                 title: cf_string_literal(b"AXTitle\0")?,
+                description: cf_string_literal(b"AXDescription\0")?,
                 press: cf_string_literal(b"AXPress\0")?,
             })
         }
+    }
+
+    #[derive(Default)]
+    struct AxTraversalEvidence {
+        visited: usize,
+        checkbox_nodes: usize,
+        role_counts: BTreeMap<String, usize>,
+        checkbox_labels: Vec<String>,
+        bash_label_nodes: Vec<String>,
     }
 
     fn cf_string_literal(bytes: &'static [u8]) -> Result<OwnedCf, String> {
@@ -122,9 +134,7 @@ mod macos_real_provider_m02 {
     }
 
     fn cf_string_value(value: CfTypeRef) -> Option<String> {
-        if value.is_null()
-            || unsafe { CFGetTypeID(value) } != unsafe { CFStringGetTypeID() }
-        {
+        if value.is_null() || unsafe { CFGetTypeID(value) } != unsafe { CFStringGetTypeID() } {
             return None;
         }
 
@@ -148,32 +158,53 @@ mod macos_real_provider_m02 {
         )
     }
 
+    fn string_attribute(element: AxUiElementRef, attribute: CfStringRef) -> Option<String> {
+        copy_attribute(element, attribute).and_then(|value| cf_string_value(value.raw()))
+    }
+
     fn find_bash_switch(
         element: AxUiElementRef,
         names: &AxNames,
         depth: usize,
-        visited: &mut usize,
-        seen_checkbox_titles: &mut Vec<String>,
+        evidence: &mut AxTraversalEvidence,
     ) -> Option<OwnedCf> {
-        if element.is_null() || depth > MAX_AX_DEPTH || *visited >= MAX_AX_NODES {
+        if element.is_null() || depth > MAX_AX_DEPTH || evidence.visited >= MAX_AX_NODES {
             return None;
         }
-        *visited += 1;
+        evidence.visited += 1;
 
-        let role = copy_attribute(element, names.role.raw().cast())
-            .and_then(|value| cf_string_value(value.raw()));
-        let title = copy_attribute(element, names.title.raw().cast())
-            .and_then(|value| cf_string_value(value.raw()));
+        let role = string_attribute(element, names.role.raw().cast());
+        let title = string_attribute(element, names.title.raw().cast());
+        let description = string_attribute(element, names.description.raw().cast());
+
+        if let Some(role) = role.as_ref() {
+            *evidence.role_counts.entry(role.clone()).or_default() += 1;
+        }
+
+        let label = title
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .or_else(|| description.as_deref().filter(|value| !value.is_empty()));
 
         if role.as_deref() == Some("AXCheckBox") {
-            if let Some(title) = title.as_ref() {
-                if seen_checkbox_titles.len() < 64 {
-                    seen_checkbox_titles.push(title.clone());
+            evidence.checkbox_nodes += 1;
+            if let Some(label) = label {
+                if evidence.checkbox_labels.len() < 64 {
+                    evidence.checkbox_labels.push(label.to_owned());
                 }
-                if title == "bash" {
+                if label == "bash" {
                     let retained = unsafe { CFRetain(element.cast()) };
                     return OwnedCf::new(retained);
                 }
+            }
+        }
+
+        if title.as_deref() == Some("bash") || description.as_deref() == Some("bash") {
+            if evidence.bash_label_nodes.len() < 32 {
+                evidence.bash_label_nodes.push(format!(
+                    "role={:?} title={:?} description={:?}",
+                    role, title, description
+                ));
             }
         }
 
@@ -186,13 +217,7 @@ mod macos_real_provider_m02 {
         let count = unsafe { CFArrayGetCount(array) };
         for index in 0..count {
             let child = unsafe { CFArrayGetValueAtIndex(array, index) }.cast::<c_void>();
-            if let Some(found) = find_bash_switch(
-                child,
-                names,
-                depth + 1,
-                visited,
-                seen_checkbox_titles,
-            ) {
+            if let Some(found) = find_bash_switch(child, names, depth + 1, evidence) {
                 return Some(found);
             }
         }
@@ -243,21 +268,18 @@ mod macos_real_provider_m02 {
 
     fn revoke_bash_accessibility_via_native_ax() -> Result<(), String> {
         let names = AxNames::new()?;
-        let mut last_seen_checkbox_titles = Vec::new();
-        let mut last_visited = 0usize;
+        let mut last_evidence = AxTraversalEvidence::default();
 
         for _ in 0..100 {
             if let Ok(pid) = system_settings_pid() {
                 let application = unsafe { AXUIElementCreateApplication(pid) };
                 if let Some(application) = OwnedCf::new(application.cast()) {
-                    let mut visited = 0usize;
-                    let mut seen_checkbox_titles = Vec::new();
+                    let mut evidence = AxTraversalEvidence::default();
                     if let Some(bash_switch) = find_bash_switch(
                         application.raw().cast(),
                         &names,
                         0,
-                        &mut visited,
-                        &mut seen_checkbox_titles,
+                        &mut evidence,
                     ) {
                         let actions = copy_action_names(bash_switch.raw().cast())?;
                         if !actions.iter().any(|action| action == "AXPress") {
@@ -279,19 +301,24 @@ mod macos_real_provider_m02 {
                         }
 
                         eprintln!(
-                            "M02_NATIVE_AX_REVOKE pid={pid} visited={visited} action=AXPress result=success"
+                            "M02_NATIVE_AX_REVOKE pid={pid} visited={} action=AXPress result=success",
+                            evidence.visited
                         );
                         return Ok(());
                     }
-                    last_seen_checkbox_titles = seen_checkbox_titles;
-                    last_visited = visited;
+                    last_evidence = evidence;
                 }
             }
             thread::sleep(Duration::from_millis(100));
         }
 
         Err(format!(
-            "bash Accessibility switch was not found through native AX traversal; last_visited={last_visited} checkbox_titles={last_seen_checkbox_titles:?}"
+            "bash Accessibility switch was not found through native AX traversal; visited={} checkbox_nodes={} checkbox_labels={:?} bash_label_nodes={:?} role_counts={:?}",
+            last_evidence.visited,
+            last_evidence.checkbox_nodes,
+            last_evidence.checkbox_labels,
+            last_evidence.bash_label_nodes,
+            last_evidence.role_counts,
         ))
     }
 
