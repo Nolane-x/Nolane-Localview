@@ -53,6 +53,13 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
           exit "$status"
+      - name: Probe fresh-process permission after failed M02 revoke observation
+        if: failure()
+        run: |
+          set -euo pipefail
+          probe_name="macos_m02_fresh_process_probe::m02_fresh_process_permission_state_after_revoke"
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_m02_fresh_process_probe "$probe_name" -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee -a "$LOCALVIEW_L7_ARTIFACT_DIR/M02-ORACLE.log"
       - name: Verify M02 evidence is exact-head and revocation-safe
         run: |
           set -euo pipefail
@@ -77,6 +84,9 @@ jobs:
           assert record["system_settings_accessibility_pane_opened"] is True
           assert record["responsible_process_switch"] == "bash"
           assert record["system_settings_bash_switch_toggled_off_mid_session"] is True
+          assert record["native_ax_switch_transition_verified"] is True
+          assert int(record["native_ax_switch_value_before"]) == 1
+          assert int(record["native_ax_switch_value_after"]) == 0
           assert record["dispatch_permission_state"] == "untrusted"
           assert int(record["dispatch_permission_check_sequence"]) > int(record["initial_permission_check_sequence"])
           assert int(record["admitted_permission_check_sequence"]) == int(record["initial_permission_check_sequence"])
