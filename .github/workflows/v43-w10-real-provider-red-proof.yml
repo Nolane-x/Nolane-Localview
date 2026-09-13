@@ -32,6 +32,15 @@ jobs:
           dotnet-version: 8.0.x
       - name: Build WPF edge seed
         run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+      - name: Compile and register exact W01-W12 physical campaign
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign_w10_w12::prospective_l7_campaign_binds_w01_w12_to_exact_candidate"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign_w10_w12 -- --list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required exact W01-W12 physical campaign is not registered: $testName"
+          }
       - name: Require and run exact W10 oracle
         shell: pwsh
         run: |
