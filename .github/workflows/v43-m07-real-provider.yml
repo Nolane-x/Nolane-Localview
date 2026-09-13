@@ -68,7 +68,7 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
           exit "$status"
-      - name: Verify M07 evidence is exact-head and continuity-safe
+      - name: Verify M07 evidence is exact-head and callback-authority-safe
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
@@ -83,15 +83,21 @@ jobs:
           path, expected_sha = sys.argv[1:]
           with open(path, encoding="utf-8") as handle:
               record = json.load(handle)
-          assert record["schema"] == "localview-v43-m07-real-provider-record-v1"
+          assert record["schema"] == "localview-v43-m07-real-provider-record-v2"
           assert record["case_id"] == "M07"
           assert record["candidate_sha"] == expected_sha
           assert record["application_identity"] == "com.nolane.localview.m07-seed"
           assert record["notification"] == "AXTitleChanged"
+          assert record["caller_supplied_serviced_liveness"] is False
+          assert record["service_evidence_authority"] == "provider_owned_callback_tracker"
+
           assert record["first_observer_create_ax_error"] == 0
           assert record["first_registration_ax_error"] == 0
+          assert record["initial_service_evidence_before_callback"] is False
           assert record["initial_callback_delivered"] is True
-          assert record["callback_count_before_interruption"] >= 1
+          assert record["first_service_evidence_callback_count"] >= 1
+          assert record["callback_count_before_interruption"] >= record["first_service_evidence_callback_count"]
+
           assert record["run_loop_source_removed_before_gap"] is True
           assert record["interrupted_title_generation"] == 2
           assert record["callback_delivery_absent_during_interruption"] is True
@@ -100,20 +106,27 @@ jobs:
           assert record["break_reason"] == "run_loop_interrupted"
           assert record["snapshot_reconciliation_required"] is True
           assert record["observer_recreation_required"] is True
+
           assert record["second_observer_create_ax_error"] == 0
           assert record["second_registration_ax_error"] == 0
           assert record["fresh_observer_revision_is_newer"] is True
           assert record["second_observer_creation_revision"] > record["first_observer_creation_revision"]
           assert record["fresh_run_loop_source_incarnation"] is True
           assert record["second_run_loop_source_incarnation"] != record["first_run_loop_source_incarnation"]
+          assert record["recovery_service_evidence_before_callback"] is False
+          assert record["recovery_proof_title_generation"] == 3
+          assert record["second_service_evidence_callback_count"] >= 1
+          assert record["pre_rebind_callback_delivered"] is True
+
           assert record["restored_continuity_revision_is_newer"] is True
           assert record["restored_continuity_revision"] > record["first_continuity_revision"]
+          assert record["restored_title_generation"] == 4
           assert record["restored_callback_delivered"] is True
-          assert record["callback_count_after_recovery"] > record["callback_count_after_interruption"]
+          assert record["callback_count_after_recovery"] > record["second_service_evidence_callback_count"]
           assert record["event_continuity_restored"] is True
           assert record["second_run_loop_source_removed_on_cleanup"] is True
           assert record["run_loop_delivery_proven"] is True
-          assert record["ground_truth_source"] == "real_appkit_title_mutations_plus_real_axobserver_cfrunloop_source_removal_and_recreation"
+          assert record["ground_truth_source"] == "real_appkit_title_mutations_plus_provider_owned_axobserver_callback_tracker_and_cfrunloop_source_removal_recreation"
           PY
       - name: Publish M07 real-provider evidence
         if: always()
