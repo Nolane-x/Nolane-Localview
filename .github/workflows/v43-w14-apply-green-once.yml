@@ -1,0 +1,90 @@
+name: V4.3 W14 Apply GREEN Once
+
+on:
+  push:
+    branches: [feat/v43-l7-windows-w14-weak-accessibility]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-w14-post-pass:
+    if: github.event.head_commit.message == 'chore(v43): apply W14 post-pass once'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/v43-l7-windows-w14-weak-accessibility
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply exact W14 post-pass patch
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path("crates/windows-uia-provider/src/lib.rs")
+          text = path.read_text(encoding="utf-8")
+          old = '''        let usage = guard.finish();
+          if usage.incomplete {
+              for limit in &usage.exhausted {
+                  debt.push(format!("snapshot_budget_exhausted:{limit:?}"));
+              }
+          }
+          (nodes, retained_elements, usage, debt)
+          '''
+          new = '''        let usage = guard.finish();
+          let observed_child_by_parent = (0..nodes.len())
+              .map(|index| {
+                  nodes
+                      .iter()
+                      .any(|candidate| candidate.parent_index == Some(index))
+              })
+              .collect::<Vec<_>>();
+          let traversal_complete = !usage.incomplete;
+          for (index, node) in nodes.iter_mut().enumerate() {
+              if let Some(coverage) =
+                  crate::custom_semantic_coverage::classify_custom_semantic_coverage(
+                      node,
+                      observed_child_by_parent[index],
+                      traversal_complete,
+                  )
+              {
+                  node.attributes.insert(
+                      crate::WINDOWS_UIA_CUSTOM_SEMANTIC_COVERAGE_ATTRIBUTE.into(),
+                      coverage.as_wire_value().into(),
+                  );
+                  if let Some(custom_debt) = coverage.incompleteness_debt() {
+                      debt.push(custom_debt.into());
+                  }
+              }
+          }
+          if usage.incomplete {
+              for limit in &usage.exhausted {
+                  debt.push(format!("snapshot_budget_exhausted:{limit:?}"));
+              }
+          }
+          (nodes, retained_elements, usage, debt)
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one W14 patch anchor, found {text.count(old)}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          '@ | python -
+      - name: Format and verify focused W14 contracts
+        shell: pwsh
+        run: |
+          cargo fmt --all
+          cargo check -p localview-windows-uia-provider
+          cargo test -p localview-windows-uia-provider custom_semantic_coverage_contract -- --nocapture
+      - name: Commit exact production patch
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/windows-uia-provider/src/lib.rs crates/windows-uia-provider/src/custom_semantic_coverage.rs crates/windows-uia-provider/src/custom_semantic_coverage_contract.rs crates/windows-uia-provider/src/event_buffer_lib.rs
+          if (git diff --cached --quiet) { throw "W14 one-shot produced no staged changes" }
+          git commit -m "feat(v43): downgrade weak custom accessibility semantics"
+          git push origin HEAD:feat/v43-l7-windows-w14-weak-accessibility
