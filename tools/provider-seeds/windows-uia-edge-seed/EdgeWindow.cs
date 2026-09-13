@@ -123,7 +123,6 @@ internal sealed class EdgeWindow : Window
         var content = new StackPanel();
         content.Children.Add(hostileProvider);
         content.Children.Add(_sensitiveFieldTarget);
-        content.Children.Add(_weakAccessibilityTarget);
         content.Children.Add(_verifiedInputTarget);
         content.Children.Add(_virtualizedList);
         Content = content;
@@ -168,6 +167,14 @@ internal sealed class EdgeWindow : Window
 
     public void PrepareWeakAccessibility()
     {
+        if (Content is not StackPanel content)
+        {
+            throw new InvalidOperationException("W14 weak-accessibility host panel is unavailable");
+        }
+        if (!content.Children.Contains(_weakAccessibilityTarget))
+        {
+            content.Children.Insert(2, _weakAccessibilityTarget);
+        }
         _weakAccessibilityTarget.Reset();
         Show();
         UpdateLayout();
