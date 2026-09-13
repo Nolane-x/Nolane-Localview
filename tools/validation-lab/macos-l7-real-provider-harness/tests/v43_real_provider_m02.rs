@@ -82,9 +82,11 @@ mod macos_real_provider_m02 {
 
     struct AxNames {
         children: OwnedCf,
+        parent: OwnedCf,
         role: OwnedCf,
         title: OwnedCf,
         description: OwnedCf,
+        value: OwnedCf,
         press: OwnedCf,
     }
 
@@ -92,9 +94,11 @@ mod macos_real_provider_m02 {
         fn new() -> Result<Self, String> {
             Ok(Self {
                 children: cf_string_literal(b"AXChildren\0")?,
+                parent: cf_string_literal(b"AXParent\0")?,
                 role: cf_string_literal(b"AXRole\0")?,
                 title: cf_string_literal(b"AXTitle\0")?,
                 description: cf_string_literal(b"AXDescription\0")?,
+                value: cf_string_literal(b"AXValue\0")?,
                 press: cf_string_literal(b"AXPress\0")?,
             })
         }
@@ -162,6 +166,59 @@ mod macos_real_provider_m02 {
         copy_attribute(element, attribute).and_then(|value| cf_string_value(value.raw()))
     }
 
+    fn element_strings(element: AxUiElementRef, names: &AxNames) -> Vec<String> {
+        [
+            names.title.raw().cast(),
+            names.description.raw().cast(),
+            names.value.raw().cast(),
+        ]
+        .into_iter()
+        .filter_map(|attribute| string_attribute(element, attribute))
+        .filter(|value| !value.is_empty())
+        .collect()
+    }
+
+    fn subtree_contains_text(
+        element: AxUiElementRef,
+        names: &AxNames,
+        wanted: &str,
+        depth: usize,
+    ) -> bool {
+        if element.is_null() || depth > 5 {
+            return false;
+        }
+        if element_strings(element, names).iter().any(|value| value == wanted) {
+            return true;
+        }
+
+        let Some(children) = copy_attribute(element, names.children.raw().cast()) else {
+            return false;
+        };
+        if unsafe { CFGetTypeID(children.raw()) } != unsafe { CFArrayGetTypeID() } {
+            return false;
+        }
+        let array = children.raw().cast();
+        let count = unsafe { CFArrayGetCount(array) };
+        for index in 0..count {
+            let child = unsafe { CFArrayGetValueAtIndex(array, index) }.cast::<c_void>();
+            if subtree_contains_text(child, names, wanted, depth + 1) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn checkbox_is_labelled_bash(element: AxUiElementRef, names: &AxNames) -> bool {
+        if element_strings(element, names).iter().any(|value| value == "bash") {
+            return true;
+        }
+
+        let Some(parent) = copy_attribute(element, names.parent.raw().cast()) else {
+            return false;
+        };
+        subtree_contains_text(parent.raw().cast(), names, "bash", 0)
+    }
+
     fn find_bash_switch(
         element: AxUiElementRef,
         names: &AxNames,
@@ -174,37 +231,26 @@ mod macos_real_provider_m02 {
         evidence.visited += 1;
 
         let role = string_attribute(element, names.role.raw().cast());
-        let title = string_attribute(element, names.title.raw().cast());
-        let description = string_attribute(element, names.description.raw().cast());
+        let strings = element_strings(element, names);
 
         if let Some(role) = role.as_ref() {
             *evidence.role_counts.entry(role.clone()).or_default() += 1;
         }
 
-        let label = title
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .or_else(|| description.as_deref().filter(|value| !value.is_empty()));
+        if strings.iter().any(|value| value == "bash") && evidence.bash_label_nodes.len() < 32 {
+            evidence
+                .bash_label_nodes
+                .push(format!("role={role:?} strings={strings:?}"));
+        }
 
         if role.as_deref() == Some("AXCheckBox") {
             evidence.checkbox_nodes += 1;
-            if let Some(label) = label {
-                if evidence.checkbox_labels.len() < 64 {
-                    evidence.checkbox_labels.push(label.to_owned());
-                }
-                if label == "bash" {
-                    let retained = unsafe { CFRetain(element.cast()) };
-                    return OwnedCf::new(retained);
-                }
+            if evidence.checkbox_labels.len() < 64 {
+                evidence.checkbox_labels.push(format!("strings={strings:?}"));
             }
-        }
-
-        if title.as_deref() == Some("bash") || description.as_deref() == Some("bash") {
-            if evidence.bash_label_nodes.len() < 32 {
-                evidence.bash_label_nodes.push(format!(
-                    "role={:?} title={:?} description={:?}",
-                    role, title, description
-                ));
+            if checkbox_is_labelled_bash(element, names) {
+                let retained = unsafe { CFRetain(element.cast()) };
+                return OwnedCf::new(retained);
             }
         }
 
@@ -301,8 +347,9 @@ mod macos_real_provider_m02 {
                         }
 
                         eprintln!(
-                            "M02_NATIVE_AX_REVOKE pid={pid} visited={} action=AXPress result=success",
-                            evidence.visited
+                            "M02_NATIVE_AX_REVOKE pid={pid} visited={} action=AXPress result=success bash_nodes={:?}",
+                            evidence.visited,
+                            evidence.bash_label_nodes,
                         );
                         return Ok(());
                     }
