@@ -1,0 +1,86 @@
+name: V4.3 W14 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-w14-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  w14-real-provider:
+    name: W14 owner-drawn weak accessibility stays partial
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Bind exact W14 candidate and artifact directory
+        shell: pwsh
+        run: |
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "W14 checkout SHA mismatch: actual=$actual expected=$env:LOCALVIEW_CANDIDATE_SHA"
+          }
+          $artifactDir = Join-Path $env:RUNNER_TEMP "localview-v43-w14"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          "LOCALVIEW_L7_ARTIFACT_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build WPF W14 owner-drawn edge seed
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+      - name: Require exact W14 real-provider registration
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w14::w14_owner_drawn_weak_accessibility_never_claims_complete_semantics"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w14 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W14 real-provider test is not registered: $testName"
+          }
+      - name: Run W14 weak-accessibility real-provider oracle
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w14::w14_owner_drawn_weak_accessibility_never_claims_complete_semantics"
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w14 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify W14 evidence is exact-head and partial-safe
+        shell: pwsh
+        run: |
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "W14 head moved during proof: actual=$actual expected=$env:LOCALVIEW_CANDIDATE_SHA"
+          }
+          $recordPath = Join-Path $env:LOCALVIEW_L7_ARTIFACT_DIR "W14-REAL-PROVIDER-RECORD.json"
+          if (-not (Test-Path $recordPath)) {
+            throw "missing W14 real-provider record: $recordPath"
+          }
+          $record = Get-Content $recordPath -Raw | ConvertFrom-Json
+          if ($record.candidate_sha -ne $env:LOCALVIEW_CANDIDATE_SHA) { throw "W14 artifact candidate SHA mismatch" }
+          if ($record.case_id -ne "W14") { throw "W14 artifact case mismatch" }
+          if ($record.owner_drawn -ne $true) { throw "W14 artifact must bind owner_drawn=true" }
+          if ($record.custom_semantic_coverage -ne "custom_partial") { throw "W14 must classify weak custom semantics as custom_partial" }
+          if ($record.snapshot_completeness -ne "incomplete") { throw "W14 snapshot must remain incomplete" }
+          if ($record.accessibility_partial_debt -ne $true) { throw "W14 accessibility-partial debt missing" }
+          if ($record.invoke_support -ne "unsupported") { throw "W14 must not synthesize Invoke" }
+          if ([int]$record.semantic_child_count -ne 0) { throw "W14 visual hotspot must not become semantic child" }
+          if ($record.visual_label_present_in_semantic_snapshot -ne $false) { throw "W14 visual label leaked into semantic snapshot" }
+          if ([int]$record.visual_effect_count -ne 0) { throw "W14 semantic observation caused side effect" }
+      - name: Publish W14 real-provider evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-w14-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
