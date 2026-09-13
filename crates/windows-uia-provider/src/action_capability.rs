@@ -228,6 +228,10 @@ impl WindowsUiaValueCapabilityFacts {
             IS_PASSWORD_ATTRIBUTE_KEY.into(),
             self.is_password.as_wire_value().into(),
         );
+        crate::w13_semantic_text_protection::write_semantic_text_protection(
+            self.is_password,
+            attributes,
+        );
         attributes.insert(
             VALUE_IS_READ_ONLY_ATTRIBUTE_KEY.into(),
             self.is_read_only.as_wire_value().into(),
