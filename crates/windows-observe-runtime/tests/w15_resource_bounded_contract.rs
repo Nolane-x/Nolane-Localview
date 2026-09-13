@@ -13,12 +13,11 @@ use localview_protocol::{
     ReconciliationCompleteness, SessionId, TargetIncarnationRef,
 };
 use localview_windows_observe_runtime::{
-    WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeManager,
-    WindowsObserveSubscriptionLineage,
+    WindowsObserveProvider, WindowsObserveRuntimeConfig, WindowsObserveRuntimeError,
+    WindowsObserveRuntimeManager, WindowsObserveSubscriptionLineage,
 };
 use localview_windows_uia_provider::{
-    WindowsUiaActionCapabilities, WindowsUiaEventDrain, WindowsUiaPattern,
-    WindowsUiaPatternSupport,
+    WindowsUiaActionCapabilities, WindowsUiaEventDrain, WindowsUiaPattern, WindowsUiaPatternSupport,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -56,7 +55,10 @@ impl Provider {
 
     fn semantic_node(&self, cut: &str) -> NativeSemanticNodeObservation {
         let mut capabilities = WindowsUiaActionCapabilities::default();
-        capabilities.record(WindowsUiaPattern::Invoke, WindowsUiaPatternSupport::Supported);
+        capabilities.record(
+            WindowsUiaPattern::Invoke,
+            WindowsUiaPatternSupport::Supported,
+        );
         let mut attributes = BTreeMap::new();
         capabilities.write_attributes(&mut attributes);
 
@@ -143,7 +145,10 @@ impl WindowsObserveProvider for Provider {
         self.provider.clone()
     }
 
-    fn attach(&self, _selection: UserSelectedWindowTarget) -> Result<Self::Attachment, Self::Error> {
+    fn attach(
+        &self,
+        _selection: UserSelectedWindowTarget,
+    ) -> Result<Self::Attachment, Self::Error> {
         Ok(Attachment(self.target.clone()))
     }
 
@@ -236,7 +241,10 @@ async fn w15_resource_bounded_reconciliation_is_current_but_never_action_authori
 
     let current = runtime.current_semantic_snapshot(session_id).await.unwrap();
     assert_ne!(current.snapshot_cut_ref(), before.snapshot_cut_ref());
-    assert_eq!(current.completeness(), ReconciliationCompleteness::Incomplete);
+    assert_eq!(
+        current.completeness(),
+        ReconciliationCompleteness::Incomplete
+    );
     assert!(current.resource_usage().incomplete);
     assert_eq!(
         current.resource_usage().exhausted,
@@ -256,8 +264,12 @@ async fn w15_resource_bounded_reconciliation_is_current_but_never_action_authori
     );
     assert!(status.reconciliation_receipt_id.is_some());
 
-    assert!(
-        error.to_string().contains("resource-bounded"),
-        "W15 requires a typed resource-bounded outcome, got: {error}"
+    assert_eq!(
+        error,
+        WindowsObserveRuntimeError::ResourceBounded {
+            operation: "fresh_action_evidence_snapshot",
+            exhausted: vec![SnapshotBudgetLimit::Nodes],
+            incompleteness_debt: vec!["snapshot_budget_exhausted:Nodes".into()],
+        }
     );
 }

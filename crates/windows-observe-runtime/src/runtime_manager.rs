@@ -141,6 +141,12 @@ pub enum WindowsObserveRuntimeError {
         pressure: PressureLevel,
         reasons: Vec<String>,
     },
+    #[error("Windows observe reconciliation is resource-bounded during {operation}: exhausted={exhausted:?}")]
+    ResourceBounded {
+        operation: &'static str,
+        exhausted: Vec<localview_native_provider::SnapshotBudgetLimit>,
+        incompleteness_debt: Vec<String>,
+    },
     #[error("Windows observe subscription provider lineage does not match the worker")]
     SubscriptionProviderIncarnationMismatch,
     #[error("Windows observe subscription target lineage does not match the attachment")]
