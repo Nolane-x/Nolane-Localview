@@ -1,5 +1,7 @@
+#[cfg(any(windows, test))]
 use localview_native_provider::NativeSemanticNodeObservation;
 
+#[cfg(any(windows, test))]
 use crate::{WindowsUiaActionCapabilities, WindowsUiaPattern, WindowsUiaPatternSupport};
 
 pub const WINDOWS_UIA_CUSTOM_SEMANTIC_COVERAGE_ATTRIBUTE: &str =
@@ -8,6 +10,7 @@ pub const WINDOWS_UIA_ACCESSIBILITY_PARTIAL_CUSTOM_CONTROL_DEBT: &str =
     "uia_accessibility_partial_custom_control";
 pub const WINDOWS_UIA_ACCESSIBILITY_OPAQUE_CUSTOM_CONTROL_DEBT: &str =
     "uia_accessibility_opaque_custom_control";
+#[cfg(any(windows, test))]
 const WINDOWS_UIA_CUSTOM_CONTROL_TYPE: &str = "uia_control_type:50025";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +38,7 @@ impl WindowsUiaCustomSemanticCoverage {
     }
 }
 
+#[cfg(any(windows, test))]
 pub(crate) fn classify_custom_semantic_coverage(
     node: &NativeSemanticNodeObservation,
     has_observed_child: bool,
