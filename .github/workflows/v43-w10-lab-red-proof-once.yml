@@ -32,7 +32,17 @@ jobs:
           cargo test -p localview-windows-uia-provider --test geometry_worker_contract -- --nocapture
           cargo test -p localview-windows-uia-provider --test geometry_contract -- --nocapture
       - name: Verify full Windows UIA provider regression suite
-        run: cargo test -p localview-windows-uia-provider -- --nocapture --test-threads=1
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "w10-full-provider.log"
+          cargo test -p localview-windows-uia-provider -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath $log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Host "::group::W10 concise failure diagnostics"
+            Select-String -Path $log -Pattern 'FAILED|failures:|panicked at|assertion|left:|right:|error: test failed' -Context 4,8 | ForEach-Object { $_.ToString() }
+            Write-Host "::endgroup::"
+            exit $code
+          }
       - name: Commit only after Windows GREEN
         shell: pwsh
         run: |
