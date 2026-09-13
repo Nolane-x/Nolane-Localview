@@ -22,6 +22,7 @@ mod macos_real_provider_m02 {
 
     const AX_ERROR_SUCCESS: i32 = 0;
     const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+    const CF_NUMBER_SINT32_TYPE: i32 = 3;
     const MAX_AX_DEPTH: usize = 24;
     const MAX_AX_NODES: usize = 12_000;
 
@@ -58,6 +59,10 @@ mod macos_real_provider_m02 {
             buffer_size: isize,
             encoding: u32,
         ) -> u8;
+        fn CFNumberGetTypeID() -> usize;
+        fn CFNumberGetValue(number: CfTypeRef, number_type: i32, value: *mut c_void) -> u8;
+        fn CFBooleanGetTypeID() -> usize;
+        fn CFBooleanGetValue(boolean: CfTypeRef) -> u8;
         fn CFRetain(value: CfTypeRef) -> CfTypeRef;
         fn CFRelease(value: CfTypeRef);
     }
@@ -164,6 +169,39 @@ mod macos_real_provider_m02 {
 
     fn string_attribute(element: AxUiElementRef, attribute: CfStringRef) -> Option<String> {
         copy_attribute(element, attribute).and_then(|value| cf_string_value(value.raw()))
+    }
+
+    fn checkbox_value(element: AxUiElementRef, names: &AxNames) -> Result<i32, String> {
+        let value = copy_attribute(element, names.value.raw().cast())
+            .ok_or_else(|| "AXValue could not be read from bash Accessibility switch".to_owned())?;
+        let type_id = unsafe { CFGetTypeID(value.raw()) };
+
+        if type_id == unsafe { CFNumberGetTypeID() } {
+            let mut number = 0_i32;
+            let copied = unsafe {
+                CFNumberGetValue(
+                    value.raw(),
+                    CF_NUMBER_SINT32_TYPE,
+                    (&mut number as *mut i32).cast::<c_void>(),
+                )
+            };
+            if copied == 0 {
+                return Err("CFNumberGetValue failed for bash Accessibility switch".to_owned());
+            }
+            return Ok(number);
+        }
+
+        if type_id == unsafe { CFBooleanGetTypeID() } {
+            return Ok(if unsafe { CFBooleanGetValue(value.raw()) } != 0 {
+                1
+            } else {
+                0
+            });
+        }
+
+        Err(format!(
+            "bash Accessibility switch AXValue had unsupported CF type id {type_id}"
+        ))
     }
 
     fn element_strings(element: AxUiElementRef, names: &AxNames) -> Vec<String> {
@@ -327,6 +365,13 @@ mod macos_real_provider_m02 {
                         0,
                         &mut evidence,
                     ) {
+                        let before = checkbox_value(bash_switch.raw().cast(), &names)?;
+                        if before != 1 {
+                            return Err(format!(
+                                "M02 requires bash Accessibility switch ON before revoke; observed AXValue={before}"
+                            ));
+                        }
+
                         let actions = copy_action_names(bash_switch.raw().cast())?;
                         if !actions.iter().any(|action| action == "AXPress") {
                             return Err(format!(
@@ -346,8 +391,32 @@ mod macos_real_provider_m02 {
                             ));
                         }
 
+                        let mut after = None;
+                        let mut last_read_error = None;
+                        for _ in 0..50 {
+                            match checkbox_value(bash_switch.raw().cast(), &names) {
+                                Ok(value) => {
+                                    after = Some(value);
+                                    last_read_error = None;
+                                    if value == 0 {
+                                        break;
+                                    }
+                                }
+                                Err(error) => {
+                                    last_read_error = Some(error);
+                                }
+                            }
+                            thread::sleep(Duration::from_millis(100));
+                        }
+
+                        if after != Some(0) {
+                            return Err(format!(
+                                "AXPress succeeded but bash Accessibility switch did not prove ON->OFF; before={before} after={after:?} last_read_error={last_read_error:?}"
+                            ));
+                        }
+
                         eprintln!(
-                            "M02_NATIVE_AX_REVOKE pid={pid} visited={} action=AXPress result=success bash_nodes={:?}",
+                            "M02_NATIVE_AX_REVOKE pid={pid} visited={} action=AXPress result=success switch_before={before} switch_after=0 bash_nodes={:?}",
                             evidence.visited,
                             evidence.bash_label_nodes,
                         );
@@ -458,6 +527,9 @@ mod macos_real_provider_m02 {
             "responsible_process_switch": "bash",
             "system_settings_bash_switch_toggled_off_mid_session": true,
             "native_ax_press_action_verified": true,
+            "native_ax_switch_transition_verified": true,
+            "native_ax_switch_value_before": 1,
+            "native_ax_switch_value_after": 0,
             "dispatch_permission_state": "untrusted",
             "dispatch_permission_check_sequence": dispatch_revision.check_sequence(),
             "admitted_permission_check_sequence": dispatch.admitted_permission_check_sequence(),
