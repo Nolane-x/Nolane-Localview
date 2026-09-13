@@ -1,0 +1,16 @@
+[package]
+name = "localview-macos-l7-real-provider-harness"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace]
+
+[[test]]
+name = "v43_real_provider_m01"
+path = "tests/v43_real_provider_m01.rs"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+localview-macos-ax-provider = { path = "../../../crates/macos-ax-provider" }
+serde_json = "1"

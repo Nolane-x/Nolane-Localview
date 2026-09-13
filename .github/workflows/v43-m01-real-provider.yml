@@ -1,0 +1,92 @@
+name: V4.3 M01 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m01-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m01-real-provider:
+    name: M01 Accessibility permission absent is typed and non-authorizing
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_MACOS_AX_SMOKE: "1"
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M01 candidate and artifact directory
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M01 checkout SHA mismatch: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          artifact_dir="$RUNNER_TEMP/localview-v43-m01"
+          mkdir -p "$artifact_dir"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Require exact M01 real-provider registration
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m01::m01_accessibility_permission_absent_is_typed_and_non_authorizing"
+          listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m01 -- --list)"
+          printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Establish real absent Accessibility permission topology
+        run: |
+          set -euo pipefail
+          # GitHub's macOS image pre-authorizes runner/shell processes for
+          # Accessibility. Apple documents tccutil reset as the supported way
+          # to remove a protected-resource authorization during testing.
+          sudo /usr/bin/tccutil reset Accessibility
+          echo "LOCALVIEW_M01_TCC_RESET=1" >> "$GITHUB_ENV"
+      - name: Run M01 Accessibility permission real-provider oracle
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m01::m01_accessibility_permission_absent_is_typed_and_non_authorizing"
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m01 "$test_name" -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify M01 evidence is exact-head and non-authorizing
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M01 head moved during proof: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M01-REAL-PROVIDER-RECORD.json"
+          test -f "$record_path"
+          python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
+          import json, sys
+          path, expected_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+          assert record["schema"] == "localview-v43-m01-real-provider-record-v1"
+          assert record["case_id"] == "M01"
+          assert record["candidate_sha"] == expected_sha
+          assert record["tcc_reset_applied"] is True
+          assert record["permission_state"] == "untrusted"
+          assert int(record["permission_check_sequence"]) > 0
+          assert record["prompt_requested"] is False
+          assert record["semantic_control_permit_minted"] is False
+          assert record["typed_permission_denial"] is True
+          assert record["denial"] == "permission_required"
+          assert record["authority_source"] == "provider_owned_os_observation"
+          PY
+      - name: Publish M01 real-provider evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-m01-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
