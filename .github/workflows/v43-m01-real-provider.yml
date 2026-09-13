@@ -43,6 +43,14 @@ jobs:
           test_name="macos_real_provider_m01::m01_accessibility_permission_absent_is_typed_and_non_authorizing"
           listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m01 -- --list)"
           printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Establish real absent Accessibility permission topology
+        run: |
+          set -euo pipefail
+          # GitHub's macOS image pre-authorizes runner/shell processes for
+          # Accessibility. Apple documents tccutil reset as the supported way
+          # to remove a protected-resource authorization during testing.
+          sudo /usr/bin/tccutil reset Accessibility
+          echo "LOCALVIEW_M01_TCC_RESET=1" >> "$GITHUB_ENV"
       - name: Run M01 Accessibility permission real-provider oracle
         run: |
           set -euo pipefail
@@ -66,12 +74,14 @@ jobs:
           assert record["schema"] == "localview-v43-m01-real-provider-record-v1"
           assert record["case_id"] == "M01"
           assert record["candidate_sha"] == expected_sha
+          assert record["tcc_reset_applied"] is True
           assert record["permission_state"] == "untrusted"
           assert int(record["permission_check_sequence"]) > 0
           assert record["prompt_requested"] is False
           assert record["semantic_control_permit_minted"] is False
           assert record["typed_permission_denial"] is True
           assert record["denial"] == "permission_required"
+          assert record["authority_source"] == "provider_owned_os_observation"
           PY
       - name: Publish M01 real-provider evidence
         uses: actions/upload-artifact@v4
