@@ -23,6 +23,7 @@ members = [
   "crates/postcondition-contracts",
   "crates/windows-uia-provider",
   "crates/windows-observe-runtime",
+  "crates/macos-ax-provider",
   "crates/chromium",
   "crates/engine",
   "crates/network",
