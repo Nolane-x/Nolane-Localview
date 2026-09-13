@@ -1,0 +1,91 @@
+name: V4.3 W15 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-w15-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  w15-real-provider:
+    name: W15 resource-bounded reconciliation stays incomplete
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Bind exact W15 candidate and artifact directory
+        shell: pwsh
+        run: |
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "W15 checkout SHA mismatch: actual=$actual expected=$env:LOCALVIEW_CANDIDATE_SHA"
+          }
+          $artifactDir = Join-Path $env:RUNNER_TEMP "localview-v43-w15"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          "LOCALVIEW_L7_ARTIFACT_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build WPF W15 low-resource edge seed
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+      - name: Require exact W15 real-provider registration
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w15::w15_low_resource_reconciliation_stays_incomplete_and_typed"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w15 -- --list
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W15 real-provider test is not registered: $testName"
+          }
+      - name: Run W15 low-resource real-provider oracle
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w15::w15_low_resource_reconciliation_stays_incomplete_and_typed"
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w15 $testName -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify W15 evidence is exact-head and resource-safe
+        shell: pwsh
+        run: |
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "W15 head moved during proof: actual=$actual expected=$env:LOCALVIEW_CANDIDATE_SHA"
+          }
+          $recordPath = Join-Path $env:LOCALVIEW_L7_ARTIFACT_DIR "W15-REAL-PROVIDER-RECORD.json"
+          if (-not (Test-Path $recordPath)) {
+            throw "missing W15 real-provider record: $recordPath"
+          }
+          $record = Get-Content $recordPath -Raw | ConvertFrom-Json
+          if ($record.candidate_sha -ne $env:LOCALVIEW_CANDIDATE_SHA) { throw "W15 artifact candidate SHA mismatch" }
+          if ($record.case_id -ne "W15") { throw "W15 artifact case mismatch" }
+          if ([int]$record.budget.max_nodes -ne 1) { throw "W15 must bind max_nodes=1" }
+          if ([int]$record.budget.max_depth -ne 12) { throw "W15 max_depth mismatch" }
+          if ([int]$record.budget.max_properties -ne 2048) { throw "W15 max_properties mismatch" }
+          if ([int]$record.initial_nodes_observed -ne 1) { throw "W15 initial traversal must retain exactly one admitted node" }
+          if ($record.initial_snapshot_completeness -ne "incomplete") { throw "W15 initial snapshot must remain incomplete" }
+          if ($record.fresh_snapshot_completeness -ne "incomplete") { throw "W15 fresh snapshot must remain incomplete" }
+          if ($record.nodes_budget_exhausted -ne $true) { throw "W15 Nodes budget exhaustion missing" }
+          if ($record.resource_debt_present -ne $true) { throw "W15 resource debt missing" }
+          if ($record.resource_error_typed -ne $true) { throw "W15 typed resource-bounded outcome missing" }
+          if ($record.fresh_cut_published -ne $true) { throw "W15 newest bounded cut was not published" }
+          if ($record.reconciliation_receipt_present -ne $true) { throw "W15 reconciliation receipt missing" }
+          if ($record.action_binding_minted -ne $false) { throw "W15 must not mint fresh action binding under resource exhaustion" }
+          if ($record.accessibility_partial_debt_present -ne $false) { throw "W15 budget truncation was misdiagnosed as accessibility weakness" }
+      - name: Publish W15 real-provider evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-w15-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30

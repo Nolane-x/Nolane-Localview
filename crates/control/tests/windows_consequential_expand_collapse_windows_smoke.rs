@@ -204,13 +204,12 @@ mod windows_consequential_expand_collapse_windows_smoke {
             spawn_windows_uia_runtime_manager(
                 live.clone(),
                 WindowsUiaWorkerConfig {
-                    snapshot_budget: SnapshotBudget {
-                        max_nodes: 32,
-                        max_depth: 4,
-                        // Keep the property ceiling aligned with the explicit node ceiling:
-                        // 32 bounded nodes × 19 tracked properties per semantic node.
-                        max_properties: 608,
-                    },
+                    // This control-path test proves consequential Expand/Collapse
+                    // behavior, not resource-pressure semantics. Give the real
+                    // UIA tree the normal bounded provider budget. W15 keeps its
+                    // own deliberately tiny budget to prove resource-bounded
+                    // reconciliation remains incomplete and fail-closed.
+                    snapshot_budget: SnapshotBudget::default(),
                     command_timeout: Duration::from_secs(5),
                 },
                 WindowsObserveRuntimeConfig {

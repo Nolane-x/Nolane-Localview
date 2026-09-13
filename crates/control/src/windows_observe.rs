@@ -177,7 +177,12 @@ fn runtime_error_response(error: WindowsObserveRuntimeError) -> axum::response::
         WindowsObserveRuntimeError::Provider { .. }
         | WindowsObserveRuntimeError::ProviderTask { .. } => StatusCode::SERVICE_UNAVAILABLE,
         WindowsObserveRuntimeError::ResourceDenied { .. } => StatusCode::TOO_MANY_REQUESTS,
-        WindowsObserveRuntimeError::SubscriptionProviderIncarnationMismatch
+        // A resource-bounded observation completed and became current world state,
+        // but its incomplete proof cannot authorize the requested operation. This
+        // is a conflict with current evidence, not admission throttling or provider
+        // unavailability.
+        WindowsObserveRuntimeError::ResourceBounded { .. }
+        | WindowsObserveRuntimeError::SubscriptionProviderIncarnationMismatch
         | WindowsObserveRuntimeError::SubscriptionTargetIncarnationMismatch
         | WindowsObserveRuntimeError::Bridge(_)
         | WindowsObserveRuntimeError::ObservationStateMissing { .. }
@@ -247,6 +252,17 @@ fn lock_registry(registry: &Mutex<RuntimeRegistry>) -> MutexGuard<'_, RuntimeReg
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_bounded_observation_is_exposed_as_current_state_conflict() {
+        let response = runtime_error_response(WindowsObserveRuntimeError::ResourceBounded {
+            operation: "fresh_action_evidence_snapshot",
+            exhausted: vec![localview_native_provider::SnapshotBudgetLimit::Nodes],
+            incompleteness_debt: vec!["snapshot_budget_exhausted:Nodes".into()],
+        });
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
 
     #[test]
     fn postcondition_observation_authority_failure_is_exposed_as_conflict() {

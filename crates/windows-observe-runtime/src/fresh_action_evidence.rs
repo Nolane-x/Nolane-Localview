@@ -115,8 +115,17 @@ impl<P: WindowsObserveProvider> WindowsObserveRuntimeManager<P> {
         self.update_reconciliation_snapshot(session_id, snapshot.clone())
             .await;
 
+        if snapshot.resource_usage().incomplete
+            && !snapshot.resource_usage().exhausted.is_empty()
+        {
+            return Err(WindowsObserveRuntimeError::ResourceBounded {
+                operation: "fresh_action_evidence_snapshot",
+                exhausted: snapshot.resource_usage().exhausted.clone(),
+                incompleteness_debt: snapshot.incompleteness_debt().to_vec(),
+            });
+        }
+
         if snapshot.completeness() != ReconciliationCompleteness::Established
-            || snapshot.resource_usage().incomplete
             || !snapshot.incompleteness_debt().is_empty()
         {
             return Err(WindowsObserveRuntimeError::Provider {
