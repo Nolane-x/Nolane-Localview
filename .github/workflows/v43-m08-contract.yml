@@ -1,0 +1,27 @@
+name: V4.3 M08 Permission Separation Contract
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'crates/macos-ax-provider/**'
+      - '.github/workflows/v43-m08-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  m08-permission-separation-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M08 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - name: Run macOS permission separation contract through M08
+        run: cargo test -p localview-macos-ax-provider --test m08_permission_separation_contract -- --nocapture

@@ -5,6 +5,7 @@ mod element_binding;
 mod observer_application;
 mod observer_continuity;
 mod observer_reliability;
+mod visual_permission;
 
 pub use application_incarnation::*;
 pub use element_binding::*;
@@ -12,6 +13,7 @@ pub use observer_application::*;
 pub use observer_continuity::*;
 pub use observer_reliability::*;
 pub use permission::*;
+pub use visual_permission::*;
 
 /// Shipping M07 continuity authority must not expose a callable raw AX callback
 /// bridge. If these methods become available without the validation-only Cargo
