@@ -6,15 +6,14 @@ mod macos_real_provider_m07 {
         path::{Path, PathBuf},
         process::{Child, Command, Stdio},
         ptr,
-        sync::atomic::{AtomicU64, Ordering},
         thread,
         time::{Duration, Instant},
     };
 
     use localview_macos_ax_provider::{
-        AxApplicationIncarnation, AxObserverApplicationBindingProvider,
-        AxObserverContinuityBreakReason, AxObserverContinuityDecision,
-        AxObserverContinuityProvider, AxPermissionProvider, AxPermissionState, AxRunLoopLiveness,
+        AxApplicationIncarnation, AxObserverApplicationBindingProvider, AxObserverCallbackFn,
+        AxObserverContinuityBreakReason, AxObserverContinuityProvider, AxPermissionProvider,
+        AxPermissionState, AxRunLoopCallbackTracker,
     };
 
     type AxUiElementRef = *const c_void;
@@ -31,8 +30,6 @@ mod macos_real_provider_m07 {
     const BASE_TITLE: &str = "LocalView M07 RunLoop Seed";
     const NOTIFICATION: &str = "AXTitleChanged";
 
-    static CALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
-
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
         fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
@@ -43,12 +40,7 @@ mod macos_real_provider_m07 {
         ) -> i32;
         fn AXObserverCreate(
             application: i32,
-            callback: unsafe extern "C" fn(
-                AxObserverRef,
-                AxUiElementRef,
-                CfStringRef,
-                *mut c_void,
-            ),
+            callback: AxObserverCallbackFn,
             out_observer: *mut AxObserverRef,
         ) -> i32;
         fn AXObserverAddNotification(
@@ -93,15 +85,6 @@ mod macos_real_provider_m07 {
             seconds: f64,
             return_after_source_handled: u8,
         ) -> i32;
-    }
-
-    unsafe extern "C" fn observer_callback(
-        _observer: AxObserverRef,
-        _element: AxUiElementRef,
-        _notification: CfStringRef,
-        _refcon: *mut c_void,
-    ) {
-        CALLBACK_COUNT.fetch_add(1, Ordering::AcqRel);
     }
 
     struct OwnedCf(CfTypeRef);
@@ -191,22 +174,26 @@ mod macos_real_provider_m07 {
         ))
     }
 
-    fn create_observer(pid: i32) -> Result<(OwnedCf, i32), String> {
+    fn create_observer(pid: i32, callback: AxObserverCallbackFn) -> Result<(OwnedCf, i32), String> {
         let mut observer: AxObserverRef = ptr::null();
-        let error = unsafe { AXObserverCreate(pid, observer_callback, &mut observer) };
+        let error = unsafe { AXObserverCreate(pid, callback, &mut observer) };
         let observer = OwnedCf::new(observer.cast())
             .ok_or_else(|| format!("AXObserverCreate returned null; error={error}"))?;
         Ok((observer, error))
     }
 
-    fn register_title_notification(observer: &OwnedCf, window: &OwnedCf) -> Result<i32, String> {
+    fn register_title_notification(
+        observer: &OwnedCf,
+        window: &OwnedCf,
+        refcon: *mut c_void,
+    ) -> Result<i32, String> {
         let notification = cf_string(NOTIFICATION)?;
         Ok(unsafe {
             AXObserverAddNotification(
                 observer.raw().cast(),
                 window.raw().cast(),
                 notification.raw().cast(),
-                ptr::null_mut(),
+                refcon,
             )
         })
     }
@@ -236,10 +223,14 @@ mod macos_real_provider_m07 {
         (unsafe { CFRunLoopContainsSource(run_loop, source, run_loop_mode()) }) == 0
     }
 
-    fn pump_until_callbacks(minimum: u64, timeout: Duration) -> bool {
+    fn pump_until_callbacks(
+        tracker: &AxRunLoopCallbackTracker,
+        minimum: u64,
+        timeout: Duration,
+    ) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if CALLBACK_COUNT.load(Ordering::Acquire) >= minimum {
+            if tracker.delivered_callback_count() >= minimum {
                 return true;
             }
             unsafe {
@@ -247,7 +238,7 @@ mod macos_real_provider_m07 {
             }
             thread::sleep(Duration::from_millis(5));
         }
-        CALLBACK_COUNT.load(Ordering::Acquire) >= minimum
+        tracker.delivered_callback_count() >= minimum
     }
 
     fn pump_for(duration: Duration) {
@@ -267,7 +258,6 @@ mod macos_real_provider_m07 {
             std::env::var_os("LOCALVIEW_MACOS_AX_SMOKE").is_some(),
             "real macOS AX smoke must be explicitly enabled"
         );
-        CALLBACK_COUNT.store(0, Ordering::Release);
 
         let candidate_sha = std::env::var("LOCALVIEW_CANDIDATE_SHA")
             .expect("M07 requires LOCALVIEW_CANDIDATE_SHA");
@@ -316,51 +306,68 @@ mod macos_real_provider_m07 {
 
         let first_binding = observer_authority.bind_current(application_incarnation.clone());
         let first_observer_revision = first_binding.observer_creation_revision();
+        let first_source_incarnation = continuity_authority.new_run_loop_source_incarnation();
+        let first_tracker =
+            continuity_authority.new_callback_tracker(&first_binding, first_source_incarnation);
         let (first_observer, first_create_error) =
-            create_observer(pid).expect("create M07 observer 1");
+            create_observer(pid, first_tracker.callback_function())
+                .expect("create M07 observer 1 with provider-owned callback tracker");
         assert_eq!(first_create_error, AX_ERROR_SUCCESS);
-        let first_registration_error = register_title_notification(&first_observer, &window)
-            .expect("register M07 title notification 1");
+        let first_registration_error = register_title_notification(
+            &first_observer,
+            &window,
+            first_tracker.callback_refcon(),
+        )
+        .expect("register M07 title notification 1");
         assert_eq!(
             first_registration_error, AX_ERROR_SUCCESS,
             "M07 positive-control AXTitleChanged notification must register"
         );
         let (run_loop, first_os_source) =
             add_observer_source(&first_observer).expect("attach first M07 observer source");
-        let first_source_incarnation = continuity_authority.new_run_loop_source_incarnation();
-        let live = continuity_authority
-            .activate(
-                first_binding,
-                first_source_incarnation,
-                AxRunLoopLiveness::Serviced,
-            )
-            .expect("attached and serviced first source must establish continuity");
-        let first_continuity_revision = live.continuity_revision();
+
+        let initial_service_evidence_before_callback = continuity_authority
+            .serviced_callback_evidence(&first_tracker)
+            .is_some();
+        assert!(
+            !initial_service_evidence_before_callback,
+            "registration + source attachment must not mint continuity before a delivered callback"
+        );
 
         fs::write(&command_path, "title 1\n").expect("request first title mutation");
         let first_changed =
             wait_for_generation(&state_path, 1).expect("wait for first title mutation");
         assert_eq!(first_changed["window_title"], format!("{BASE_TITLE} 1"));
         assert!(
-            pump_until_callbacks(1, Duration::from_secs(5)),
+            pump_until_callbacks(&first_tracker, 1, Duration::from_secs(5)),
             "serviced AX observer source must deliver the first real title callback"
         );
         pump_for(Duration::from_millis(150));
-        let callbacks_before_interruption = CALLBACK_COUNT.load(Ordering::Acquire);
+        let callbacks_before_interruption = first_tracker.delivered_callback_count();
         assert!(callbacks_before_interruption >= 1);
+        let first_service_evidence = continuity_authority
+            .serviced_callback_evidence(&first_tracker)
+            .expect("real first callback must mint provider-owned service evidence");
+        let first_service_evidence_callback_count =
+            first_service_evidence.delivered_callback_count();
+        let live = continuity_authority
+            .activate(
+                first_binding,
+                first_source_incarnation,
+                first_service_evidence,
+            )
+            .expect("callback-backed first source may establish continuity");
+        let first_continuity_revision = live.continuity_revision();
 
         assert!(
             remove_observer_source(run_loop, first_os_source),
             "first AX observer run-loop source must be removed before interruption mutation"
         );
-        let broken = match continuity_authority.validate(
+        let broken = continuity_authority.break_continuity(
             live,
             first_source_incarnation,
-            AxRunLoopLiveness::Interrupted,
-        ) {
-            AxObserverContinuityDecision::Broken(broken) => broken,
-            other => panic!("run-loop interruption must break M07 continuity, got {other:?}"),
-        };
+            AxObserverContinuityBreakReason::RunLoopInterrupted,
+        );
         assert_eq!(
             broken.reason(),
             AxObserverContinuityBreakReason::RunLoopInterrupted
@@ -373,7 +380,7 @@ mod macos_real_provider_m07 {
             wait_for_generation(&state_path, 2).expect("wait for interruption title mutation");
         assert_eq!(interrupted["window_title"], format!("{BASE_TITLE} 2"));
         pump_for(Duration::from_millis(650));
-        let callbacks_after_interruption = CALLBACK_COUNT.load(Ordering::Acquire);
+        let callbacks_after_interruption = first_tracker.delivered_callback_count();
         assert_eq!(
             callbacks_after_interruption, callbacks_before_interruption,
             "removed run-loop source must not deliver the title mutation during interruption"
@@ -384,43 +391,78 @@ mod macos_real_provider_m07 {
         let fresh_binding = observer_authority.bind_current(application_incarnation.clone());
         let second_observer_revision = fresh_binding.observer_creation_revision();
         assert!(second_observer_revision > first_observer_revision);
+        let second_source_incarnation = continuity_authority.new_run_loop_source_incarnation();
+        assert_ne!(second_source_incarnation, first_source_incarnation);
+        let second_tracker =
+            continuity_authority.new_callback_tracker(&fresh_binding, second_source_incarnation);
         let (second_observer, second_create_error) =
-            create_observer(pid).expect("create M07 observer 2");
+            create_observer(pid, second_tracker.callback_function())
+                .expect("create M07 observer 2 with provider-owned callback tracker");
         assert_eq!(second_create_error, AX_ERROR_SUCCESS);
-        let second_registration_error = register_title_notification(&second_observer, &window)
-            .expect("register M07 title notification 2");
+        let second_registration_error = register_title_notification(
+            &second_observer,
+            &window,
+            second_tracker.callback_refcon(),
+        )
+        .expect("register M07 title notification 2");
         assert_eq!(second_registration_error, AX_ERROR_SUCCESS);
         let (second_run_loop, second_os_source) =
             add_observer_source(&second_observer).expect("attach second M07 observer source");
         assert_eq!(second_run_loop, run_loop);
-        let second_source_incarnation = continuity_authority.new_run_loop_source_incarnation();
-        assert_ne!(second_source_incarnation, first_source_incarnation);
+
+        let recovery_service_evidence_before_callback = continuity_authority
+            .serviced_callback_evidence(&second_tracker)
+            .is_some();
+        assert!(
+            !recovery_service_evidence_before_callback,
+            "fresh registration/source attachment must not restore authority before callback delivery"
+        );
+
+        fs::write(&command_path, "title 3\n").expect("request recovery-proof title mutation");
+        let recovery_proof_state =
+            wait_for_generation(&state_path, 3).expect("wait for recovery-proof title mutation");
+        assert_eq!(recovery_proof_state["window_title"], format!("{BASE_TITLE} 3"));
+        assert!(
+            pump_until_callbacks(&second_tracker, 1, Duration::from_secs(5)),
+            "fresh AX observer/source must deliver a callback before authority is restored"
+        );
+        let second_service_evidence = continuity_authority
+            .serviced_callback_evidence(&second_tracker)
+            .expect("fresh real callback must mint provider-owned service evidence");
+        let second_service_evidence_callback_count =
+            second_service_evidence.delivered_callback_count();
         let restored = continuity_authority
             .rebind_after_break(
                 broken,
                 fresh_binding,
                 second_source_incarnation,
-                AxRunLoopLiveness::Serviced,
+                second_service_evidence,
             )
-            .expect("fresh observer and source must restore M07 continuity");
+            .expect("fresh observer/source with callback evidence must restore M07 continuity");
         assert!(restored.continuity_revision() > first_continuity_revision);
+        let restored_continuity_revision = restored.continuity_revision();
 
-        fs::write(&command_path, "title 3\n").expect("request restored title mutation");
+        let callbacks_before_post_rebind_delivery = second_tracker.delivered_callback_count();
+        fs::write(&command_path, "title 4\n").expect("request post-rebind title mutation");
         let restored_state =
-            wait_for_generation(&state_path, 3).expect("wait for restored title mutation");
-        assert_eq!(restored_state["window_title"], format!("{BASE_TITLE} 3"));
+            wait_for_generation(&state_path, 4).expect("wait for post-rebind title mutation");
+        assert_eq!(restored_state["window_title"], format!("{BASE_TITLE} 4"));
         assert!(
-            pump_until_callbacks(callbacks_after_interruption + 1, Duration::from_secs(5)),
-            "recreated serviced AX observer source must restore real callback delivery"
+            pump_until_callbacks(
+                &second_tracker,
+                callbacks_before_post_rebind_delivery + 1,
+                Duration::from_secs(5),
+            ),
+            "rebound serviced AX observer source must continue delivering callbacks"
         );
-        let callbacks_after_recovery = CALLBACK_COUNT.load(Ordering::Acquire);
-        assert!(callbacks_after_recovery > callbacks_after_interruption);
+        let callbacks_after_recovery = second_tracker.delivered_callback_count();
+        assert!(callbacks_after_recovery > callbacks_before_post_rebind_delivery);
 
         let second_source_removed = remove_observer_source(second_run_loop, second_os_source);
         assert!(second_source_removed);
 
         let record = serde_json::json!({
-            "schema": "localview-v43-m07-real-provider-record-v1",
+            "schema": "localview-v43-m07-real-provider-record-v2",
             "case_id": "M07",
             "candidate_sha": candidate_sha,
             "seed_executable": seed_executable,
@@ -428,12 +470,16 @@ mod macos_real_provider_m07 {
             "pid": pid,
             "launch_marker": launch_marker,
             "notification": NOTIFICATION,
+            "caller_supplied_serviced_liveness": false,
+            "service_evidence_authority": "provider_owned_callback_tracker",
             "first_observer_create_ax_error": first_create_error,
             "first_registration_ax_error": first_registration_error,
             "first_observer_creation_revision": first_observer_revision,
             "first_run_loop_source_incarnation": first_source_incarnation.sequence(),
-            "first_continuity_revision": first_continuity_revision,
+            "initial_service_evidence_before_callback": initial_service_evidence_before_callback,
             "initial_callback_delivered": callbacks_before_interruption >= 1,
+            "first_service_evidence_callback_count": first_service_evidence_callback_count,
+            "first_continuity_revision": first_continuity_revision,
             "callback_count_before_interruption": callbacks_before_interruption,
             "run_loop_source_removed_before_gap": true,
             "interrupted_title_generation": interrupted["title_generation"].as_u64(),
@@ -449,14 +495,19 @@ mod macos_real_provider_m07 {
             "fresh_observer_revision_is_newer": second_observer_revision > first_observer_revision,
             "second_run_loop_source_incarnation": second_source_incarnation.sequence(),
             "fresh_run_loop_source_incarnation": second_source_incarnation != first_source_incarnation,
-            "restored_continuity_revision": restored.continuity_revision(),
-            "restored_continuity_revision_is_newer": restored.continuity_revision() > first_continuity_revision,
-            "restored_callback_delivered": callbacks_after_recovery > callbacks_after_interruption,
+            "recovery_service_evidence_before_callback": recovery_service_evidence_before_callback,
+            "recovery_proof_title_generation": recovery_proof_state["title_generation"].as_u64(),
+            "second_service_evidence_callback_count": second_service_evidence_callback_count,
+            "pre_rebind_callback_delivered": second_service_evidence_callback_count >= 1,
+            "restored_continuity_revision": restored_continuity_revision,
+            "restored_continuity_revision_is_newer": restored_continuity_revision > first_continuity_revision,
+            "restored_title_generation": restored_state["title_generation"].as_u64(),
+            "restored_callback_delivered": callbacks_after_recovery > callbacks_before_post_rebind_delivery,
             "callback_count_after_recovery": callbacks_after_recovery,
-            "event_continuity_restored": callbacks_after_recovery > callbacks_after_interruption,
+            "event_continuity_restored": callbacks_after_recovery > callbacks_before_post_rebind_delivery,
             "second_run_loop_source_removed_on_cleanup": second_source_removed,
             "run_loop_delivery_proven": true,
-            "ground_truth_source": "real_appkit_title_mutations_plus_real_axobserver_cfrunloop_source_removal_and_recreation",
+            "ground_truth_source": "real_appkit_title_mutations_plus_provider_owned_axobserver_callback_tracker_and_cfrunloop_source_removal_recreation",
         });
         fs::write(
             artifact_dir.join("M07-REAL-PROVIDER-RECORD.json"),
