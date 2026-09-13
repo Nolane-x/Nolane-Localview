@@ -50,7 +50,10 @@ mod macos_real_provider_m02 {
 
         const before = Number(safe(() => bashSwitch.value()));
         if (before !== 1) throw new Error(`bash Accessibility switch precondition expected ON, got ${before}`);
-        bashSwitch.click();
+
+        const press = safe(() => bashSwitch.actions['AXPress']);
+        if (press === null) throw new Error('bash Accessibility switch does not expose AXPress');
+        press.perform();
 
         let after = Number(safe(() => bashSwitch.value()));
         for (let attempt = 0; attempt < 50 && after !== 0; attempt++) {
