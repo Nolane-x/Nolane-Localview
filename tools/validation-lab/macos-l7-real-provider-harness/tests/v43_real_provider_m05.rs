@@ -223,10 +223,11 @@ mod macos_real_provider_m05 {
         if let Some(role) = string_attribute(element, names.role.raw().cast()) {
             let retained = unsafe { CFRetain(element.cast()) };
             if let Some(element) = OwnedCf::new(retained) {
+                let title = string_attribute(element.raw().cast(), names.title.raw().cast());
                 targets.push(ProbeTarget {
                     element,
                     role,
-                    title: string_attribute(element.raw().cast(), names.title.raw().cast()),
+                    title,
                 });
             }
         }
@@ -335,11 +336,6 @@ mod macos_real_provider_m05 {
             "seed application must provide a positive-control supported AX notification registration"
         );
 
-        // Stay strictly within the observer's seed PID. Probe only documented
-        // AX notification names against real AppKit accessibility nodes and
-        // preserve every raw result. This diagnostic exists solely to locate a
-        // stable real kAXErrorNotificationUnsupported pair; the final oracle
-        // will lock that pair and remove the matrix.
         let names = AxNames::new().expect("build M05 AX names");
         let mut visited = 0;
         let mut targets = Vec::new();
@@ -400,8 +396,6 @@ mod macos_real_provider_m05 {
                 )
             });
 
-        // Prove that notification incompleteness is not equivalent to loss of
-        // direct observation on the exact same accessibility element.
         let direct_read_attribute =
             cf_string(DIRECT_READ_ATTRIBUTE).expect("build M05 direct-read attribute name");
         let mut direct_read_value: CfTypeRef = ptr::null();
