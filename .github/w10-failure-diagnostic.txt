@@ -1,163 +1,163 @@
 W10 format diagnostic
 exit_code=1
 
+[0m[32m+                COINIT_MULTITHREADED, SAFEARRAY,
+[0m             },
+             Ole::{
+                 SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound,
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\lib.rs:187:
+                 UIA_IsSelectionItemPatternAvailablePropertyId,
+                 UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
+                 UIA_IsVirtualizedItemPatternAvailablePropertyId, UIA_ItemContainerPatternId,
+[31m-                UIA_NamePropertyId, UIA_PROPERTY_ID, UIA_SelectionItemIsSelectedPropertyId,
+[0m[32m+                UIA_NamePropertyId, UIA_SelectionItemIsSelectedPropertyId,
+[0m                 UIA_SelectionItemPatternId, UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId,
+[31m-                UIA_ValuePatternId, UIA_VirtualizedItemPatternId,
+[0m[32m+                UIA_ValuePatternId, UIA_VirtualizedItemPatternId, UIA_PROPERTY_ID,
+[0m             },
+             HiDpi::GetDpiForWindow,
+             WindowsAndMessaging::{
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\lib.rs:196:
+[31m-                GW_ENABLEDPOPUP, GetForegroundWindow, GetWindow, GetWindowThreadProcessId,
+[0m[31m-                IsWindowVisible,
+[0m[32m+                GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsWindowVisible,
+[0m[32m+                GW_ENABLEDPOPUP,
+[0m             },
+         },
+     };
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\lib.rs:201:
+[31m-    use windows::core::BSTR;
+[0m 
+     use super::*;
+     use crate::worker_health::{WorkerHealth, WorkerReceiveError};
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\lib.rs:205:
+     use crate::{
+[31m-        WindowsInputDispatchBlocker, WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact,
+[0m[31m-        WindowsUiaCoordinateSpace, WindowsUiaDispatchContextObservation,
+[0m[31m-        WindowsUiaDispatchContextReceipt, WindowsUiaGeometryReceipt, WindowsUiaGeometryRequest,
+[0m[31m-        WindowsUiaPhysicalRect,
+[0m[31m-        WindowsUiaDispatchContextRequest, WindowsUiaItemLookupProperty, WindowsUiaPattern,
+[0m[31m-        WindowsUiaPatternDispatchOperation, WindowsUiaPatternDispatchReceipt,
+[0m[31m-        WindowsUiaPatternDispatchRequest, WindowsUiaPatternSupport,
+[0m[31m-        WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
+[0m[31m-        WindowsUiaSetValueEquality, WindowsUiaSetValueVerificationReceipt,
+[0m[31m-        WindowsUiaSetValueVerificationRequest, WindowsUiaValueCapabilityFacts,
+[0m[31m-        WindowsUiaVerifiedInputReceipt, WindowsUiaVerifiedInputRequest,
+[0m[31m-        WindowsUiaVirtualizedItemQueryReceipt, WindowsUiaVirtualizedItemQueryRequest,
+[0m[31m-        WindowsUiaVirtualizedItemRealizeReceipt, WindowsUiaVirtualizedItemRealizeRequest,
+[0m[31m-        WindowsVerifiedInputBoundaryError, WindowsVerifiedInputBoundaryReceipt,
+[0m         classify_windows_input_insertion, evaluate_windows_keyboard_state,
+         evaluate_windows_uia_dispatch_context, snapshot_windows_keyboard_state,
+[31m-        windows_insert_verified_key_events,
+[0m[32m+        windows_insert_verified_key_events, WindowsInputDispatchBlocker,
+[0m[32m+        WindowsUiaActionCapabilities, WindowsUiaBooleanCapabilityFact, WindowsUiaCoordinateSpace,
+[0m[32m+        WindowsUiaDispatchContextObservation, WindowsUiaDispatchContextReceipt,
+[0m[32m+        WindowsUiaDispatchContextRequest, WindowsUiaGeometryReceipt, WindowsUiaGeometryRequest,
+[0m[32m+        WindowsUiaItemLookupProperty, WindowsUiaPattern, WindowsUiaPatternDispatchOperation,
+[0m[32m+        WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
+[0m[32m+        WindowsUiaPatternSupport, WindowsUiaPhysicalRect, WindowsUiaSetValueDispatchReceipt,
+[0m[32m+        WindowsUiaSetValueDispatchRequest, WindowsUiaSetValueEquality,
+[0m[32m+        WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,
+[0m[32m+        WindowsUiaValueCapabilityFacts, WindowsUiaVerifiedInputReceipt,
+[0m[32m+        WindowsUiaVerifiedInputRequest, WindowsUiaVirtualizedItemQueryReceipt,
+[0m[32m+        WindowsUiaVirtualizedItemQueryRequest, WindowsUiaVirtualizedItemRealizeReceipt,
+[0m[32m+        WindowsUiaVirtualizedItemRealizeRequest, WindowsVerifiedInputBoundaryError,
+[0m[32m+        WindowsVerifiedInputBoundaryReceipt,
+[0m     };
  
-     assert_eq!(facts.is_password(), WindowsUiaBooleanCapabilityFact::False);
-[31m-    assert_eq!(
-[0m[31m-        facts.is_read_only(),
-[0m[31m-        WindowsUiaBooleanCapabilityFact::False
-[0m[31m-    );
-[0m[32m+    assert_eq!(facts.is_read_only(), WindowsUiaBooleanCapabilityFact::False);
-[0m     assert!(
-         facts.permits_set_value(),
-         "SetValue admission requires exact Value support plus explicit non-password and writable facts"
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\tests\virtualized_item_contract.rs:2:
-     ProviderElementRealization, ProviderElementRef, ProviderIncarnationRef, TargetIncarnationRef,
- };
- use localview_windows_uia_provider::{
-[31m-    WindowsUiaItemLookupProperty, WindowsUiaVirtualizedItemRequestError,
-[0m[31m-    WindowsUiaVirtualizedItemQueryRequest, WindowsUiaVirtualizedItemRealizeRequest,
-[0m[32m+    WindowsUiaItemLookupProperty, WindowsUiaVirtualizedItemQueryRequest,
-[0m[32m+    WindowsUiaVirtualizedItemRealizeRequest, WindowsUiaVirtualizedItemRequestError,
+     const PROPERTIES_PER_NODE: usize = 19;
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\lib.rs:986:
+                 retained.element.CurrentBoundingRectangle()
+             }
+             .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+[31m-            let bounding_rect = WindowsUiaPhysicalRect::new(
+[0m[31m-                rect.left,
+[0m[31m-                rect.top,
+[0m[31m-                rect.right,
+[0m[31m-                rect.bottom,
+[0m[31m-            )
+[0m[31m-            .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+[0m[32m+            let bounding_rect =
+[0m[32m+                WindowsUiaPhysicalRect::new(rect.left, rect.top, rect.right, rect.bottom)
+[0m[32m+                    .map_err(|error| WindowsUiaWorkerError::ProviderFailure(error.to_string()))?;
+[0m             let target_window_dpi = unsafe {
+                 // SAFETY: exact_retained_element revalidated this attachment HWND immediately above.
+                 GetDpiForWindow(hwnd_from_u64(attachment.selection.native_window_handle))
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\subscription.rs:8:
+ use uuid::Uuid;
+ 
+ use crate::{
+[31m-    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
+[0m[31m-    WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
+[0m[31m-    WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
+[0m[31m-    WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,
+[0m[31m-    WindowsUiaVerifiedInputReceipt, WindowsUiaVerifiedInputRequest,
+[0m     event_buffer::{WindowsUiaEventBuffer, WindowsUiaEventDraft, WindowsUiaEventKind},
+     worker::{
+         WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\subscription.rs:19:
+         WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
+     },
+[32m+    WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
+[0m[32m+    WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
+[0m[32m+    WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
+[0m[32m+    WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,
+[0m[32m+    WindowsUiaVerifiedInputReceipt, WindowsUiaVerifiedInputRequest,
 [0m };
  
- fn element(cut: &str, realization: ProviderElementRealization) -> ProviderElementRef {
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\tests\virtualized_item_contract.rs:54:
-     assert_eq!(
-         WindowsUiaVirtualizedItemQueryRequest::new(
-             "cut:w03:1",
-[31m-            element(
-[0m[31m-                "cut:w03:1",
-[0m[31m-                ProviderElementRealization::RealizationRequired,
-[0m[31m-            ),
-[0m[32m+            element("cut:w03:1", ProviderElementRealization::RealizationRequired,),
-[0m             WindowsUiaItemLookupProperty::Name,
-             "LocalView Virtual Item 255",
-         ),
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\tests\virtualized_item_contract.rs:67:
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\subscription.rs:58:
+         collections::HashMap,
+         ffi::c_void,
+         sync::{
+[31m-            Arc, Mutex,
+[0m             mpsc::{self, Receiver, RecvTimeoutError, Sender},
+[32m+            Arc, Mutex,
+[0m         },
+         thread,
+     };
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\subscription.rs:66:
  
- #[test]
- fn realization_request_accepts_only_exact_realization_required_placeholder() {
-[31m-    let placeholder = element(
-[0m[31m-        "cut:w03:1",
-[0m[31m-        ProviderElementRealization::RealizationRequired,
-[0m[31m-    );
-[0m[32m+    let placeholder = element("cut:w03:1", ProviderElementRealization::RealizationRequired);
-[0m     let request = WindowsUiaVirtualizedItemRealizeRequest::new("cut:w03:1", placeholder.clone())
-         .expect("virtual placeholder should be realizable");
-     assert_eq!(request.snapshot_cut_ref(), "cut:w03:1");
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\tests\virtualized_item_contract.rs:79:
-     assert_eq!(
-         WindowsUiaVirtualizedItemRealizeRequest::new(
-             "cut:w03:2",
-[31m-            element(
-[0m[31m-                "cut:w03:1",
-[0m[31m-                ProviderElementRealization::RealizationRequired,
-[0m[31m-            ),
-[0m[32m+            element("cut:w03:1", ProviderElementRealization::RealizationRequired,),
-[0m         ),
-         Err(WindowsUiaVirtualizedItemRequestError::AcquisitionCutMismatch),
-     );
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:7:
+     use windows::{
+[32m+        core::Ref,
+[0m         Win32::{
+             Foundation::{CloseHandle, FILETIME, HWND},
+             System::{
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\subscription.rs:71:
+                 Com::{
+[31m-                    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+[0m[31m-                    CoUninitialize,
+[0m[32m+                    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+[0m[32m+                    COINIT_MULTITHREADED,
+[0m                 },
+                 Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+                 Variant::VARIANT,
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\subscription.rs:85:
+                 WindowsAndMessaging::GetWindowThreadProcessId,
+             },
+         },
+[31m-        core::Ref,
+[0m     };
  
- use anyhow::{Context, Result};
- use serde::{Deserialize, Serialize};
-[31m-use serde_json::{json, Value};
-[0m[32m+use serde_json::{Value, json};
-[0m 
- #[derive(Debug, Deserialize)]
- struct RpcRequest {
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:137:
-         .get("arguments")
-         .cloned()
-         .unwrap_or_else(|| json!({}));
-[31m-    let base = std::env::var("LOCALVIEW_CONTROL")
-[0m[31m-        .unwrap_or_else(|_| "http://127.0.0.1:45454".into());
-[0m[32m+    let base =
-[0m[32m+        std::env::var("LOCALVIEW_CONTROL").unwrap_or_else(|_| "http://127.0.0.1:45454".into());
-[0m     let token = read_token().await?;
-     let client = reqwest::Client::new();
+     use super::*;
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\subscription_stub.rs:8:
+ use uuid::Uuid;
  
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:153:
-         let snapshot = fresh_page_snapshot(&client, &base, &token, session).await?;
-         let node = find_semantic_node(&snapshot, reference)
-             .cloned()
-[31m-            .with_context(|| format!("element reference not found in fresh snapshot: {reference}"))?;
-[0m[32m+            .with_context(|| {
-[0m[32m+                format!("element reference not found in fresh snapshot: {reference}")
-[0m[32m+            })?;
-[0m         return tool_content(json!({
-             "reference": reference,
-             "version": snapshot.get("version"),
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:169:
-             let id = string_arg(&args, "id")?;
-             authed_get(&client, &base, &token, &format!("/v1/sessions/{id}")).await?
-         }
-[31m-        "session.project_state" => session_get(&client, &base, &token, &args, "project-state").await?,
-[0m[32m+        "session.project_state" => {
-[0m[32m+            session_get(&client, &base, &token, &args, "project-state").await?
-[0m[32m+        }
-[0m         "session.analysis" => session_get(&client, &base, &token, &args, "analysis").await?,
-         "session.diagnose" => session_get(&client, &base, &token, &args, "diagnose").await?,
-         "session.verify" => session_get(&client, &base, &token, &args, "verify").await?,
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:191:
-         }
-         "evidence.trace" => {
-             let id = string_arg(&args, "id")?;
-[31m-            authed_get(
-[0m[31m-                &client,
-[0m[31m-                &base,
-[0m[31m-                &token,
-[0m[31m-                &format!("/v1/evidence/{id}/trace"),
-[0m[31m-            )
-[0m[31m-            .await?
-[0m[32m+            authed_get(&client, &base, &token, &format!("/v1/evidence/{id}/trace")).await?
-[0m         }
-         "proof.staleness" => {
-             let id = string_arg(&args, "id")?;
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:204:
-[31m-            authed_get(
-[0m[31m-                &client,
-[0m[31m-                &base,
-[0m[31m-                &token,
-[0m[31m-                &format!("/v1/proof/{id}/staleness"),
-[0m[31m-            )
-[0m[31m-            .await?
-[0m[32m+            authed_get(&client, &base, &token, &format!("/v1/proof/{id}/staleness")).await?
-[0m         }
-         "runtime.pause" => authed_post(&client, &base, &token, "/v1/runtime/pause").await?,
-         "runtime.resume" => authed_post(&client, &base, &token, "/v1/runtime/resume").await?,
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:248:
-             let session = string_arg(&args, "session")?;
-             let key = string_arg(&args, "key")?;
-             let reference = args.get("reference").and_then(Value::as_str);
-[31m-            let modifiers = args
-[0m[31m-                .get("modifiers")
-[0m[31m-                .cloned()
-[0m[31m-                .unwrap_or_else(|| json!([]));
-[0m[32m+            let modifiers = args.get("modifiers").cloned().unwrap_or_else(|| json!([]));
-[0m             post_action(
-                 &client,
-                 &base,
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:308:
-     let status = response.status();
-     if !status.is_success() {
-         let body = response.text().await.unwrap_or_default();
-[31m-        return Err(anyhow::anyhow!("LocalView control returned {status}: {body}"));
-[0m[32m+        return Err(anyhow::anyhow!(
-[0m[32m+            "LocalView control returned {status}: {body}"
-[0m[32m+        ));
-[0m     }
-     let content = if status == reqwest::StatusCode::NO_CONTENT {
-         json!({"ok": true})
-Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\integrations\mcp\src\main.rs:396:
-             .and_then(|children| children.iter().find_map(|child| visit(child, reference)))
-     }
+ use crate::{
+[32m+    worker::{
+[0m[32m+        WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
+[0m[32m+        WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
+[0m[32m+    },
+[0m     WindowsUiaBoundDispatchContextReceipt, WindowsUiaDispatchContextRequest, WindowsUiaEventDrain,
+     WindowsUiaPatternDispatchReceipt, WindowsUiaPatternDispatchRequest,
+     WindowsUiaSetValueDispatchReceipt, WindowsUiaSetValueDispatchRequest,
+Diff in \\?\D:\a\Nolane-Localview\Nolane-Localview\crates\windows-uia-provider\src\subscription_stub.rs:14:
+     WindowsUiaSetValueVerificationReceipt, WindowsUiaSetValueVerificationRequest,
+     WindowsUiaVerifiedInputReceipt, WindowsUiaVerifiedInputRequest,
+[31m-    worker::{
+[0m[31m-        WindowsUiaAttachment, WindowsUiaElementLeaseReceipt, WindowsUiaElementLeaseRequest,
+[0m[31m-        WindowsUiaSnapshotRequest, WindowsUiaWorkerConfig, WindowsUiaWorkerError,
+[0m[31m-    },
+[0m };
  
-[31m-    snapshot.get("semantic_tree").and_then(|root| visit(root, reference))
-[0m[32m+    snapshot
-[0m[32m+        .get("semantic_tree")
-[0m[32m+        .and_then(|root| visit(root, reference))
-[0m }
- 
- fn tool_content(content: Value) -> Result<Value> {
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
