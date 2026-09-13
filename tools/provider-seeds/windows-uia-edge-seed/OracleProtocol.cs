@@ -73,6 +73,16 @@ internal sealed class OracleProtocol
                 case "get_sensitive_field_state":
                     Write(ReadSensitiveFieldState("get_sensitive_field_state"));
                     break;
+                case "prepare_weak_accessibility":
+                    Write(_window.Dispatcher.Invoke(() =>
+                    {
+                        _window.PrepareWeakAccessibility();
+                        return ReadWeakAccessibilityStateOnUiThread("prepare_weak_accessibility");
+                    }));
+                    break;
+                case "get_weak_accessibility_state":
+                    Write(ReadWeakAccessibilityState("get_weak_accessibility_state"));
+                    break;
                 case "prepare_verified_input_target":
                     Write(_window.Dispatcher.Invoke(() =>
                     {
@@ -214,6 +224,29 @@ internal sealed class OracleProtocol
             is_password = true,
             secret_length = _window.SensitiveFieldSecretLength(),
             value_read_count = _window.SensitiveFieldValueReadCount(),
+        };
+    }
+
+    private object ReadWeakAccessibilityState(string command)
+    {
+        return _window.Dispatcher.Invoke(() => ReadWeakAccessibilityStateOnUiThread(command));
+    }
+
+    private object ReadWeakAccessibilityStateOnUiThread(string command)
+    {
+        return new
+        {
+            ok = true,
+            command,
+            seed_run_id = _seedRunId,
+            process_id = Environment.ProcessId,
+            window_handle = _window.WindowHandle(),
+            target_automation_id = EdgeWindow.WeakAccessibilityAutomationId,
+            owner_drawn = true,
+            visual_label = _window.WeakAccessibilityVisualLabel(),
+            visual_effect_count = _window.WeakAccessibilityVisualEffectCount(),
+            semantic_child_expected = false,
+            semantic_invoke_expected = false,
         };
     }
 

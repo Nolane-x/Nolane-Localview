@@ -1,6 +1,9 @@
 #![cfg_attr(not(windows), forbid(unsafe_code))]
 
 mod action_capability;
+mod custom_semantic_coverage;
+#[cfg(test)]
+mod custom_semantic_coverage_contract;
 mod dispatch_context;
 mod event_buffer;
 mod pattern_dispatch;
@@ -23,6 +26,11 @@ mod worker;
 mod worker_health;
 
 pub use action_capability::*;
+pub use custom_semantic_coverage::{
+    WINDOWS_UIA_ACCESSIBILITY_OPAQUE_CUSTOM_CONTROL_DEBT,
+    WINDOWS_UIA_ACCESSIBILITY_PARTIAL_CUSTOM_CONTROL_DEBT,
+    WINDOWS_UIA_CUSTOM_SEMANTIC_COVERAGE_ATTRIBUTE, WindowsUiaCustomSemanticCoverage,
+};
 pub use dispatch_context::*;
 pub use event_buffer::*;
 pub use pattern_dispatch::*;
