@@ -44,11 +44,41 @@ jobs:
           set -euo pipefail
           test_name="macos_real_provider_m08::m08_visual_and_ax_permissions_are_independently_os_observed"
           cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m08 "$test_name" -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify M08 evidence is exact-head and cross-authority-safe
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$LOCALVIEW_CANDIDATE_SHA"
+          record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M08-REAL-PROVIDER-RECORD.json"
+          test -f "$record_path"
+          python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
+          import json, sys
+          path, expected_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+
+          assert record["schema"] == "localview-v43-m08-real-provider-record-v1"
+          assert record["case_id"] == "M08"
+          assert record["candidate_sha"] == expected_sha
+          assert record["visual_authority_source"] == "coregraphics_preflight"
+          assert record["ax_authority_source"] == "accessibility_provider_live_observation"
+          assert record["cross_authority_inference_used"] is False
+          assert record["visual_permission_check_sequence"] > 0
+          assert record["ax_permission_check_sequence"] > 0
+
+          visual_granted = record["direct_visual_preflight_granted"]
+          expected_visual_state = "granted" if visual_granted else "denied"
+          assert record["visual_permission_state"] == expected_visual_state
+          assert record["visual_permit_minted"] is visual_granted
+
+          ax_state = record["ax_permission_state"]
+          assert ax_state in {"trusted", "untrusted", "unknown"}
+          assert record["ax_semantic_permit_minted"] is (ax_state == "trusted")
+          PY
       - name: Publish M08 real-provider evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: v43-m08-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
           path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 30
