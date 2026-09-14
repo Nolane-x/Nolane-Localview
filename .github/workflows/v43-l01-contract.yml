@@ -1,0 +1,58 @@
+name: V4.3 L01 DEFUNCT Binding Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-l01-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  l01-contract:
+    name: L01 DEFUNCT invalidates old action authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+      - name: Bind exact L01 candidate
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$expected" ]; then
+            echo "L01 checkout SHA mismatch: actual=$actual expected=$expected" >&2
+            exit 1
+          fi
+      - name: Verify exact AT-SPI dependency under Rust 1.85
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/localview-l01-atspi-msrv"
+          mkdir -p "$probe/src"
+          cat > "$probe/Cargo.toml" <<'EOF'
+          [package]
+          name = "localview-l01-atspi-msrv-probe"
+          version = "0.0.0"
+          edition = "2024"
+          rust-version = "1.85"
+          resolver = "3"
+
+          [dependencies]
+          atspi = { version = "=0.30.0", features = ["zbus"] }
+          EOF
+          printf '%s\n' 'fn main() {}' > "$probe/src/main.rs"
+          cargo +1.85.0 check --manifest-path "$probe/Cargo.toml"
+          cargo +1.85.0 tree --manifest-path "$probe/Cargo.toml" | grep -F 'atspi v0.30.0'
+      - name: Run L01 DEFUNCT binding contract
+        run: |
+          set -euo pipefail
+          cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l01_defunct_binding_contract -- --nocapture
