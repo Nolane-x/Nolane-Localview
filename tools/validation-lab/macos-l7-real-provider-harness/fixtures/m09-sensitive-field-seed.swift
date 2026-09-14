@@ -18,7 +18,7 @@ private final class CountingSecureTextField: NSSecureTextField {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func accessibilityValue() -> Any? {
+    override func accessibilityValue() -> String? {
         stateLock.lock()
         valueReadCountStorage += 1
         stateLock.unlock()
