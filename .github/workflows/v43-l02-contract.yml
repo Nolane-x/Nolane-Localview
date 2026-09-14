@@ -1,0 +1,40 @@
+name: V4.3 L02 DEFUNCT Recreate Contract
+
+on:
+  pull_request:
+    paths:
+      - 'crates/linux-atspi-provider/**'
+      - '.github/workflows/v43-l02-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/linux-atspi-provider/**'
+      - '.github/workflows/v43-l02-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-l02-defunct-recreate:
+    name: Linux L02 typed DEFUNCT recreation contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+      - name: Verify L02 test registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          listed="$(cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l02_defunct_recreate_contract -- --list)"
+          grep -F 'live_binding_cannot_be_used_as_recreate_authority: test' <<<"$listed"
+          grep -F 'recreate_requires_previous_binding_from_same_provider_and_target_incarnation: test' <<<"$listed"
+          grep -F 'defunct_recreate_mints_fresh_authority_without_resurrecting_old_binding: test' <<<"$listed"
+      - name: Run Linux L02 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l02_defunct_recreate_contract -- --nocapture --test-threads=1
+      - name: Clippy Linux AT-SPI provider with validation feature
+        run: cargo clippy -p localview-linux-atspi-provider --features validation-state-injection --all-targets -- -D warnings
