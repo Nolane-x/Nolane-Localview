@@ -43,6 +43,7 @@ mod linux_real_provider_l03 {
             let mut seed = Self { child, stdout };
             let ready = seed.read_event();
             assert_eq!(ready["event"], "ready", "GTK L03 seed must announce readiness");
+            assert_eq!(ready["blocker_present"], true, "L03 seed must begin occluded");
             seed
         }
 
@@ -84,6 +85,20 @@ mod linux_real_provider_l03 {
             .build()
             .await
             .ok()
+    }
+
+    async fn component_for<'a>(
+        connection: &'a atspi::zbus::Connection,
+        object: &ObjectRefOwned,
+    ) -> ComponentProxy<'a> {
+        ComponentProxy::builder(connection)
+            .destination(object.name_as_str().expect("component bus name").to_owned())
+            .expect("component destination")
+            .path(object.path_as_str().to_owned())
+            .expect("component path")
+            .build()
+            .await
+            .expect("build component proxy")
     }
 
     async fn find_accessible_by_name(
@@ -133,51 +148,117 @@ mod linux_real_provider_l03 {
         }
     }
 
-    async fn hit_name_at_target_center(
+    async fn parent_of(
         connection: &AccessibilityConnection,
-        target_object: &ObjectRefOwned,
-    ) -> String {
-        let bus = connection.connection();
-        let target_proxy = proxy_for(bus, target_object)
+        object: &ObjectRefOwned,
+    ) -> ObjectRefOwned {
+        let proxy = proxy_for(connection.connection(), object)
             .await
-            .expect("build target accessible proxy");
-        let target_component = ComponentProxy::builder(bus)
-            .destination(target_object.name_as_str().expect("target bus name").to_owned())
-            .expect("target component destination")
-            .path(target_object.path_as_str().to_owned())
-            .expect("target component path")
-            .build()
+            .expect("build accessible proxy for parent lookup");
+        let parent = proxy.parent().await.expect("read accessible parent");
+        assert!(!parent.is_null(), "accessible must have a non-null parent");
+        parent
+    }
+
+    fn same_object(left: &ObjectRefOwned, right: &ObjectRefOwned) -> bool {
+        left.name_as_str() == right.name_as_str() && left.path_as_str() == right.path_as_str()
+    }
+
+    async fn extents_of(
+        connection: &AccessibilityConnection,
+        object: &ObjectRefOwned,
+    ) -> (i32, i32, i32, i32) {
+        component_for(connection.connection(), object)
             .await
-            .expect("build target component proxy");
-        let (x, y, width, height) = target_component
             .get_extents(CoordType::Screen)
             .await
-            .expect("target extents from real AT-SPI");
-        assert!(width > 0 && height > 0, "target must occupy a real screen rectangle");
-        let center_x = x.checked_add(width / 2).expect("target center x");
-        let center_y = y.checked_add(height / 2).expect("target center y");
+            .expect("read real AT-SPI component extents")
+    }
 
-        let parent = target_proxy.parent().await.expect("target parent");
-        assert!(!parent.is_null(), "target must have an AT-SPI parent");
-        let parent_component = ComponentProxy::builder(bus)
-            .destination(parent.name_as_str().expect("parent bus name").to_owned())
-            .expect("parent component destination")
-            .path(parent.path_as_str().to_owned())
-            .expect("parent component path")
-            .build()
+    fn center_of(rect: (i32, i32, i32, i32)) -> (i32, i32) {
+        let (x, y, width, height) = rect;
+        assert!(width > 0 && height > 0, "accessible must occupy a positive screen rectangle");
+        (
+            x.checked_add(width / 2).expect("center x must not overflow"),
+            y.checked_add(height / 2).expect("center y must not overflow"),
+        )
+    }
+
+    fn rect_contains(rect: (i32, i32, i32, i32), point: (i32, i32)) -> bool {
+        let (x, y, width, height) = rect;
+        if width <= 0 || height <= 0 {
+            return false;
+        }
+        let left = i64::from(x);
+        let top = i64::from(y);
+        let right = left + i64::from(width);
+        let bottom = top + i64::from(height);
+        let px = i64::from(point.0);
+        let py = i64::from(point.1);
+        px >= left && px < right && py >= top && py < bottom
+    }
+
+    async fn hit_name_at_point(
+        connection: &AccessibilityConnection,
+        parent: &ObjectRefOwned,
+        point: (i32, i32),
+    ) -> String {
+        let hit = component_for(connection.connection(), parent)
             .await
-            .expect("build parent component proxy");
-        let hit = parent_component
-            .get_accessible_at_point(center_x, center_y, CoordType::Screen)
+            .get_accessible_at_point(point.0, point.1, CoordType::Screen)
             .await
             .expect("real parent hit-test at target center");
-        assert!(!hit.is_null(), "real hit-test must resolve an accessible");
-        proxy_for(bus, &hit)
+        assert!(!hit.is_null(), "real AT-SPI hit-test must resolve an accessible");
+        proxy_for(connection.connection(), &hit)
             .await
             .expect("build hit accessible proxy")
             .name()
             .await
             .expect("read hit accessible name")
+    }
+
+    fn x11_click(point: (i32, i32)) {
+        let move_status = Command::new("xdotool")
+            .arg("mousemove")
+            .arg("--sync")
+            .arg(point.0.to_string())
+            .arg(point.1.to_string())
+            .status()
+            .expect("run xdotool mousemove");
+        assert!(move_status.success(), "xdotool mousemove must succeed");
+
+        let click_status = Command::new("xdotool")
+            .arg("click")
+            .arg("1")
+            .status()
+            .expect("run xdotool click");
+        assert!(click_status.success(), "xdotool click must succeed");
+    }
+
+    async fn wait_for_press_counts(
+        seed: &mut SeedProcess,
+        expected_target: u64,
+        expected_blocker: u64,
+        phase: &str,
+    ) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = seed.command("status");
+            let target = status["target_press_count"]
+                .as_u64()
+                .expect("target_press_count must be numeric");
+            let blocker = status["blocker_press_count"]
+                .as_u64()
+                .expect("blocker_press_count must be numeric");
+            if target == expected_target && blocker == expected_blocker {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for pointer recipient counts during {phase}: target={target}, blocker={blocker}"
+            );
+            sleep(Duration::from_millis(50)).await;
+        }
     }
 
     fn write_evidence(payload: &Value) {
@@ -202,22 +283,55 @@ mod linux_real_provider_l03 {
         let observer = AccessibilityConnection::new()
             .await
             .expect("connect real AT-SPI observer");
+
         let target_object = find_accessible_by_name(&observer, TARGET_NAME).await;
+        let blocker_object = find_accessible_by_name(&observer, BLOCKER_NAME).await;
         let target_proxy = proxy_for(observer.connection(), &target_object)
             .await
             .expect("build real target accessible proxy");
-        let states = target_proxy
+        let blocker_proxy = proxy_for(observer.connection(), &blocker_object)
+            .await
+            .expect("build real blocker accessible proxy");
+
+        let target_states = target_proxy
             .get_state()
             .await
             .expect("read real target state while occluded");
-        assert!(states.contains(State::Visible), "occluded target must remain VISIBLE");
-        assert!(states.contains(State::Showing), "occluded target must remain SHOWING");
+        assert!(target_states.contains(State::Visible), "occluded target must remain VISIBLE");
+        assert!(target_states.contains(State::Showing), "occluded target must remain SHOWING");
 
-        let raw_hit_before = hit_name_at_target_center(&observer, &target_object).await;
-        assert_eq!(
-            raw_hit_before, BLOCKER_NAME,
-            "real AT-SPI parent hit-test must resolve the blocker, not the visible target"
+        let blocker_states = blocker_proxy
+            .get_state()
+            .await
+            .expect("read real blocker state");
+        assert!(blocker_states.contains(State::Visible), "real blocker must be VISIBLE");
+        assert!(blocker_states.contains(State::Showing), "real blocker must be SHOWING");
+
+        let target_parent = parent_of(&observer, &target_object).await;
+        let blocker_parent = parent_of(&observer, &blocker_object).await;
+        assert!(
+            same_object(&target_parent, &blocker_parent),
+            "target and blocker must be siblings in the real AT-SPI tree"
         );
+
+        let target_rect = extents_of(&observer, &target_object).await;
+        let blocker_rect = extents_of(&observer, &blocker_object).await;
+        let target_center = center_of(target_rect);
+        assert!(
+            rect_contains(blocker_rect, target_center),
+            "real blocker extents must cover the target center"
+        );
+
+        let raw_atspi_hit_before =
+            hit_name_at_point(&observer, &target_parent, target_center).await;
+        assert_eq!(
+            raw_atspi_hit_before, TARGET_NAME,
+            "GTK3 baseline must reproduce the AT-SPI self-hit false positive"
+        );
+
+        x11_click(target_center);
+        let blocked_status = wait_for_press_counts(&mut seed, 0, 1, "occluded click").await;
+        assert_eq!(blocked_status["blocker_present"], true);
 
         let provider = LinuxAtspiProvider::connect(
             ProviderIncarnationRef::from("provider:linux-atspi:real:l03"),
@@ -240,43 +354,54 @@ mod linux_real_provider_l03 {
         assert_eq!(
             provider.authorize_pointer_action(&binding).await,
             Err(AtspiPointerEligibilityError::Occluded),
-            "shipping pointer authority must reject the real blocker hit"
+            "shipping pointer authority must reject a target self-hit when a visible/showing sibling covers the tested point"
         );
 
         let unblock = seed.command("unblock");
         assert_eq!(unblock["event"], "unblocked");
         let clear_deadline = Instant::now() + Duration::from_secs(5);
-        let raw_hit_after = loop {
-            let name = hit_name_at_target_center(&observer, &target_object).await;
+        let raw_atspi_hit_after = loop {
+            let name = hit_name_at_point(&observer, &target_parent, target_center).await;
             if name == TARGET_NAME {
                 break name;
             }
             assert!(
                 Instant::now() < clear_deadline,
-                "real AT-SPI hit-test did not return to target after blocker removal"
+                "real AT-SPI hit-test did not settle on target after blocker removal"
             );
             sleep(Duration::from_millis(50)).await;
         };
 
+        x11_click(target_center);
+        let clear_status = wait_for_press_counts(&mut seed, 1, 1, "unblocked click").await;
+        assert_eq!(clear_status["blocker_present"], false);
+
         let permit = provider
             .authorize_pointer_action(&binding)
             .await
-            .expect("shipping pointer authority must reopen after the blocker is really removed");
+            .expect("shipping pointer authority must reopen after the real blocker is removed");
         assert_eq!(permit.binding_revision(), binding.binding_revision());
 
         write_evidence(&json!({
-            "schema": "localview.v43.l03.real-provider.v1",
+            "schema": "localview.v43.l03.real-provider.v2",
             "case_id": "L03",
             "candidate_sha": candidate_sha,
             "provider_family": "linux_atspi",
             "target_visible_while_occluded": true,
             "target_showing_while_occluded": true,
-            "raw_hit_before": raw_hit_before,
+            "blocker_visible_while_occluding": true,
+            "blocker_showing_while_occluding": true,
+            "blocker_overlaps_target_center": true,
+            "target_and_blocker_are_atspi_siblings": true,
+            "raw_atspi_hit_before": raw_atspi_hit_before,
+            "atspi_self_hit_false_positive": true,
+            "actual_pointer_recipient_before": BLOCKER_NAME,
             "shipping_pointer_denial": "occluded",
             "semantic_authorization_while_occluded": true,
-            "raw_hit_after": raw_hit_after,
+            "raw_atspi_hit_after": raw_atspi_hit_after,
+            "actual_pointer_recipient_after": TARGET_NAME,
             "post_unblock_pointer_authorized": true,
-            "ground_truth_source": "real_gtk_atk_atspi_component_hit_test"
+            "ground_truth_source": "real_x11_pointer_delivery_plus_gtk_atk_atspi_geometry"
         }));
 
         assert_eq!(seed.command("quit")["event"], "quitting");

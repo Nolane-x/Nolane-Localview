@@ -31,10 +31,10 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@1.85.0
-      - name: Install real GTK/AT-SPI dependencies
+      - name: Install real GTK/AT-SPI/X11 dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dbus-x11 xvfb at-spi2-core libatk-adaptor build-essential pkg-config libgtk-3-dev
+          sudo apt-get install -y dbus-x11 xvfb xdotool at-spi2-core libatk-adaptor build-essential pkg-config libgtk-3-dev
       - name: Compile real GTK occlusion seed
         shell: bash
         run: |
@@ -72,18 +72,25 @@ jobs:
           import json, os, pathlib
           path = pathlib.Path(os.environ['LOCALVIEW_L7_ARTIFACT_DIR']) / 'l03-real-provider-evidence.json'
           data = json.loads(path.read_text())
-          assert data['schema'] == 'localview.v43.l03.real-provider.v1'
+          assert data['schema'] == 'localview.v43.l03.real-provider.v2'
           assert data['case_id'] == 'L03'
           assert data['candidate_sha'] == os.environ['LOCALVIEW_CANDIDATE_SHA']
           assert data['provider_family'] == 'linux_atspi'
           assert data['target_visible_while_occluded'] is True
           assert data['target_showing_while_occluded'] is True
-          assert data['raw_hit_before'] == 'LocalView L03 Occluding Blocker'
+          assert data['blocker_visible_while_occluding'] is True
+          assert data['blocker_showing_while_occluding'] is True
+          assert data['blocker_overlaps_target_center'] is True
+          assert data['target_and_blocker_are_atspi_siblings'] is True
+          assert data['raw_atspi_hit_before'] == 'LocalView L03 Visible Target'
+          assert data['atspi_self_hit_false_positive'] is True
+          assert data['actual_pointer_recipient_before'] == 'LocalView L03 Occluding Blocker'
           assert data['shipping_pointer_denial'] == 'occluded'
           assert data['semantic_authorization_while_occluded'] is True
-          assert data['raw_hit_after'] == 'LocalView L03 Visible Target'
+          assert data['raw_atspi_hit_after'] == 'LocalView L03 Visible Target'
+          assert data['actual_pointer_recipient_after'] == 'LocalView L03 Visible Target'
           assert data['post_unblock_pointer_authorized'] is True
-          assert data['ground_truth_source'] == 'real_gtk_atk_atspi_component_hit_test'
+          assert data['ground_truth_source'] == 'real_x11_pointer_delivery_plus_gtk_atk_atspi_geometry'
       - name: Record run context
         if: always()
         shell: bash
