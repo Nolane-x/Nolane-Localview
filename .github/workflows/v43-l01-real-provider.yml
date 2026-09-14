@@ -1,0 +1,42 @@
+name: V4.3 L01 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-l01-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  l01-real-provider:
+    name: L01 real AT-SPI provider oracle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+      - name: Bind exact L01 real-provider candidate
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$expected" ]; then
+            echo "L01 real-provider checkout SHA mismatch: actual=$actual expected=$expected" >&2
+            exit 1
+          fi
+      - name: Compile real-provider RED harness
+        run: |
+          set -euo pipefail
+          cargo +1.85.0 test \
+            --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
+            --test v43_real_provider_l01 \
+            --no-run
