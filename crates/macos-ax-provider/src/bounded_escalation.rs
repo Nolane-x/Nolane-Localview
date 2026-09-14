@@ -74,10 +74,11 @@ pub enum AxVisualEscalationAuthorizationError {
 ///
 /// Visual denial or resource pressure therefore cannot destroy the M04
 /// unresponsive tombstone or prevent ordinary semantic reconciliation after
-/// the target becomes responsive again.
+/// the target becomes responsive again. The request is boxed so this recoverable
+/// failure remains a compact Result error without weakening ownership semantics.
 #[derive(Debug)]
 pub struct AxVisualEscalationAuthorizationFailure {
-    request: AxBoundedVisualEscalationRequest,
+    request: Box<AxBoundedVisualEscalationRequest>,
     error: AxVisualEscalationAuthorizationError,
 }
 
@@ -91,7 +92,7 @@ impl AxVisualEscalationAuthorizationFailure {
     }
 
     pub fn into_request(self) -> AxBoundedVisualEscalationRequest {
-        self.request
+        *self.request
     }
 }
 
@@ -176,7 +177,7 @@ impl AxBoundedVisualEscalationAuthority {
             Ok(reservation) => reservation,
             Err(denial) => {
                 return Err(AxVisualEscalationAuthorizationFailure {
-                    request,
+                    request: Box::new(request),
                     error: AxVisualEscalationAuthorizationError::ResourceDenied(denial),
                 });
             }
@@ -187,7 +188,7 @@ impl AxBoundedVisualEscalationAuthority {
             VisualObservationOutcome::Denied(error) => {
                 drop(reservation);
                 return Err(AxVisualEscalationAuthorizationFailure {
-                    request,
+                    request: Box::new(request),
                     error: AxVisualEscalationAuthorizationError::VisualPermission(error),
                 });
             }
