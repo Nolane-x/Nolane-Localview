@@ -1,0 +1,100 @@
+name: V4.3 M09 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m09-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m09-real-provider:
+    name: M09 secure AX field never exports plaintext
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_MACOS_AX_SMOKE: "1"
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M09 candidate and artifact directory
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M09 checkout SHA mismatch: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          artifact_dir="$RUNNER_TEMP/localview-v43-m09"
+          mkdir -p "$artifact_dir"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Compile exact-head M09 AppKit seed
+        run: |
+          set -euo pipefail
+          seed_src="tools/validation-lab/macos-l7-real-provider-harness/fixtures/m09-sensitive-field-seed.swift"
+          seed_bin="$RUNNER_TEMP/localview-v43-m09-seed"
+          test -f "$seed_src"
+          xcrun swiftc "$seed_src" -framework AppKit -o "$seed_bin"
+          test -x "$seed_bin"
+          echo "LOCALVIEW_M09_SEED_EXECUTABLE=$seed_bin" >> "$GITHUB_ENV"
+      - name: Require exact M09 real-provider registration
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m09::m09_secure_text_is_classified_before_value_read_and_never_exported"
+          listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m09 -- --list)"
+          printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Run M09 real AX sensitive-field oracle
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m09::m09_secure_text_is_classified_before_value_read_and_never_exported"
+          set +e
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m09 "$test_name" -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M09-ORACLE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
+      - name: Verify M09 evidence is exact-head and secret-safe
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M09 head moved during proof: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M09-REAL-PROVIDER-RECORD.json"
+          test -f "$record_path"
+          python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
+          import json, sys
+          path, expected_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+          assert record["schema"] == "localview-v43-m09-real-provider-record-v1"
+          assert record["case_id"] == "M09"
+          assert record["candidate_sha"] == expected_sha
+          assert record["ax_role"] == "AXTextField"
+          assert record["ax_subrole"] == "AXSecureTextField"
+          assert record["semantic_text_protection"] == "protected_secure_text"
+          assert record["taints"] == ["secret", "credential"]
+          assert record["value_read_permitted"] is False
+          assert int(record["provider_value_read_count"]) == 0
+          assert record["semantic_export_contains_plaintext"] is False
+          assert record["evidence_artifact_contains_plaintext"] is False
+          assert record["ground_truth_source"] == "seed_state_file_test_only"
+          PY
+      - name: Publish M09 real-provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-m09-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30

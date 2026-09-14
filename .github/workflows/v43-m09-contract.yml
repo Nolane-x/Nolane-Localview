@@ -1,0 +1,37 @@
+name: V4.3 M09 Sensitive Field Taint Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m09-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m09-contract:
+    name: M09 secure text is opaque and tainted
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M09 candidate
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$expected" ]; then
+            echo "M09 checkout SHA mismatch: actual=$actual expected=$expected" >&2
+            exit 1
+          fi
+      - name: Run M09 sensitive-field contract
+        run: |
+          set -euo pipefail
+          cargo test -p localview-macos-ax-provider --test m09_sensitive_field_taint_contract -- --nocapture

@@ -5,6 +5,7 @@ mod element_binding;
 mod observer_application;
 mod observer_continuity;
 mod observer_reliability;
+mod sensitive_text;
 mod visual_permission;
 
 pub use application_incarnation::*;
@@ -13,6 +14,7 @@ pub use observer_application::*;
 pub use observer_continuity::*;
 pub use observer_reliability::*;
 pub use permission::*;
+pub use sensitive_text::*;
 pub use visual_permission::*;
 
 /// Shipping M07 continuity authority must not expose a callable raw AX callback
