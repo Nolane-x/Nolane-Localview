@@ -37,6 +37,14 @@ impl LinuxAtspiProvider {
         )
     }
 
+    pub fn reacquire(
+        &self,
+        endpoint: AtspiEndpoint,
+        acquisition_cut_ref: impl Into<String>,
+    ) -> AtspiElementBinding {
+        self.bind(endpoint, acquisition_cut_ref)
+    }
+
     #[cfg(feature = "validation-state-injection")]
     pub fn authorize_from_state_set_for_validation(
         &self,
@@ -52,7 +60,7 @@ impl LinuxAtspiProvider {
         states: StateSet,
     ) -> Result<AtspiActionEligibilityPermit, AtspiActionEligibilityError> {
         if binding.lifecycle() == AtspiBindingLifecycle::InvalidDefunct {
-            return Err(AtspiActionEligibilityError::Defunct);
+            return Err(AtspiActionEligibilityError::AlreadyInvalidDefunct);
         }
         if binding.provider_incarnation_ref() != &self.provider_incarnation_ref {
             return Err(AtspiActionEligibilityError::ProviderIncarnationMismatch);
