@@ -70,6 +70,31 @@ pub enum AxVisualEscalationAuthorizationError {
     VisualPermission(VisualObservationPermissionError),
 }
 
+/// Failed M10 authorization retains the original timeout request.
+///
+/// Visual denial or resource pressure therefore cannot destroy the M04
+/// unresponsive tombstone or prevent ordinary semantic reconciliation after
+/// the target becomes responsive again.
+#[derive(Debug)]
+pub struct AxVisualEscalationAuthorizationFailure {
+    request: AxBoundedVisualEscalationRequest,
+    error: AxVisualEscalationAuthorizationError,
+}
+
+impl AxVisualEscalationAuthorizationFailure {
+    pub const fn error(&self) -> &AxVisualEscalationAuthorizationError {
+        &self.error
+    }
+
+    pub fn request(&self) -> &AxBoundedVisualEscalationRequest {
+        &self.request
+    }
+
+    pub fn into_request(self) -> AxBoundedVisualEscalationRequest {
+        self.request
+    }
+}
+
 /// Opaque M10 permit for exactly one bounded visual-observation escalation.
 ///
 /// The provider-owned resource reservation remains alive inside this value for
@@ -142,19 +167,29 @@ impl AxBoundedVisualEscalationAuthority {
         governor: &RuntimeResourceGovernor,
         session_id: impl Into<String>,
         request_id: impl Into<String>,
-    ) -> Result<AxBoundedVisualEscalationPermit, AxVisualEscalationAuthorizationError> {
-        let reservation = governor
-            .reserve(
-                session_id,
-                request_id,
-                ResourceWorkKind::NativeVisualCapture,
-            )
-            .map_err(AxVisualEscalationAuthorizationError::ResourceDenied)?;
+    ) -> Result<AxBoundedVisualEscalationPermit, AxVisualEscalationAuthorizationFailure> {
+        let reservation = match governor.reserve(
+            session_id,
+            request_id,
+            ResourceWorkKind::NativeVisualCapture,
+        ) {
+            Ok(reservation) => reservation,
+            Err(denial) => {
+                return Err(AxVisualEscalationAuthorizationFailure {
+                    request,
+                    error: AxVisualEscalationAuthorizationError::ResourceDenied(denial),
+                });
+            }
+        };
 
         let visual_permit = match visual_decision.outcome() {
             VisualObservationOutcome::Authorized(permit) => permit,
             VisualObservationOutcome::Denied(error) => {
-                return Err(AxVisualEscalationAuthorizationError::VisualPermission(error));
+                drop(reservation);
+                return Err(AxVisualEscalationAuthorizationFailure {
+                    request,
+                    error: AxVisualEscalationAuthorizationError::VisualPermission(error),
+                });
             }
         };
 
