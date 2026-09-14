@@ -7,7 +7,7 @@ use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
 static NEXT_BINDING_REVISION: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AtspiEndpoint {
     bus_name: String,
     object_path: String,

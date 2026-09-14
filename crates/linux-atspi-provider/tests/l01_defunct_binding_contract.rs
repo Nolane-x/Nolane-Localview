@@ -20,10 +20,21 @@ fn provider_with(provider: &str, target: &str) -> LinuxAtspiProvider {
     )
 }
 
+fn initial_binding(
+    provider: &LinuxAtspiProvider,
+    endpoint: AtspiEndpoint,
+    cut: &str,
+) -> localview_linux_atspi_provider::AtspiElementBinding {
+    provider
+        .bind_initial(endpoint, cut)
+        .expect("first binding for a test endpoint must succeed")
+}
+
 #[test]
 fn explicit_defunct_observation_terminally_blocks_action_eligibility() {
     let provider = provider();
-    let binding = provider.bind(
+    let binding = initial_binding(
+        &provider,
         AtspiEndpoint::new(":1.100", "/org/a11y/atspi/accessible/7"),
         "cut:l01:1",
     );
@@ -49,7 +60,8 @@ fn explicit_defunct_observation_terminally_blocks_action_eligibility() {
 #[test]
 fn cloned_binding_shares_terminal_defunct_invalidation() {
     let provider = provider();
-    let binding = provider.bind(
+    let binding = initial_binding(
+        &provider,
         AtspiEndpoint::new(":1.100", "/org/a11y/atspi/accessible/8"),
         "cut:l01:clone",
     );
@@ -71,7 +83,8 @@ fn cloned_binding_shares_terminal_defunct_invalidation() {
 #[test]
 fn unavailable_state_fails_closed_without_claiming_defunct() {
     let provider = provider();
-    let binding = provider.bind(
+    let binding = initial_binding(
+        &provider,
         AtspiEndpoint::new(":1.100", "/org/a11y/atspi/accessible/12"),
         "cut:l01:unavailable",
     );
@@ -90,7 +103,8 @@ fn unavailable_state_fails_closed_without_claiming_defunct() {
 #[test]
 fn stale_and_visible_do_not_become_defunct() {
     let provider = provider();
-    let binding = provider.bind(
+    let binding = initial_binding(
+        &provider,
         AtspiEndpoint::new(":1.100", "/org/a11y/atspi/accessible/9"),
         "cut:l01:states",
     );
@@ -108,7 +122,8 @@ fn provider_and_target_lineage_mismatch_are_typed() {
         "provider:linux-atspi:test:owner",
         "target:linux-atspi:test:owner",
     );
-    let binding = owner.bind(
+    let binding = initial_binding(
+        &owner,
         AtspiEndpoint::new(":1.100", "/org/a11y/atspi/accessible/10"),
         "cut:l01:lineage",
     );
@@ -136,7 +151,7 @@ fn provider_and_target_lineage_mismatch_are_typed() {
 fn same_endpoint_reuse_requires_a_new_binding_revision() {
     let provider = provider();
     let endpoint = AtspiEndpoint::new(":1.100", "/org/a11y/atspi/accessible/11");
-    let old = provider.bind(endpoint.clone(), "cut:l01:old");
+    let old = initial_binding(&provider, endpoint.clone(), "cut:l01:old");
     let old_revision = old.binding_revision();
 
     assert_eq!(
@@ -151,7 +166,9 @@ fn same_endpoint_reuse_requires_a_new_binding_revision() {
         Err(AtspiActionEligibilityError::AlreadyInvalidDefunct)
     );
 
-    let fresh = provider.reacquire(endpoint, "cut:l01:new");
+    let fresh = provider
+        .reacquire_after_defunct(&old, endpoint, "cut:l01:new")
+        .expect("explicit DEFUNCT permits one fresh binding");
     assert_ne!(fresh.binding_revision(), old_revision);
     assert!(provider
         .authorize_from_state_set_for_validation(&fresh, StateSet::empty())

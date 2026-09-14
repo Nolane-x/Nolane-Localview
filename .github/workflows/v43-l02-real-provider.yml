@@ -1,0 +1,103 @@
+name: V4.3 L02 Real Provider Seed
+
+on:
+  pull_request:
+    paths:
+      - 'crates/linux-atspi-provider/**'
+      - 'tools/provider-seeds/linux-atspi-defunct-seed/**'
+      - 'tools/validation-lab/linux-l7-real-provider-harness/**'
+      - '.github/workflows/v43-l02-real-provider.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/linux-atspi-provider/**'
+      - 'tools/provider-seeds/linux-atspi-defunct-seed/**'
+      - 'tools/validation-lab/linux-l7-real-provider-harness/**'
+      - '.github/workflows/v43-l02-real-provider.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-l02-real-provider:
+    name: Linux L02 real GTK/ATK/AT-SPI recreation oracle
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install real GTK/AT-SPI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dbus-x11 xvfb at-spi2-core libatk-adaptor build-essential pkg-config libgtk-3-dev
+      - name: Compile retained-handle GTK seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/localview-l02-seed" "$RUNNER_TEMP/localview-l7-real-provider"
+          cc -std=c11 -Wall -Wextra -Werror \
+            tools/provider-seeds/linux-atspi-defunct-seed/seed.c \
+            -o "$RUNNER_TEMP/localview-l02-seed/seed" \
+            $(pkg-config --cflags --libs gtk+-3.0 atk)
+          echo "LOCALVIEW_L02_SEED_BIN=$RUNNER_TEMP/localview-l02-seed/seed" >> "$GITHUB_ENV"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$RUNNER_TEMP/localview-l7-real-provider" >> "$GITHUB_ENV"
+      - name: Verify exact L02 test registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_l02 -- --list)"
+          grep -F 'linux_real_provider_l02::l02_defunct_recreate_never_resurrects_old_binding: test' <<<"$listed"
+      - name: Run real Linux L02 oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          dbus-run-session -- xvfb-run -a env \
+            NO_AT_BRIDGE=0 \
+            GTK_MODULES=gail:atk-bridge \
+            LOCALVIEW_CANDIDATE_SHA="$LOCALVIEW_CANDIDATE_SHA" \
+            LOCALVIEW_L02_SEED_BIN="$LOCALVIEW_L02_SEED_BIN" \
+            LOCALVIEW_L7_ARTIFACT_DIR="$LOCALVIEW_L7_ARTIFACT_DIR" \
+            cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" \
+              --test v43_real_provider_l02 \
+              linux_real_provider_l02::l02_defunct_recreate_never_resurrects_old_binding \
+              -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify L02 evidence schema
+        shell: python
+        run: |
+          import json, os, pathlib
+          path = pathlib.Path(os.environ['LOCALVIEW_L7_ARTIFACT_DIR']) / 'l02-real-provider-evidence.json'
+          data = json.loads(path.read_text())
+          assert data['schema'] == 'localview.v43.l02.real-provider.v1'
+          assert data['case_id'] == 'L02'
+          assert data['candidate_sha'] == os.environ['LOCALVIEW_CANDIDATE_SHA']
+          assert data['provider_family'] == 'linux_atspi'
+          assert data['same_endpoint_reused'] is True
+          assert data['typed_defunct_observed'] is True
+          assert data['old_binding_terminal_denial'] == 'already_invalid_defunct'
+          assert data['old_defunct_authority_replay_denial'] == 'previous_binding_superseded'
+          assert data['fresh_binding_revision_greater_than_old'] is True
+          assert data['fresh_authorization_succeeded'] is True
+          assert data['before_destroy_total'] == 1
+          assert data['before_destroy_original'] == 1
+          assert data['before_destroy_replacement'] == 0
+          assert data['after_recreate_total'] == 2
+          assert data['after_recreate_original'] == 1
+          assert data['after_recreate_replacement'] == 1
+      - name: Record run context
+        if: always()
+        shell: bash
+        run: |
+          printf '{"candidate_sha":"%s","case_id":"L02"}\n' "$LOCALVIEW_CANDIDATE_SHA" > "$LOCALVIEW_L7_ARTIFACT_DIR/run-context.json"
+      - name: Upload exact-head L02 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-l02-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30

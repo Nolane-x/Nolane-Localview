@@ -1,16 +1,29 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
 use atspi::{AccessibilityConnection, State, StateSet, proxy::accessible::AccessibleProxy};
 use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
 use crate::{
-    AtspiActionEligibilityError, AtspiActionEligibilityPermit, AtspiBindingLifecycle,
-    AtspiElementBinding, AtspiEndpoint, AtspiProviderConnectionError,
+    AtspiActionEligibilityError, AtspiActionEligibilityPermit, AtspiBindError,
+    AtspiBindingLifecycle, AtspiElementBinding, AtspiEndpoint, AtspiProviderConnectionError,
+    AtspiReacquireError,
 };
+
+#[derive(Debug, Clone, Copy)]
+struct EndpointAuthorityRecord {
+    binding_revision: u64,
+    retired: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct LinuxAtspiProvider {
     provider_incarnation_ref: ProviderIncarnationRef,
     target_incarnation_ref: TargetIncarnationRef,
     connection: Option<AccessibilityConnection>,
+    endpoint_authority: Arc<Mutex<HashMap<AtspiEndpoint, EndpointAuthorityRecord>>>,
 }
 
 impl LinuxAtspiProvider {
@@ -26,6 +39,7 @@ impl LinuxAtspiProvider {
             provider_incarnation_ref,
             target_incarnation_ref,
             connection: Some(connection),
+            endpoint_authority: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -38,28 +52,107 @@ impl LinuxAtspiProvider {
             provider_incarnation_ref,
             target_incarnation_ref,
             connection: None,
+            endpoint_authority: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    pub fn bind(
+    pub fn bind_initial(
         &self,
         endpoint: AtspiEndpoint,
         acquisition_cut_ref: impl Into<String>,
-    ) -> AtspiElementBinding {
-        AtspiElementBinding::new(
+    ) -> Result<AtspiElementBinding, AtspiBindError> {
+        let mut authority = self
+            .endpoint_authority
+            .lock()
+            .expect("AT-SPI endpoint authority mutex poisoned");
+        if authority.contains_key(&endpoint) {
+            return Err(AtspiBindError::EndpointAlreadyBound);
+        }
+
+        let binding = AtspiElementBinding::new(
             self.provider_incarnation_ref.clone(),
             self.target_incarnation_ref.clone(),
-            endpoint,
+            endpoint.clone(),
             acquisition_cut_ref,
-        )
+        );
+        authority.insert(
+            endpoint,
+            EndpointAuthorityRecord {
+                binding_revision: binding.binding_revision(),
+                retired: false,
+            },
+        );
+        Ok(binding)
     }
 
-    pub fn reacquire(
+    pub fn reacquire_after_defunct(
         &self,
-        endpoint: AtspiEndpoint,
+        previous_binding: &AtspiElementBinding,
+        replacement_endpoint: AtspiEndpoint,
         acquisition_cut_ref: impl Into<String>,
-    ) -> AtspiElementBinding {
-        self.bind(endpoint, acquisition_cut_ref)
+    ) -> Result<AtspiElementBinding, AtspiReacquireError> {
+        if previous_binding.provider_incarnation_ref() != &self.provider_incarnation_ref {
+            return Err(AtspiReacquireError::ProviderIncarnationMismatch);
+        }
+        if previous_binding.target_incarnation_ref() != &self.target_incarnation_ref {
+            return Err(AtspiReacquireError::TargetIncarnationMismatch);
+        }
+        if previous_binding.lifecycle() != AtspiBindingLifecycle::InvalidDefunct {
+            return Err(AtspiReacquireError::PreviousBindingNotDefunct);
+        }
+
+        let previous_endpoint = previous_binding.endpoint().clone();
+        let mut authority = self
+            .endpoint_authority
+            .lock()
+            .expect("AT-SPI endpoint authority mutex poisoned");
+        let previous_record = authority
+            .get(&previous_endpoint)
+            .copied()
+            .ok_or(AtspiReacquireError::PreviousBindingSuperseded)?;
+        if previous_record.retired
+            || previous_record.binding_revision != previous_binding.binding_revision()
+        {
+            return Err(AtspiReacquireError::PreviousBindingSuperseded);
+        }
+        if replacement_endpoint != previous_endpoint && authority.contains_key(&replacement_endpoint)
+        {
+            return Err(AtspiReacquireError::ReplacementEndpointAlreadyBound);
+        }
+
+        let fresh = AtspiElementBinding::new(
+            self.provider_incarnation_ref.clone(),
+            self.target_incarnation_ref.clone(),
+            replacement_endpoint.clone(),
+            acquisition_cut_ref,
+        );
+
+        if replacement_endpoint == previous_endpoint {
+            authority.insert(
+                replacement_endpoint,
+                EndpointAuthorityRecord {
+                    binding_revision: fresh.binding_revision(),
+                    retired: false,
+                },
+            );
+        } else {
+            authority.insert(
+                previous_endpoint,
+                EndpointAuthorityRecord {
+                    binding_revision: previous_record.binding_revision,
+                    retired: true,
+                },
+            );
+            authority.insert(
+                replacement_endpoint,
+                EndpointAuthorityRecord {
+                    binding_revision: fresh.binding_revision(),
+                    retired: false,
+                },
+            );
+        }
+
+        Ok(fresh)
     }
 
     pub async fn authorize_action(
