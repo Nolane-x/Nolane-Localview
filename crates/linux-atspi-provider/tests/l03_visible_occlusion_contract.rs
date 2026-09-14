@@ -130,3 +130,19 @@ fn defunct_semantics_still_win_before_pointer_exposure() {
         ))
     );
 }
+
+#[tokio::test]
+async fn shipping_pointer_path_requires_live_provider_observation() {
+    let provider = provider();
+    let binding = binding(
+        &provider,
+        AtspiEndpoint::new(":1.230", "/org/a11y/atspi/accessible/36"),
+    );
+
+    assert_eq!(
+        provider.authorize_pointer_action(&binding).await,
+        Err(AtspiPointerEligibilityError::Semantic(
+            AtspiActionEligibilityError::ObservationUnavailable
+        ))
+    );
+}
