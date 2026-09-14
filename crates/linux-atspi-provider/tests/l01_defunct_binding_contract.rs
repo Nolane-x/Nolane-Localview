@@ -69,6 +69,25 @@ fn cloned_binding_shares_terminal_defunct_invalidation() {
 }
 
 #[test]
+fn unavailable_state_fails_closed_without_claiming_defunct() {
+    let provider = provider();
+    let binding = provider.bind(
+        AtspiEndpoint::new(":1.100", "/org/a11y/atspi/accessible/12"),
+        "cut:l01:unavailable",
+    );
+
+    assert_eq!(
+        provider.authorize_unavailable_for_validation(&binding),
+        Err(AtspiActionEligibilityError::ObservationUnavailable)
+    );
+    assert_eq!(binding.lifecycle(), AtspiBindingLifecycle::Live);
+
+    assert!(provider
+        .authorize_from_state_set_for_validation(&binding, StateSet::empty())
+        .is_ok());
+}
+
+#[test]
 fn stale_and_visible_do_not_become_defunct() {
     let provider = provider();
     let binding = provider.bind(
