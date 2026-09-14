@@ -16,7 +16,7 @@ jobs:
   l01-real-provider:
     name: L01 real AT-SPI provider oracle
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,6 +24,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
+      - name: Install real GTK/ATK/AT-SPI oracle dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dbus-x11 xvfb at-spi2-core python3-gi gir1.2-gtk-3.0 libgtk-3-0 libatk-adaptor
       - name: Bind exact L01 real-provider candidate
         run: |
           set -euo pipefail
@@ -33,10 +37,74 @@ jobs:
             echo "L01 real-provider checkout SHA mismatch: actual=$actual expected=$expected" >&2
             exit 1
           fi
-      - name: Compile real-provider RED harness
+          mkdir -p "$RUNNER_TEMP/localview-v43-l01"
+          printf '{"candidate_sha":"%s","workflow":"v43-l01-real-provider"}\n' "$actual" \
+            > "$RUNNER_TEMP/localview-v43-l01/run-context.json"
+      - name: Require exact L01 real-provider test registration
         run: |
           set -euo pipefail
           cargo +1.85.0 test \
             --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
             --test v43_real_provider_l01 \
-            --no-run
+            -- --list \
+            | grep -F 'linux_real_provider_l01::l01_real_defunct_terminally_invalidates_old_binding: test'
+      - name: Run real GTK/ATK/AT-SPI L01 oracle
+        env:
+          LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          LOCALVIEW_L7_ARTIFACT_DIR: ${{ runner.temp }}/localview-v43-l01
+        run: |
+          set -euo pipefail
+          dbus-run-session -- xvfb-run -a env NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge \
+            LOCALVIEW_CANDIDATE_SHA="$LOCALVIEW_CANDIDATE_SHA" \
+            LOCALVIEW_L7_ARTIFACT_DIR="$LOCALVIEW_L7_ARTIFACT_DIR" \
+            cargo +1.85.0 test \
+              --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
+              --test v43_real_provider_l01 \
+              linux_real_provider_l01::l01_real_defunct_terminally_invalidates_old_binding \
+              -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify L01 evidence schema and exact-head binding
+        if: always()
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVIDENCE_PATH: ${{ runner.temp }}/localview-v43-l01/l01-real-provider-evidence.json
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["EVIDENCE_PATH"])
+          if not path.is_file():
+              raise SystemExit(f"missing L01 real-provider evidence: {path}")
+          evidence = json.loads(path.read_text())
+          expected = {
+              "schema": "localview.v43.l01.real-provider.v1",
+              "case_id": "L01",
+              "candidate_sha": os.environ["EXPECTED_SHA"],
+              "provider_family": "linux_atspi",
+              "initial_defunct_observed": False,
+              "final_defunct_observed": True,
+              "live_authorization_succeeded": True,
+              "pre_defunct_press_count": 1,
+              "post_defunct_press_count": 1,
+              "post_defunct_dispatch_delta": 0,
+              "defunct_denial": "defunct",
+              "old_binding_terminal_denial": "already_invalid_defunct",
+              "old_binding_revival_succeeded": False,
+              "fresh_binding_revision_greater_than_old": True,
+              "ground_truth_source": "real_gtk_atk_atspi_state",
+          }
+          for key, value in expected.items():
+              if evidence.get(key) != value:
+                  raise SystemExit(
+                      f"invalid L01 evidence field {key}: {evidence.get(key)!r} != {value!r}"
+                  )
+          PY
+      - name: Upload L01 exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-l01-real-provider-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/localview-v43-l01/
+          if-no-files-found: error
+          retention-days: 30
