@@ -224,7 +224,7 @@ impl LinuxAtspiProvider {
             )
         })?;
 
-        self.authorize_from_state_set(binding, states.clone())
+        self.authorize_from_state_set(binding, states)
             .map_err(AtspiPointerEligibilityError::Semantic)?;
         if !states.contains(State::Visible) {
             return Err(AtspiPointerEligibilityError::NotVisible);
