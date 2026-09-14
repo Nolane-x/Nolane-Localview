@@ -62,7 +62,7 @@ impl AxSensitiveTextDecision {
 pub struct AxSensitiveTextPolicy;
 
 impl AxSensitiveTextPolicy {
-    pub const fn classify(metadata: AxSensitiveTextMetadata<'_>) -> AxSensitiveTextDecision {
+    pub fn classify(metadata: AxSensitiveTextMetadata<'_>) -> AxSensitiveTextDecision {
         let protection = match metadata.subrole {
             Some(AX_SECURE_TEXT_FIELD_SUBROLE) => AxSensitiveTextProtection::ProtectedSecureText,
             _ => AxSensitiveTextProtection::Ordinary,
