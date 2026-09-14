@@ -31,10 +31,13 @@ jobs:
         run: |
           set -euo pipefail
           listed="$(cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l02_defunct_recreate_contract -- --list)"
+          grep -F 'duplicate_initial_bind_cannot_bypass_recreate_gate: test' <<<"$listed"
           grep -F 'live_binding_cannot_be_used_as_recreate_authority: test' <<<"$listed"
           grep -F 'recreate_requires_previous_binding_from_same_provider_and_target_incarnation: test' <<<"$listed"
-          grep -F 'defunct_recreate_mints_fresh_authority_without_resurrecting_old_binding: test' <<<"$listed"
+          grep -F 'defunct_recreate_mints_fresh_authority_without_resurrecting_or_replaying_old_binding: test' <<<"$listed"
       - name: Run Linux L02 contract
         run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l02_defunct_recreate_contract -- --nocapture --test-threads=1
+      - name: Retain Linux L01 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l01_defunct_binding_contract -- --nocapture --test-threads=1
       - name: Clippy Linux AT-SPI provider with validation feature
         run: cargo clippy -p localview-linux-atspi-provider --features validation-state-injection --all-targets -- -D warnings
