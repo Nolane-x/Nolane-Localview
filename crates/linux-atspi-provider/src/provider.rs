@@ -3,7 +3,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use atspi::{AccessibilityConnection, State, StateSet, proxy::accessible::AccessibleProxy};
+use atspi::{
+    AccessibilityConnection, CoordType, State, StateSet,
+    proxy::{accessible::AccessibleProxy, component::ComponentProxy},
+};
 use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
 use crate::{
@@ -180,6 +183,114 @@ impl LinuxAtspiProvider {
             .map_err(|_| AtspiActionEligibilityError::ObservationUnavailable)?;
 
         self.authorize_from_state_set(binding, states)
+    }
+
+    pub async fn authorize_pointer_action(
+        &self,
+        binding: &AtspiElementBinding,
+    ) -> Result<AtspiPointerEligibilityPermit, AtspiPointerEligibilityError> {
+        self.ensure_binding_authority(binding)
+            .map_err(AtspiPointerEligibilityError::Semantic)?;
+
+        let connection = self.connection.as_ref().ok_or(
+            AtspiPointerEligibilityError::Semantic(
+                AtspiActionEligibilityError::ObservationUnavailable,
+            ),
+        )?;
+        let bus = connection.connection();
+        let accessible = AccessibleProxy::builder(bus)
+            .destination(binding.endpoint().bus_name())
+            .map_err(|_| {
+                AtspiPointerEligibilityError::Semantic(
+                    AtspiActionEligibilityError::ObservationUnavailable,
+                )
+            })?
+            .path(binding.endpoint().object_path())
+            .map_err(|_| {
+                AtspiPointerEligibilityError::Semantic(
+                    AtspiActionEligibilityError::ObservationUnavailable,
+                )
+            })?
+            .build()
+            .await
+            .map_err(|_| {
+                AtspiPointerEligibilityError::Semantic(
+                    AtspiActionEligibilityError::ObservationUnavailable,
+                )
+            })?;
+        let states = accessible.get_state().await.map_err(|_| {
+            AtspiPointerEligibilityError::Semantic(
+                AtspiActionEligibilityError::ObservationUnavailable,
+            )
+        })?;
+
+        self.authorize_from_state_set(binding, states.clone())
+            .map_err(AtspiPointerEligibilityError::Semantic)?;
+        if !states.contains(State::Visible) {
+            return Err(AtspiPointerEligibilityError::NotVisible);
+        }
+        if !states.contains(State::Showing) {
+            return Err(AtspiPointerEligibilityError::NotShowing);
+        }
+
+        let component = ComponentProxy::builder(bus)
+            .destination(binding.endpoint().bus_name())
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+            .path(binding.endpoint().object_path())
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+            .build()
+            .await
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let (x, y, width, height) = component
+            .get_extents(CoordType::Screen)
+            .await
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+        if width <= 0 || height <= 0 {
+            return Err(AtspiPointerEligibilityError::HitTestUnavailable);
+        }
+        let center_x = x
+            .checked_add(width / 2)
+            .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let center_y = y
+            .checked_add(height / 2)
+            .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+
+        let parent = accessible
+            .parent()
+            .await
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+        if parent.is_null() {
+            return Err(AtspiPointerEligibilityError::HitTestUnavailable);
+        }
+        let parent_bus_name = parent
+            .name_as_str()
+            .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let parent_component = ComponentProxy::builder(bus)
+            .destination(parent_bus_name)
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+            .path(parent.path_as_str())
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+            .build()
+            .await
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let hit = parent_component
+            .get_accessible_at_point(center_x, center_y, CoordType::Screen)
+            .await
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+        if hit.is_null() {
+            return Err(AtspiPointerEligibilityError::HitTestUnavailable);
+        }
+        let hit_bus_name = hit
+            .name_as_str()
+            .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let hit_endpoint = AtspiEndpoint::new(hit_bus_name, hit.path_as_str());
+        let hit_test = if &hit_endpoint == binding.endpoint() {
+            AtspiPointerHitTest::Target(hit_endpoint)
+        } else {
+            AtspiPointerHitTest::Other(hit_endpoint)
+        };
+
+        self.authorize_pointer_from_observation(binding, states, hit_test)
     }
 
     #[cfg(feature = "validation-state-injection")]
