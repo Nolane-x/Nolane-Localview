@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #define ACCESSIBLE_NAME "LocalView L01 Defunct Button"
+#define REPLACEMENT_LABEL "LocalView L02 Replacement Backing"
 
 #define LV_TYPE_RETAINED_BUTTON_ACCESSIBLE (lv_retained_button_accessible_get_type())
 #define LV_TYPE_RETAINED_BUTTON (lv_retained_button_get_type())
@@ -32,7 +33,11 @@ G_DEFINE_TYPE(LvRetainedButtonAccessible,
 G_DEFINE_TYPE(LvRetainedButton, lv_retained_button, GTK_TYPE_BUTTON)
 
 static guint press_count = 0;
+static guint original_press_count = 0;
+static guint replacement_press_count = 0;
+static GtkWidget *window = NULL;
 static GtkWidget *button = NULL;
+static GtkWidget *replacement_button = NULL;
 static AtkObject *old_accessible = NULL;
 
 static AtkStateSet *
@@ -56,10 +61,10 @@ lv_retained_button_accessible_ref_state_set(AtkObject *object) {
 static void
 lv_retained_button_accessible_widget_unset(GtkAccessible *accessible) {
   /* Default GtkAccessible emits state-change::defunct here; atk-adaptor
-   * immediately deregisters the object when it observes that event. L01
-   * needs the equally valid provider lifecycle where the old object remains
-   * queryable and reports DEFUNCT from its state set, so this test-only
-   * accessible suppresses the eager notification/deregistration path. */
+   * immediately deregisters the object when it observes that event. L01/L02
+   * need the equally valid provider lifecycle where the old transport object
+   * remains queryable while its backing widget disappears and is later
+   * replaced, so this test-only accessible suppresses eager deregistration. */
   (void)accessible;
 }
 
@@ -101,6 +106,12 @@ emit_destroyed(void) {
 }
 
 static void
+emit_recreated(void) {
+  puts("{\"event\":\"recreated\"}");
+  fflush(stdout);
+}
+
+static void
 emit_quitting(void) {
   puts("{\"event\":\"quitting\"}");
   fflush(stdout);
@@ -108,7 +119,11 @@ emit_quitting(void) {
 
 static void
 emit_status(void) {
-  printf("{\"event\":\"status\",\"press_count\":%u}\n", press_count);
+  printf("{\"event\":\"status\",\"press_count\":%u,"
+         "\"original_press_count\":%u,\"replacement_press_count\":%u}\n",
+         press_count,
+         original_press_count,
+         replacement_press_count);
   fflush(stdout);
 }
 
@@ -119,10 +134,51 @@ emit_error(const char *command) {
 }
 
 static void
-on_clicked(GtkButton *clicked_button, gpointer user_data) {
+on_original_clicked(GtkButton *clicked_button, gpointer user_data) {
   (void)clicked_button;
   (void)user_data;
   press_count += 1;
+  original_press_count += 1;
+}
+
+static void
+on_replacement_clicked(GtkButton *clicked_button, gpointer user_data) {
+  (void)clicked_button;
+  (void)user_data;
+  press_count += 1;
+  replacement_press_count += 1;
+}
+
+static gboolean
+recreate_backing_widget(void) {
+  if (old_accessible == NULL || window == NULL || replacement_button != NULL) {
+    return FALSE;
+  }
+  if (gtk_accessible_get_widget(GTK_ACCESSIBLE(old_accessible)) != NULL) {
+    return FALSE;
+  }
+
+  if (button != NULL && gtk_widget_get_parent(button) == window) {
+    gtk_container_remove(GTK_CONTAINER(window), button);
+  }
+  button = NULL;
+
+  replacement_button = g_object_new(LV_TYPE_RETAINED_BUTTON,
+                                    "label", REPLACEMENT_LABEL,
+                                    NULL);
+  g_signal_connect(replacement_button,
+                   "clicked",
+                   G_CALLBACK(on_replacement_clicked),
+                   NULL);
+  gtk_container_add(GTK_CONTAINER(window), replacement_button);
+
+  /* Reattach the retained real GtkButtonAccessible to a new real GTK button.
+   * Its AT-SPI transport object remains the same object exported by
+   * atk-adaptor; only the backing widget incarnation changes. */
+  gtk_accessible_set_widget(GTK_ACCESSIBLE(old_accessible), replacement_button);
+  atk_object_set_name(old_accessible, ACCESSIBLE_NAME);
+  gtk_widget_show_all(window);
+  return TRUE;
 }
 
 static gboolean
@@ -164,6 +220,12 @@ on_stdin(GIOChannel *source, GIOCondition condition, gpointer user_data) {
       gtk_accessible_set_widget(GTK_ACCESSIBLE(old_accessible), NULL);
     }
     emit_destroyed();
+  } else if (strcmp(line, "recreate") == 0) {
+    if (recreate_backing_widget()) {
+      emit_recreated();
+    } else {
+      emit_error(line);
+    }
   } else if (strcmp(line, "status") == 0) {
     emit_status();
   } else if (strcmp(line, "quit") == 0) {
@@ -181,20 +243,19 @@ on_stdin(GIOChannel *source, GIOCondition condition, gpointer user_data) {
 
 int
 main(int argc, char **argv) {
-  GtkWidget *window;
   GIOChannel *stdin_channel;
 
   gtk_init(&argc, &argv);
 
   window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-  gtk_window_set_title(GTK_WINDOW(window), "LocalView L01 DEFUNCT Seed");
+  gtk_window_set_title(GTK_WINDOW(window), "LocalView L01/L02 DEFUNCT Seed");
   gtk_window_set_default_size(GTK_WINDOW(window), 360, 120);
   g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
   button = g_object_new(LV_TYPE_RETAINED_BUTTON,
                         "label", ACCESSIBLE_NAME,
                         NULL);
-  g_signal_connect(button, "clicked", G_CALLBACK(on_clicked), NULL);
+  g_signal_connect(button, "clicked", G_CALLBACK(on_original_clicked), NULL);
 
   old_accessible = gtk_widget_get_accessible(button);
   g_object_ref(old_accessible);
