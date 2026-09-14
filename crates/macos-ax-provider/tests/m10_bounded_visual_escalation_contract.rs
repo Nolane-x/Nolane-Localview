@@ -1,9 +1,14 @@
 use localview_macos_ax_provider::{
     AxApplicationIncarnation, AxBoundedVisualEscalationAuthority, AxElementBindingProvider,
-    AxElementIdentity, AxElementOperationDecision, AxVisualEscalationAuthorizationError,
-    AxVisualEscalationReason, VisualObservationPermissionError,
+    AxElementIdentity, AxElementOperationDecision, AxVisualEscalationReason,
+};
+
+#[cfg(feature = "validation-visual-permission-state")]
+use localview_macos_ax_provider::{
+    AxVisualEscalationAuthorizationError, VisualObservationPermissionError,
     VisualObservationPermissionProvider, VisualObservationPermissionState,
 };
+#[cfg(feature = "validation-visual-permission-state")]
 use localview_resource_governor::{
     ResourceBudget, ResourceWorkKind, RuntimeResourceGovernor, RuntimeResourceSample,
 };
@@ -18,6 +23,7 @@ fn identity() -> AxElementIdentity {
     )
 }
 
+#[cfg(feature = "validation-visual-permission-state")]
 fn timeout_request() -> localview_macos_ax_provider::AxBoundedVisualEscalationRequest {
     let binding_provider = AxElementBindingProvider::new();
     let binding = binding_provider.bind_current(identity());
@@ -48,6 +54,7 @@ fn timeout_creates_only_a_bounded_visual_escalation_request_not_capture_authorit
     assert!(!request.input_fallback_permitted());
 }
 
+#[cfg(feature = "validation-visual-permission-state")]
 #[test]
 fn visual_escalation_requires_both_visual_permission_and_governor_admission() {
     let mut budget = ResourceBudget::default();
@@ -98,6 +105,7 @@ fn visual_escalation_requires_both_visual_permission_and_governor_admission() {
     );
 }
 
+#[cfg(feature = "validation-visual-permission-state")]
 #[test]
 fn resource_pressure_denial_preserves_timeout_request_for_semantic_reconciliation() {
     let governor = RuntimeResourceGovernor::default();
@@ -132,6 +140,7 @@ fn resource_pressure_denial_preserves_timeout_request_for_semantic_reconciliatio
     assert_eq!(recovered.target_identity(), &identity());
 }
 
+#[cfg(feature = "validation-visual-permission-state")]
 #[test]
 fn visual_permission_denial_preserves_timeout_request_for_semantic_reconciliation() {
     let governor = RuntimeResourceGovernor::default();
