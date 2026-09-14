@@ -24,6 +24,7 @@ members = [
   "crates/windows-uia-provider",
   "crates/windows-observe-runtime",
   "crates/macos-ax-provider",
+  "crates/linux-atspi-provider",
   "crates/chromium",
   "crates/engine",
   "crates/network",
