@@ -99,7 +99,7 @@ fn visual_escalation_requires_both_visual_permission_and_governor_admission() {
 }
 
 #[test]
-fn resource_pressure_blocks_visual_escalation_even_when_visual_permission_is_granted() {
+fn resource_pressure_denial_preserves_timeout_request_for_semantic_reconciliation() {
     let governor = RuntimeResourceGovernor::default();
     assert!(governor.update_sample(RuntimeResourceSample {
         memory_mb: 1024,
@@ -110,10 +110,12 @@ fn resource_pressure_blocks_visual_escalation_even_when_visual_permission_is_gra
     let visual = VisualObservationPermissionProvider::validation_decision_for_state(
         VisualObservationPermissionState::Granted,
     );
+    let request = timeout_request();
+    let invalidated_sequence = request.invalidated_binding_sequence();
 
-    let error = AxBoundedVisualEscalationAuthority::new()
+    let failure = AxBoundedVisualEscalationAuthority::new()
         .authorize_visual_observation(
-            timeout_request(),
+            request,
             visual,
             &governor,
             "m10-session",
@@ -122,21 +124,26 @@ fn resource_pressure_blocks_visual_escalation_even_when_visual_permission_is_gra
         .expect_err("resource governor denial must block timeout-driven visual escalation");
 
     assert!(matches!(
-        error,
+        failure.error(),
         AxVisualEscalationAuthorizationError::ResourceDenied(_)
     ));
+    let recovered = failure.into_request();
+    assert_eq!(recovered.invalidated_binding_sequence(), invalidated_sequence);
+    assert_eq!(recovered.target_identity(), &identity());
 }
 
 #[test]
-fn visual_permission_denial_blocks_escalation_after_resource_admission() {
+fn visual_permission_denial_preserves_timeout_request_for_semantic_reconciliation() {
     let governor = RuntimeResourceGovernor::default();
     let visual = VisualObservationPermissionProvider::validation_decision_for_state(
         VisualObservationPermissionState::Denied,
     );
+    let request = timeout_request();
+    let invalidated_sequence = request.invalidated_binding_sequence();
 
-    let error = AxBoundedVisualEscalationAuthority::new()
+    let failure = AxBoundedVisualEscalationAuthority::new()
         .authorize_visual_observation(
-            timeout_request(),
+            request,
             visual,
             &governor,
             "m10-session",
@@ -145,9 +152,12 @@ fn visual_permission_denial_blocks_escalation_after_resource_admission() {
         .expect_err("visual permission denial must fail closed");
 
     assert!(matches!(
-        error,
+        failure.error(),
         AxVisualEscalationAuthorizationError::VisualPermission(
             VisualObservationPermissionError::PermissionRequired
         )
     ));
+    let recovered = failure.into_request();
+    assert_eq!(recovered.invalidated_binding_sequence(), invalidated_sequence);
+    assert_eq!(recovered.target_identity(), &identity());
 }
