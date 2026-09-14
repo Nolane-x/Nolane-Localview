@@ -1,0 +1,122 @@
+name: V4.3 M10 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m10-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m10-real-provider:
+    name: M10 real AX timeout keeps visual escalation bounded
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      LOCALVIEW_MACOS_AX_SMOKE: "1"
+      LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/macos-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M10 candidate and artifact directory
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M10 checkout SHA mismatch: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          artifact_dir="$RUNNER_TEMP/localview-v43-m10"
+          mkdir -p "$artifact_dir"
+          echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Build exact-head AppKit M10 provider-hang seed
+        run: |
+          set -euo pipefail
+          seed_src="tools/validation-lab/macos-l7-real-provider-harness/fixtures/m04-unresponsive-seed.swift"
+          seed_bin="$RUNNER_TEMP/localview-m10-unresponsive-seed"
+          set +e
+          xcrun swiftc "$seed_src" -framework AppKit -o "$seed_bin" \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M10-SEED-COMPILE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          test -x "$seed_bin"
+          echo "LOCALVIEW_M10_SEED_EXECUTABLE=$seed_bin" >> "$GITHUB_ENV"
+      - name: Require exact M10 real-provider registration
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m10::m10_timeout_never_auto_escalates_and_visual_path_is_permission_resource_bounded"
+          listed="$(cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m10 -- --list)"
+          printf '%s\n' "$listed" | grep -F "${test_name}: test"
+      - name: Run M10 real AX bounded-escalation oracle
+        run: |
+          set -euo pipefail
+          test_name="macos_real_provider_m10::m10_timeout_never_auto_escalates_and_visual_path_is_permission_resource_bounded"
+          set +e
+          cargo test --manifest-path "$LOCALVIEW_L7_HARNESS_MANIFEST" --test v43_real_provider_m10 "$test_name" -- --ignored --exact --nocapture --test-threads=1 \
+            2>&1 | tee "$LOCALVIEW_L7_ARTIFACT_DIR/M10-ORACLE.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
+      - name: Verify M10 evidence is exact-head and escalation-bounded
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$LOCALVIEW_CANDIDATE_SHA" ]; then
+            echo "M10 head moved during proof: actual=$actual expected=$LOCALVIEW_CANDIDATE_SHA" >&2
+            exit 1
+          fi
+          record_path="$LOCALVIEW_L7_ARTIFACT_DIR/M10-REAL-PROVIDER-RECORD.json"
+          test -f "$record_path"
+          python3 - "$record_path" "$LOCALVIEW_CANDIDATE_SHA" <<'PY'
+          import json, sys
+          path, expected_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+          assert record["schema"] == "localview-v43-m10-real-provider-record-v1"
+          assert record["case_id"] == "M10"
+          assert record["candidate_sha"] == expected_sha
+          assert record["stall_ground_truth"] is True
+          assert int(record["stall_count"]) == 1
+          assert int(record["stall_duration_ms"]) == 2000
+          assert int(record["configured_ax_timeout_ms"]) == 250
+          assert int(record["cannot_complete_ax_error"]) == -25204
+          assert record["cannot_complete_observed"] is True
+          assert int(record["timeout_elapsed_ms"]) < 1500
+          assert record["automatic_visual_resource_reservation_after_timeout"] is False
+          assert record["automatic_input_fallback_after_timeout"] is False
+          assert int(record["max_visual_regions"]) == 1
+          assert record["resource_work_kind"] == "native_visual_capture"
+          assert record["resource_reservation_released_after_authorization"] is True
+          assert record["semantic_reconciliation_preserved"] is True
+          assert int(record["fresh_binding_sequence"]) > int(record["old_binding_sequence"])
+          assert int(record["world_press_count_after_timeout_and_visual_authorization"]) == 0
+          if record["direct_visual_preflight_granted"]:
+              assert record["visual_permission_state"] == "granted"
+              assert record["authorization_outcome"] == "authorized"
+              assert record["resource_reservation_held_during_permit"] is True
+          else:
+              assert record["visual_permission_state"] == "denied"
+              assert record["authorization_outcome"] == "visual_permission_required"
+              assert record["resource_reservation_held_during_permit"] is False
+          assert int(record["visual_permission_check_sequence"]) > 0
+          assert record["ground_truth_source"] == "seed_state_file_test_only"
+          PY
+      - name: Publish M10 real-provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-m10-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
+          path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
