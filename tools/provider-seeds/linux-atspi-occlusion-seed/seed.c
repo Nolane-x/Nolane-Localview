@@ -10,11 +10,12 @@
 static GtkWidget *window = NULL;
 static GtkWidget *overlay = NULL;
 static GtkWidget *target = NULL;
+static GtkWidget *blocker = NULL;
 static guint target_press_count = 0;
 
 static void
 emit_ready(void) {
-  puts("{\"event\":\"ready\",\"blocker_present\":false}");
+  puts("{\"event\":\"ready\",\"blocker_present\":true}");
   fflush(stdout);
 }
 
@@ -33,9 +34,10 @@ emit_quitting(void) {
 static void
 emit_status(void) {
   printf("{\"event\":\"status\",\"target_press_count\":%u,"
-         "\"blocker_present\":false,\"target_name\":\"%s\","
+         "\"blocker_present\":%s,\"target_name\":\"%s\","
          "\"blocker_name\":\"%s\"}\n",
          target_press_count,
+         blocker != NULL ? "true" : "false",
          TARGET_NAME,
          BLOCKER_NAME);
   fflush(stdout);
@@ -52,6 +54,16 @@ on_target_clicked(GtkButton *button, gpointer user_data) {
   (void)button;
   (void)user_data;
   target_press_count += 1;
+}
+
+static void
+remove_blocker(void) {
+  if (blocker == NULL) {
+    return;
+  }
+
+  gtk_container_remove(GTK_CONTAINER(overlay), blocker);
+  blocker = NULL;
 }
 
 static gboolean
@@ -91,6 +103,7 @@ on_stdin(GIOChannel *source, GIOCondition condition, gpointer user_data) {
   if (strcmp(line, "status") == 0) {
     emit_status();
   } else if (strcmp(line, "unblock") == 0) {
+    remove_blocker();
     emit_unblocked();
   } else if (strcmp(line, "quit") == 0) {
     emit_quitting();
@@ -109,11 +122,12 @@ int
 main(int argc, char **argv) {
   GIOChannel *stdin_channel;
   AtkObject *target_accessible;
+  AtkObject *blocker_accessible;
 
   gtk_init(&argc, &argv);
 
   window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-  gtk_window_set_title(GTK_WINDOW(window), "LocalView L03 Visible Occlusion RED Seed");
+  gtk_window_set_title(GTK_WINDOW(window), "LocalView L03 Visible Occlusion Seed");
   gtk_window_set_default_size(GTK_WINDOW(window), 420, 220);
   g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
@@ -128,12 +142,24 @@ main(int argc, char **argv) {
 
   target_accessible = gtk_widget_get_accessible(target);
   atk_object_set_name(target_accessible, TARGET_NAME);
-
-  /* Intentional TDD RED seed: there is no blocker yet. The L03 real-provider
-   * oracle must fail because a real AT-SPI hit-test resolves the target itself.
-   * The GREEN change will add a real GTK overlay widget rather than teaching
-   * production LocalView about a test-only side channel. */
   gtk_container_add(GTK_CONTAINER(overlay), target);
+
+  /* A real GTK overlay child covers the target's center. The target remains
+   * present, VISIBLE and SHOWING in AT-SPI, while the parent Component
+   * hit-test resolves this blocker. Production LocalView observes only the
+   * real AT-SPI state/component interfaces; stdin is lifecycle control for
+   * the validation seed and is never a production truth source. */
+  blocker = gtk_button_new_with_label(BLOCKER_NAME);
+  gtk_widget_set_halign(blocker, GTK_ALIGN_FILL);
+  gtk_widget_set_valign(blocker, GTK_ALIGN_FILL);
+  gtk_widget_set_hexpand(blocker, TRUE);
+  gtk_widget_set_vexpand(blocker, TRUE);
+  gtk_widget_set_size_request(blocker, 320, 140);
+  blocker_accessible = gtk_widget_get_accessible(blocker);
+  atk_object_set_name(blocker_accessible, BLOCKER_NAME);
+  gtk_overlay_add_overlay(GTK_OVERLAY(overlay), blocker);
+  gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), blocker, FALSE);
+
   gtk_widget_show_all(window);
 
   stdin_channel = g_io_channel_unix_new(STDIN_FILENO);
