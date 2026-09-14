@@ -12,6 +12,7 @@ static GtkWidget *overlay = NULL;
 static GtkWidget *target = NULL;
 static GtkWidget *blocker = NULL;
 static guint target_press_count = 0;
+static guint blocker_press_count = 0;
 
 static void
 emit_ready(void) {
@@ -34,9 +35,10 @@ emit_quitting(void) {
 static void
 emit_status(void) {
   printf("{\"event\":\"status\",\"target_press_count\":%u,"
-         "\"blocker_present\":%s,\"target_name\":\"%s\","
-         "\"blocker_name\":\"%s\"}\n",
+         "\"blocker_press_count\":%u,\"blocker_present\":%s,"
+         "\"target_name\":\"%s\",\"blocker_name\":\"%s\"}\n",
          target_press_count,
+         blocker_press_count,
          blocker != NULL ? "true" : "false",
          TARGET_NAME,
          BLOCKER_NAME);
@@ -54,6 +56,13 @@ on_target_clicked(GtkButton *button, gpointer user_data) {
   (void)button;
   (void)user_data;
   target_press_count += 1;
+}
+
+static void
+on_blocker_clicked(GtkButton *button, gpointer user_data) {
+  (void)button;
+  (void)user_data;
+  blocker_press_count += 1;
 }
 
 static void
@@ -144,17 +153,19 @@ main(int argc, char **argv) {
   atk_object_set_name(target_accessible, TARGET_NAME);
   gtk_container_add(GTK_CONTAINER(overlay), target);
 
-  /* A real GTK overlay child covers the target's center. The target remains
-   * present, VISIBLE and SHOWING in AT-SPI, while the parent Component
-   * hit-test resolves this blocker. Production LocalView observes only the
-   * real AT-SPI state/component interfaces; stdin is lifecycle control for
-   * the validation seed and is never a production truth source. */
+  /* A real GTK overlay child covers the target's center and receives real
+   * pointer input first. GTK3's generic ATK container hit-test can still
+   * report the main target at that same point, which is precisely the L03
+   * false-positive this seed is designed to expose. Production LocalView
+   * observes only real AT-SPI interfaces; stdin is lifecycle/status control
+   * for independent validation and is never a production truth source. */
   blocker = gtk_button_new_with_label(BLOCKER_NAME);
   gtk_widget_set_halign(blocker, GTK_ALIGN_FILL);
   gtk_widget_set_valign(blocker, GTK_ALIGN_FILL);
   gtk_widget_set_hexpand(blocker, TRUE);
   gtk_widget_set_vexpand(blocker, TRUE);
   gtk_widget_set_size_request(blocker, 320, 140);
+  g_signal_connect(blocker, "clicked", G_CALLBACK(on_blocker_clicked), NULL);
   blocker_accessible = gtk_widget_get_accessible(blocker);
   atk_object_set_name(blocker_accessible, BLOCKER_NAME);
   gtk_overlay_add_overlay(GTK_OVERLAY(overlay), blocker);
