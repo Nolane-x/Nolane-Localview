@@ -1,0 +1,37 @@
+name: V4.3 M10 Bounded Visual Escalation Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-m10-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  m10-contract:
+    name: M10 timeout cannot mint uncontrolled visual authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bind exact M10 candidate
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$expected" ]; then
+            echo "M10 checkout SHA mismatch: actual=$actual expected=$expected" >&2
+            exit 1
+          fi
+      - name: Run M10 bounded escalation contract
+        run: |
+          set -euo pipefail
+          cargo test -p localview-macos-ax-provider --test m10_bounded_visual_escalation_contract -- --nocapture
