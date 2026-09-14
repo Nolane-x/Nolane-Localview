@@ -8,7 +8,8 @@ use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
 use crate::{
     AtspiActionEligibilityError, AtspiActionEligibilityPermit, AtspiBindError,
-    AtspiBindingLifecycle, AtspiElementBinding, AtspiEndpoint, AtspiProviderConnectionError,
+    AtspiBindingLifecycle, AtspiElementBinding, AtspiEndpoint, AtspiPointerEligibilityError,
+    AtspiPointerEligibilityPermit, AtspiPointerHitTest, AtspiProviderConnectionError,
     AtspiReacquireError,
 };
 
@@ -191,6 +192,16 @@ impl LinuxAtspiProvider {
     }
 
     #[cfg(feature = "validation-state-injection")]
+    pub fn authorize_pointer_from_observation_for_validation(
+        &self,
+        binding: &AtspiElementBinding,
+        states: StateSet,
+        hit_test: AtspiPointerHitTest,
+    ) -> Result<AtspiPointerEligibilityPermit, AtspiPointerEligibilityError> {
+        self.authorize_pointer_from_observation(binding, states, hit_test)
+    }
+
+    #[cfg(feature = "validation-state-injection")]
     pub fn authorize_unavailable_for_validation(
         &self,
         binding: &AtspiElementBinding,
@@ -227,5 +238,31 @@ impl LinuxAtspiProvider {
         }
 
         Ok(AtspiActionEligibilityPermit::new(binding))
+    }
+
+    fn authorize_pointer_from_observation(
+        &self,
+        binding: &AtspiElementBinding,
+        states: StateSet,
+        hit_test: AtspiPointerHitTest,
+    ) -> Result<AtspiPointerEligibilityPermit, AtspiPointerEligibilityError> {
+        self.authorize_from_state_set(binding, states)
+            .map_err(AtspiPointerEligibilityError::Semantic)?;
+
+        if !states.contains(State::Visible) {
+            return Err(AtspiPointerEligibilityError::NotVisible);
+        }
+        if !states.contains(State::Showing) {
+            return Err(AtspiPointerEligibilityError::NotShowing);
+        }
+
+        match hit_test {
+            AtspiPointerHitTest::Unavailable => Err(AtspiPointerEligibilityError::HitTestUnavailable),
+            AtspiPointerHitTest::Other(_) => Err(AtspiPointerEligibilityError::Occluded),
+            AtspiPointerHitTest::Target(endpoint) if &endpoint == binding.endpoint() => {
+                Ok(AtspiPointerEligibilityPermit::new(binding))
+            }
+            AtspiPointerHitTest::Target(_) => Err(AtspiPointerEligibilityError::Occluded),
+        }
     }
 }
