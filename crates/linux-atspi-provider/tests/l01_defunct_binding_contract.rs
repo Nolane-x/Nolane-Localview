@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(all(target_os = "linux", feature = "validation-state-injection"))]
 
 use atspi::{State, StateSet};
 use localview_linux_atspi_provider::{
