@@ -27,65 +27,6 @@ pub const SPACE_VK: u16 = 0x20;
 const FOREGROUND_ESTABLISH_TIMEOUT: Duration = Duration::from_secs(2);
 const FOREGROUND_ESTABLISH_POLL: Duration = Duration::from_millis(25);
 
-#[link(name = "user32")]
-unsafe extern "system" {
-    #[link_name = "GetForegroundWindow"]
-    fn get_foreground_window() -> isize;
-    #[link_name = "GetWindowThreadProcessId"]
-    fn get_window_thread_process_id(window: isize, process_id: *mut u32) -> u32;
-    #[link_name = "AttachThreadInput"]
-    fn attach_thread_input(id_attach: u32, id_attach_to: u32, attach: i32) -> i32;
-    #[link_name = "SetForegroundWindow"]
-    fn set_foreground_window(window: isize) -> i32;
-}
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    #[link_name = "GetCurrentThreadId"]
-    fn get_current_thread_id() -> u32;
-}
-
-fn handoff_test_fixture_foreground(target_window: u64) -> bool {
-    let Ok(target_window) = isize::try_from(target_window) else {
-        return false;
-    };
-
-    // SAFETY: this helper is compiled only into the Windows real-provider test harness.
-    // It temporarily joins the harness thread to the current foreground input queue,
-    // attempts one foreground handoff to the already-created seed HWND, and always
-    // detaches before returning. The real oracle below still has to observe the target
-    // HWND as foreground; this helper cannot mint or fake shipping dispatch authority.
-    unsafe {
-        let foreground_window = get_foreground_window();
-        if foreground_window == target_window {
-            return true;
-        }
-
-        let current_thread = get_current_thread_id();
-        let foreground_thread = if foreground_window == 0 {
-            0
-        } else {
-            get_window_thread_process_id(foreground_window, std::ptr::null_mut())
-        };
-        let needs_attach = foreground_thread != 0 && foreground_thread != current_thread;
-        if needs_attach && attach_thread_input(current_thread, foreground_thread, 1) == 0 {
-            return false;
-        }
-
-        let set_result = set_foreground_window(target_window) != 0;
-
-        if needs_attach {
-            assert_ne!(
-                attach_thread_input(current_thread, foreground_thread, 0),
-                0,
-                "test fixture must detach the temporary foreground input queue"
-            );
-        }
-
-        set_result && get_foreground_window() == target_window
-    }
-}
-
 pub struct EdgeSeedProcess {
     child: Child,
     stdin: ChildStdin,
@@ -154,18 +95,6 @@ impl EdgeSeedProcess {
 
             if response.get("target_is_foreground").and_then(Value::as_bool) == Some(true) {
                 return response;
-            }
-
-            let target_window = truth_u64(&response, "window_handle");
-            if handoff_test_fixture_foreground(target_window) {
-                let observed = self.input_state();
-                if observed
-                    .get("target_is_foreground")
-                    .and_then(Value::as_bool)
-                    == Some(true)
-                {
-                    return observed;
-                }
             }
 
             assert!(
