@@ -423,19 +423,68 @@ internal sealed class EdgeWindow : Window
 
     private void RestoreVerifiedInputTargetForeground()
     {
-        Activate();
-        var handle = WindowHandle();
-        if (handle != 0)
+        var handle = (nint)WindowHandle();
+        if (handle == 0)
         {
-            _ = SetForegroundWindow((nint)handle);
+            return;
         }
-        _verifiedInputTarget.BringIntoView();
-        _verifiedInputTarget.Focus();
-        Keyboard.Focus(_verifiedInputTarget);
+
+        var foregroundHandle = GetForegroundWindow();
+        var currentThreadId = GetCurrentThreadId();
+        var foregroundThreadId = foregroundHandle == 0
+            ? 0
+            : GetWindowThreadProcessId(foregroundHandle, out _);
+        var attachedForegroundQueue = false;
+
+        if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId)
+        {
+            attachedForegroundQueue = AttachThreadInput(
+                currentThreadId,
+                foregroundThreadId,
+                true);
+        }
+
+        try
+        {
+            Activate();
+            _ = BringWindowToTop(handle);
+            _ = SetActiveWindow(handle);
+            _ = SetForegroundWindow(handle);
+            _verifiedInputTarget.BringIntoView();
+            _verifiedInputTarget.Focus();
+            Keyboard.Focus(_verifiedInputTarget);
+        }
+        finally
+        {
+            if (attachedForegroundQueue)
+            {
+                _ = AttachThreadInput(currentThreadId, foregroundThreadId, false);
+            }
+        }
     }
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint hWnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachThreadInput(
+        uint idAttach,
+        uint idAttachTo,
+        [MarshalAs(UnmanagedType.Bool)] bool attach);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BringWindowToTop(nint hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern nint SetActiveWindow(nint hWnd);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
