@@ -38,9 +38,13 @@ def on_stdin(source, condition):
 
     command = line.strip()
     if command == "destroy":
-        if button is not None:
-            button.destroy()
-            button = None
+        # Keep the AtkObject itself alive/exported, but sever its GTK backing
+        # association through GTK's public accessibility API. GTK3's
+        # GtkWidgetAccessible::ref_state_set then derives ATK_STATE_DEFUNCT
+        # from the missing backing widget. This deliberately does not inject
+        # an ATK state or send provider state over the control channel.
+        if old_accessible is not None:
+            old_accessible.set_widget(None)
         emit({"event": "destroyed"})
     elif command == "status":
         emit({"event": "status", "press_count": press_count})
