@@ -5,7 +5,7 @@ mod linux_real_provider_l01 {
         collections::{HashSet, VecDeque},
         fs,
         io::{BufRead, BufReader, Write},
-        path::{Path, PathBuf},
+        path::PathBuf,
         process::{Child, Command, Stdio},
         time::Duration,
     };
@@ -30,11 +30,9 @@ mod linux_real_provider_l01 {
 
     impl SeedProcess {
         fn launch() -> Self {
-            let seed_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../provider-seeds/linux-atspi-defunct-seed/seed.py");
-            let mut child = Command::new("python3")
-                .arg(seed_path)
-                .env("PYTHONUNBUFFERED", "1")
+            let seed_bin = std::env::var("LOCALVIEW_L01_SEED_BIN")
+                .expect("LOCALVIEW_L01_SEED_BIN must point to the compiled real GTK3 seed");
+            let mut child = Command::new(seed_bin)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
