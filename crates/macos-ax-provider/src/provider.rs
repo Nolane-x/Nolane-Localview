@@ -1,6 +1,7 @@
 #[path = "lib.rs"]
 mod permission;
 mod application_incarnation;
+mod bounded_escalation;
 mod element_binding;
 mod observer_application;
 mod observer_continuity;
@@ -9,6 +10,7 @@ mod sensitive_text;
 mod visual_permission;
 
 pub use application_incarnation::*;
+pub use bounded_escalation::*;
 pub use element_binding::*;
 pub use observer_application::*;
 pub use observer_continuity::*;

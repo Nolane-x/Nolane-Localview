@@ -111,6 +111,18 @@ impl VisualObservationPermissionProvider {
     pub fn observation_decision(&self) -> VisualObservationDecision {
         decision_from_revision(self.current_permission_revision())
     }
+
+    /// Validation-only constructor for deterministic authority contracts.
+    ///
+    /// This surface is absent from default/shipping builds. Real-provider
+    /// oracles must use [`Self::observation_decision`] so live CoreGraphics
+    /// permission remains the authority source.
+    #[cfg(feature = "validation-visual-permission-state")]
+    pub fn validation_decision_for_state(
+        state: VisualObservationPermissionState,
+    ) -> VisualObservationDecision {
+        decision_from_revision(permission_revision(state))
+    }
 }
 
 fn permission_revision(

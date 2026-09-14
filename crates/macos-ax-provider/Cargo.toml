@@ -11,6 +11,8 @@ path = "src/provider.rs"
 [features]
 default = []
 validation-pid-identity = []
+validation-visual-permission-state = []
 
 [dependencies]
+localview-resource-governor = { path = "../resource-governor" }
 thiserror.workspace = true
