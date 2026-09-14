@@ -2,6 +2,8 @@
 pub enum AtspiActionEligibilityError {
     #[error("AT-SPI accessible is DEFUNCT")]
     Defunct,
+    #[error("AT-SPI binding was already invalidated as DEFUNCT")]
+    AlreadyInvalidDefunct,
     #[error("AT-SPI state observation is unavailable")]
     ObservationUnavailable,
     #[error("AT-SPI provider incarnation does not match the binding")]
