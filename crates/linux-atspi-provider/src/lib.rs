@@ -12,6 +12,6 @@ pub use binding::{
     AtspiActionEligibilityPermit, AtspiBindingLifecycle, AtspiElementBinding, AtspiEndpoint,
 };
 #[cfg(target_os = "linux")]
-pub use error::AtspiActionEligibilityError;
+pub use error::{AtspiActionEligibilityError, AtspiProviderConnectionError};
 #[cfg(target_os = "linux")]
 pub use provider::LinuxAtspiProvider;

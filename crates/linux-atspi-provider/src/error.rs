@@ -1,4 +1,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AtspiProviderConnectionError {
+    #[error("AT-SPI accessibility bus is unavailable")]
+    AccessibilityBusUnavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AtspiActionEligibilityError {
     #[error("AT-SPI accessible is DEFUNCT")]
     Defunct,
