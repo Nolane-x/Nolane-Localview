@@ -54,6 +54,24 @@ impl LinuxAtspiProvider {
         self.authorize_from_state_set(binding, states)
     }
 
+    #[cfg(feature = "validation-state-injection")]
+    pub fn authorize_unavailable_for_validation(
+        &self,
+        binding: &AtspiElementBinding,
+    ) -> Result<AtspiActionEligibilityPermit, AtspiActionEligibilityError> {
+        if binding.lifecycle() == AtspiBindingLifecycle::InvalidDefunct {
+            return Err(AtspiActionEligibilityError::AlreadyInvalidDefunct);
+        }
+        if binding.provider_incarnation_ref() != &self.provider_incarnation_ref {
+            return Err(AtspiActionEligibilityError::ProviderIncarnationMismatch);
+        }
+        if binding.target_incarnation_ref() != &self.target_incarnation_ref {
+            return Err(AtspiActionEligibilityError::TargetIncarnationMismatch);
+        }
+
+        Err(AtspiActionEligibilityError::ObservationUnavailable)
+    }
+
     fn authorize_from_state_set(
         &self,
         binding: &AtspiElementBinding,
