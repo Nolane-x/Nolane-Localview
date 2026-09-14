@@ -4,7 +4,8 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::PathBuf,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 use localview_live_bridge::{
@@ -23,6 +24,8 @@ use uuid::Uuid;
 
 pub const INPUT_TARGET_AUTOMATION_ID: &str = "LocalViewW07W09VerifiedInputTarget";
 pub const SPACE_VK: u16 = 0x20;
+const FOREGROUND_ESTABLISH_TIMEOUT: Duration = Duration::from_secs(2);
+const FOREGROUND_ESTABLISH_POLL: Duration = Duration::from_millis(25);
 
 pub struct EdgeSeedProcess {
     child: Child,
@@ -75,17 +78,32 @@ impl EdgeSeedProcess {
     }
 
     pub fn prepare_input_target(&mut self) -> Value {
-        let response = self.command(json!({ "command": "prepare_verified_input_target" }));
-        assert_eq!(
-            response.get("ok").and_then(Value::as_bool),
-            Some(true),
-            "W07/W09 edge seed must provide the deterministic verified-input target fixture: {response}"
-        );
-        assert_eq!(
-            response.get("target_automation_id").and_then(Value::as_str),
-            Some(INPUT_TARGET_AUTOMATION_ID)
-        );
-        response
+        let deadline = Instant::now() + FOREGROUND_ESTABLISH_TIMEOUT;
+        let mut attempts = 0_u32;
+        loop {
+            attempts += 1;
+            let response = self.command(json!({ "command": "prepare_verified_input_target" }));
+            assert_eq!(
+                response.get("ok").and_then(Value::as_bool),
+                Some(true),
+                "W07/W09 edge seed must provide the verified-input target fixture: {response}"
+            );
+            assert_eq!(
+                response.get("target_automation_id").and_then(Value::as_str),
+                Some(INPUT_TARGET_AUTOMATION_ID)
+            );
+
+            if response.get("target_is_foreground").and_then(Value::as_bool) == Some(true) {
+                return response;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "verified-input fixture could not establish and observe the target as the actual foreground window within {:?} after {attempts} attempts; last oracle state: {response}",
+                FOREGROUND_ESTABLISH_TIMEOUT
+            );
+            thread::sleep(FOREGROUND_ESTABLISH_POLL);
+        }
     }
 
     pub fn input_state(&mut self) -> Value {
