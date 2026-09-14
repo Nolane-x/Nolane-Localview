@@ -190,7 +190,9 @@ mod linux_real_provider_l01 {
         .await
         .expect("connect shipping Linux AT-SPI provider");
         let endpoint = AtspiEndpoint::new(bus_name.clone(), object_path.clone());
-        let old_binding = provider.bind(endpoint.clone(), "cut:l01:real:old");
+        let old_binding = provider
+            .bind_initial(endpoint.clone(), "cut:l01:real:old")
+            .expect("initial real L01 binding must be unique");
         let old_revision = old_binding.binding_revision();
 
         provider
@@ -259,7 +261,9 @@ mod linux_real_provider_l01 {
             Err(AtspiActionEligibilityError::AlreadyInvalidDefunct)
         );
 
-        let fresh_binding = provider.reacquire(endpoint, "cut:l01:real:fresh");
+        let fresh_binding = provider
+            .reacquire_after_defunct(&old_binding, endpoint, "cut:l01:real:fresh")
+            .expect("L01 fresh binding must be derived from explicit DEFUNCT");
         let fresh_binding_revision_greater_than_old =
             fresh_binding.binding_revision() > old_revision;
         assert!(fresh_binding_revision_greater_than_old);
