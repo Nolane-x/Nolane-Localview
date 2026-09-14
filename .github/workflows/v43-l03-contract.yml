@@ -36,6 +36,7 @@ jobs:
           grep -F 'invisible_or_not_showing_target_cannot_mint_pointer_authority: test' <<<"$listed"
           grep -F 'pointer_authority_requires_visible_showing_and_exact_target_hit: test' <<<"$listed"
           grep -F 'defunct_semantics_still_win_before_pointer_exposure: test' <<<"$listed"
+          grep -F 'shipping_pointer_path_requires_live_provider_observation: test' <<<"$listed"
       - name: Run Linux L03 contract
         run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l03_visible_occlusion_contract -- --nocapture --test-threads=1
       - name: Retain Linux L01 contract
