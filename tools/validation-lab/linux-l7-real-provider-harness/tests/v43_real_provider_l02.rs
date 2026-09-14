@@ -133,6 +133,12 @@ mod linux_real_provider_l02 {
         }
     }
 
+    fn press_count(seed: &mut SeedProcess) -> u64 {
+        let status = seed.command("status");
+        assert_eq!(status["event"], "status");
+        status["press_count"].as_u64().expect("press_count")
+    }
+
     fn counts(seed: &mut SeedProcess) -> (u64, u64, u64) {
         let status = seed.command("status");
         assert_eq!(status["event"], "status");
@@ -211,10 +217,10 @@ mod linux_real_provider_l02 {
         assert!(action.do_action(0).await.expect("initial real action"));
 
         let initial_action_deadline = Instant::now() + Duration::from_secs(2);
-        let (before_destroy_total, before_destroy_original, before_destroy_replacement) = loop {
-            let values = counts(&mut seed);
-            if values == (1, 1, 0) {
-                break values;
+        let before_destroy_total = loop {
+            let total = press_count(&mut seed);
+            if total == 1 {
+                break total;
             }
             assert!(Instant::now() < initial_action_deadline, "initial action count mismatch");
             sleep(Duration::from_millis(50)).await;
@@ -245,6 +251,12 @@ mod linux_real_provider_l02 {
             recreated["event"], "recreated",
             "real seed must recreate a live backing widget behind the retained AT-SPI endpoint"
         );
+
+        let (after_recreate_before_action_total, before_destroy_original, before_destroy_replacement) =
+            counts(&mut seed);
+        assert_eq!(after_recreate_before_action_total, before_destroy_total);
+        assert_eq!(before_destroy_original, 1);
+        assert_eq!(before_destroy_replacement, 0);
 
         let live_again_deadline = Instant::now() + Duration::from_secs(5);
         loop {
