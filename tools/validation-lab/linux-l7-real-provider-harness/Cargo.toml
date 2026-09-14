@@ -11,6 +11,10 @@ publish = false
 name = "v43_real_provider_l01"
 path = "tests/v43_real_provider_l01.rs"
 
+[[test]]
+name = "v43_real_provider_l02"
+path = "tests/v43_real_provider_l02.rs"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 localview-linux-atspi-provider = { path = "../../../crates/linux-atspi-provider" }
 localview-protocol = { path = "../../../crates/protocol" }
