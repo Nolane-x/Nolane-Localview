@@ -37,6 +37,15 @@ jobs:
           artifact_dir="$RUNNER_TEMP/localview-v43-m09"
           mkdir -p "$artifact_dir"
           echo "LOCALVIEW_L7_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Compile exact-head M09 AppKit seed
+        run: |
+          set -euo pipefail
+          seed_src="tools/validation-lab/macos-l7-real-provider-harness/fixtures/m09-sensitive-field-seed.swift"
+          seed_bin="$RUNNER_TEMP/localview-v43-m09-seed"
+          test -f "$seed_src"
+          xcrun swiftc "$seed_src" -framework AppKit -o "$seed_bin"
+          test -x "$seed_bin"
+          echo "LOCALVIEW_M09_SEED_EXECUTABLE=$seed_bin" >> "$GITHUB_ENV"
       - name: Require exact M09 real-provider registration
         run: |
           set -euo pipefail
