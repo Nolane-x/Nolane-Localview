@@ -1,0 +1,44 @@
+name: V4.3 L01 DEFUNCT Binding Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-l01-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  l01-contract:
+    name: L01 DEFUNCT invalidates old action authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+      - name: Bind exact L01 candidate
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$expected" ]; then
+            echo "L01 checkout SHA mismatch: actual=$actual expected=$expected" >&2
+            exit 1
+          fi
+      - name: Verify Rust 1.85 dependency preflight
+        run: |
+          set -euo pipefail
+          cargo +1.85.0 check -p localview-linux-atspi-provider --all-targets
+          cargo +1.85.0 tree -p localview-linux-atspi-provider | grep -F 'atspi v0.30.0'
+      - name: Run L01 DEFUNCT binding contract
+        run: |
+          set -euo pipefail
+          cargo +1.85.0 test -p localview-linux-atspi-provider --features validation-state-injection --test l01_defunct_binding_contract -- --nocapture
