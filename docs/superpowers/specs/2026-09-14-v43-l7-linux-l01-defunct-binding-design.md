@@ -40,7 +40,7 @@ Its responsibility is the Linux AT-SPI provider boundary. It owns live AT-SPI tr
 
 The crate may depend on `localview-native-provider` and `localview-protocol`; the inverse dependency is forbidden. `localview-native-provider` must not gain `atspi`, `zbus`, portal, or PipeWire dependencies as part of L01.
 
-For the first implementation, use the current Rust AT-SPI stack (`atspi` 0.30.x) with a version pinned by the implementation plan after an MSRV-compatible resolution is proven against the repository's Rust 1.85 floor. L01 must not use a floating wildcard dependency.
+The first implementation targets exact `atspi = 0.30.0`, the current release verified during design. The implementation plan must include an MSRV/dependency-resolution preflight against the repository's Rust 1.85 floor before production code is written. If exact 0.30.0 cannot satisfy that preflight, the design spec must be amended and re-reviewed before any alternate AT-SPI version is used. Floating/wildcard dependency selection is forbidden.
 
 ## 4. Binding model
 
@@ -158,14 +158,14 @@ The real-provider test must prove, in order:
 2. provider acquires a binding to the exact seed accessible;
 3. a live state read does not contain DEFUNCT;
 4. L01 authorization succeeds for that live binding;
-5. seed destroys or invalidates the backing accessible such that the real AT-SPI endpoint reports DEFUNCT for the old accessible reference, when supported by the real toolkit/provider lifecycle;
+5. seed destroys or invalidates the backing accessible such that the real AT-SPI endpoint reports DEFUNCT for the old accessible reference;
 6. provider observes DEFUNCT from AT-SPI itself;
 7. the old binding becomes terminally invalid;
 8. action authorization from the old binding is denied with typed DEFUNCT/invalid-binding semantics;
 9. no action dispatch occurs after that denial;
 10. if the same object path or semantic attributes are reused by a replacement object, the old binding still cannot revive; only reacquisition may create a new binding.
 
-If a chosen real toolkit does not expose an observable DEFUNCT state after destruction and instead removes the object immediately from D-Bus, that environment is not sufficient to claim the DEFUNCT oracle. The implementation must either choose a seed/toolkit that exposes the real state or report the oracle as unsupported; it must not simulate DEFUNCT inside production provider code.
+If a candidate toolkit removes the object immediately from D-Bus instead of exposing an observable DEFUNCT state for the old reference, that toolkit is insufficient for the L01 oracle. The implementation must choose another real seed/toolkit or lifecycle construction that produces the platform DEFUNCT fact. A merely unavailable/removed object may be tested as a fail-closed secondary case, but it cannot substitute for the required DEFUNCT proof. **L01 must not merge without an actual platform-observed DEFUNCT oracle.** Production code must never simulate or inject DEFUNCT to satisfy this gate.
 
 ## 11. Evidence artifact
 
@@ -181,7 +181,7 @@ The Linux L01 real-provider workflow should publish a compact machine-readable r
 - old binding authorization after DEFUNCT: denied;
 - denial class: invalid/defunct binding;
 - dispatch count after DEFUNCT: zero;
-- old binding revival attempted: false/success denied;
+- `old_binding_revival_succeeded: false`;
 - reacquisition outcome if the replacement-object subcase is exercised.
 
 Do not persist raw environment-specific D-Bus data unless needed for reproducibility. Evidence must not turn bus/object identifiers into a new cross-session durable authority.
