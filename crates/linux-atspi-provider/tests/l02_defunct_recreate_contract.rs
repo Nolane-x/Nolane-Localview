@@ -2,8 +2,8 @@
 
 use atspi::{State, StateSet};
 use localview_linux_atspi_provider::{
-    AtspiActionEligibilityError, AtspiBindingLifecycle, AtspiEndpoint, AtspiReacquireError,
-    LinuxAtspiProvider,
+    AtspiActionEligibilityError, AtspiBindError, AtspiBindingLifecycle, AtspiEndpoint,
+    AtspiReacquireError, LinuxAtspiProvider,
 };
 use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
@@ -22,20 +22,41 @@ fn provider() -> LinuxAtspiProvider {
 }
 
 #[test]
-fn live_binding_cannot_be_used_as_recreate_authority() {
+fn duplicate_initial_bind_cannot_bypass_recreate_gate() {
     let provider = provider();
-    let old = provider.bind(
-        AtspiEndpoint::new(":1.220", "/org/a11y/atspi/accessible/22"),
-        "cut:l02:old-live",
-    );
+    let endpoint = AtspiEndpoint::new(":1.220", "/org/a11y/atspi/accessible/21");
+    let first = provider
+        .bind_initial(endpoint.clone(), "cut:l02:first")
+        .expect("first acquisition for an endpoint is allowed");
 
     assert_eq!(
-        provider.reacquire_after_defunct(
-            &old,
-            old.endpoint().clone(),
-            "cut:l02:replacement-too-early",
-        ),
-        Err(AtspiReacquireError::PreviousBindingNotDefunct)
+        provider
+            .bind_initial(endpoint, "cut:l02:bypass")
+            .expect_err("same endpoint cannot be minted again as an initial binding"),
+        AtspiBindError::EndpointAlreadyBound
+    );
+    assert_eq!(first.lifecycle(), AtspiBindingLifecycle::Live);
+}
+
+#[test]
+fn live_binding_cannot_be_used_as_recreate_authority() {
+    let provider = provider();
+    let old = provider
+        .bind_initial(
+            AtspiEndpoint::new(":1.220", "/org/a11y/atspi/accessible/22"),
+            "cut:l02:old-live",
+        )
+        .expect("initial binding");
+
+    assert_eq!(
+        provider
+            .reacquire_after_defunct(
+                &old,
+                old.endpoint().clone(),
+                "cut:l02:replacement-too-early",
+            )
+            .expect_err("live binding must not authorize recreation"),
+        AtspiReacquireError::PreviousBindingNotDefunct
     );
     assert_eq!(old.lifecycle(), AtspiBindingLifecycle::Live);
 }
@@ -43,10 +64,12 @@ fn live_binding_cannot_be_used_as_recreate_authority() {
 #[test]
 fn recreate_requires_previous_binding_from_same_provider_and_target_incarnation() {
     let owner = provider();
-    let old = owner.bind(
-        AtspiEndpoint::new(":1.220", "/org/a11y/atspi/accessible/23"),
-        "cut:l02:foreign-old",
-    );
+    let old = owner
+        .bind_initial(
+            AtspiEndpoint::new(":1.220", "/org/a11y/atspi/accessible/23"),
+            "cut:l02:foreign-old",
+        )
+        .expect("initial binding");
     assert_eq!(
         owner.authorize_from_state_set_for_validation(&old, StateSet::new(State::Defunct)),
         Err(AtspiActionEligibilityError::Defunct)
@@ -57,12 +80,14 @@ fn recreate_requires_previous_binding_from_same_provider_and_target_incarnation(
         "target:linux-atspi:l02:stable",
     );
     assert_eq!(
-        wrong_provider.reacquire_after_defunct(
-            &old,
-            old.endpoint().clone(),
-            "cut:l02:wrong-provider",
-        ),
-        Err(AtspiReacquireError::ProviderIncarnationMismatch)
+        wrong_provider
+            .reacquire_after_defunct(
+                &old,
+                old.endpoint().clone(),
+                "cut:l02:wrong-provider",
+            )
+            .expect_err("foreign provider cannot reuse the old binding"),
+        AtspiReacquireError::ProviderIncarnationMismatch
     );
 
     let wrong_target = provider_with(
@@ -70,20 +95,24 @@ fn recreate_requires_previous_binding_from_same_provider_and_target_incarnation(
         "target:linux-atspi:l02:other",
     );
     assert_eq!(
-        wrong_target.reacquire_after_defunct(
-            &old,
-            old.endpoint().clone(),
-            "cut:l02:wrong-target",
-        ),
-        Err(AtspiReacquireError::TargetIncarnationMismatch)
+        wrong_target
+            .reacquire_after_defunct(
+                &old,
+                old.endpoint().clone(),
+                "cut:l02:wrong-target",
+            )
+            .expect_err("foreign target cannot reuse the old binding"),
+        AtspiReacquireError::TargetIncarnationMismatch
     );
 }
 
 #[test]
-fn defunct_recreate_mints_fresh_authority_without_resurrecting_old_binding() {
+fn defunct_recreate_mints_fresh_authority_without_resurrecting_or_replaying_old_binding() {
     let provider = provider();
     let endpoint = AtspiEndpoint::new(":1.220", "/org/a11y/atspi/accessible/24");
-    let old = provider.bind(endpoint.clone(), "cut:l02:old");
+    let old = provider
+        .bind_initial(endpoint.clone(), "cut:l02:old")
+        .expect("initial binding");
     let old_revision = old.binding_revision();
 
     assert!(provider
@@ -99,7 +128,7 @@ fn defunct_recreate_mints_fresh_authority_without_resurrecting_old_binding() {
     assert_eq!(old.lifecycle(), AtspiBindingLifecycle::InvalidDefunct);
 
     let fresh = provider
-        .reacquire_after_defunct(&old, endpoint, "cut:l02:fresh")
+        .reacquire_after_defunct(&old, endpoint.clone(), "cut:l02:fresh")
         .expect("typed DEFUNCT is the only authority for L02 recreation");
 
     assert!(fresh.binding_revision() > old_revision);
@@ -114,4 +143,11 @@ fn defunct_recreate_mints_fresh_authority_without_resurrecting_old_binding() {
     assert!(provider
         .authorize_from_state_set_for_validation(&fresh, StateSet::empty())
         .is_ok());
+
+    assert_eq!(
+        provider
+            .reacquire_after_defunct(&old, endpoint, "cut:l02:replay")
+            .expect_err("old DEFUNCT authority is single-use"),
+        AtspiReacquireError::PreviousBindingSuperseded
+    );
 }
