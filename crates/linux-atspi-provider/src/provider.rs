@@ -14,8 +14,8 @@ use crate::{
     AtspiActionEligibilityError, AtspiActionEligibilityPermit, AtspiBindError,
     AtspiBindingLifecycle, AtspiElementBinding, AtspiEndpoint, AtspiEventReliabilityProfile,
     AtspiObservationOrigin, AtspiPointerEligibilityError, AtspiPointerEligibilityPermit,
-    AtspiPointerHitTest, AtspiProviderConnectionError, AtspiReacquireError,
-    AtspiSemanticDimension, AtspiStateObservation,
+    AtspiPointerHitTest, AtspiProviderConnectionError, AtspiReacquireError, AtspiSemanticDimension,
+    AtspiStateObservation,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -109,7 +109,6 @@ impl LinuxAtspiProvider {
     }
 
     pub fn accessibility_bus_lifecycle(&self) -> AtspiAccessibilityBusLifecycle {
-        self.refresh_closed_transport_state();
         self.accessibility_bus
             .lock()
             .expect("AT-SPI accessibility bus mutex poisoned")
@@ -117,7 +116,6 @@ impl LinuxAtspiProvider {
     }
 
     pub fn accessibility_bus_incarnation_ref(&self) -> AtspiAccessibilityBusIncarnationRef {
-        self.refresh_closed_transport_state();
         self.accessibility_bus
             .lock()
             .expect("AT-SPI accessibility bus mutex poisoned")
@@ -191,7 +189,6 @@ impl LinuxAtspiProvider {
         endpoint: AtspiEndpoint,
         acquisition_cut_ref: impl Into<String>,
     ) -> Result<AtspiElementBinding, AtspiBindError> {
-        self.refresh_closed_transport_state();
         let bus_incarnation = {
             let bus = self
                 .accessibility_bus
@@ -244,7 +241,6 @@ impl LinuxAtspiProvider {
             return Err(AtspiReacquireError::PreviousBindingNotDefunct);
         }
 
-        self.refresh_closed_transport_state();
         let bus_incarnation = {
             let bus = self
                 .accessibility_bus
@@ -273,7 +269,8 @@ impl LinuxAtspiProvider {
         {
             return Err(AtspiReacquireError::PreviousBindingSuperseded);
         }
-        if replacement_endpoint != previous_endpoint && authority.contains_key(&replacement_endpoint)
+        if replacement_endpoint != previous_endpoint
+            && authority.contains_key(&replacement_endpoint)
         {
             return Err(AtspiReacquireError::ReplacementEndpointAlreadyBound);
         }
@@ -327,7 +324,6 @@ impl LinuxAtspiProvider {
             return Err(AtspiReacquireError::TargetIncarnationMismatch);
         }
 
-        self.refresh_closed_transport_state();
         let current_bus = {
             let bus = self
                 .accessibility_bus
@@ -356,7 +352,8 @@ impl LinuxAtspiProvider {
         {
             return Err(AtspiReacquireError::PreviousBindingSuperseded);
         }
-        if replacement_endpoint != previous_endpoint && authority.contains_key(&replacement_endpoint)
+        if replacement_endpoint != previous_endpoint
+            && authority.contains_key(&replacement_endpoint)
         {
             return Err(AtspiReacquireError::ReplacementEndpointAlreadyBound);
         }
@@ -405,19 +402,28 @@ impl LinuxAtspiProvider {
         binding: &AtspiElementBinding,
     ) -> Result<AtspiStateObservation, AtspiActionEligibilityError> {
         self.ensure_binding_authority(binding)?;
-        let connection = self.connection_for_live_authority()?;
-        let proxy = AccessibleProxy::builder(connection.connection())
+        let (bus_incarnation, connection) = self.connection_for_live_authority()?;
+        let builder = AccessibleProxy::builder(connection.connection())
             .destination(binding.endpoint().bus_name())
-            .map_err(|_| self.observation_transport_error())?
+            .map_err(|_| AtspiActionEligibilityError::ObservationUnavailable)?
             .path(binding.endpoint().object_path())
-            .map_err(|_| self.observation_transport_error())?
-            .build()
-            .await
-            .map_err(|_| self.observation_transport_error())?;
-        let states = proxy
-            .get_state()
-            .await
-            .map_err(|_| self.observation_transport_error())?;
+            .map_err(|_| AtspiActionEligibilityError::ObservationUnavailable)?;
+        let proxy = match builder.build().await {
+            Ok(proxy) => proxy,
+            Err(_) => {
+                return Err(self
+                    .classify_transport_failure(bus_incarnation, &connection)
+                    .await);
+            }
+        };
+        let states = match proxy.get_state().await {
+            Ok(states) => states,
+            Err(_) => {
+                return Err(self
+                    .classify_transport_failure(bus_incarnation, &connection)
+                    .await);
+            }
+        };
 
         Ok(AtspiStateObservation::from_direct_reconciliation(
             binding, states,
@@ -429,9 +435,8 @@ impl LinuxAtspiProvider {
         binding: &AtspiElementBinding,
     ) -> Result<AtspiActionEligibilityPermit, AtspiActionEligibilityError> {
         let observation = self.reconcile_action_state(binding).await?;
-        let reliability = AtspiEventReliabilityProfile::linux_toolkit_default([
-            AtspiSemanticDimension::StateSet,
-        ]);
+        let reliability =
+            AtspiEventReliabilityProfile::linux_toolkit_default([AtspiSemanticDimension::StateSet]);
         self.authorize_action_from_observation(binding, &reliability, &observation)
     }
 
@@ -442,27 +447,41 @@ impl LinuxAtspiProvider {
         self.ensure_binding_authority(binding)
             .map_err(AtspiPointerEligibilityError::Semantic)?;
 
-        let connection = self
+        let (bus_incarnation, connection) = self
             .connection_for_live_authority()
             .map_err(AtspiPointerEligibilityError::Semantic)?;
         let bus = connection.connection();
-        let accessible = AccessibleProxy::builder(bus)
+        let builder = AccessibleProxy::builder(bus)
             .destination(binding.endpoint().bus_name())
             .map_err(|_| {
-                AtspiPointerEligibilityError::Semantic(self.observation_transport_error())
+                AtspiPointerEligibilityError::Semantic(
+                    AtspiActionEligibilityError::ObservationUnavailable,
+                )
             })?
             .path(binding.endpoint().object_path())
             .map_err(|_| {
-                AtspiPointerEligibilityError::Semantic(self.observation_transport_error())
-            })?
-            .build()
-            .await
-            .map_err(|_| {
-                AtspiPointerEligibilityError::Semantic(self.observation_transport_error())
+                AtspiPointerEligibilityError::Semantic(
+                    AtspiActionEligibilityError::ObservationUnavailable,
+                )
             })?;
-        let states = accessible.get_state().await.map_err(|_| {
-            AtspiPointerEligibilityError::Semantic(self.observation_transport_error())
-        })?;
+        let accessible = match builder.build().await {
+            Ok(accessible) => accessible,
+            Err(_) => {
+                return Err(AtspiPointerEligibilityError::Semantic(
+                    self.classify_transport_failure(bus_incarnation, &connection)
+                        .await,
+                ));
+            }
+        };
+        let states = match accessible.get_state().await {
+            Ok(states) => states,
+            Err(_) => {
+                return Err(AtspiPointerEligibilityError::Semantic(
+                    self.classify_transport_failure(bus_incarnation, &connection)
+                        .await,
+                ));
+            }
+        };
 
         self.authorize_from_state_set(binding, states)
             .map_err(AtspiPointerEligibilityError::Semantic)?;
@@ -500,8 +519,8 @@ impl LinuxAtspiProvider {
             .get_layer()
             .await
             .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
-        let target_layer_rank =
-            layer_stack_rank(target_layer).ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let target_layer_rank = layer_stack_rank(target_layer)
+            .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
         let target_mdi_z = if matches!(target_layer, Layer::Window | Layer::Mdi) {
             Some(
                 component
@@ -719,43 +738,12 @@ impl LinuxAtspiProvider {
         Err(AtspiActionEligibilityError::ObservationUnavailable)
     }
 
-    fn refresh_closed_transport_state(&self) {
-        let connection = {
-            let bus = self
-                .accessibility_bus
-                .lock()
-                .expect("AT-SPI accessibility bus mutex poisoned");
-            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
-                return;
-            }
-            bus.connection.clone()
-        };
-
-        let Some(connection) = connection else {
-            return;
-        };
-        if !connection.connection().is_closed() {
-            return;
-        }
-
-        let mut bus = self
-            .accessibility_bus
-            .lock()
-            .expect("AT-SPI accessibility bus mutex poisoned");
-        if bus
-            .connection
-            .as_ref()
-            .is_some_and(|current| current.connection().is_closed())
-        {
-            bus.lifecycle = AtspiAccessibilityBusLifecycle::Disconnected;
-            bus.connection = None;
-        }
-    }
-
     fn connection_for_live_authority(
         &self,
-    ) -> Result<AccessibilityConnection, AtspiActionEligibilityError> {
-        self.refresh_closed_transport_state();
+    ) -> Result<
+        (AtspiAccessibilityBusIncarnationRef, AccessibilityConnection),
+        AtspiActionEligibilityError,
+    > {
         let bus = self
             .accessibility_bus
             .lock()
@@ -763,24 +751,50 @@ impl LinuxAtspiProvider {
         if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
             return Err(AtspiActionEligibilityError::AccessibilityBusDisconnected);
         }
-        bus.connection
+        let connection = bus
+            .connection
             .clone()
-            .ok_or(AtspiActionEligibilityError::ObservationUnavailable)
+            .ok_or(AtspiActionEligibilityError::ObservationUnavailable)?;
+        Ok((bus.incarnation_ref, connection))
     }
 
-    fn observation_transport_error(&self) -> AtspiActionEligibilityError {
-        self.refresh_closed_transport_state();
-        if self
+    async fn classify_transport_failure(
+        &self,
+        failed_bus_incarnation: AtspiAccessibilityBusIncarnationRef,
+        connection: &AccessibilityConnection,
+    ) -> AtspiActionEligibilityError {
+        // zbus 5.13 has no synchronous closed-state accessor. Probe the
+        // well-known bus daemon only after a real operation failed: a
+        // target-local failure leaves the bus connected, while a dead
+        // transport fails this probe and fences the shared bus epoch.
+        let bus_alive = connection
+            .connection()
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "GetId",
+                &(),
+            )
+            .await
+            .is_ok();
+        if bus_alive {
+            return AtspiActionEligibilityError::ObservationUnavailable;
+        }
+
+        let mut bus = self
             .accessibility_bus
             .lock()
-            .expect("AT-SPI accessibility bus mutex poisoned")
-            .lifecycle
-            == AtspiAccessibilityBusLifecycle::Disconnected
-        {
-            AtspiActionEligibilityError::AccessibilityBusDisconnected
-        } else {
-            AtspiActionEligibilityError::ObservationUnavailable
+            .expect("AT-SPI accessibility bus mutex poisoned");
+        if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
+            return AtspiActionEligibilityError::AccessibilityBusDisconnected;
         }
+        if bus.incarnation_ref != failed_bus_incarnation {
+            return AtspiActionEligibilityError::AccessibilityBusIncarnationMismatch;
+        }
+        bus.lifecycle = AtspiAccessibilityBusLifecycle::Disconnected;
+        bus.connection = None;
+        AtspiActionEligibilityError::AccessibilityBusDisconnected
     }
 
     fn ensure_binding_authority(
@@ -797,7 +811,6 @@ impl LinuxAtspiProvider {
             return Err(AtspiActionEligibilityError::TargetIncarnationMismatch);
         }
 
-        self.refresh_closed_transport_state();
         let bus = self
             .accessibility_bus
             .lock()
@@ -868,7 +881,9 @@ impl LinuxAtspiProvider {
         }
 
         match hit_test {
-            AtspiPointerHitTest::Unavailable => Err(AtspiPointerEligibilityError::HitTestUnavailable),
+            AtspiPointerHitTest::Unavailable => {
+                Err(AtspiPointerEligibilityError::HitTestUnavailable)
+            }
             AtspiPointerHitTest::Other(_) => Err(AtspiPointerEligibilityError::Occluded),
             AtspiPointerHitTest::Target(endpoint) if &endpoint == binding.endpoint() => {
                 Ok(AtspiPointerEligibilityPermit::new(binding))
