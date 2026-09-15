@@ -3,7 +3,7 @@
 use atspi::{State, StateSet};
 use localview_linux_atspi_provider::{
     AtspiAccessibilityBusLifecycle, AtspiActionEligibilityError, AtspiBindError, AtspiEndpoint,
-    AtspiProviderConnectionError, LinuxAtspiProvider,
+    AtspiPointerHitTest, AtspiProviderConnectionError, LinuxAtspiProvider,
 };
 use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
@@ -37,6 +37,60 @@ fn accessibility_bus_disconnect_immediately_fences_old_binding_authority() {
     assert_eq!(
         provider.authorize_from_state_set_for_validation(&binding, live_states()),
         Err(AtspiActionEligibilityError::AccessibilityBusDisconnected)
+    );
+}
+
+#[test]
+fn provider_clones_share_accessibility_bus_disconnect_fence() {
+    let mut provider = provider();
+    let peer = provider.clone();
+    let binding = provider
+        .bind_initial(
+            AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/50-clone"),
+            "cut:l05:clone:old",
+        )
+        .expect("initial clone-shared L05 binding");
+
+    provider.mark_accessibility_bus_disconnected();
+
+    assert_eq!(
+        peer.accessibility_bus_lifecycle(),
+        AtspiAccessibilityBusLifecycle::Disconnected,
+        "all provider clones must observe the same bus lifecycle fence"
+    );
+    assert_eq!(
+        peer.authorize_from_state_set_for_validation(&binding, live_states()),
+        Err(AtspiActionEligibilityError::AccessibilityBusDisconnected),
+        "a provider clone must not retain authority from the disconnected bus"
+    );
+}
+
+#[test]
+fn provider_clones_share_successful_reconnect_epoch() {
+    let mut provider = provider();
+    let mut peer = provider.clone();
+    let endpoint = AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/50-clone-reconnect");
+    let old = provider
+        .bind_initial(endpoint, "cut:l05:clone:reconnect:old")
+        .expect("initial clone-shared reconnect binding");
+    let old_bus = *old.accessibility_bus_incarnation_ref();
+
+    provider.mark_accessibility_bus_disconnected();
+    let fresh_bus = peer
+        .reconnect_accessibility_bus_for_validation()
+        .expect("reconnect through one clone must rotate the shared bus authority");
+
+    assert_ne!(fresh_bus, old_bus);
+    assert_eq!(provider.accessibility_bus_incarnation_ref(), fresh_bus);
+    assert_eq!(peer.accessibility_bus_incarnation_ref(), fresh_bus);
+    assert_eq!(
+        provider.accessibility_bus_lifecycle(),
+        AtspiAccessibilityBusLifecycle::Connected
+    );
+    assert_eq!(
+        provider.authorize_from_state_set_for_validation(&old, live_states()),
+        Err(AtspiActionEligibilityError::AccessibilityBusIncarnationMismatch),
+        "a reconnect through one clone must supersede old bindings through every clone"
     );
 }
 
@@ -115,7 +169,7 @@ fn explicit_reacquire_after_bus_reconnect_mints_fresh_binding_on_new_bus() {
 }
 
 #[test]
-fn observations_and_permits_are_bound_to_accessibility_bus_incarnation() {
+fn observations_and_action_permits_are_bound_to_accessibility_bus_incarnation() {
     let mut provider = provider();
     let endpoint = AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/53");
     let old = provider
@@ -158,6 +212,73 @@ fn observations_and_permits_are_bound_to_accessibility_bus_incarnation() {
     assert_ne!(
         old_permit.accessibility_bus_incarnation_ref(),
         fresh_permit.accessibility_bus_incarnation_ref()
+    );
+}
+
+#[test]
+fn pointer_permits_are_bound_to_accessibility_bus_incarnation() {
+    let mut provider = provider();
+    let endpoint = AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/54");
+    let old = provider
+        .bind_initial(endpoint.clone(), "cut:l05:pointer:old")
+        .expect("initial pointer binding");
+    let old_permit = provider
+        .authorize_pointer_from_observation_for_validation(
+            &old,
+            live_states(),
+            AtspiPointerHitTest::Target(endpoint.clone()),
+        )
+        .expect("old-bus pointer permit");
+    assert_eq!(
+        old_permit.accessibility_bus_incarnation_ref(),
+        old.accessibility_bus_incarnation_ref()
+    );
+
+    provider.mark_accessibility_bus_disconnected();
+    provider
+        .reconnect_accessibility_bus_for_validation()
+        .expect("fresh validation bus");
+    let fresh = provider
+        .reacquire_after_bus_reconnect(&old, endpoint.clone(), "cut:l05:pointer:fresh")
+        .expect("fresh pointer binding");
+    let fresh_permit = provider
+        .authorize_pointer_from_observation_for_validation(
+            &fresh,
+            live_states(),
+            AtspiPointerHitTest::Target(endpoint),
+        )
+        .expect("fresh-bus pointer permit");
+
+    assert_ne!(
+        old_permit.accessibility_bus_incarnation_ref(),
+        fresh_permit.accessibility_bus_incarnation_ref()
+    );
+    assert_eq!(
+        fresh_permit.accessibility_bus_incarnation_ref(),
+        fresh.accessibility_bus_incarnation_ref()
+    );
+}
+
+#[test]
+fn defunct_terminal_state_still_precedes_bus_disconnect_denial() {
+    let mut provider = provider();
+    let binding = provider
+        .bind_initial(
+            AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/55"),
+            "cut:l05:defunct:old",
+        )
+        .expect("initial DEFUNCT-retention binding");
+    let defunct_states = live_states() | StateSet::new(State::Defunct);
+
+    assert_eq!(
+        provider.authorize_from_state_set_for_validation(&binding, defunct_states),
+        Err(AtspiActionEligibilityError::Defunct)
+    );
+    provider.mark_accessibility_bus_disconnected();
+    assert_eq!(
+        provider.authorize_from_state_set_for_validation(&binding, live_states()),
+        Err(AtspiActionEligibilityError::AlreadyInvalidDefunct),
+        "L01 terminal DEFUNCT must not be rewritten into a weaker bus-disconnect diagnosis"
     );
 }
 
