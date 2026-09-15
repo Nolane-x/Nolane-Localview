@@ -11,6 +11,10 @@ on:
       - 'crates/linux-atspi-provider/**'
       - '.github/workflows/v43-l05-contract.yml'
 
+concurrency:
+  group: localview-v43-l05-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -32,10 +36,14 @@ jobs:
           set -euo pipefail
           listed="$(cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l05_bus_reconnect_contract -- --list)"
           grep -F 'accessibility_bus_disconnect_immediately_fences_old_binding_authority: test' <<<"$listed"
+          grep -F 'provider_clones_share_accessibility_bus_disconnect_fence: test' <<<"$listed"
+          grep -F 'provider_clones_share_successful_reconnect_epoch: test' <<<"$listed"
           grep -F 'disconnected_bus_cannot_create_unobserved_initial_binding: test' <<<"$listed"
           grep -F 'successful_bus_reconnect_changes_incarnation_and_old_binding_cannot_revive: test' <<<"$listed"
           grep -F 'explicit_reacquire_after_bus_reconnect_mints_fresh_binding_on_new_bus: test' <<<"$listed"
-          grep -F 'observations_and_permits_are_bound_to_accessibility_bus_incarnation: test' <<<"$listed"
+          grep -F 'observations_and_action_permits_are_bound_to_accessibility_bus_incarnation: test' <<<"$listed"
+          grep -F 'pointer_permits_are_bound_to_accessibility_bus_incarnation: test' <<<"$listed"
+          grep -F 'defunct_terminal_state_still_precedes_bus_disconnect_denial: test' <<<"$listed"
           grep -F 'reconnect_failure_stays_disconnected_and_does_not_advance_bus_incarnation: test' <<<"$listed"
           grep -F 'reconnect_without_disconnect_is_rejected_instead_of_rotating_authority: test' <<<"$listed"
       - name: Run Linux L05 contract
