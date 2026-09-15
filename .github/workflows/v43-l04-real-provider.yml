@@ -1,0 +1,121 @@
+name: V4.3 L04 Real Provider Seed
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: localview-v43-l04-real-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  l04-real-provider:
+    name: L04 real AT-SPI missed-event reconciliation oracle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+      - name: Install real GTK/ATK/AT-SPI oracle dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dbus-x11 xvfb at-spi2-core libatk-adaptor \
+            build-essential pkg-config libgtk-3-dev
+      - name: Bind exact L04 real-provider candidate
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$expected" ]; then
+            echo "L04 real-provider checkout SHA mismatch: actual=$actual expected=$expected" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/localview-v43-l04"
+          printf '{"candidate_sha":"%s","workflow":"v43-l04-real-provider"}\n' "$actual" \
+            > "$RUNNER_TEMP/localview-v43-l04/run-context.json"
+      - name: Compile silent-state GTK/ATK provider seed
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra -Werror \
+            tools/provider-seeds/linux-atspi-missed-event-seed/seed.c \
+            -o "$RUNNER_TEMP/localview-v43-l04/seed" \
+            $(pkg-config --cflags --libs gtk+-3.0 atk)
+      - name: Require exact L04 real-provider test registration
+        run: |
+          set -euo pipefail
+          cargo +1.85.0 test \
+            --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
+            --test v43_real_provider_l04 \
+            -- --list \
+            | grep -F 'linux_real_provider_l04::l04_real_missed_event_requires_direct_reconciliation: test'
+      - name: Run real GTK/ATK/AT-SPI L04 oracle
+        env:
+          LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          LOCALVIEW_L7_ARTIFACT_DIR: ${{ runner.temp }}/localview-v43-l04
+          LOCALVIEW_L04_SEED_BIN: ${{ runner.temp }}/localview-v43-l04/seed
+        run: |
+          set -euo pipefail
+          dbus-run-session -- xvfb-run -a env NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge \
+            LOCALVIEW_CANDIDATE_SHA="$LOCALVIEW_CANDIDATE_SHA" \
+            LOCALVIEW_L7_ARTIFACT_DIR="$LOCALVIEW_L7_ARTIFACT_DIR" \
+            LOCALVIEW_L04_SEED_BIN="$LOCALVIEW_L04_SEED_BIN" \
+            cargo +1.85.0 test \
+              --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
+              --test v43_real_provider_l04 \
+              linux_real_provider_l04::l04_real_missed_event_requires_direct_reconciliation \
+              -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify L04 evidence schema and exact-head binding
+        if: always()
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVIDENCE_PATH: ${{ runner.temp }}/localview-v43-l04/l04-real-provider-evidence.json
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["EVIDENCE_PATH"])
+          if not path.is_file():
+              raise SystemExit(f"missing L04 real-provider evidence: {path}")
+          evidence = json.loads(path.read_text())
+          expected = {
+              "schema": "localview.v43.l04.real-provider.v1",
+              "case_id": "L04",
+              "candidate_sha": os.environ["EXPECTED_SHA"],
+              "provider_family": "linux_atspi",
+              "ground_truth_source": "real_gtk_atk_atspi_state_and_event_stream",
+              "event_assurance": "incomplete",
+              "positive_control_state_event_observed": True,
+              "checked_event_observed_after_silent_mutation": False,
+              "initial_checked": False,
+              "independent_direct_checked": True,
+              "provider_reconciled_checked": True,
+              "fresh_observation_revision_greater_than_old": True,
+              "old_observation_immutable": True,
+              "shipping_authorization_succeeded": True,
+              "shipping_permit_has_observation_revision": True,
+          }
+          for key, value in expected.items():
+              if evidence.get(key) != value:
+                  raise SystemExit(
+                      f"invalid L04 evidence field {key}: {evidence.get(key)!r} != {value!r}"
+                  )
+          PY
+      - name: Upload L04 exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-l04-real-provider-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/localview-v43-l04/
+          if-no-files-found: error
+          retention-days: 30

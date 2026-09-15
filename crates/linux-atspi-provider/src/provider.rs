@@ -11,9 +11,10 @@ use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
 use crate::{
     AtspiActionEligibilityError, AtspiActionEligibilityPermit, AtspiBindError,
-    AtspiBindingLifecycle, AtspiElementBinding, AtspiEndpoint, AtspiPointerEligibilityError,
-    AtspiPointerEligibilityPermit, AtspiPointerHitTest, AtspiProviderConnectionError,
-    AtspiReacquireError,
+    AtspiBindingLifecycle, AtspiElementBinding, AtspiEndpoint, AtspiEventReliabilityProfile,
+    AtspiObservationOrigin, AtspiPointerEligibilityError, AtspiPointerEligibilityPermit,
+    AtspiPointerHitTest, AtspiProviderConnectionError, AtspiReacquireError,
+    AtspiSemanticDimension, AtspiStateObservation,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -187,10 +188,13 @@ impl LinuxAtspiProvider {
         Ok(fresh)
     }
 
-    pub async fn authorize_action(
+    /// Perform a fresh direct AT-SPI state read and mint an immutable
+    /// observation revision/cut. This is the reconciliation path used when
+    /// toolkit event delivery cannot prove current state completeness.
+    pub async fn reconcile_action_state(
         &self,
         binding: &AtspiElementBinding,
-    ) -> Result<AtspiActionEligibilityPermit, AtspiActionEligibilityError> {
+    ) -> Result<AtspiStateObservation, AtspiActionEligibilityError> {
         self.ensure_binding_authority(binding)?;
 
         let connection = self
@@ -210,7 +214,20 @@ impl LinuxAtspiProvider {
             .await
             .map_err(|_| AtspiActionEligibilityError::ObservationUnavailable)?;
 
-        self.authorize_from_state_set(binding, states)
+        Ok(AtspiStateObservation::from_direct_reconciliation(
+            binding, states,
+        ))
+    }
+
+    pub async fn authorize_action(
+        &self,
+        binding: &AtspiElementBinding,
+    ) -> Result<AtspiActionEligibilityPermit, AtspiActionEligibilityError> {
+        let observation = self.reconcile_action_state(binding).await?;
+        let reliability = AtspiEventReliabilityProfile::linux_toolkit_default([
+            AtspiSemanticDimension::StateSet,
+        ]);
+        self.authorize_action_from_observation(binding, &reliability, &observation)
     }
 
     pub async fn authorize_pointer_action(
@@ -443,6 +460,43 @@ impl LinuxAtspiProvider {
     }
 
     #[cfg(feature = "validation-state-injection")]
+    pub fn state_observation_from_event_for_validation(
+        &self,
+        binding: &AtspiElementBinding,
+        snapshot_cut_ref: impl Into<String>,
+        states: StateSet,
+    ) -> Result<AtspiStateObservation, AtspiActionEligibilityError> {
+        self.ensure_binding_authority(binding)?;
+        Ok(AtspiStateObservation::from_event_cache_for_validation(
+            binding,
+            snapshot_cut_ref,
+            states,
+        ))
+    }
+
+    #[cfg(feature = "validation-state-injection")]
+    pub fn reconcile_state_from_state_set_for_validation(
+        &self,
+        binding: &AtspiElementBinding,
+        states: StateSet,
+    ) -> Result<AtspiStateObservation, AtspiActionEligibilityError> {
+        self.ensure_binding_authority(binding)?;
+        Ok(AtspiStateObservation::from_direct_reconciliation(
+            binding, states,
+        ))
+    }
+
+    #[cfg(feature = "validation-state-injection")]
+    pub fn authorize_action_from_observation_for_validation(
+        &self,
+        binding: &AtspiElementBinding,
+        reliability: &AtspiEventReliabilityProfile,
+        observation: &AtspiStateObservation,
+    ) -> Result<AtspiActionEligibilityPermit, AtspiActionEligibilityError> {
+        self.authorize_action_from_observation(binding, reliability, observation)
+    }
+
+    #[cfg(feature = "validation-state-injection")]
     pub fn authorize_from_state_set_for_validation(
         &self,
         binding: &AtspiElementBinding,
@@ -484,6 +538,32 @@ impl LinuxAtspiProvider {
             return Err(AtspiActionEligibilityError::TargetIncarnationMismatch);
         }
         Ok(())
+    }
+
+    fn authorize_action_from_observation(
+        &self,
+        binding: &AtspiElementBinding,
+        reliability: &AtspiEventReliabilityProfile,
+        observation: &AtspiStateObservation,
+    ) -> Result<AtspiActionEligibilityPermit, AtspiActionEligibilityError> {
+        self.ensure_binding_authority(binding)?;
+        if !observation.matches_binding(binding) {
+            return Err(AtspiActionEligibilityError::ObservationBindingMismatch);
+        }
+        if reliability.requires_direct_reconciliation_for(AtspiSemanticDimension::StateSet)
+            && observation.origin() != AtspiObservationOrigin::DirectReconciliation
+        {
+            return Err(AtspiActionEligibilityError::ReconciliationRequired);
+        }
+        if observation.states().contains(State::Defunct) {
+            binding.invalidate_defunct();
+            return Err(AtspiActionEligibilityError::Defunct);
+        }
+
+        Ok(AtspiActionEligibilityPermit::new_reconciled(
+            binding,
+            observation,
+        ))
     }
 
     fn authorize_from_state_set(
