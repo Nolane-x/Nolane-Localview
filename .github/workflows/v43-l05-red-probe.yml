@@ -1,0 +1,24 @@
+name: V4.3 L05 RED Probe
+
+on:
+  push:
+    branches: [wip/v43-l05-real-oracle]
+    paths:
+      - 'crates/linux-atspi-provider/**'
+      - '.github/workflows/v43-l05-red-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  l05-red-probe:
+    name: L05 RED compile probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Compile wished-for L05 contract registration
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l05_bus_reconnect_contract -- --list
