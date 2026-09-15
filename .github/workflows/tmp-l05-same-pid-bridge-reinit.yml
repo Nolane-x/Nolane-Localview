@@ -1,0 +1,252 @@
+name: TEMP L05 same-PID ATK bridge recovery
+
+on:
+  push:
+    branches:
+      - wip/v43-l05-same-pid-bridge-reinit
+
+permissions:
+  contents: write
+
+jobs:
+  validate-same-pid-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: wip/v43-l05-same-pid-bridge-reinit
+          fetch-depth: 2
+      - name: Require staging branch descends from exact L05 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor fe8d0a890d6d99030d895449805e058c530592b6 HEAD
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          components: rustfmt
+      - name: Install real GTK/ATK/AT-SPI oracle dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dbus-x11 xvfb at-spi2-core libatk-adaptor procps \
+            build-essential pkg-config libgtk-3-dev
+      - name: Apply same-PID toolkit bridge recovery oracle patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          seed_path = Path('tools/provider-seeds/linux-atspi-bus-reconnect-seed/seed.c')
+          seed = seed_path.read_text()
+          old = '#include <atk/atk.h>\n#include <gtk/gtk.h>\n'
+          new = '#include <atk/atk.h>\n#include <gtk/gtk.h>\n#include <gmodule.h>\n'
+          if seed.count(old) != 1:
+              raise SystemExit('unexpected seed include anchor')
+          seed = seed.replace(old, new)
+
+          anchor = '''static void emit_error(const char *command) {
+  fprintf(stdout, "{\\\"event\\\":\\\"error\\\",\\\"command\\\":\\\"%s\\\"}\\n", command);
+  fflush(stdout);
+}
+
+'''
+          insertion = '''static void emit_error(const char *command) {
+  fprintf(stdout, "{\\\"event\\\":\\\"error\\\",\\\"command\\\":\\\"%s\\\"}\\n", command);
+  fflush(stdout);
+}
+
+static void emit_bridge_reinitialized(void) {
+  puts("{\\\"event\\\":\\\"bridge_reinitialized\\\"}");
+  fflush(stdout);
+}
+
+typedef int (*AtkBridgeInitFunc)(int *, char ***);
+typedef void (*AtkBridgeCleanupFunc)(void);
+
+static gboolean reinitialize_atk_bridge(void) {
+  GModule *module;
+  AtkBridgeInitFunc init_func = NULL;
+  AtkBridgeCleanupFunc cleanup_func = NULL;
+  int result;
+
+  module = g_module_open("libatk-bridge-2.0.so.0", G_MODULE_BIND_LAZY);
+  if (module == NULL) {
+    fprintf(stderr, "failed to open libatk-bridge-2.0.so.0: %s\\n", g_module_error());
+    return FALSE;
+  }
+
+  if (!g_module_symbol(module, "atk_bridge_adaptor_cleanup", (gpointer *)&cleanup_func) ||
+      cleanup_func == NULL) {
+    fprintf(stderr, "failed to resolve atk_bridge_adaptor_cleanup: %s\\n", g_module_error());
+    g_module_close(module);
+    return FALSE;
+  }
+  if (!g_module_symbol(module, "atk_bridge_adaptor_init", (gpointer *)&init_func) ||
+      init_func == NULL) {
+    fprintf(stderr, "failed to resolve atk_bridge_adaptor_init: %s\\n", g_module_error());
+    g_module_close(module);
+    return FALSE;
+  }
+
+  cleanup_func();
+  result = init_func(NULL, NULL);
+  g_module_close(module);
+  if (result != 0) {
+    fprintf(stderr, "atk_bridge_adaptor_init failed after bus replacement: %d\\n", result);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+'''
+          if seed.count(anchor) != 1:
+              raise SystemExit('unexpected seed emit_error anchor')
+          seed = seed.replace(anchor, insertion)
+
+          old = '''  if (strcmp(line, "status") == 0) {
+    emit_status();
+  } else if (strcmp(line, "quit") == 0) {
+'''
+          new = '''  if (strcmp(line, "status") == 0) {
+    emit_status();
+  } else if (strcmp(line, "reinitialize_bridge") == 0) {
+    if (reinitialize_atk_bridge()) {
+      emit_bridge_reinitialized();
+    } else {
+      emit_error(line);
+    }
+  } else if (strcmp(line, "quit") == 0) {
+'''
+          if seed.count(old) != 1:
+              raise SystemExit('unexpected seed command anchor')
+          seed_path.write_text(seed.replace(old, new))
+
+          harness_path = Path('tools/validation-lab/linux-l7-real-provider-harness/tests/v43_real_provider_l05.rs')
+          harness = harness_path.read_text()
+          old = '''        let fresh_observer = connect_replacement_observer().await;
+        let fresh_object = find_accessible_by_name(&fresh_observer, ACCESSIBLE_NAME).await;
+'''
+          new = '''        let fresh_observer = connect_replacement_observer().await;
+        let bridge_reinitialized = seed.command("reinitialize_bridge");
+        assert_eq!(
+            bridge_reinitialized["event"], "bridge_reinitialized",
+            "Ubuntu 24.04 at-spi2-core 2.52 requires the live toolkit bridge to reconnect explicitly after accessibility-bus replacement"
+        );
+        let toolkit_bridge_reinitialized_same_pid = seed.is_running() && seed.pid() == target_pid;
+        assert!(
+            toolkit_bridge_reinitialized_same_pid,
+            "ATK bridge recovery must occur inside the original GTK target process"
+        );
+        let fresh_object = find_accessible_by_name(&fresh_observer, ACCESSIBLE_NAME).await;
+'''
+          if harness.count(old) != 1:
+              raise SystemExit('unexpected fresh observer anchor')
+          harness = harness.replace(old, new)
+          harness = harness.replace('        let mut provider = LinuxAtspiProvider::connect(\n', '        let provider = LinuxAtspiProvider::connect(\n', 1)
+          old = '''            "target_process_survived_bus_restart": target_process_survived_bus_restart,
+            "target_pid": target_pid,
+'''
+          new = '''            "target_process_survived_bus_restart": target_process_survived_bus_restart,
+            "toolkit_bridge_reinitialized_same_pid": toolkit_bridge_reinitialized_same_pid,
+            "toolkit_recovery_mode": "same_pid_atk_bridge_cleanup_init",
+            "target_pid": target_pid,
+'''
+          if harness.count(old) != 1:
+              raise SystemExit('unexpected evidence anchor')
+          harness_path.write_text(harness.replace(old, new))
+
+          workflow_path = Path('.github/workflows/v43-l05-real-provider.yml')
+          workflow = workflow_path.read_text()
+          old = '            $(pkg-config --cflags --libs gtk+-3.0 atk)\n'
+          new = '            $(pkg-config --cflags --libs gtk+-3.0 atk gmodule-2.0)\n'
+          if workflow.count(old) != 1:
+              raise SystemExit('unexpected seed compile anchor')
+          workflow = workflow.replace(old, new)
+          old = '              "target_process_survived_bus_restart": True,\n'
+          new = '              "target_process_survived_bus_restart": True,\n              "toolkit_bridge_reinitialized_same_pid": True,\n              "toolkit_recovery_mode": "same_pid_atk_bridge_cleanup_init",\n'
+          if workflow.count(old) != 1:
+              raise SystemExit('unexpected verifier evidence anchor')
+          workflow_path.write_text(workflow.replace(old, new))
+          PY
+          rm .github/workflows/tmp-l05-same-pid-bridge-reinit.yml
+          rustfmt +1.85.0 --edition 2024 tools/validation-lab/linux-l7-real-provider-harness/tests/v43_real_provider_l05.rs
+          git diff --check
+      - name: Compile patched GTK seed with bridge module API support
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/localview-v43-l05-staging"
+          cc -std=c11 -Wall -Wextra -Werror \
+            tools/provider-seeds/linux-atspi-bus-reconnect-seed/seed.c \
+            -o "$RUNNER_TEMP/localview-v43-l05-staging/seed" \
+            $(pkg-config --cflags --libs gtk+-3.0 atk gmodule-2.0)
+      - name: Compile exact patched L05 real-provider registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          listed="$(cargo +1.85.0 test --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml --test v43_real_provider_l05 -- --list)"
+          grep -F 'linux_real_provider_l05::l05_real_accessibility_bus_reconnect_invalidates_old_binding: test' <<<"$listed"
+      - name: Run patched real L05 bus-reconnect oracle
+        env:
+          LOCALVIEW_CANDIDATE_SHA: staging-same-pid-bridge-reinit
+          LOCALVIEW_L7_ARTIFACT_DIR: ${{ runner.temp }}/localview-v43-l05-staging
+          LOCALVIEW_L05_SEED_BIN: ${{ runner.temp }}/localview-v43-l05-staging/seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          dbus-run-session -- xvfb-run -a env NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge \
+            LOCALVIEW_CANDIDATE_SHA="$LOCALVIEW_CANDIDATE_SHA" \
+            LOCALVIEW_L7_ARTIFACT_DIR="$LOCALVIEW_L7_ARTIFACT_DIR" \
+            LOCALVIEW_L05_SEED_BIN="$LOCALVIEW_L05_SEED_BIN" \
+            cargo +1.85.0 test \
+              --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
+              --test v43_real_provider_l05 \
+              linux_real_provider_l05::l05_real_accessibility_bus_reconnect_invalidates_old_binding \
+              -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify patched staging evidence
+        env:
+          EVIDENCE_PATH: ${{ runner.temp }}/localview-v43-l05-staging/l05-real-provider-evidence.json
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          evidence = json.loads(Path(os.environ['EVIDENCE_PATH']).read_text())
+          expected = {
+              'candidate_sha': 'staging-same-pid-bridge-reinit',
+              'pre_restart_action_delta': 1,
+              'old_transport_unavailable': True,
+              'old_binding_denied_while_disconnected': True,
+              'bus_incarnation_changed': True,
+              'old_binding_denied_after_reconnect': True,
+              'fresh_binding_revision_greater_than_old': True,
+              'fresh_authorization_succeeded': True,
+              'post_reconnect_action_delta': 1,
+              'target_process_survived_bus_restart': True,
+              'toolkit_bridge_reinitialized_same_pid': True,
+              'toolkit_recovery_mode': 'same_pid_atk_bridge_cleanup_init',
+          }
+          for key, value in expected.items():
+              if evidence.get(key) != value:
+                  raise SystemExit(f'{key}: {evidence.get(key)!r} != {value!r}')
+          if evidence['old_bus_child_pid'] == evidence['replacement_bus_child_pid']:
+              raise SystemExit('replacement accessibility bus must have a fresh PID')
+          PY
+      - name: Commit validated final oracle tree on staging branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            tools/provider-seeds/linux-atspi-bus-reconnect-seed/seed.c \
+            tools/validation-lab/linux-l7-real-provider-harness/tests/v43_real_provider_l05.rs \
+            .github/workflows/v43-l05-real-provider.yml \
+            .github/workflows/tmp-l05-same-pid-bridge-reinit.yml
+          git diff --cached --check
+          git commit -m 'test(v43): recover GTK bridge in-place after L05 bus replacement'
+          git push origin HEAD:wip/v43-l05-same-pid-bridge-reinit
