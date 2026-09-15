@@ -10,6 +10,7 @@ use atspi::{
 use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
 use crate::{
+    AtspiAccessibilityBusIncarnationRef, AtspiAccessibilityBusLifecycle,
     AtspiActionEligibilityError, AtspiActionEligibilityPermit, AtspiBindError,
     AtspiBindingLifecycle, AtspiElementBinding, AtspiEndpoint, AtspiEventReliabilityProfile,
     AtspiObservationOrigin, AtspiPointerEligibilityError, AtspiPointerEligibilityPermit,
@@ -21,6 +22,13 @@ use crate::{
 struct EndpointAuthorityRecord {
     binding_revision: u64,
     retired: bool,
+}
+
+#[derive(Debug)]
+struct AccessibilityBusRuntime {
+    lifecycle: AtspiAccessibilityBusLifecycle,
+    incarnation_ref: AtspiAccessibilityBusIncarnationRef,
+    connection: Option<AccessibilityConnection>,
 }
 
 fn layer_stack_rank(layer: Layer) -> Option<u8> {
@@ -55,8 +63,9 @@ fn point_in_extents(extents: (i32, i32, i32, i32), point: (i32, i32)) -> bool {
 pub struct LinuxAtspiProvider {
     provider_incarnation_ref: ProviderIncarnationRef,
     target_incarnation_ref: TargetIncarnationRef,
-    connection: Option<AccessibilityConnection>,
+    accessibility_bus: Arc<Mutex<AccessibilityBusRuntime>>,
     endpoint_authority: Arc<Mutex<HashMap<AtspiEndpoint, EndpointAuthorityRecord>>>,
+    validation_only: bool,
 }
 
 impl LinuxAtspiProvider {
@@ -71,8 +80,13 @@ impl LinuxAtspiProvider {
         Ok(Self {
             provider_incarnation_ref,
             target_incarnation_ref,
-            connection: Some(connection),
+            accessibility_bus: Arc::new(Mutex::new(AccessibilityBusRuntime {
+                lifecycle: AtspiAccessibilityBusLifecycle::Connected,
+                incarnation_ref: AtspiAccessibilityBusIncarnationRef::fresh(),
+                connection: Some(connection),
+            })),
             endpoint_authority: Arc::new(Mutex::new(HashMap::new())),
+            validation_only: false,
         })
     }
 
@@ -84,9 +98,92 @@ impl LinuxAtspiProvider {
         Self {
             provider_incarnation_ref,
             target_incarnation_ref,
-            connection: None,
+            accessibility_bus: Arc::new(Mutex::new(AccessibilityBusRuntime {
+                lifecycle: AtspiAccessibilityBusLifecycle::Connected,
+                incarnation_ref: AtspiAccessibilityBusIncarnationRef::fresh(),
+                connection: None,
+            })),
             endpoint_authority: Arc::new(Mutex::new(HashMap::new())),
+            validation_only: true,
         }
+    }
+
+    pub fn accessibility_bus_lifecycle(&self) -> AtspiAccessibilityBusLifecycle {
+        self.refresh_closed_transport_state();
+        self.accessibility_bus
+            .lock()
+            .expect("AT-SPI accessibility bus mutex poisoned")
+            .lifecycle
+    }
+
+    pub fn accessibility_bus_incarnation_ref(&self) -> AtspiAccessibilityBusIncarnationRef {
+        self.refresh_closed_transport_state();
+        self.accessibility_bus
+            .lock()
+            .expect("AT-SPI accessibility bus mutex poisoned")
+            .incarnation_ref
+    }
+
+    pub fn mark_accessibility_bus_disconnected(&self) {
+        let mut bus = self
+            .accessibility_bus
+            .lock()
+            .expect("AT-SPI accessibility bus mutex poisoned");
+        bus.lifecycle = AtspiAccessibilityBusLifecycle::Disconnected;
+        bus.connection = None;
+    }
+
+    pub async fn reconnect_accessibility_bus(
+        &self,
+    ) -> Result<AtspiAccessibilityBusIncarnationRef, AtspiProviderConnectionError> {
+        {
+            let bus = self
+                .accessibility_bus
+                .lock()
+                .expect("AT-SPI accessibility bus mutex poisoned");
+            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Connected {
+                return Err(AtspiProviderConnectionError::AccessibilityBusStillConnected);
+            }
+        }
+
+        if self.validation_only {
+            return Err(AtspiProviderConnectionError::AccessibilityBusUnavailable);
+        }
+
+        let connection = AccessibilityConnection::new()
+            .await
+            .map_err(|_| AtspiProviderConnectionError::AccessibilityBusUnavailable)?;
+
+        let mut bus = self
+            .accessibility_bus
+            .lock()
+            .expect("AT-SPI accessibility bus mutex poisoned");
+        if bus.lifecycle == AtspiAccessibilityBusLifecycle::Connected {
+            return Err(AtspiProviderConnectionError::AccessibilityBusStillConnected);
+        }
+        let fresh = AtspiAccessibilityBusIncarnationRef::fresh();
+        bus.incarnation_ref = fresh;
+        bus.connection = Some(connection);
+        bus.lifecycle = AtspiAccessibilityBusLifecycle::Connected;
+        Ok(fresh)
+    }
+
+    #[cfg(feature = "validation-state-injection")]
+    pub fn reconnect_accessibility_bus_for_validation(
+        &self,
+    ) -> Result<AtspiAccessibilityBusIncarnationRef, AtspiProviderConnectionError> {
+        let mut bus = self
+            .accessibility_bus
+            .lock()
+            .expect("AT-SPI accessibility bus mutex poisoned");
+        if bus.lifecycle == AtspiAccessibilityBusLifecycle::Connected {
+            return Err(AtspiProviderConnectionError::AccessibilityBusStillConnected);
+        }
+        let fresh = AtspiAccessibilityBusIncarnationRef::fresh();
+        bus.incarnation_ref = fresh;
+        bus.connection = None;
+        bus.lifecycle = AtspiAccessibilityBusLifecycle::Connected;
+        Ok(fresh)
     }
 
     pub fn bind_initial(
@@ -94,6 +191,18 @@ impl LinuxAtspiProvider {
         endpoint: AtspiEndpoint,
         acquisition_cut_ref: impl Into<String>,
     ) -> Result<AtspiElementBinding, AtspiBindError> {
+        self.refresh_closed_transport_state();
+        let bus_incarnation = {
+            let bus = self
+                .accessibility_bus
+                .lock()
+                .expect("AT-SPI accessibility bus mutex poisoned");
+            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
+                return Err(AtspiBindError::AccessibilityBusDisconnected);
+            }
+            bus.incarnation_ref
+        };
+
         let mut authority = self
             .endpoint_authority
             .lock()
@@ -105,6 +214,7 @@ impl LinuxAtspiProvider {
         let binding = AtspiElementBinding::new(
             self.provider_incarnation_ref.clone(),
             self.target_incarnation_ref.clone(),
+            bus_incarnation,
             endpoint.clone(),
             acquisition_cut_ref,
         );
@@ -134,6 +244,21 @@ impl LinuxAtspiProvider {
             return Err(AtspiReacquireError::PreviousBindingNotDefunct);
         }
 
+        self.refresh_closed_transport_state();
+        let bus_incarnation = {
+            let bus = self
+                .accessibility_bus
+                .lock()
+                .expect("AT-SPI accessibility bus mutex poisoned");
+            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
+                return Err(AtspiReacquireError::AccessibilityBusDisconnected);
+            }
+            if previous_binding.accessibility_bus_incarnation_ref() != &bus.incarnation_ref {
+                return Err(AtspiReacquireError::AccessibilityBusIncarnationMismatch);
+            }
+            bus.incarnation_ref
+        };
+
         let previous_endpoint = previous_binding.endpoint().clone();
         let mut authority = self
             .endpoint_authority
@@ -156,6 +281,90 @@ impl LinuxAtspiProvider {
         let fresh = AtspiElementBinding::new(
             self.provider_incarnation_ref.clone(),
             self.target_incarnation_ref.clone(),
+            bus_incarnation,
+            replacement_endpoint.clone(),
+            acquisition_cut_ref,
+        );
+
+        if replacement_endpoint == previous_endpoint {
+            authority.insert(
+                replacement_endpoint,
+                EndpointAuthorityRecord {
+                    binding_revision: fresh.binding_revision(),
+                    retired: false,
+                },
+            );
+        } else {
+            authority.insert(
+                previous_endpoint,
+                EndpointAuthorityRecord {
+                    binding_revision: previous_record.binding_revision,
+                    retired: true,
+                },
+            );
+            authority.insert(
+                replacement_endpoint,
+                EndpointAuthorityRecord {
+                    binding_revision: fresh.binding_revision(),
+                    retired: false,
+                },
+            );
+        }
+
+        Ok(fresh)
+    }
+
+    pub fn reacquire_after_bus_reconnect(
+        &self,
+        previous_binding: &AtspiElementBinding,
+        replacement_endpoint: AtspiEndpoint,
+        acquisition_cut_ref: impl Into<String>,
+    ) -> Result<AtspiElementBinding, AtspiReacquireError> {
+        if previous_binding.provider_incarnation_ref() != &self.provider_incarnation_ref {
+            return Err(AtspiReacquireError::ProviderIncarnationMismatch);
+        }
+        if previous_binding.target_incarnation_ref() != &self.target_incarnation_ref {
+            return Err(AtspiReacquireError::TargetIncarnationMismatch);
+        }
+
+        self.refresh_closed_transport_state();
+        let current_bus = {
+            let bus = self
+                .accessibility_bus
+                .lock()
+                .expect("AT-SPI accessibility bus mutex poisoned");
+            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
+                return Err(AtspiReacquireError::AccessibilityBusDisconnected);
+            }
+            if previous_binding.accessibility_bus_incarnation_ref() == &bus.incarnation_ref {
+                return Err(AtspiReacquireError::AccessibilityBusIncarnationNotAdvanced);
+            }
+            bus.incarnation_ref
+        };
+
+        let previous_endpoint = previous_binding.endpoint().clone();
+        let mut authority = self
+            .endpoint_authority
+            .lock()
+            .expect("AT-SPI endpoint authority mutex poisoned");
+        let previous_record = authority
+            .get(&previous_endpoint)
+            .copied()
+            .ok_or(AtspiReacquireError::PreviousBindingSuperseded)?;
+        if previous_record.retired
+            || previous_record.binding_revision != previous_binding.binding_revision()
+        {
+            return Err(AtspiReacquireError::PreviousBindingSuperseded);
+        }
+        if replacement_endpoint != previous_endpoint && authority.contains_key(&replacement_endpoint)
+        {
+            return Err(AtspiReacquireError::ReplacementEndpointAlreadyBound);
+        }
+
+        let fresh = AtspiElementBinding::new(
+            self.provider_incarnation_ref.clone(),
+            self.target_incarnation_ref.clone(),
+            current_bus,
             replacement_endpoint.clone(),
             acquisition_cut_ref,
         );
@@ -196,23 +405,19 @@ impl LinuxAtspiProvider {
         binding: &AtspiElementBinding,
     ) -> Result<AtspiStateObservation, AtspiActionEligibilityError> {
         self.ensure_binding_authority(binding)?;
-
-        let connection = self
-            .connection
-            .as_ref()
-            .ok_or(AtspiActionEligibilityError::ObservationUnavailable)?;
+        let connection = self.connection_for_live_authority()?;
         let proxy = AccessibleProxy::builder(connection.connection())
             .destination(binding.endpoint().bus_name())
-            .map_err(|_| AtspiActionEligibilityError::ObservationUnavailable)?
+            .map_err(|_| self.observation_transport_error())?
             .path(binding.endpoint().object_path())
-            .map_err(|_| AtspiActionEligibilityError::ObservationUnavailable)?
+            .map_err(|_| self.observation_transport_error())?
             .build()
             .await
-            .map_err(|_| AtspiActionEligibilityError::ObservationUnavailable)?;
+            .map_err(|_| self.observation_transport_error())?;
         let states = proxy
             .get_state()
             .await
-            .map_err(|_| AtspiActionEligibilityError::ObservationUnavailable)?;
+            .map_err(|_| self.observation_transport_error())?;
 
         Ok(AtspiStateObservation::from_direct_reconciliation(
             binding, states,
@@ -237,36 +442,26 @@ impl LinuxAtspiProvider {
         self.ensure_binding_authority(binding)
             .map_err(AtspiPointerEligibilityError::Semantic)?;
 
-        let connection = self.connection.as_ref().ok_or(
-            AtspiPointerEligibilityError::Semantic(
-                AtspiActionEligibilityError::ObservationUnavailable,
-            ),
-        )?;
+        let connection = self
+            .connection_for_live_authority()
+            .map_err(AtspiPointerEligibilityError::Semantic)?;
         let bus = connection.connection();
         let accessible = AccessibleProxy::builder(bus)
             .destination(binding.endpoint().bus_name())
             .map_err(|_| {
-                AtspiPointerEligibilityError::Semantic(
-                    AtspiActionEligibilityError::ObservationUnavailable,
-                )
+                AtspiPointerEligibilityError::Semantic(self.observation_transport_error())
             })?
             .path(binding.endpoint().object_path())
             .map_err(|_| {
-                AtspiPointerEligibilityError::Semantic(
-                    AtspiActionEligibilityError::ObservationUnavailable,
-                )
+                AtspiPointerEligibilityError::Semantic(self.observation_transport_error())
             })?
             .build()
             .await
             .map_err(|_| {
-                AtspiPointerEligibilityError::Semantic(
-                    AtspiActionEligibilityError::ObservationUnavailable,
-                )
+                AtspiPointerEligibilityError::Semantic(self.observation_transport_error())
             })?;
         let states = accessible.get_state().await.map_err(|_| {
-            AtspiPointerEligibilityError::Semantic(
-                AtspiActionEligibilityError::ObservationUnavailable,
-            )
+            AtspiPointerEligibilityError::Semantic(self.observation_transport_error())
         })?;
 
         self.authorize_from_state_set(binding, states)
@@ -524,6 +719,70 @@ impl LinuxAtspiProvider {
         Err(AtspiActionEligibilityError::ObservationUnavailable)
     }
 
+    fn refresh_closed_transport_state(&self) {
+        let connection = {
+            let bus = self
+                .accessibility_bus
+                .lock()
+                .expect("AT-SPI accessibility bus mutex poisoned");
+            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
+                return;
+            }
+            bus.connection.clone()
+        };
+
+        let Some(connection) = connection else {
+            return;
+        };
+        if !connection.connection().is_closed() {
+            return;
+        }
+
+        let mut bus = self
+            .accessibility_bus
+            .lock()
+            .expect("AT-SPI accessibility bus mutex poisoned");
+        if bus
+            .connection
+            .as_ref()
+            .is_some_and(|current| current.connection().is_closed())
+        {
+            bus.lifecycle = AtspiAccessibilityBusLifecycle::Disconnected;
+            bus.connection = None;
+        }
+    }
+
+    fn connection_for_live_authority(
+        &self,
+    ) -> Result<AccessibilityConnection, AtspiActionEligibilityError> {
+        self.refresh_closed_transport_state();
+        let bus = self
+            .accessibility_bus
+            .lock()
+            .expect("AT-SPI accessibility bus mutex poisoned");
+        if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
+            return Err(AtspiActionEligibilityError::AccessibilityBusDisconnected);
+        }
+        bus.connection
+            .clone()
+            .ok_or(AtspiActionEligibilityError::ObservationUnavailable)
+    }
+
+    fn observation_transport_error(&self) -> AtspiActionEligibilityError {
+        self.refresh_closed_transport_state();
+        if self
+            .accessibility_bus
+            .lock()
+            .expect("AT-SPI accessibility bus mutex poisoned")
+            .lifecycle
+            == AtspiAccessibilityBusLifecycle::Disconnected
+        {
+            AtspiActionEligibilityError::AccessibilityBusDisconnected
+        } else {
+            AtspiActionEligibilityError::ObservationUnavailable
+        }
+    }
+
     fn ensure_binding_authority(
         &self,
         binding: &AtspiElementBinding,
@@ -536,6 +795,18 @@ impl LinuxAtspiProvider {
         }
         if binding.target_incarnation_ref() != &self.target_incarnation_ref {
             return Err(AtspiActionEligibilityError::TargetIncarnationMismatch);
+        }
+
+        self.refresh_closed_transport_state();
+        let bus = self
+            .accessibility_bus
+            .lock()
+            .expect("AT-SPI accessibility bus mutex poisoned");
+        if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
+            return Err(AtspiActionEligibilityError::AccessibilityBusDisconnected);
+        }
+        if binding.accessibility_bus_incarnation_ref() != &bus.incarnation_ref {
+            return Err(AtspiActionEligibilityError::AccessibilityBusIncarnationMismatch);
         }
         Ok(())
     }
