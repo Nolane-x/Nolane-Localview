@@ -41,6 +41,31 @@ fn accessibility_bus_disconnect_immediately_fences_old_binding_authority() {
 }
 
 #[test]
+fn provider_clones_share_accessibility_bus_disconnect_fence() {
+    let mut provider = provider();
+    let peer = provider.clone();
+    let binding = provider
+        .bind_initial(
+            AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/50-clone"),
+            "cut:l05:clone:old",
+        )
+        .expect("initial clone-shared L05 binding");
+
+    provider.mark_accessibility_bus_disconnected();
+
+    assert_eq!(
+        peer.accessibility_bus_lifecycle(),
+        AtspiAccessibilityBusLifecycle::Disconnected,
+        "all provider clones must observe the same bus lifecycle fence"
+    );
+    assert_eq!(
+        peer.authorize_from_state_set_for_validation(&binding, live_states()),
+        Err(AtspiActionEligibilityError::AccessibilityBusDisconnected),
+        "a provider clone must not retain authority from the disconnected bus"
+    );
+}
+
+#[test]
 fn disconnected_bus_cannot_create_unobserved_initial_binding() {
     let mut provider = provider();
     provider.mark_accessibility_bus_disconnected();
