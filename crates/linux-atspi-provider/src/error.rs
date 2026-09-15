@@ -32,6 +32,10 @@ pub enum AtspiActionEligibilityError {
     AlreadyInvalidDefunct,
     #[error("AT-SPI state observation is unavailable")]
     ObservationUnavailable,
+    #[error("AT-SPI event-derived state requires direct reconciliation before action authority")]
+    ReconciliationRequired,
+    #[error("AT-SPI state observation does not belong to the current binding")]
+    ObservationBindingMismatch,
     #[error("AT-SPI provider incarnation does not match the binding")]
     ProviderIncarnationMismatch,
     #[error("AT-SPI target incarnation does not match the binding")]

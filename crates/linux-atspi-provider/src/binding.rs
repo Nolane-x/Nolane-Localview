@@ -5,6 +5,8 @@ use std::sync::{
 
 use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
+use crate::AtspiStateObservation;
+
 static NEXT_BINDING_REVISION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -109,6 +111,8 @@ impl AtspiElementBinding {
 pub struct AtspiActionEligibilityPermit {
     binding_revision: u64,
     acquisition_cut_ref: String,
+    observation_revision: Option<u64>,
+    observation_cut_ref: Option<String>,
 }
 
 impl AtspiActionEligibilityPermit {
@@ -116,6 +120,20 @@ impl AtspiActionEligibilityPermit {
         Self {
             binding_revision: binding.binding_revision(),
             acquisition_cut_ref: binding.acquisition_cut_ref().to_owned(),
+            observation_revision: None,
+            observation_cut_ref: None,
+        }
+    }
+
+    pub(crate) fn new_reconciled(
+        binding: &AtspiElementBinding,
+        observation: &AtspiStateObservation,
+    ) -> Self {
+        Self {
+            binding_revision: binding.binding_revision(),
+            acquisition_cut_ref: binding.acquisition_cut_ref().to_owned(),
+            observation_revision: Some(observation.observation_revision()),
+            observation_cut_ref: Some(observation.snapshot_cut_ref().to_owned()),
         }
     }
 
@@ -125,5 +143,13 @@ impl AtspiActionEligibilityPermit {
 
     pub fn acquisition_cut_ref(&self) -> &str {
         &self.acquisition_cut_ref
+    }
+
+    pub const fn observation_revision(&self) -> Option<u64> {
+        self.observation_revision
+    }
+
+    pub fn observation_cut_ref(&self) -> Option<&str> {
+        self.observation_cut_ref.as_deref()
     }
 }

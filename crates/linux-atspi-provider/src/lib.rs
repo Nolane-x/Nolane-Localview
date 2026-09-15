@@ -8,6 +8,8 @@ mod error;
 mod pointer;
 #[cfg(target_os = "linux")]
 mod provider;
+#[cfg(target_os = "linux")]
+mod reconciliation;
 
 #[cfg(target_os = "linux")]
 pub use binding::{
@@ -22,3 +24,8 @@ pub use error::{
 pub use pointer::{AtspiPointerEligibilityPermit, AtspiPointerHitTest};
 #[cfg(target_os = "linux")]
 pub use provider::LinuxAtspiProvider;
+#[cfg(target_os = "linux")]
+pub use reconciliation::{
+    AtspiEventAssurance, AtspiEventReliabilityProfile, AtspiObservationOrigin,
+    AtspiSemanticDimension, AtspiStateObservation,
+};
