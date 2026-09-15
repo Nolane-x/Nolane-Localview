@@ -5,7 +5,7 @@ use std::sync::{
 
 use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
 
-use crate::AtspiStateObservation;
+use crate::{AtspiAccessibilityBusIncarnationRef, AtspiStateObservation};
 
 static NEXT_BINDING_REVISION: AtomicU64 = AtomicU64::new(1);
 
@@ -47,6 +47,7 @@ struct AtspiBindingState {
 pub struct AtspiElementBinding {
     provider_incarnation_ref: ProviderIncarnationRef,
     target_incarnation_ref: TargetIncarnationRef,
+    accessibility_bus_incarnation_ref: AtspiAccessibilityBusIncarnationRef,
     endpoint: AtspiEndpoint,
     acquisition_cut_ref: String,
     binding_revision: u64,
@@ -57,12 +58,14 @@ impl AtspiElementBinding {
     pub(crate) fn new(
         provider_incarnation_ref: ProviderIncarnationRef,
         target_incarnation_ref: TargetIncarnationRef,
+        accessibility_bus_incarnation_ref: AtspiAccessibilityBusIncarnationRef,
         endpoint: AtspiEndpoint,
         acquisition_cut_ref: impl Into<String>,
     ) -> Self {
         Self {
             provider_incarnation_ref,
             target_incarnation_ref,
+            accessibility_bus_incarnation_ref,
             endpoint,
             acquisition_cut_ref: acquisition_cut_ref.into(),
             binding_revision: NEXT_BINDING_REVISION.fetch_add(1, Ordering::Relaxed),
@@ -78,6 +81,10 @@ impl AtspiElementBinding {
 
     pub fn target_incarnation_ref(&self) -> &TargetIncarnationRef {
         &self.target_incarnation_ref
+    }
+
+    pub fn accessibility_bus_incarnation_ref(&self) -> &AtspiAccessibilityBusIncarnationRef {
+        &self.accessibility_bus_incarnation_ref
     }
 
     pub fn endpoint(&self) -> &AtspiEndpoint {
@@ -111,6 +118,7 @@ impl AtspiElementBinding {
 pub struct AtspiActionEligibilityPermit {
     binding_revision: u64,
     acquisition_cut_ref: String,
+    accessibility_bus_incarnation_ref: AtspiAccessibilityBusIncarnationRef,
     observation_revision: Option<u64>,
     observation_cut_ref: Option<String>,
 }
@@ -120,6 +128,7 @@ impl AtspiActionEligibilityPermit {
         Self {
             binding_revision: binding.binding_revision(),
             acquisition_cut_ref: binding.acquisition_cut_ref().to_owned(),
+            accessibility_bus_incarnation_ref: *binding.accessibility_bus_incarnation_ref(),
             observation_revision: None,
             observation_cut_ref: None,
         }
@@ -132,6 +141,7 @@ impl AtspiActionEligibilityPermit {
         Self {
             binding_revision: binding.binding_revision(),
             acquisition_cut_ref: binding.acquisition_cut_ref().to_owned(),
+            accessibility_bus_incarnation_ref: *binding.accessibility_bus_incarnation_ref(),
             observation_revision: Some(observation.observation_revision()),
             observation_cut_ref: Some(observation.snapshot_cut_ref().to_owned()),
         }
@@ -143,6 +153,10 @@ impl AtspiActionEligibilityPermit {
 
     pub fn acquisition_cut_ref(&self) -> &str {
         &self.acquisition_cut_ref
+    }
+
+    pub fn accessibility_bus_incarnation_ref(&self) -> &AtspiAccessibilityBusIncarnationRef {
+        &self.accessibility_bus_incarnation_ref
     }
 
     pub const fn observation_revision(&self) -> Option<u64> {
