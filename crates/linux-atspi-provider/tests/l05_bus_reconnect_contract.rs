@@ -20,7 +20,7 @@ fn live_states() -> StateSet {
 
 #[test]
 fn accessibility_bus_disconnect_immediately_fences_old_binding_authority() {
-    let mut provider = provider();
+    let provider = provider();
     let binding = provider
         .bind_initial(
             AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/50"),
@@ -42,7 +42,7 @@ fn accessibility_bus_disconnect_immediately_fences_old_binding_authority() {
 
 #[test]
 fn provider_clones_share_accessibility_bus_disconnect_fence() {
-    let mut provider = provider();
+    let provider = provider();
     let peer = provider.clone();
     let binding = provider
         .bind_initial(
@@ -67,8 +67,8 @@ fn provider_clones_share_accessibility_bus_disconnect_fence() {
 
 #[test]
 fn provider_clones_share_successful_reconnect_epoch() {
-    let mut provider = provider();
-    let mut peer = provider.clone();
+    let provider = provider();
+    let peer = provider.clone();
     let endpoint = AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/50-clone-reconnect");
     let old = provider
         .bind_initial(endpoint, "cut:l05:clone:reconnect:old")
@@ -96,21 +96,21 @@ fn provider_clones_share_successful_reconnect_epoch() {
 
 #[test]
 fn disconnected_bus_cannot_create_unobserved_initial_binding() {
-    let mut provider = provider();
+    let provider = provider();
     provider.mark_accessibility_bus_disconnected();
 
-    assert_eq!(
+    assert!(matches!(
         provider.bind_initial(
             AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/50-new"),
             "cut:l05:disconnected",
         ),
         Err(AtspiBindError::AccessibilityBusDisconnected)
-    );
+    ));
 }
 
 #[test]
 fn successful_bus_reconnect_changes_incarnation_and_old_binding_cannot_revive() {
-    let mut provider = provider();
+    let provider = provider();
     let endpoint = AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/51");
     let old = provider
         .bind_initial(endpoint.clone(), "cut:l05:old")
@@ -132,15 +132,15 @@ fn successful_bus_reconnect_changes_incarnation_and_old_binding_cannot_revive() 
         provider.authorize_from_state_set_for_validation(&old, live_states()),
         Err(AtspiActionEligibilityError::AccessibilityBusIncarnationMismatch)
     );
-    assert_eq!(
+    assert!(matches!(
         provider.bind_initial(endpoint, "cut:l05:illegal-aba"),
         Err(AtspiBindError::EndpointAlreadyBound)
-    );
+    ));
 }
 
 #[test]
 fn explicit_reacquire_after_bus_reconnect_mints_fresh_binding_on_new_bus() {
-    let mut provider = provider();
+    let provider = provider();
     let endpoint = AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/52");
     let old = provider
         .bind_initial(endpoint.clone(), "cut:l05:old")
@@ -170,7 +170,7 @@ fn explicit_reacquire_after_bus_reconnect_mints_fresh_binding_on_new_bus() {
 
 #[test]
 fn observations_and_action_permits_are_bound_to_accessibility_bus_incarnation() {
-    let mut provider = provider();
+    let provider = provider();
     let endpoint = AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/53");
     let old = provider
         .bind_initial(endpoint.clone(), "cut:l05:old")
@@ -217,7 +217,7 @@ fn observations_and_action_permits_are_bound_to_accessibility_bus_incarnation() 
 
 #[test]
 fn pointer_permits_are_bound_to_accessibility_bus_incarnation() {
-    let mut provider = provider();
+    let provider = provider();
     let endpoint = AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/54");
     let old = provider
         .bind_initial(endpoint.clone(), "cut:l05:pointer:old")
@@ -261,7 +261,7 @@ fn pointer_permits_are_bound_to_accessibility_bus_incarnation() {
 
 #[test]
 fn defunct_terminal_state_still_precedes_bus_disconnect_denial() {
-    let mut provider = provider();
+    let provider = provider();
     let binding = provider
         .bind_initial(
             AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/55"),
@@ -284,7 +284,7 @@ fn defunct_terminal_state_still_precedes_bus_disconnect_denial() {
 
 #[tokio::test]
 async fn reconnect_failure_stays_disconnected_and_does_not_advance_bus_incarnation() {
-    let mut provider = provider();
+    let provider = provider();
     let old_bus = provider.accessibility_bus_incarnation_ref();
     provider.mark_accessibility_bus_disconnected();
 
@@ -301,7 +301,7 @@ async fn reconnect_failure_stays_disconnected_and_does_not_advance_bus_incarnati
 
 #[test]
 fn reconnect_without_disconnect_is_rejected_instead_of_rotating_authority() {
-    let mut provider = provider();
+    let provider = provider();
     let old_bus = provider.accessibility_bus_incarnation_ref();
 
     assert_eq!(
