@@ -30,8 +30,8 @@ jobs:
 
           refresh = "        self.refresh_closed_transport_state();\n"
           count = text.count(refresh)
-          if count != 6:
-              raise SystemExit(f"expected 6 refresh calls, found {count}")
+          if count != 8:
+              raise SystemExit(f"expected 8 refresh calls, found {count}")
           text = text.replace(refresh, "")
 
           old = "        let connection = self.connection_for_live_authority()?;\n"
