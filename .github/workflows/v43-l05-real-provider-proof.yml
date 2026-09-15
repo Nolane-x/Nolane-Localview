@@ -1,0 +1,133 @@
+name: V4.3 L05 Real Provider Proof
+
+on:
+  push:
+    branches: [wip/v43-l05-real-provider-proof]
+    paths:
+      - '.github/workflows/v43-l05-real-provider-proof.yml'
+
+concurrency:
+  group: localview-v43-l05-real-provider-proof
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  l05-real-provider-proof:
+    name: L05 exact-candidate real accessibility-bus reconnect proof
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    env:
+      CANDIDATE_SHA: 5b4fed20d1a65bc1008cc072aaf22bdb915bb61d
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+      - name: Install real GTK/ATK/AT-SPI oracle dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dbus-x11 xvfb at-spi2-core libatk-adaptor procps \
+            build-essential pkg-config libgtk-3-dev
+      - name: Require reconnect-capable AT-SPI runtime
+        run: |
+          set -euo pipefail
+          installed="$(dpkg-query -W -f='${Version}' at-spi2-core)"
+          echo "at-spi2-core=$installed"
+          if ! dpkg --compare-versions "$installed" ge "2.57.2"; then
+            echo "L05 requires atk-adaptor bus-launcher reconnect support from at-spi2-core >= 2.57.2; installed=$installed" >&2
+            exit 1
+          fi
+      - name: Bind exact L05 candidate
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$CANDIDATE_SHA"
+          mkdir -p "$RUNNER_TEMP/localview-v43-l05"
+          printf '{"candidate_sha":"%s","workflow":"v43-l05-real-provider-proof"}\n' "$actual" \
+            > "$RUNNER_TEMP/localview-v43-l05/run-context.json"
+      - name: Compile bus-reconnect GTK/ATK provider seed
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra -Werror \
+            tools/provider-seeds/linux-atspi-bus-reconnect-seed/seed.c \
+            -o "$RUNNER_TEMP/localview-v43-l05/seed" \
+            $(pkg-config --cflags --libs gtk+-3.0 atk)
+      - name: Require exact L05 real-provider registration
+        run: |
+          set -euo pipefail
+          cargo +1.85.0 test \
+            --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
+            --test v43_real_provider_l05 \
+            -- --list \
+            | grep -F 'linux_real_provider_l05::l05_real_accessibility_bus_reconnect_invalidates_old_binding: test'
+      - name: Run real GTK/ATK/AT-SPI L05 oracle
+        env:
+          LOCALVIEW_L7_ARTIFACT_DIR: ${{ runner.temp }}/localview-v43-l05
+          LOCALVIEW_L05_SEED_BIN: ${{ runner.temp }}/localview-v43-l05/seed
+        run: |
+          set -euo pipefail
+          dbus-run-session -- xvfb-run -a env NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge \
+            LOCALVIEW_CANDIDATE_SHA="$CANDIDATE_SHA" \
+            LOCALVIEW_L7_ARTIFACT_DIR="$LOCALVIEW_L7_ARTIFACT_DIR" \
+            LOCALVIEW_L05_SEED_BIN="$LOCALVIEW_L05_SEED_BIN" \
+            cargo +1.85.0 test \
+              --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
+              --test v43_real_provider_l05 \
+              linux_real_provider_l05::l05_real_accessibility_bus_reconnect_invalidates_old_binding \
+              -- --ignored --exact --nocapture --test-threads=1
+      - name: Verify L05 evidence schema and exact candidate
+        if: always()
+        env:
+          EVIDENCE_PATH: ${{ runner.temp }}/localview-v43-l05/l05-real-provider-evidence.json
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path(os.environ["EVIDENCE_PATH"])
+          if not path.is_file():
+              raise SystemExit(f"missing L05 evidence: {path}")
+          evidence = json.loads(path.read_text())
+          expected = {
+              "schema": "localview.v43.l05.real-provider.v1",
+              "case_id": "L05",
+              "candidate_sha": os.environ["CANDIDATE_SHA"],
+              "provider_family": "linux_atspi",
+              "ground_truth_source": "real_atspi_bus_process_restart_plus_gtk_action_effect",
+              "pre_restart_action_delta": 1,
+              "old_transport_unavailable": True,
+              "old_binding_denied_while_disconnected": True,
+              "bus_incarnation_changed": True,
+              "old_binding_denied_after_reconnect": True,
+              "fresh_binding_revision_greater_than_old": True,
+              "fresh_authorization_succeeded": True,
+              "post_reconnect_action_delta": 1,
+              "target_process_survived_bus_restart": True,
+          }
+          for key, value in expected.items():
+              if evidence.get(key) != value:
+                  raise SystemExit(f"invalid {key}: {evidence.get(key)!r} != {value!r}")
+          if not isinstance(evidence.get("endpoint_reused"), bool):
+              raise SystemExit("endpoint_reused must be an empirical boolean")
+          for key in ("target_pid", "old_bus_child_pid", "replacement_bus_child_pid"):
+              value = evidence.get(key)
+              if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                  raise SystemExit(f"{key} must be a measured positive PID, got {value!r}")
+          if evidence["old_bus_child_pid"] == evidence["replacement_bus_child_pid"]:
+              raise SystemExit("replacement accessibility-bus child must have a fresh PID")
+          killed = evidence.get("killed_processes", "").split(":", 1)
+          if len(killed) != 2 or int(killed[1]) != evidence["old_bus_child_pid"]:
+              raise SystemExit("killed_processes must bind the measured old bus child PID")
+          PY
+      - name: Upload L05 exact-candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v43-l05-real-provider-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/localview-v43-l05/
+          if-no-files-found: error
+          retention-days: 30
