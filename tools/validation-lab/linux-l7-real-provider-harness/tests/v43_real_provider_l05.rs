@@ -46,6 +46,17 @@ mod linux_real_provider_l05 {
             seed
         }
 
+        fn pid(&self) -> u32 {
+            self.child.id()
+        }
+
+        fn is_running(&mut self) -> bool {
+            self.child
+                .try_wait()
+                .expect("inspect GTK L05 seed process")
+                .is_none()
+        }
+
         fn command(&mut self, command: &str) -> Value {
             let stdin = self.child.stdin.as_mut().expect("seed stdin");
             writeln!(stdin, "{command}").expect("write seed command");
@@ -130,6 +141,22 @@ mod linux_real_provider_l05 {
         }
     }
 
+    async fn connect_replacement_observer() -> AccessibilityConnection {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            if let Ok(connection) = AccessibilityConnection::new().await {
+                if connection.root_accessible_on_registry().await.is_ok() {
+                    return connection;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "replacement AT-SPI accessibility bus never became connectable"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     fn press_count(seed: &mut SeedProcess) -> u64 {
         let status = seed.command("status");
         assert_eq!(status["event"], "status");
@@ -163,12 +190,6 @@ if kill -0 "$child" 2>/dev/null; then
   echo "accessibility bus child did not exit: $child" >&2
   exit 22
 fi
-for _ in $(seq 1 100); do
-  if ! kill -0 "$launcher" 2>/dev/null; then
-    break
-  fi
-  sleep 0.05
-done
 printf '%s:%s\n' "$launcher" "$child"
 "#;
         let output = Command::new("bash")
@@ -185,6 +206,41 @@ printf '%s:%s\n' "$launcher" "$child"
             .expect("restart probe output must be UTF-8")
             .trim()
             .to_owned()
+    }
+
+    fn killed_bus_child_pid(killed_processes: &str) -> u32 {
+        killed_processes
+            .split_once(':')
+            .expect("killed process evidence must be launcher:child")
+            .1
+            .parse()
+            .expect("killed accessibility bus child PID must be numeric")
+    }
+
+    fn current_accessibility_bus_child_pid() -> u32 {
+        let script = r#"
+set -euo pipefail
+launcher="$(ps -eo pid=,ppid=,args= | awk '/[a]t-spi-bus-launcher/ {print $1; exit}')"
+[ -n "$launcher" ]
+child="$(ps -eo pid=,ppid=,args= | awk -v p="$launcher" '$2 == p && ($0 ~ /[d]bus-daemon/ || $0 ~ /[d]bus-broker/) {print $1; exit}')"
+[ -n "$child" ]
+printf '%s\n' "$child"
+"#;
+        let output = Command::new("bash")
+            .arg("-lc")
+            .arg(script)
+            .output()
+            .expect("inspect replacement accessibility bus child");
+        assert!(
+            output.status.success(),
+            "replacement accessibility bus child not found: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("replacement child PID must be UTF-8")
+            .trim()
+            .parse()
+            .expect("replacement accessibility bus child PID must be numeric")
     }
 
     async fn wait_until_old_bus_is_dead(connection: &AccessibilityConnection) -> bool {
@@ -219,6 +275,7 @@ printf '%s:%s\n' "$launcher" "$child"
         let candidate_sha = std::env::var("LOCALVIEW_CANDIDATE_SHA")
             .expect("LOCALVIEW_CANDIDATE_SHA must bind evidence to the exact candidate");
         let mut seed = SeedProcess::launch();
+        let target_pid = seed.pid();
 
         let old_observer = AccessibilityConnection::new()
             .await
@@ -254,6 +311,7 @@ printf '%s:%s\n' "$launcher" "$child"
             .expect("old binding must be actionable before the real bus restart");
 
         let killed_processes = terminate_real_accessibility_bus_child();
+        let old_bus_child_pid = killed_bus_child_pid(&killed_processes);
         let old_transport_unavailable = wait_until_old_bus_is_dead(&old_observer).await;
         assert!(
             old_transport_unavailable,
@@ -270,6 +328,22 @@ printf '%s:%s\n' "$launcher" "$child"
             Err(AtspiActionEligibilityError::AccessibilityBusDisconnected)
         );
 
+        let target_process_survived_bus_restart = seed.is_running()
+            && seed.pid() == target_pid
+            && press_count(&mut seed) == 0;
+        assert!(
+            target_process_survived_bus_restart,
+            "GTK target process must survive the accessibility-bus restart unchanged"
+        );
+
+        let fresh_observer = connect_replacement_observer().await;
+        let fresh_object = find_accessible_by_name(&fresh_observer, ACCESSIBLE_NAME).await;
+        let replacement_bus_child_pid = current_accessibility_bus_child_pid();
+        assert_ne!(
+            replacement_bus_child_pid, old_bus_child_pid,
+            "real accessibility bus child PID must change across L05 reincarnation"
+        );
+
         let fresh_bus_incarnation = provider
             .reconnect_accessibility_bus()
             .await
@@ -284,10 +358,6 @@ printf '%s:%s\n' "$launcher" "$child"
             Err(AtspiActionEligibilityError::AccessibilityBusIncarnationMismatch)
         );
 
-        let fresh_observer = AccessibilityConnection::new()
-            .await
-            .expect("connect independent observer to replacement accessibility bus");
-        let fresh_object = find_accessible_by_name(&fresh_observer, ACCESSIBLE_NAME).await;
         let fresh_bus_name = fresh_object
             .name_as_str()
             .expect("fresh real accessible must have a unique bus name")
@@ -357,7 +427,10 @@ printf '%s:%s\n' "$launcher" "$child"
             "fresh_binding_revision_greater_than_old": fresh_binding_revision_greater_than_old,
             "fresh_authorization_succeeded": true,
             "post_reconnect_action_delta": after_press_count - before_press_count,
-            "target_process_survived_bus_restart": true,
+            "target_process_survived_bus_restart": target_process_survived_bus_restart,
+            "target_pid": target_pid,
+            "old_bus_child_pid": old_bus_child_pid,
+            "replacement_bus_child_pid": replacement_bus_child_pid,
             "endpoint_reused": endpoint_reused,
             "killed_processes": killed_processes
         }));
