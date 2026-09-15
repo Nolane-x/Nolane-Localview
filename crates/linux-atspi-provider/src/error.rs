@@ -2,10 +2,14 @@
 pub enum AtspiProviderConnectionError {
     #[error("AT-SPI accessibility bus is unavailable")]
     AccessibilityBusUnavailable,
+    #[error("AT-SPI accessibility bus is still connected")]
+    AccessibilityBusStillConnected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AtspiBindError {
+    #[error("AT-SPI accessibility bus is disconnected")]
+    AccessibilityBusDisconnected,
     #[error("AT-SPI endpoint was already bound and requires an explicit recreation transition")]
     EndpointAlreadyBound,
 }
@@ -22,6 +26,12 @@ pub enum AtspiReacquireError {
     ProviderIncarnationMismatch,
     #[error("AT-SPI target incarnation does not match the previous binding")]
     TargetIncarnationMismatch,
+    #[error("AT-SPI accessibility bus is disconnected")]
+    AccessibilityBusDisconnected,
+    #[error("AT-SPI accessibility-bus incarnation does not match the current bus")]
+    AccessibilityBusIncarnationMismatch,
+    #[error("AT-SPI accessibility-bus incarnation has not advanced")]
+    AccessibilityBusIncarnationNotAdvanced,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -30,6 +40,10 @@ pub enum AtspiActionEligibilityError {
     Defunct,
     #[error("AT-SPI binding was already invalidated as DEFUNCT")]
     AlreadyInvalidDefunct,
+    #[error("AT-SPI accessibility bus is disconnected")]
+    AccessibilityBusDisconnected,
+    #[error("AT-SPI accessibility-bus incarnation does not match the binding")]
+    AccessibilityBusIncarnationMismatch,
     #[error("AT-SPI state observation is unavailable")]
     ObservationUnavailable,
     #[error("AT-SPI event-derived state requires direct reconciliation before action authority")]
