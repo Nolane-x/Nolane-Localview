@@ -1,0 +1,40 @@
+name: V4.3 L05 GREEN Probe
+
+on:
+  push:
+    branches: [wip/v43-l05-green-probe]
+    paths:
+      - 'crates/linux-atspi-provider/**'
+      - '.github/workflows/v43-l05-green-probe.yml'
+
+concurrency:
+  group: localview-v43-l05-green-probe
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  l05-green-probe:
+    name: L05 GREEN semantic contract probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+      - name: Run Linux L05 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l05_bus_reconnect_contract -- --nocapture --test-threads=1
+      - name: Retain Linux L01 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l01_defunct_binding_contract -- --nocapture --test-threads=1
+      - name: Retain Linux L02 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l02_defunct_recreate_contract -- --nocapture --test-threads=1
+      - name: Retain Linux L03 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l03_visible_occlusion_contract -- --nocapture --test-threads=1
+      - name: Retain Linux L04 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l04_event_reconciliation_contract -- --nocapture --test-threads=1
+      - name: Clippy Linux AT-SPI provider
+        run: cargo clippy -p localview-linux-atspi-provider --features validation-state-injection --all-targets -- -D warnings
