@@ -7,6 +7,10 @@ on:
       - 'crates/linux-atspi-provider/**'
       - '.github/workflows/v43-l05-red-probe.yml'
 
+concurrency:
+  group: localview-v43-l05-red-probe
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
