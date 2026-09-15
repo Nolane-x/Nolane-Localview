@@ -42,7 +42,10 @@ mod linux_real_provider_l05 {
             let stdout = BufReader::new(child.stdout.take().expect("seed stdout"));
             let mut seed = Self { child, stdout };
             let ready = seed.read_event();
-            assert_eq!(ready["event"], "ready", "GTK L05 seed must announce readiness");
+            assert_eq!(
+                ready["event"], "ready",
+                "GTK L05 seed must announce readiness"
+            );
             seed
         }
 
@@ -176,7 +179,10 @@ mod linux_real_provider_l05 {
             if count == expected {
                 return count;
             }
-            assert!(Instant::now() < deadline, "{failure_message}: expected={expected} actual={count}");
+            assert!(
+                Instant::now() < deadline,
+                "{failure_message}: expected={expected} actual={count}"
+            );
             sleep(Duration::from_millis(50)).await;
         }
     }
@@ -262,7 +268,17 @@ printf '%s\n' "$child"
     async fn wait_until_old_bus_is_dead(connection: &AccessibilityConnection) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if connection.root_accessible_on_registry().await.is_err() {
+            let probe = connection
+                .connection()
+                .call_method(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    Some("org.freedesktop.DBus"),
+                    "GetId",
+                    &(),
+                )
+                .await;
+            if probe.is_err() {
                 return true;
             }
             if Instant::now() >= deadline {
@@ -305,7 +321,10 @@ printf '%s\n' "$child"
         let old_proxy = proxy_for(old_observer.connection(), &old_object)
             .await
             .expect("build old real accessible proxy");
-        old_proxy.get_state().await.expect("old bus state query before restart");
+        old_proxy
+            .get_state()
+            .await
+            .expect("old bus state query before restart");
 
         let mut provider = LinuxAtspiProvider::connect(
             ProviderIncarnationRef::from("provider:linux-atspi:real:l05"),
@@ -407,7 +426,8 @@ printf '%s\n' "$child"
             .expect("fresh real accessible must have a unique bus name")
             .to_owned();
         let fresh_object_path = fresh_object.path_as_str().to_owned();
-        let endpoint_reused = fresh_bus_name == old_bus_name && fresh_object_path == old_object_path;
+        let endpoint_reused =
+            fresh_bus_name == old_bus_name && fresh_object_path == old_object_path;
 
         let fresh_binding = provider
             .reacquire_after_bus_reconnect(
@@ -446,7 +466,10 @@ printf '%s\n' "$child"
             "bus reincarnation must not dispatch an action as a side effect"
         );
         assert!(
-            action.do_action(0).await.expect("invoke real AT-SPI action after reconnect"),
+            action
+                .do_action(0)
+                .await
+                .expect("invoke real AT-SPI action after reconnect"),
             "fresh real GTK button must report action success"
         );
         let after_press_count = wait_for_press_count(
