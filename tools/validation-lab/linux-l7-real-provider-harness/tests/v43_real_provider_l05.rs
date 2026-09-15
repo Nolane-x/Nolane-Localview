@@ -165,6 +165,22 @@ mod linux_real_provider_l05 {
             .expect("press_count must be an unsigned integer")
     }
 
+    async fn wait_for_press_count(
+        seed: &mut SeedProcess,
+        expected: u64,
+        failure_message: &str,
+    ) -> u64 {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let count = press_count(seed);
+            if count == expected {
+                return count;
+            }
+            assert!(Instant::now() < deadline, "{failure_message}: expected={expected} actual={count}");
+            sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     fn terminate_real_accessibility_bus_child() -> String {
         let script = r#"
 set -euo pipefail
@@ -310,6 +326,31 @@ printf '%s\n' "$child"
             .await
             .expect("old binding must be actionable before the real bus restart");
 
+        let old_action = ActionProxy::builder(old_observer.connection())
+            .destination(old_bus_name.clone())
+            .expect("valid old AT-SPI action destination")
+            .path(old_object_path.clone())
+            .expect("valid old AT-SPI action path")
+            .build()
+            .await
+            .expect("build old real AT-SPI Action proxy");
+        let pre_restart_before = press_count(&mut seed);
+        assert!(
+            old_action
+                .do_action(0)
+                .await
+                .expect("invoke real AT-SPI action before reconnect"),
+            "old real GTK button must report action success before restart"
+        );
+        let pre_restart_after = wait_for_press_count(
+            &mut seed,
+            pre_restart_before + 1,
+            "pre-restart AT-SPI action did not reach GTK seed exactly once",
+        )
+        .await;
+        let pre_restart_action_delta = pre_restart_after - pre_restart_before;
+        assert_eq!(pre_restart_action_delta, 1);
+
         let killed_processes = terminate_real_accessibility_bus_child();
         let old_bus_child_pid = killed_bus_child_pid(&killed_processes);
         let old_transport_unavailable = wait_until_old_bus_is_dead(&old_observer).await;
@@ -333,10 +374,10 @@ printf '%s\n' "$child"
 
         let target_process_survived_bus_restart = seed.is_running()
             && seed.pid() == target_pid
-            && press_count(&mut seed) == 0;
+            && press_count(&mut seed) == pre_restart_after;
         assert!(
             target_process_survived_bus_restart,
-            "GTK target process must survive the accessibility-bus restart unchanged"
+            "GTK target process must survive the accessibility-bus restart unchanged and receive no phantom action"
         );
 
         let fresh_observer = connect_replacement_observer().await;
@@ -400,22 +441,20 @@ printf '%s\n' "$child"
             .await
             .expect("build fresh real AT-SPI Action proxy");
         let before_press_count = press_count(&mut seed);
+        assert_eq!(
+            before_press_count, pre_restart_after,
+            "bus reincarnation must not dispatch an action as a side effect"
+        );
         assert!(
             action.do_action(0).await.expect("invoke real AT-SPI action after reconnect"),
             "fresh real GTK button must report action success"
         );
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let after_press_count = loop {
-            let count = press_count(&mut seed);
-            if count == before_press_count + 1 {
-                break count;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "fresh AT-SPI action did not reach the original GTK process after bus reconnect"
-            );
-            sleep(Duration::from_millis(50)).await;
-        };
+        let after_press_count = wait_for_press_count(
+            &mut seed,
+            before_press_count + 1,
+            "fresh AT-SPI action did not reach the original GTK process after bus reconnect",
+        )
+        .await;
 
         write_evidence(&json!({
             "schema": "localview.v43.l05.real-provider.v1",
@@ -423,6 +462,7 @@ printf '%s\n' "$child"
             "candidate_sha": candidate_sha,
             "provider_family": "linux_atspi",
             "ground_truth_source": "real_atspi_bus_process_restart_plus_gtk_action_effect",
+            "pre_restart_action_delta": pre_restart_action_delta,
             "old_transport_unavailable": old_transport_unavailable,
             "old_binding_denied_while_disconnected": old_binding_denied_while_disconnected,
             "bus_incarnation_changed": fresh_bus_incarnation != old_bus_incarnation,
