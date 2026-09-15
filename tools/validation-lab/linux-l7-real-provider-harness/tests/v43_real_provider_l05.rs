@@ -318,14 +318,17 @@ printf '%s\n' "$child"
             "old AT-SPI connection must become unusable after killing the real accessibility bus"
         );
 
-        provider.mark_accessibility_bus_disconnected();
+        let old_binding_denied_while_disconnected = matches!(
+            provider.authorize_action(&old_binding).await,
+            Err(AtspiActionEligibilityError::AccessibilityBusDisconnected)
+        );
+        assert!(
+            old_binding_denied_while_disconnected,
+            "shipping provider must detect the closed AT-SPI transport and fence the old binding without a manual disconnect hint"
+        );
         assert_eq!(
             provider.accessibility_bus_lifecycle(),
             AtspiAccessibilityBusLifecycle::Disconnected
-        );
-        assert_eq!(
-            provider.authorize_action(&old_binding).await,
-            Err(AtspiActionEligibilityError::AccessibilityBusDisconnected)
         );
 
         let target_process_survived_bus_restart = seed.is_running()
@@ -421,7 +424,7 @@ printf '%s\n' "$child"
             "provider_family": "linux_atspi",
             "ground_truth_source": "real_atspi_bus_process_restart_plus_gtk_action_effect",
             "old_transport_unavailable": old_transport_unavailable,
-            "old_binding_denied_while_disconnected": true,
+            "old_binding_denied_while_disconnected": old_binding_denied_while_disconnected,
             "bus_incarnation_changed": fresh_bus_incarnation != old_bus_incarnation,
             "old_binding_denied_after_reconnect": true,
             "fresh_binding_revision_greater_than_old": fresh_binding_revision_greater_than_old,
