@@ -13,7 +13,7 @@ permissions:
 jobs:
   l05-red-probe:
     name: L05 RED compile probe
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
