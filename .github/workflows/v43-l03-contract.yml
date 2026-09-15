@@ -1,0 +1,47 @@
+name: V4.3 L03 Visible Occlusion Contract
+
+on:
+  pull_request:
+    paths:
+      - 'crates/linux-atspi-provider/**'
+      - '.github/workflows/v43-l03-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/linux-atspi-provider/**'
+      - '.github/workflows/v43-l03-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-l03-visible-occlusion:
+    name: Linux L03 visible is not unobscured contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+      - name: Verify L03 test registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          listed="$(cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l03_visible_occlusion_contract -- --list)"
+          grep -F 'visible_target_hit_by_other_accessible_is_typed_occluded: test' <<<"$listed"
+          grep -F 'visible_state_without_authoritative_hit_test_fails_closed: test' <<<"$listed"
+          grep -F 'invisible_or_not_showing_target_cannot_mint_pointer_authority: test' <<<"$listed"
+          grep -F 'pointer_authority_requires_visible_showing_and_exact_target_hit: test' <<<"$listed"
+          grep -F 'defunct_semantics_still_win_before_pointer_exposure: test' <<<"$listed"
+          grep -F 'shipping_pointer_path_requires_live_provider_observation: test' <<<"$listed"
+      - name: Run Linux L03 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l03_visible_occlusion_contract -- --nocapture --test-threads=1
+      - name: Retain Linux L01 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l01_defunct_binding_contract -- --nocapture --test-threads=1
+      - name: Retain Linux L02 contract
+        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l02_defunct_recreate_contract -- --nocapture --test-threads=1
+      - name: Clippy Linux AT-SPI provider with validation feature
+        run: cargo clippy -p localview-linux-atspi-provider --features validation-state-injection --all-targets -- -D warnings

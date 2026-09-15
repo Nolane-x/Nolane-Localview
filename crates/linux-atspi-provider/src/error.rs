@@ -37,3 +37,17 @@ pub enum AtspiActionEligibilityError {
     #[error("AT-SPI target incarnation does not match the binding")]
     TargetIncarnationMismatch,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AtspiPointerEligibilityError {
+    #[error("AT-SPI semantic eligibility failed: {0}")]
+    Semantic(AtspiActionEligibilityError),
+    #[error("AT-SPI target is not VISIBLE")]
+    NotVisible,
+    #[error("AT-SPI target is not SHOWING")]
+    NotShowing,
+    #[error("AT-SPI pointer hit-test is unavailable")]
+    HitTestUnavailable,
+    #[error("AT-SPI pointer hit-test resolves an accessible other than the intended target")]
+    Occluded,
+}
