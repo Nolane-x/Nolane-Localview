@@ -15,7 +15,7 @@ permissions:
 jobs:
   l05-real-provider:
     name: L05 real AT-SPI accessibility-bus reconnect oracle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +30,15 @@ jobs:
           sudo apt-get install -y \
             dbus-x11 xvfb at-spi2-core libatk-adaptor procps \
             build-essential pkg-config libgtk-3-dev
+      - name: Require reconnect-capable AT-SPI runtime
+        run: |
+          set -euo pipefail
+          installed="$(dpkg-query -W -f='${Version}' at-spi2-core)"
+          echo "at-spi2-core=$installed"
+          if ! dpkg --compare-versions "$installed" ge "2.57.2"; then
+            echo "L05 requires atk-adaptor bus-launcher reconnect support from at-spi2-core >= 2.57.2; installed=$installed" >&2
+            exit 1
+          fi
       - name: Bind exact L05 real-provider candidate
         run: |
           set -euo pipefail
