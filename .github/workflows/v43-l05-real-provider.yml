@@ -94,6 +94,7 @@ jobs:
               "candidate_sha": os.environ["EXPECTED_SHA"],
               "provider_family": "linux_atspi",
               "ground_truth_source": "real_atspi_bus_process_restart_plus_gtk_action_effect",
+              "pre_restart_action_delta": 1,
               "old_transport_unavailable": True,
               "old_binding_denied_while_disconnected": True,
               "bus_incarnation_changed": True,
