@@ -32,6 +32,7 @@ jobs:
           set -euo pipefail
           listed="$(cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l05_bus_reconnect_contract -- --list)"
           grep -F 'accessibility_bus_disconnect_immediately_fences_old_binding_authority: test' <<<"$listed"
+          grep -F 'disconnected_bus_cannot_create_unobserved_initial_binding: test' <<<"$listed"
           grep -F 'successful_bus_reconnect_changes_incarnation_and_old_binding_cannot_revive: test' <<<"$listed"
           grep -F 'explicit_reacquire_after_bus_reconnect_mints_fresh_binding_on_new_bus: test' <<<"$listed"
           grep -F 'observations_and_permits_are_bound_to_accessibility_bus_incarnation: test' <<<"$listed"

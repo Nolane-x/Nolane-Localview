@@ -41,6 +41,20 @@ fn accessibility_bus_disconnect_immediately_fences_old_binding_authority() {
 }
 
 #[test]
+fn disconnected_bus_cannot_create_unobserved_initial_binding() {
+    let mut provider = provider();
+    provider.mark_accessibility_bus_disconnected();
+
+    assert_eq!(
+        provider.bind_initial(
+            AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/50-new"),
+            "cut:l05:disconnected",
+        ),
+        Err(AtspiBindError::AccessibilityBusDisconnected)
+    );
+}
+
+#[test]
 fn successful_bus_reconnect_changes_incarnation_and_old_binding_cannot_revive() {
     let mut provider = provider();
     let endpoint = AtspiEndpoint::new(":1.250", "/org/a11y/atspi/accessible/51");
