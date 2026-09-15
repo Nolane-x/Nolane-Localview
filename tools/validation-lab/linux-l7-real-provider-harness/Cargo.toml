@@ -34,3 +34,6 @@ atspi = { version = "=0.30.0", features = ["zbus"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tokio-stream = "0.1"
+# yoke-derive 0.8.3 is selected as Rust-1.85-compatible but does not compile on
+# rustc 1.85.0; 0.8.2 is the exact derive version proven by the L04 real oracle.
+yoke-derive = "=0.8.2"
