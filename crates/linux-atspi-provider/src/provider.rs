@@ -339,13 +339,11 @@ impl LinuxAtspiProvider {
             );
         }
 
-        // AT-SPI explicitly warns that same-layer relative z-order is unavailable
-        // for ordinary widgets and recommends the "first child paints first"
-        // heuristic. A parent hit-test can therefore self-hit the target even
-        // when a later sibling actually overpaints and receives pointer input.
-        // Treat the self-hit as necessary but not sufficient evidence: inspect
-        // later siblings through the same real AT-SPI tree before minting a
-        // pointer permit.
+        // A target self-hit is necessary but not sufficient. AT-SPI documents
+        // explicit layer/z-order authority and, for ordinary same-layer siblings,
+        // recommends "first child paints first". Inspect every overlapping
+        // sibling for higher layer/z-order, and use child order only as the
+        // same-layer tie-breaker where no explicit z-order exists.
         let parent_accessible = AccessibleProxy::builder(bus)
             .destination(parent_bus_name)
             .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
@@ -366,8 +364,8 @@ impl LinuxAtspiProvider {
             })
             .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
 
-        for sibling in children.iter().skip(target_index + 1) {
-            if sibling.is_null() {
+        for (sibling_index, sibling) in children.iter().enumerate() {
+            if sibling_index == target_index || sibling.is_null() {
                 continue;
             }
             let sibling_bus_name = sibling
@@ -427,10 +425,12 @@ impl LinuxAtspiProvider {
                     .get_mdiz_order()
                     .await
                     .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
-                if sibling_z >= target_mdi_z.expect("MDI/window target z-order was observed") {
+                let target_z =
+                    target_mdi_z.ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+                if sibling_z > target_z || (sibling_z == target_z && sibling_index > target_index) {
                     return Err(AtspiPointerEligibilityError::Occluded);
                 }
-            } else {
+            } else if sibling_index > target_index {
                 return Err(AtspiPointerEligibilityError::Occluded);
             }
         }
