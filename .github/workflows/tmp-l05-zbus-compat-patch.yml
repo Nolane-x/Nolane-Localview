@@ -2,7 +2,8 @@ name: TEMP L05 zbus compatibility patch
 
 on:
   push:
-    branches: [wip/v43-l05-zbus-compat-fix]
+    branches:
+      - wip/v43-l05-zbus-compat-fix
 
 permissions:
   contents: write
@@ -24,101 +25,85 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('crates/linux-atspi-provider/src/provider.rs')
+          path = Path("crates/linux-atspi-provider/src/provider.rs")
           text = path.read_text()
 
-          # zbus <=5.17 has no Connection::is_closed(). Sync accessors retain
-          # the provider-owned lifecycle; live shipping authority performs the
-          # real bus liveness probe immediately before AT-SPI reads.
-          refresh = '        self.refresh_closed_transport_state();\n'
+          refresh = "        self.refresh_closed_transport_state();\n"
           count = text.count(refresh)
           if count != 6:
-              raise SystemExit(f'expected 6 refresh calls, found {count}')
-          text = text.replace(refresh, '')
+              raise SystemExit(f"expected 6 refresh calls, found {count}")
+          text = text.replace(refresh, "")
 
-          old = '        let connection = self.connection_for_live_authority()?;\n'
+          old = "        let connection = self.connection_for_live_authority()?;\n"
           if text.count(old) != 1:
-              raise SystemExit('expected one reconcile live-connection call')
-          text = text.replace(
-              old,
-              '        let connection = self.connection_for_live_authority().await?;\n',
-          )
+              raise SystemExit("expected one reconcile live-connection call")
+          text = text.replace(old, "        let connection = self.connection_for_live_authority().await?;\n")
 
-          old = '''        let connection = self
-            .connection_for_live_authority()
-            .map_err(AtspiPointerEligibilityError::Semantic)?;
-'''
+          old = "        let connection = self\n            .connection_for_live_authority()\n            .map_err(AtspiPointerEligibilityError::Semantic)?;\n"
+          new = "        let connection = self\n            .connection_for_live_authority()\n            .await\n            .map_err(AtspiPointerEligibilityError::Semantic)?;\n"
           if text.count(old) != 1:
-              raise SystemExit('expected one pointer live-connection call')
-          text = text.replace(
-              old,
-              '''        let connection = self
-            .connection_for_live_authority()
-            .await
-            .map_err(AtspiPointerEligibilityError::Semantic)?;
-''',
-          )
+              raise SystemExit("expected one pointer live-connection call")
+          text = text.replace(old, new)
 
-          start = text.index('    fn refresh_closed_transport_state(&self) {\n')
-          end = text.index('    fn observation_transport_error(&self) -> AtspiActionEligibilityError {\n')
-          replacement = '''    async fn connection_for_live_authority(
-        &self,
-    ) -> Result<AccessibilityConnection, AtspiActionEligibilityError> {
-        let (bus_incarnation, connection) = {
-            let bus = self
-                .accessibility_bus
-                .lock()
-                .expect("AT-SPI accessibility bus mutex poisoned");
-            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {
-                return Err(AtspiActionEligibilityError::AccessibilityBusDisconnected);
-            }
-            let connection = bus
-                .connection
-                .clone()
-                .ok_or(AtspiActionEligibilityError::ObservationUnavailable)?;
-            (bus.incarnation_ref, connection)
-        };
-
-        // zbus 5.13.x (the version resolved by atspi 0.30 on Rust 1.85)
-        // predates Connection::is_closed(). Probe the message bus itself via
-        // the standard org.freedesktop.DBus GetId method instead. A failure is
-        // authoritative evidence that this transport can no longer back live
-        // action authority.
-        let probe = connection
-            .connection()
-            .call_method(
-                Some("org.freedesktop.DBus"),
-                "/org/freedesktop/DBus",
-                Some("org.freedesktop.DBus"),
-                "GetId",
-                &(),
-            )
-            .await;
-        if probe.is_err() {
-            let mut bus = self
-                .accessibility_bus
-                .lock()
-                .expect("AT-SPI accessibility bus mutex poisoned");
-            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Connected
-                && bus.incarnation_ref == bus_incarnation
-            {
-                bus.lifecycle = AtspiAccessibilityBusLifecycle::Disconnected;
-                bus.connection = None;
-            }
-            return Err(AtspiActionEligibilityError::AccessibilityBusDisconnected);
-        }
-
-        Ok(connection)
-    }
-
-'''
+          start = text.index("    fn refresh_closed_transport_state(&self) {\n")
+          end = text.index("    fn observation_transport_error(&self) -> AtspiActionEligibilityError {\n")
+          lines = [
+              "    async fn connection_for_live_authority(",
+              "        &self,",
+              "    ) -> Result<AccessibilityConnection, AtspiActionEligibilityError> {",
+              "        let (bus_incarnation, connection) = {",
+              "            let bus = self",
+              "                .accessibility_bus",
+              "                .lock()",
+              "                .expect(\"AT-SPI accessibility bus mutex poisoned\");",
+              "            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Disconnected {",
+              "                return Err(AtspiActionEligibilityError::AccessibilityBusDisconnected);",
+              "            }",
+              "            let connection = bus",
+              "                .connection",
+              "                .clone()",
+              "                .ok_or(AtspiActionEligibilityError::ObservationUnavailable)?;",
+              "            (bus.incarnation_ref, connection)",
+              "        };",
+              "",
+              "        // zbus 5.13.x (resolved by atspi 0.30 on Rust 1.85) predates",
+              "        // Connection::is_closed(). Probe the message bus itself through",
+              "        // the standard org.freedesktop.DBus GetId method instead.",
+              "        let probe = connection",
+              "            .connection()",
+              "            .call_method(",
+              "                Some(\"org.freedesktop.DBus\"),",
+              "                \"/org/freedesktop/DBus\",",
+              "                Some(\"org.freedesktop.DBus\"),",
+              "                \"GetId\",",
+              "                &(),",
+              "            )",
+              "            .await;",
+              "        if probe.is_err() {",
+              "            let mut bus = self",
+              "                .accessibility_bus",
+              "                .lock()",
+              "                .expect(\"AT-SPI accessibility bus mutex poisoned\");",
+              "            if bus.lifecycle == AtspiAccessibilityBusLifecycle::Connected",
+              "                && bus.incarnation_ref == bus_incarnation",
+              "            {",
+              "                bus.lifecycle = AtspiAccessibilityBusLifecycle::Disconnected;",
+              "                bus.connection = None;",
+              "            }",
+              "            return Err(AtspiActionEligibilityError::AccessibilityBusDisconnected);",
+              "        }",
+              "",
+              "        Ok(connection)",
+              "    }",
+              "",
+          ]
+          replacement = "\n".join(lines) + "\n"
           text = text[:start] + replacement + text[end:]
 
-          if 'is_closed()' in text:
-              raise SystemExit('zbus is_closed call survived compatibility patch')
-          if 'refresh_closed_transport_state' in text:
-              raise SystemExit('obsolete sync transport refresh survived patch')
-
+          if "is_closed()" in text:
+              raise SystemExit("zbus is_closed call survived compatibility patch")
+          if "refresh_closed_transport_state" in text:
+              raise SystemExit("obsolete sync transport refresh survived patch")
           path.write_text(text)
           PY
           rm .github/workflows/tmp-l05-zbus-compat-patch.yml
