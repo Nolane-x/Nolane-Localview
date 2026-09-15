@@ -112,6 +112,15 @@ jobs:
               raise SystemExit("L05 evidence must identify the killed launcher/bus child pair")
           if not isinstance(evidence.get("endpoint_reused"), bool):
               raise SystemExit("L05 endpoint_reused must be an empirical boolean")
+          for key in ("target_pid", "old_bus_child_pid", "replacement_bus_child_pid"):
+              value = evidence.get(key)
+              if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                  raise SystemExit(f"L05 {key} must be a measured positive PID, got {value!r}")
+          if evidence["old_bus_child_pid"] == evidence["replacement_bus_child_pid"]:
+              raise SystemExit("L05 replacement accessibility-bus child must have a fresh PID")
+          killed_parts = evidence["killed_processes"].split(":", 1)
+          if len(killed_parts) != 2 or int(killed_parts[1]) != evidence["old_bus_child_pid"]:
+              raise SystemExit("L05 killed_processes must bind the measured old bus child PID")
           PY
       - name: Upload L05 exact-head evidence
         if: always()
