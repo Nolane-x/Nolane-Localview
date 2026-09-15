@@ -23,6 +23,10 @@ path = "tests/v43_real_provider_l03.rs"
 name = "v43_real_provider_l04"
 path = "tests/v43_real_provider_l04.rs"
 
+[[test]]
+name = "v43_real_provider_l05"
+path = "tests/v43_real_provider_l05.rs"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 localview-linux-atspi-provider = { path = "../../../crates/linux-atspi-provider" }
 localview-protocol = { path = "../../../crates/protocol" }
