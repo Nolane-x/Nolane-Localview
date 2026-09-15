@@ -17,7 +17,7 @@ permissions:
 jobs:
   l05-green-probe:
     name: L05 GREEN semantic contract probe
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
