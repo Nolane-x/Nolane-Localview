@@ -12,13 +12,15 @@ permissions:
 
 jobs:
   l05-red-probe:
-    name: L05 RED compile probe
-    runs-on: ubuntu-slim
+    name: L05 RED Linux cross-check probe
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
       - uses: dtolnay/rust-toolchain@1.85.0
-      - name: Compile wished-for L05 contract registration
-        run: cargo test -p localview-linux-atspi-provider --features validation-state-injection --test l05_bus_reconnect_contract -- --list
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Type-check wished-for Linux L05 contract
+        run: cargo check -p localview-linux-atspi-provider --features validation-state-injection --target x86_64-unknown-linux-gnu --test l05_bus_reconnect_contract
