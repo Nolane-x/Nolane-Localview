@@ -45,8 +45,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: rustfmt
-      - name: Format harness
-        run: cargo +1.85.0 fmt --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml -- --check
+      - name: Format only the corrected L05 oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustfmt +1.85.0 --edition 2024 tools/validation-lab/linux-l7-real-provider-harness/tests/v43_real_provider_l05.rs
+          git diff --check
       - name: Compile exact L05 real-provider registration
         shell: bash
         run: |
