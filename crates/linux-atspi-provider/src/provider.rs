@@ -4,7 +4,7 @@ use std::{
 };
 
 use atspi::{
-    AccessibilityConnection, CoordType, State, StateSet,
+    AccessibilityConnection, CoordType, Layer, State, StateSet,
     proxy::{accessible::AccessibleProxy, component::ComponentProxy},
 };
 use localview_protocol::{ProviderIncarnationRef, TargetIncarnationRef};
@@ -20,6 +20,34 @@ use crate::{
 struct EndpointAuthorityRecord {
     binding_revision: u64,
     retired: bool,
+}
+
+fn layer_stack_rank(layer: Layer) -> Option<u8> {
+    match layer {
+        Layer::Invalid => None,
+        Layer::Background => Some(1),
+        Layer::Window => Some(2),
+        Layer::Mdi => Some(3),
+        Layer::Canvas => Some(4),
+        Layer::Widget => Some(5),
+        Layer::Popup => Some(6),
+        Layer::Overlay => Some(7),
+    }
+}
+
+fn point_in_extents(extents: (i32, i32, i32, i32), point: (i32, i32)) -> bool {
+    let (x, y, width, height) = extents;
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+
+    let left = i64::from(x);
+    let top = i64::from(y);
+    let right = left + i64::from(width);
+    let bottom = top + i64::from(height);
+    let px = i64::from(point.0);
+    let py = i64::from(point.1);
+    px >= left && px < right && py >= top && py < bottom
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +282,24 @@ impl LinuxAtspiProvider {
         let center_y = y
             .checked_add(height / 2)
             .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let center = (center_x, center_y);
+
+        let target_layer = component
+            .get_layer()
+            .await
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let target_layer_rank =
+            layer_stack_rank(target_layer).ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let target_mdi_z = if matches!(target_layer, Layer::Window | Layer::Mdi) {
+            Some(
+                component
+                    .get_mdiz_order()
+                    .await
+                    .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?,
+            )
+        } else {
+            None
+        };
 
         let parent = accessible
             .parent()
@@ -265,10 +311,11 @@ impl LinuxAtspiProvider {
         let parent_bus_name = parent
             .name_as_str()
             .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let parent_path = parent.path_as_str();
         let parent_component = ComponentProxy::builder(bus)
             .destination(parent_bus_name)
             .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
-            .path(parent.path_as_str())
+            .path(parent_path)
             .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
             .build()
             .await
@@ -284,13 +331,115 @@ impl LinuxAtspiProvider {
             .name_as_str()
             .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
         let hit_endpoint = AtspiEndpoint::new(hit_bus_name, hit.path_as_str());
-        let hit_test = if &hit_endpoint == binding.endpoint() {
-            AtspiPointerHitTest::Target(hit_endpoint)
-        } else {
-            AtspiPointerHitTest::Other(hit_endpoint)
-        };
+        if &hit_endpoint != binding.endpoint() {
+            return self.authorize_pointer_from_observation(
+                binding,
+                states,
+                AtspiPointerHitTest::Other(hit_endpoint),
+            );
+        }
 
-        self.authorize_pointer_from_observation(binding, states, hit_test)
+        // AT-SPI explicitly warns that same-layer relative z-order is unavailable
+        // for ordinary widgets and recommends the "first child paints first"
+        // heuristic. A parent hit-test can therefore self-hit the target even
+        // when a later sibling actually overpaints and receives pointer input.
+        // Treat the self-hit as necessary but not sufficient evidence: inspect
+        // later siblings through the same real AT-SPI tree before minting a
+        // pointer permit.
+        let parent_accessible = AccessibleProxy::builder(bus)
+            .destination(parent_bus_name)
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+            .path(parent_path)
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+            .build()
+            .await
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let children = parent_accessible
+            .get_children()
+            .await
+            .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+        let target_index = children
+            .iter()
+            .position(|child| {
+                child.name_as_str() == Some(binding.endpoint().bus_name())
+                    && child.path_as_str() == binding.endpoint().object_path()
+            })
+            .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+
+        for sibling in children.iter().skip(target_index + 1) {
+            if sibling.is_null() {
+                continue;
+            }
+            let sibling_bus_name = sibling
+                .name_as_str()
+                .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+            let sibling_path = sibling.path_as_str();
+            let sibling_accessible = AccessibleProxy::builder(bus)
+                .destination(sibling_bus_name)
+                .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+                .path(sibling_path)
+                .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+                .build()
+                .await
+                .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+            let sibling_states = sibling_accessible
+                .get_state()
+                .await
+                .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+            if sibling_states.contains(State::Defunct)
+                || !sibling_states.contains(State::Visible)
+                || !sibling_states.contains(State::Showing)
+            {
+                continue;
+            }
+
+            let sibling_component = ComponentProxy::builder(bus)
+                .destination(sibling_bus_name)
+                .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+                .path(sibling_path)
+                .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?
+                .build()
+                .await
+                .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+            let sibling_extents = sibling_component
+                .get_extents(CoordType::Screen)
+                .await
+                .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+            if !point_in_extents(sibling_extents, center) {
+                continue;
+            }
+
+            let sibling_layer = sibling_component
+                .get_layer()
+                .await
+                .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+            let sibling_layer_rank = layer_stack_rank(sibling_layer)
+                .ok_or(AtspiPointerEligibilityError::HitTestUnavailable)?;
+            if sibling_layer_rank > target_layer_rank {
+                return Err(AtspiPointerEligibilityError::Occluded);
+            }
+            if sibling_layer_rank < target_layer_rank {
+                continue;
+            }
+
+            if matches!(target_layer, Layer::Window | Layer::Mdi) {
+                let sibling_z = sibling_component
+                    .get_mdiz_order()
+                    .await
+                    .map_err(|_| AtspiPointerEligibilityError::HitTestUnavailable)?;
+                if sibling_z >= target_mdi_z.expect("MDI/window target z-order was observed") {
+                    return Err(AtspiPointerEligibilityError::Occluded);
+                }
+            } else {
+                return Err(AtspiPointerEligibilityError::Occluded);
+            }
+        }
+
+        self.authorize_pointer_from_observation(
+            binding,
+            states,
+            AtspiPointerHitTest::Target(hit_endpoint),
+        )
     }
 
     #[cfg(feature = "validation-state-injection")]
