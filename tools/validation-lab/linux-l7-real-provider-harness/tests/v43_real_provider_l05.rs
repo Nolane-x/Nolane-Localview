@@ -190,12 +190,12 @@ mod linux_real_provider_l05 {
     fn terminate_real_accessibility_bus_child() -> String {
         let script = r#"
 set -euo pipefail
-launcher="$(ps -eo pid=,ppid=,args= | awk '/[a]t-spi-bus-launcher/ {print $1; exit}')"
+launcher="$(ps -eo pid=,ppid=,args= | awk '$3 ~ /(^|\/)at-spi-bus-launcher$/ {print $1; exit}')"
 if [ -z "$launcher" ]; then
   echo 'no at-spi-bus-launcher found' >&2
   exit 20
 fi
-child="$(ps -eo pid=,ppid=,args= | awk -v p="$launcher" '$2 == p && ($0 ~ /[d]bus-daemon/ || $0 ~ /[d]bus-broker/) {print $1; exit}')"
+child="$(ps -eo pid=,ppid=,args= | awk -v p="$launcher" '$2 == p && ($3 ~ /(^|\/)dbus-daemon$/ || $3 ~ /(^|\/)dbus-broker(-launch)?$/) {print $1; exit}')"
 if [ -z "$child" ]; then
   echo "no accessibility bus child found under launcher=$launcher" >&2
   ps -eo pid=,ppid=,args= >&2
@@ -242,9 +242,9 @@ printf '%s:%s\n' "$launcher" "$child"
     fn current_accessibility_bus_child_pid() -> u32 {
         let script = r#"
 set -euo pipefail
-launcher="$(ps -eo pid=,ppid=,args= | awk '/[a]t-spi-bus-launcher/ {print $1; exit}')"
+launcher="$(ps -eo pid=,ppid=,args= | awk '$3 ~ /(^|\/)at-spi-bus-launcher$/ {print $1; exit}')"
 [ -n "$launcher" ]
-child="$(ps -eo pid=,ppid=,args= | awk -v p="$launcher" '$2 == p && ($0 ~ /[d]bus-daemon/ || $0 ~ /[d]bus-broker/) {print $1; exit}')"
+child="$(ps -eo pid=,ppid=,args= | awk -v p="$launcher" '$2 == p && ($3 ~ /(^|\/)dbus-daemon$/ || $3 ~ /(^|\/)dbus-broker(-launch)?$/) {print $1; exit}')"
 [ -n "$child" ]
 printf '%s\n' "$child"
 "#;
@@ -326,7 +326,7 @@ printf '%s\n' "$child"
             .await
             .expect("old bus state query before restart");
 
-        let mut provider = LinuxAtspiProvider::connect(
+        let provider = LinuxAtspiProvider::connect(
             ProviderIncarnationRef::from("provider:linux-atspi:real:l05"),
             TargetIncarnationRef::from("target:linux-atspi:real:l05"),
         )
