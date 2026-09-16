@@ -15,7 +15,7 @@ permissions:
 jobs:
   l05-real-provider:
     name: L05 real AT-SPI accessibility-bus reconnect oracle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +42,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/localview-v43-l05"
           printf '{"candidate_sha":"%s","workflow":"v43-l05-real-provider"}\n' "$actual" \
             > "$RUNNER_TEMP/localview-v43-l05/run-context.json"
+      - name: Require reconnect-capable AT-SPI runtime
+        run: |
+          set -euo pipefail
+          version="$(dpkg-query -W -f='${Version}\n' at-spi2-core | sed 's/-.*//')"
+          if ! dpkg --compare-versions "$version" ge 2.57.0; then
+            echo "L05 requires AT-SPI >= 2.57.0 because older ATK adaptors do not reconnect when the bus launcher reappears; got $version" >&2
+            exit 1
+          fi
+          printf '%s\n' "$version" > "$RUNNER_TEMP/localview-v43-l05/at-spi2-core-version.txt"
       - name: Compile bus-reconnect GTK/ATK provider seed
         run: |
           set -euo pipefail
@@ -67,14 +76,14 @@ jobs:
           set -euo pipefail
           # Xvfb must exist before dbus-run-session so D-Bus activated AT-SPI
           # services inherit DISPLAY/XAUTHORITY from the session-bus activation
-          # environment.  The inverse wrapper order split the seed and observer
+          # environment. The inverse wrapper order split the seed and observer
           # across two accessibility-bus incarnations.
           xvfb-run -a dbus-run-session -- bash -lc '
             set -euo pipefail
 
-            # Match the at-spi2-core 2.52 upstream CI environment: the bus
-            # launcher and registry participate in GNOME session lifecycle, so
-            # a bare dbus-run-session is not a faithful end-to-end fixture.
+            # Mirror the upstream AT-SPI session lifecycle. This L05 oracle is
+            # intentionally version-bound to AT-SPI >= 2.57, where atk-adaptor
+            # reconnects when the accessibility-bus launcher reappears.
             python3 -m dbusmock --session \
               org.gnome.SessionManager \
               /org/gnome/SessionManager \
@@ -106,7 +115,7 @@ jobs:
 
             # A DISPLAY-aware at-spi-bus-launcher derives an X-specific socket
             # (bus_<display>) and publishes the same address through the X root
-            # AT_SPI_BUS property.  Fail here instead of allowing a split-brain
+            # AT_SPI_BUS property. Fail here instead of allowing a split-brain
             # fixture to masquerade as a provider failure.
             grep -Eq "at-spi/bus_[0-9]+" \
               "$LOCALVIEW_L7_ARTIFACT_DIR/initial-bus-address.txt"
