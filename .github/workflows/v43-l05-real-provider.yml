@@ -65,7 +65,11 @@ jobs:
           LOCALVIEW_L05_SEED_BIN: ${{ runner.temp }}/localview-v43-l05/seed
         run: |
           set -euo pipefail
-          dbus-run-session -- xvfb-run -a bash -lc '
+          # Xvfb must exist before dbus-run-session so D-Bus activated AT-SPI
+          # services inherit DISPLAY/XAUTHORITY from the session-bus activation
+          # environment.  The inverse wrapper order split the seed and observer
+          # across two accessibility-bus incarnations.
+          xvfb-run -a dbus-run-session -- bash -lc '
             set -euo pipefail
 
             # Match the at-spi2-core 2.52 upstream CI environment: the bus
@@ -99,6 +103,13 @@ jobs:
               --object-path /org/a11y/bus \
               --method org.a11y.Bus.GetAddress \
               >"$LOCALVIEW_L7_ARTIFACT_DIR/initial-bus-address.txt"
+
+            # A DISPLAY-aware at-spi-bus-launcher derives an X-specific socket
+            # (bus_<display>) and publishes the same address through the X root
+            # AT_SPI_BUS property.  Fail here instead of allowing a split-brain
+            # fixture to masquerade as a provider failure.
+            grep -Eq "at-spi/bus_[0-9]+" \
+              "$LOCALVIEW_L7_ARTIFACT_DIR/initial-bus-address.txt"
 
             gdbus call --session \
               --dest org.gnome.SessionManager \
