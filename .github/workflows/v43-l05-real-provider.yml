@@ -66,25 +66,46 @@ jobs:
           set -euo pipefail
           dbus-run-session -- xvfb-run -a bash -lc '
             set -euo pipefail
-            # Hold a real client connection to the initial accessibility bus.
-            # A one-shot GetAddress requester exits too quickly and Ubuntu 24.04
-            # tears that first bus down before the GTK seed/observer attach.
-            raw_address="$(gdbus call --session \
-              --dest org.a11y.Bus \
-              --object-path /org/a11y/bus \
-              --method org.a11y.Bus.GetAddress)"
-            address="$(printf "%s" "$raw_address" | python3 -c "import ast,sys; print(ast.literal_eval(sys.stdin.read())[0])")"
-            test -n "$address"
-            dbus-monitor --address "$address" \
-              >"$LOCALVIEW_L7_ARTIFACT_DIR/initial-bus-keeper.log" 2>&1 &
-            keeper_pid=$!
-            cleanup_keeper() {
-              kill "$keeper_pid" 2>/dev/null || true
-              wait "$keeper_pid" 2>/dev/null || true
+            # Keep the initial at-spi-bus-launcher itself under oracle control.
+            # The accessibility dbus-daemon uses PR_SET_PDEATHSIG, so an
+            # unstable D-Bus-activated launcher can make its bus exit cleanly
+            # before the GTK target is discoverable.  L05 later kills only the
+            # bus child; this controlled launcher may then exit naturally and
+            # org.a11y.Bus activation is free to create the replacement pair.
+            launcher="$(dpkg -L at-spi2-core | grep -E "/at-spi-bus-launcher$" | head -n 1)"
+            test -n "$launcher"
+            test -x "$launcher"
+            "$launcher" --launch-immediately \
+              >"$LOCALVIEW_L7_ARTIFACT_DIR/initial-at-spi-bus-launcher.log" 2>&1 &
+            launcher_pid=$!
+            cleanup_launcher() {
+              kill "$launcher_pid" 2>/dev/null || true
+              wait "$launcher_pid" 2>/dev/null || true
             }
-            trap cleanup_keeper EXIT
-            sleep 0.2
-            kill -0 "$keeper_pid"
+            trap cleanup_launcher EXIT
+
+            address_ready=0
+            for _ in $(seq 1 50); do
+              if gdbus call --session \
+                --dest org.a11y.Bus \
+                --object-path /org/a11y/bus \
+                --method org.a11y.Bus.GetAddress \
+                >"$LOCALVIEW_L7_ARTIFACT_DIR/initial-bus-address.txt" 2>/dev/null; then
+                address_ready=1
+                break
+              fi
+              if ! kill -0 "$launcher_pid" 2>/dev/null; then
+                cat "$LOCALVIEW_L7_ARTIFACT_DIR/initial-at-spi-bus-launcher.log" >&2 || true
+                exit 1
+              fi
+              sleep 0.1
+            done
+            if [ "$address_ready" -ne 1 ]; then
+              cat "$LOCALVIEW_L7_ARTIFACT_DIR/initial-at-spi-bus-launcher.log" >&2 || true
+              echo "controlled L05 accessibility launcher never became ready" >&2
+              exit 1
+            fi
+            kill -0 "$launcher_pid"
 
             env NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge \
               LOCALVIEW_CANDIDATE_SHA="$LOCALVIEW_CANDIDATE_SHA" \
