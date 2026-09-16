@@ -64,15 +64,25 @@ jobs:
           LOCALVIEW_L05_SEED_BIN: ${{ runner.temp }}/localview-v43-l05/seed
         run: |
           set -euo pipefail
-          dbus-run-session -- xvfb-run -a env NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge \
-            LOCALVIEW_CANDIDATE_SHA="$LOCALVIEW_CANDIDATE_SHA" \
-            LOCALVIEW_L7_ARTIFACT_DIR="$LOCALVIEW_L7_ARTIFACT_DIR" \
-            LOCALVIEW_L05_SEED_BIN="$LOCALVIEW_L05_SEED_BIN" \
-            cargo +1.85.0 test \
-              --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
-              --test v43_real_provider_l05 \
-              linux_real_provider_l05::l05_real_accessibility_bus_reconnect_invalidates_old_binding \
-              -- --ignored --exact --nocapture --test-threads=1
+          dbus-run-session -- xvfb-run -a bash -lc '
+            set -euo pipefail
+            # L05 is about an intentional bus reincarnation later in the test.
+            # Prime org.a11y.Bus first so the GTK target attaches to one stable
+            # initial bus instead of racing the observer for first activation.
+            gdbus call --session \
+              --dest org.a11y.Bus \
+              --object-path /org/a11y/bus \
+              --method org.a11y.Bus.GetAddress >/dev/null
+            exec env NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge \
+              LOCALVIEW_CANDIDATE_SHA="$LOCALVIEW_CANDIDATE_SHA" \
+              LOCALVIEW_L7_ARTIFACT_DIR="$LOCALVIEW_L7_ARTIFACT_DIR" \
+              LOCALVIEW_L05_SEED_BIN="$LOCALVIEW_L05_SEED_BIN" \
+              cargo +1.85.0 test \
+                --manifest-path tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml \
+                --test v43_real_provider_l05 \
+                linux_real_provider_l05::l05_real_accessibility_bus_reconnect_invalidates_old_binding \
+                -- --ignored --exact --nocapture --test-threads=1
+          '
       - name: Verify L05 evidence schema and exact-head binding
         if: always()
         env:
