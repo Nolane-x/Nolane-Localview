@@ -59,6 +59,7 @@ jobs:
             | grep -F 'linux_real_provider_l05::l05_real_accessibility_bus_reconnect_invalidates_old_binding: test'
       - name: Run real GTK/ATK/AT-SPI L05 oracle
         env:
+          ATSPI_DBUS_IMPLEMENTATION: dbus-daemon
           LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           LOCALVIEW_L7_ARTIFACT_DIR: ${{ runner.temp }}/localview-v43-l05
           LOCALVIEW_L05_SEED_BIN: ${{ runner.temp }}/localview-v43-l05/seed
