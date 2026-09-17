@@ -1,0 +1,12 @@
+[package]
+name = "localview-full-page"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+localview-visual = { path = "../visual" }
+png = "0.18.1"
