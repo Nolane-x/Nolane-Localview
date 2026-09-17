@@ -11,6 +11,7 @@ members = [
   "crates/semantic",
   "crates/layout",
   "crates/visual",
+  "crates/full-page",
   "crates/responsive",
   "crates/source-map",
   "crates/source-graph",
