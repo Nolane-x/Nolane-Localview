@@ -1087,11 +1087,11 @@ fn valid_positive_document_height(value: f64) -> bool {
 }
 
 fn valid_nonnegative_css_coordinate(value: f64) -> bool {
-    value.is_finite() && value >= 0.0 && value <= MAX_CSS_VIEWPORT_DIMENSION
+    value.is_finite() && (0.0..=MAX_CSS_VIEWPORT_DIMENSION).contains(&value)
 }
 
 fn valid_full_page_y(value: f64) -> bool {
-    value.is_finite() && value >= 0.0 && value <= MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT
+    value.is_finite() && (0.0..=MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT).contains(&value)
 }
 
 fn sanitized_mask_rects(payload: &Value) -> Option<Vec<Value>> {
