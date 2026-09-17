@@ -64,24 +64,31 @@ fn planner_rejects_more_than_32_tiles() {
 
 #[test]
 fn projected_height_supports_fractional_native_scale_without_integer_css_assumption() {
-    let height = project_output_height_px(2500.0, 1000.0, 1500, policy()).unwrap();
+    let height = project_output_height_px(2500.0, 1000.0, 1200, 1500, policy()).unwrap();
     assert_eq!(height, 3750);
 }
 
 #[test]
 fn projected_height_rejects_output_over_pixel_height_budget() {
-    let err = project_output_height_px(50_000.0, 1000.0, 1000, policy()).unwrap_err();
+    let err = project_output_height_px(50_000.0, 1000.0, 1000, 1000, policy()).unwrap_err();
     assert!(matches!(err, FullPagePlanError::OutputTooTall));
 }
 
 #[test]
 fn projected_height_rejects_output_over_rgba_budget() {
-    let err = project_output_height_px(32_768.0, 1000.0, 1000, FullPagePolicy {
-        max_tiles: 64,
-        max_document_css_height: 50_000.0,
-        max_output_rgba_bytes: 1024,
-        max_output_pixel_height: 32_768,
-    }).unwrap_err();
+    let err = project_output_height_px(
+        1000.0,
+        1000.0,
+        1000,
+        1000,
+        FullPagePolicy {
+            max_tiles: 64,
+            max_document_css_height: 50_000.0,
+            max_output_rgba_bytes: 1024,
+            max_output_pixel_height: 32_768,
+        },
+    )
+    .unwrap_err();
     assert!(matches!(err, FullPagePlanError::OutputTooLarge));
 }
 
@@ -93,8 +100,14 @@ fn scroll_tolerance_is_one_native_pixel_with_quarter_css_floor() {
 
 #[test]
 fn scroll_tolerance_rejects_non_positive_or_non_finite_scale() {
-    assert!(matches!(scroll_tolerance_css(0.0), Err(FullPagePlanError::InvalidScale)));
-    assert!(matches!(scroll_tolerance_css(f64::NAN), Err(FullPagePlanError::InvalidScale)));
+    assert!(matches!(
+        scroll_tolerance_css(0.0),
+        Err(FullPagePlanError::InvalidScale)
+    ));
+    assert!(matches!(
+        scroll_tolerance_css(f64::NAN),
+        Err(FullPagePlanError::InvalidScale)
+    ));
 }
 
 #[test]
