@@ -53,7 +53,7 @@ Any failure before exact scroll + visual restoration causes all captured pixels 
 
 Existing public `Scroll` remains a user/page action and is not reused as stitching authority.
 
-Add private internal-capture operations bound to the active freeze token:
+Add private internal-capture operations bound to the active freeze token.
 
 ### 5.1 Full-page metrics
 
@@ -68,9 +68,12 @@ Returns a bounded receipt containing:
 - maximum scroll x/y;
 - bounded viewport-anchored scan count;
 - count of visible `position: fixed` / `position: sticky` elements;
-- a deterministic geometry fingerprint for the document/viewport state.
+- a deterministic **document invariant fingerprint** that excludes expected scroll coordinates but includes document/viewport dimensions and bounded structural geometry inputs used by the stitch guard;
+- current private mask rectangles/count for this exact viewport position, never selector strings.
 
 The instrumentation scan is bounded. If the scan budget is exceeded, metrics acquisition fails closed.
+
+A successful metrics acknowledgement renews the active visual-freeze lease for another normal lease interval. It does not create a new token.
 
 ### 5.2 Capture-only scroll
 
@@ -82,8 +85,11 @@ Requirements:
 - x/y must be finite and inside the metrics-defined scroll range;
 - the page scrolls using the managed page runtime;
 - acknowledgement is emitted only after the browser reports the resulting position after at least two animation-frame turns;
-- the receipt returns actual `scroll_x`, `scroll_y`, current document dimensions, viewport dimensions and the same geometry fingerprint fields used by metrics;
+- the receipt returns actual `scroll_x`, `scroll_y`, current document dimensions, viewport dimensions, current visible fixed/sticky count, the document invariant fingerprint, and private mask rectangles/count for that exact scroll position;
+- successful acknowledgement renews the same freeze token's lease for another normal lease interval;
 - clamping is allowed only when it exactly matches the precomputed terminal tile target; arbitrary mismatch fails.
+
+Every tile, including a tile at the original scroll position, begins with one `CaptureScroll` acknowledgement. This gives every native acquisition a fresh token-bound lease renewal and a tile-specific mask receipt.
 
 These actions remain outside public action cancellation, like existing freeze/restore actions. They are capture-internal and never become a public page-control primitive.
 
@@ -95,7 +101,7 @@ Before the first tile, the frozen page is scanned for visible viewport-anchored 
 
 Reason: repeating or suppressing fixed/sticky UI would invent a visual interpretation. A later dedicated anchored-element compositor may relax this gate only with its own evidence-backed contract.
 
-The guard is checked again after each capture-only scroll. If viewport-anchored state appears later, the transaction aborts and discards pixels.
+The guard is checked again in every capture-scroll acknowledgement. If viewport-anchored state appears later, the transaction aborts and discards pixels.
 
 ## 7. Geometry and tile planning
 
@@ -119,7 +125,7 @@ The last target on each axis is exactly the maximum scroll position, so browser 
 
 Do not accumulate rounded tile sizes.
 
-Derive `scale_x = native_pixel_width / viewport_css_width` and `scale_y = native_pixel_height / viewport_css_height` from the real native frame. Require both to be finite, positive, mutually sane and compatible with the reported device-scale factor within a small documented tolerance.
+Derive `scale_x = native_pixel_width / viewport_css_width` and `scale_y = native_pixel_height / viewport_css_height` from the real native frame. Require both to be finite, positive, mutually sane and compatible with the reported device-scale factor within an implementation constant locked by tests.
 
 For every global CSS boundary, calculate its final native pixel boundary from the global coordinate and scale, then round once. The compositor crops overlapping tile pixels using these global boundaries. This prevents cumulative fractional-DPI seam drift.
 
@@ -135,10 +141,13 @@ Initial design targets:
 - maximum tile count: 64;
 - maximum decoded final RGBA allocation: 96 MiB;
 - every native tile remains subject to the existing 24 MiB native frame limit;
-- final encoded PNG must pass existing artifact-store retained-resource admission before mutation;
+- final encoded PNG must pass existing artifact-store retained-resource projection/admission before mutation;
 - capture uses the existing per-session serialization gate;
 - full-page execution receives a bounded overall timeout independent of the per-native-capture timeout;
+- the overall timeout must still allow repeated lease renewal, but no individual native capture may outlive the renewed visual-freeze lease;
 - integer conversions use checked/saturating-safe arithmetic; overflow is an error, never truncation.
+
+The 96 MiB compositor bound is a local transient-allocation bound, not a fabricated retained-resource counter. Retained artifact bytes continue to be governed by the existing owner-local artifact-store ledger.
 
 If the page cannot fit the bounds, LocalView returns a bounded unsupported/resource error and captures nothing.
 
@@ -151,34 +160,37 @@ For one `capture_full_page` request:
 3. Acquire the existing per-session capture gate.
 4. Wait for stable capture settle.
 5. Freeze visual state and private masking; record freeze token.
-6. Acquire full-page metrics and original scroll position.
+6. Acquire full-page metrics and original scroll position; this renews the freeze lease.
 7. Reject bounded-scan overflow or any visible fixed/sticky element.
 8. Plan the complete tile grid before native pixel acquisition.
-9. Admit projected final decoded/compositor resource usage before continuing.
+9. Validate projected final RGBA allocation against the hard transient compositor bound.
 10. For each tile target:
-   - perform token-bound capture scroll;
-   - verify exact acknowledged position and invariant document/viewport/route geometry;
+   - perform token-bound capture scroll, even when the target equals the current position;
+   - renew the freeze lease through that acknowledgement;
+   - verify exact acknowledged position, zero fixed/sticky count, document invariant fingerprint, document dimensions and viewport dimensions;
    - capture through the existing native managed-surface viewport path;
    - verify backend, route, revision, viewport, native dimensions and scale invariants;
-   - redact private pixels in memory using the active freeze mask geometry;
+   - redact private pixels in memory using the mask geometry from that tile's capture-scroll acknowledgement;
    - decode and copy only the globally owned crop into the final compositor;
    - drop tile PNG/RGBA buffers as soon as copied.
-11. Token-bound scroll back to the exact original x/y and verify acknowledgement.
+11. Token-bound scroll back to the exact original x/y and verify acknowledgement; this also refreshes the lease.
 12. Restore visual state with the exact token and require acknowledgement.
 13. Only after both restores succeed, encode the final compositor image.
-14. Reconcile/admit artifact-store retained bytes and persist one final artifact.
+14. Reconcile/project/admit final encoded bytes against the existing artifact-store retained-resource authority and persist one final artifact.
 15. Register one full-page visual evidence record.
 16. Drop compositor memory and release the session gate.
 
-Cleanup must attempt both scroll restoration and visual restoration even when an earlier tile fails. Failure of either restoration makes the transaction unsuccessful and prevents persistence.
+Cleanup must attempt both scroll restoration and visual restoration even when an earlier tile fails. Failure of either restoration makes the transaction unsuccessful and prevents final persistence.
+
+If artifact persistence succeeds but evidence registration fails, no successful command receipt or authoritative full-page evidence is returned. The content-addressed artifact may remain as unreferenced retained data under the existing ArtifactStore/LRU semantics; retained-resource accounting must remain exact. This slice does not invent an unsafe ad-hoc delete path solely to simulate cross-process atomicity.
 
 ## 10. Private redaction
 
 Private pixels must never enter the stitched canvas unredacted.
 
-Each native tile is redacted before decode/copy into the final compositor using the same private-selector authority already used by viewport capture.
+Each native tile is redacted before decode/copy into the final compositor using the private-selector authority already owned by the managed page. The capture-scroll acknowledgement returns only bounded mask geometry for that exact tile position. Selector strings never leave the private capture envelope.
 
-Because mask geometry is currently viewport-relative, the instrumentation receipt for capture-only scrolling must provide/revalidate mask rectangles for the current tile position under the same freeze token. Selector strings remain private to the managed page; only bounded geometry receipts cross the bridge.
+The desktop forms a tile-local redaction receipt from the active freeze token plus the just-acknowledged mask geometry, then reuses the existing in-memory redaction implementation before compositor access.
 
 If mask resolution changes unexpectedly, exceeds its limits or cannot be proven for a tile, the transaction aborts and all pixels are discarded.
 
@@ -199,8 +211,8 @@ Required provenance:
 - final pixel width/height;
 - tile count;
 - deterministic ordered tile targets/acknowledged offsets or a bounded digest over them;
-- geometry fingerprint;
-- redaction applied flag/count metadata without selectors;
+- document invariant fingerprint;
+- redaction-applied flag and bounded redaction-count metadata without selectors;
 - exact transaction outcome.
 
 No filesystem path or tile pixels are exposed in command receipts.
@@ -213,6 +225,7 @@ The operation fails closed on at least:
 - non-loopback route;
 - settle timeout;
 - freeze failure;
+- freeze lease expiration/renewal failure;
 - metrics scan overflow;
 - invalid/non-finite document geometry;
 - document too large;
@@ -222,6 +235,7 @@ The operation fails closed on at least:
 - token mismatch;
 - scroll acknowledgement mismatch;
 - unexpected browser clamping;
+- document invariant fingerprint drift;
 - document-size drift;
 - viewport/DSF/native-size drift;
 - route/revision drift where revision is authoritative;
@@ -233,14 +247,14 @@ The operation fails closed on at least:
 - retained-resource admission/persistence failure;
 - evidence-registration failure.
 
-A failed transaction must not emit a successful full-page evidence record or leave a final artifact behind as authoritative evidence.
+A failed transaction must not emit a successful full-page evidence record or successful full-page command receipt.
 
 ## 13. Implementation boundaries
 
 Expected files/components:
 
 - `crates/live-bridge`: private full-page metrics/capture-scroll action variants and internal-action classification;
-- `crates/instrumentation`: bounded metrics, anchored-element guard, token-bound scroll and per-tile mask geometry receipt;
+- `crates/instrumentation`: bounded metrics, anchored-element guard, token-bound scroll/lease renewal and per-tile mask geometry receipt;
 - `crates/visual`: pure tile planner/compositor geometry helpers and adversarial tests;
 - `apps/desktop/src-tauri/src/visual_capture.rs`: full transaction coordinator and final artifact/evidence path;
 - `apps/desktop/src-tauri/src/lib.rs`: command registration/managed-page executor cases;
@@ -280,16 +294,18 @@ Must prove:
 - bounded element scan;
 - fixed/sticky guard;
 - exact scroll acknowledgement;
+- lease renewal without token replacement;
 - original scroll restoration;
-- per-tile private mask re-resolution without selector leakage.
+- per-tile private mask re-resolution without selector leakage;
+- invariant fingerprint excludes expected scroll coordinates but changes when guarded document geometry changes.
 
 ### 14.3 Desktop transaction tests
 
 Must lock ordering:
 
-`settle -> freeze -> metrics -> plan/admit -> [scroll -> native capture -> redact -> copy]* -> restore scroll -> restore visuals -> encode -> persist -> evidence`
+`settle -> freeze -> metrics/renew -> plan/bound -> [scroll+renew -> native capture -> redact -> copy]* -> restore scroll+renew -> restore visuals -> encode -> retained project/admit/persist -> evidence`
 
-Adversarial tests must show no persistence/evidence when route, geometry, scale, mask, capture, restoration, resource admission or evidence registration fails.
+Adversarial tests must show no persistence/evidence before restoration and no successful receipt/evidence when route, geometry, scale, mask, lease, capture, restoration, resource admission or evidence registration fails.
 
 ### 14.4 Cross-platform compile/CI
 
@@ -309,13 +325,14 @@ This wave is complete only when:
 
 1. full-page capture uses only the existing managed native viewport authority;
 2. one coherent token-bound transaction owns every tile;
-3. private pixels are redacted before entering the compositor;
-4. exact original scroll and visual state are restored before persistence;
-5. fractional-DPI/overlap math is deterministic and adversarially tested;
-6. fixed/sticky ambiguity fails closed;
-7. memory, tile, timeout and retained-storage bounds are enforced;
-8. no intermediate tile is persisted;
-9. final full-page artifact has dedicated provenance/evidence;
-10. existing capture behavior remains unchanged;
-11. exact-head CI is green across supported platforms;
-12. roadmap/status claims are updated only to the level actually proven.
+3. the 8-second visual-freeze lease is safely renewed without replacing the transaction token;
+4. private pixels are redacted with tile-current mask geometry before entering the compositor;
+5. exact original scroll and visual state are restored before persistence;
+6. fractional-DPI/overlap math is deterministic and adversarially tested;
+7. fixed/sticky ambiguity fails closed;
+8. transient memory, tile, timeout and retained-storage bounds are enforced by their correct owners;
+9. no intermediate tile is persisted;
+10. final full-page artifact has dedicated provenance/evidence;
+11. existing capture behavior remains unchanged;
+12. exact-head CI is green across supported platforms;
+13. roadmap/status claims are updated only to the level actually proven.
