@@ -46,9 +46,9 @@ The initial full-page authority is bounded by constants owned by production code
 - `MAX_FULL_PAGE_PNG_BYTES = 128 * 1024 * 1024`
 - device-scale factor must continue to satisfy the existing visual-capture bound `0 < dsf <= 8`
 - document width must be finite, positive, and no more than `0.5 CSS px` wider than the captured viewport width
-- document height must be finite, positive, at least the viewport height, and no greater than `MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT`
+- document height must be finite, positive, and no greater than `MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT`
 
-A page outside those limits is unsupported for guarded stitching and must fail before persistence.
+A page shorter than one viewport is valid and produces one cropped contribution from one native viewport capture. A page outside the limits above is unsupported for guarded stitching and must fail before persistence.
 
 ## High-level architecture
 
@@ -60,7 +60,7 @@ This unit owns no browser or Tauri state. It accepts validated document geometry
 
 It produces a deterministic vertical stitch plan and a single final PNG. The planner is independently testable and must not invent browser state.
 
-The plan uses real scroll-clamping semantics. For a document height `H` and viewport height `V`, offsets advance by `V` until the last offset and must always include `max_scroll = H - V` exactly. The final tile can overlap the previous tile. Each planned tile therefore contains:
+For document height `H` and viewport height `V`, `max_scroll = max(H - V, 0)`. If `H <= V`, the plan contains only offset `0`. Otherwise offsets advance by `V` until the next step would pass `max_scroll`, and the plan must include `max_scroll` exactly as the final offset. The final tile can overlap the previous tile. Each planned tile therefore contains:
 
 ```text
 scroll_y_css
@@ -111,16 +111,18 @@ mask_rects
 lease_ms
 ```
 
-`StitchScroll` must:
+The page-side freeze state retains the private selector list only inside the exact active freeze-token state so later probes can recompute mask geometry after scroll. Selector strings never leave the private page/instrumentation authority.
 
-1. verify the exact freeze token is still active;
-2. reject non-finite/negative requested positions;
-3. perform an exact vertical document scroll with `x = original_scroll_x`;
-4. read back the actual clamped scroll offset;
-5. refresh document/viewport geometry;
-6. refresh private-mask geometry for the new viewport using the already-private selector authority;
-7. refresh the visual-freeze self-healing lease for the same token;
-8. return the same geometry-only receipt shape.
+Both `StitchProbe` and `StitchScroll` must verify the exact active token and renew the existing self-healing visual-freeze lease before returning success.
+
+`StitchScroll` must additionally:
+
+1. reject non-finite/negative requested positions;
+2. perform an exact vertical document scroll while preserving the original horizontal scroll position;
+3. read back the actual clamped scroll offset;
+4. refresh document/viewport geometry;
+5. refresh private-mask geometry for the new viewport using the retained private selector authority;
+6. return the same geometry-only receipt shape.
 
 No selector string, page payload, text content, storage value, cookie, URL query, or response body may cross this boundary.
 
@@ -139,22 +141,24 @@ The exact successful sequence is:
 3. Acquire the existing per-session capture gate.
 4. Run the existing stable-settle gate.
 5. Freeze visual state through the existing internal freeze authority.
-6. Record original scroll position from the freeze-bound stitch probe.
-7. Validate initial document geometry and safety limits.
-8. Reject if `fixed_or_sticky_count > 0` in this initial slice.
+6. Run an exact-token `StitchProbe` and record the original `(scroll_x, scroll_y)` plus initial document/viewport geometry.
+7. Validate initial document geometry and all safety limits.
+8. Reject if the initial `fixed_or_sticky_count > 0`.
 9. Build the deterministic stitch plan.
 10. For each planned tile:
     - issue exact-token `StitchScroll` to the planned `scroll_y_css`;
     - require returned actual `scroll_y` to match the plan within `0.5 CSS px`;
-    - require route-independent viewport/document geometry to equal the initial geometry within `0.5 CSS px`;
+    - require viewport/document geometry to equal the initial geometry within `0.5 CSS px`;
+    - require `fixed_or_sticky_count == 0`;
     - run stable-settle again after the scroll so lazy-loading/network activity cannot be silently stitched mid-change;
-    - issue `StitchProbe` again and require the same scroll/document/viewport geometry;
+    - issue a pre-capture exact-token `StitchProbe`; require the same scroll/document/viewport geometry and `fixed_or_sticky_count == 0`;
     - capture one viewport through the existing native WebView backend;
     - require route, viewport and device-scale factor to remain compatible;
-    - redact that tile immediately using the mask rectangles returned by the same exact-token post-settle probe;
+    - issue a post-capture exact-token `StitchProbe`; require the same scroll/document/viewport geometry, `fixed_or_sticky_count == 0`, and mask rectangles equal to the pre-capture mask rectangles under the normal geometry tolerance;
+    - redact that tile immediately using the pre-capture mask rectangles only after the post-capture bracket proves they did not drift;
     - decode/validate the redacted tile and feed only the redacted image into the stitcher;
     - discard the original native PNG and decoded tile as soon as its contribution is committed.
-11. Before final persistence, scroll back to the exact original `scroll_y` using the same freeze token and verify the read-back offset.
+11. Before final persistence, use the exact freeze token to restore both original horizontal and vertical scroll state and verify the read-back offsets within `0.5 CSS px`.
 12. Restore visual state with the exact existing freeze token and require restore acknowledgement.
 13. Only after both scroll restoration and visual restoration succeed may the final stitched PNG be admitted to retained-resource storage.
 14. Persist one final artifact.
@@ -173,16 +177,18 @@ Full-page capture is an evidence transaction, not a best-effort screenshot. It f
 - device-scale factor changes;
 - document width or height changes after initial probe;
 - actual scroll offset differs from the planned offset by more than `0.5 CSS px`;
+- fixed/sticky content appears after the initial probe;
+- pre/post-capture private-mask geometry differs;
 - private-mask refresh fails;
 - settle times out for any tile;
 - freeze lease expires or token changes;
 - native capture fails;
 - redaction fails;
 - tile decode/encode/stitch validation fails;
-- original scroll cannot be restored exactly enough;
+- original scroll cannot be restored within `0.5 CSS px`;
 - visual restore acknowledgement fails;
 - retained-resource admission fails;
-- evidence registration fails before the artifact transaction can be considered complete.
+- evidence registration fails before the operation can be reported as complete.
 
 The initial closure deliberately treats dynamic document-height growth caused by infinite/lazy feeds as unsupported instead of chasing a moving end-of-page target.
 
@@ -190,7 +196,7 @@ The initial closure deliberately treats dynamic document-height growth caused by
 
 A naive stitch duplicates fixed headers, cookie banners, floating buttons and sticky navigation. Heuristic image de-duplication would be visually fragile and would move correctness authority away from browser state.
 
-Therefore the initial guarded implementation fails before tile capture when the freeze-bound probe reports any rendered element whose computed `position` is `fixed` or `sticky`.
+Therefore the initial guarded implementation fails before tile capture when the freeze-bound probe reports any rendered element whose computed `position` is `fixed` or `sticky`. The same zero-count condition is rechecked for every tile.
 
 This is an explicit capability limit, not a hidden fallback. A later separately reviewed slice may introduce an exact-token temporary suppression protocol with proof of restoration, but this design does not claim it.
 
@@ -202,7 +208,9 @@ The strongest invariant of this feature is:
 
 The current viewport freeze receipt cannot be reused after scrolling because selector-matched elements move relative to the viewport. Every tile therefore requires private-mask geometry refreshed under the exact active freeze token after that tile has settled.
 
-Mask refresh is geometry-only. The private selectors remain in the private capture envelope/page instrumentation and never become daemon evidence or public command fields.
+Every native capture is bracketed by pre/post exact-token probes. If the mask geometry changes across that bracket, the native pixels are discarded instead of being redacted using stale rectangles.
+
+Mask refresh is geometry-only. The private selectors remain in private page-side freeze state and never become daemon evidence or public command fields.
 
 ## Artifact and retained-resource authority
 
@@ -213,6 +221,8 @@ The final stitched PNG is admitted through the same owner-local retained-resourc
 A failed store mutation or failed accounting reconciliation cannot be counted as successful persistence.
 
 The final PNG byte length must also satisfy `MAX_FULL_PAGE_PNG_BYTES` even when the ArtifactStore has more free capacity.
+
+The current ArtifactStore has no public transactional rollback primitive. This slice therefore does not invent fake atomicity between local artifact persistence and subsequent daemon evidence registration. If evidence registration fails after a successful `put`, the command fails and must not return a usable full-page receipt. Retained-resource accounting still reflects the real persisted artifact. A separate artifact transaction/rollback design is required before claiming atomic store+evidence commit semantics repository-wide.
 
 ## Evidence contract
 
@@ -235,6 +245,7 @@ document_css_height
 tile_count
 device_scale_factor
 scroll_offsets_css[]
+original_scroll_x_css
 original_scroll_y_css
 fixed_or_sticky_count = 0
 redaction_applied = true
@@ -250,6 +261,7 @@ Public errors remain coarse and privacy-safe. They identify the failed invariant
 - `full-page capture refuses fixed or sticky content in guarded mode`
 - `full-page document geometry changed during capture; pixels discarded`
 - `full-page scroll acknowledgement drifted; pixels discarded`
+- `full-page private-mask geometry drifted; pixels discarded`
 - `full-page private-mask refresh failed; pixels discarded`
 - `full-page restore acknowledgement failed; pixels discarded`
 - `full-page stitched output exceeds the bounded pixel budget`
@@ -260,6 +272,7 @@ Implementation follows TDD. At minimum, RED then GREEN coverage must prove the f
 
 ### Pure planner/stitcher tests
 
+- document shorter than one viewport produces one cropped contribution;
 - one-viewport document produces one tile;
 - exact two-viewport document produces two non-overlapping contributions;
 - partial final page forces an overlapping clamped final scroll but contributes each document row exactly once;
@@ -276,8 +289,8 @@ Implementation follows TDD. At minimum, RED then GREEN coverage must prove the f
 - stitch actions are internal capture actions;
 - public action API cannot enqueue them;
 - wrong/expired freeze token is rejected;
+- both probe and scroll renew the freeze lease;
 - `StitchScroll` reports actual clamped offset;
-- each stitch scroll refreshes the freeze lease;
 - each stitch scroll/probe refreshes private-mask geometry;
 - selector strings never appear in the serialized result;
 - fixed/sticky count is geometry-only metadata.
@@ -286,16 +299,19 @@ Implementation follows TDD. At minimum, RED then GREEN coverage must prove the f
 
 - session capture gate covers the entire multi-tile transaction;
 - no artifact is persisted before original-scroll and visual restore succeed;
+- every native tile is bracketed by pre/post stitch probes;
 - every native tile is redacted before it reaches the stitcher;
+- changed mask geometry across the capture bracket rejects and discards the tile;
 - route drift rejects and discards all pixels;
 - viewport/DSF/document-height drift rejects and discards all pixels;
 - settle timeout on tile N rejects the whole capture;
-- fixed/sticky content is rejected before the first native tile;
-- original scroll is restored on success;
+- fixed/sticky content is rejected before the first native tile and if it appears later;
+- original horizontal and vertical scroll are restored on success;
 - failed original-scroll restore prevents persistence;
 - failed visual restore prevents persistence;
 - retained-resource projection occurs before final store mutation;
-- one successful transaction creates exactly one final artifact/evidence receipt and no tile artifacts.
+- one successful transaction creates exactly one final artifact/evidence receipt and no tile artifacts;
+- evidence registration failure returns an error and never returns a usable full-page receipt while retained accounting continues to reflect any already-persisted artifact.
 
 ### Cross-platform regression
 
