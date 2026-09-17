@@ -2,218 +2,289 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add bounded native full-page capture by vertically stitching redacted viewport captures from the existing managed WebView authority.
+**Goal:** Add a bounded native full-page capture command that composes redacted viewport captures from the exact LocalView-managed WebView while preserving capture, privacy, restoration and retained-resource authority.
 
-**Architecture:** Keep platform adapters viewport-only. Add a pure planner/streaming stitcher in `localview-visual`, exact-freeze-token probe/scroll actions in the live bridge/instrumentation path, and one desktop coordinator that owns settle → freeze → tile scroll/probe/capture/redact/stitch → original-scroll restore → visual restore → persistence → evidence. All drift fails closed.
+**Architecture:** Keep WebView2/WKWebView/WebKitGTK adapters viewport-only. Put deterministic planning/output geometry/row-copy stitching in `localview-visual`; add exact freeze-token `CaptureScrollTo` and `CaptureTileProbe` internal bridge actions; expose narrow authenticated control endpoints; and let the desktop coordinator own one session-gated settle -> freeze -> tile loop -> original-scroll restore -> visual restore -> final persistence/evidence transaction. Any authority, geometry, privacy, resource or restoration uncertainty fails closed.
 
-**Tech Stack:** Rust, Tauri 2, existing `png` crate, LocalView live bridge/instrumentation, Axum control plane, GitHub Actions cross-platform CI.
+**Tech Stack:** Rust 1.85+, Tauri 2, existing `png`/visual utilities, LocalView LiveBridge/instrumentation, Axum control plane, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-09-17-guarded-full-page-stitching-design.md`
 
 ## Global Constraints
 
-- `MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT = 100_000.0`.
-- `MAX_FULL_PAGE_TILES = 128`.
-- `MAX_FULL_PAGE_PIXELS = 64_000_000`.
-- `MAX_FULL_PAGE_PNG_BYTES = 128 * 1024 * 1024`.
-- Existing viewport DSF bound remains `0 < dsf <= 8`.
-- Full-page capture is vertical-only and rejects horizontal document overflow beyond `0.5 CSS px`.
-- Fixed or sticky rendered content is rejected in this slice.
-- Every tile must be redacted before entering the stitcher.
-- Every native tile must be bracketed by exact-token pre/post probes with stable mask geometry.
-- No intermediate tile artifact may be persisted.
-- Original scroll and visual state must restore successfully before final persistence.
-- No Chromium/Playwright full-page fallback.
+- `max_tiles = 32`.
+- `max_document_css_height = 50_000 CSS px`.
+- `max_output_rgba_bytes = 128 MiB`.
+- `max_output_pixel_height = 32_768 px`.
+- Existing viewport/region freeze lease remains `8_000 ms`; full-page uses one internal `30_000 ms` lease and one matching desktop transaction timeout. No lease-renewal loop.
+- Full-page stitching is vertical-only. Document CSS width must remain equal to the frozen viewport width within the existing geometry tolerance.
+- Visible `position: fixed` or `position: sticky` content fails closed in this slice.
+- Every tile gets fresh private-mask geometry after its exact scroll/settle and is redacted before entering the stitcher.
+- Intermediate tile PNG/RGBA buffers are ephemeral and never persisted or registered as evidence.
+- Original scroll and exact visual state must be restored before final encode/persistence/evidence registration.
+- No Chromium/Playwright/Puppeteer/html2canvas/DOM reconstruction fallback.
+- No caller-provided tile offsets, document dimensions, masks, backend, route or evidence verdicts.
 
 ---
 
-## Task 1: Pure deterministic full-page planner and streaming compositor
+### Task 1: Move the pure planner/stitcher into `localview-visual`
 
 **Files:**
 - Create: `crates/visual/src/full_page.rs`
 - Modify: `crates/visual/src/lib.rs`
-- Create: `crates/visual/tests/full_page_stitching.rs`
+- Create: `crates/visual/tests/full_page_stitch_contract.rs`
+- Modify: `Cargo.toml` to remove the temporary `crates/full-page` workspace member
+- Delete: `crates/full-page/Cargo.toml`
+- Delete: `crates/full-page/src/lib.rs`
+- Delete: `crates/full-page/tests/full_page_stitching.rs`
 
 **Interfaces:**
-- Produces: `MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT: f64`, `MAX_FULL_PAGE_TILES: usize`, `MAX_FULL_PAGE_PIXELS: u64`, `MAX_FULL_PAGE_PNG_BYTES: usize`.
-- Produces: `FullPageTilePlan { scroll_y_css, source_start_y_css, contribution_height_css, destination_start_y_css }`.
-- Produces: `FullPagePlan { document_css_width, document_css_height, viewport_css_width, viewport_css_height, tiles }`.
-- Produces: `plan_full_page(document_css: (f64, f64), viewport_css: (f64, f64)) -> Result<FullPagePlan, VisualError>`.
-- Produces: `FullPageStitcher::new(plan, native_pixel_width, native_pixel_height) -> Result<Self, VisualError>`.
-- Produces: `FullPageStitcher::push_tile(index, &RgbaImage) -> Result<(), VisualError>` and `finish() -> Result<Vec<u8>, VisualError>`.
-
-- [ ] **Step 1: Write planner RED tests**
-
-Create tests for shorter-than-viewport, exact viewport multiples, clamped overlapping final scroll, 100,000 CSS-px bound, 129 tiles, horizontal overflow, and non-finite geometry.
-
-Representative expected plan for `H=2500,V=1000`:
 
 ```rust
-assert_eq!(plan.tiles.len(), 3);
-assert_eq!(plan.tiles[0].scroll_y_css, 0.0);
-assert_eq!(plan.tiles[1].scroll_y_css, 1000.0);
-assert_eq!(plan.tiles[2].scroll_y_css, 1500.0);
-assert_eq!(plan.tiles[2].source_start_y_css, 500.0);
-assert_eq!(plan.tiles[2].destination_start_y_css, 2000.0);
-assert_eq!(plan.tiles[2].contribution_height_css, 500.0);
+pub const MAX_FULL_PAGE_TILES: usize = 32;
+pub const MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT: f64 = 50_000.0;
+pub const MAX_FULL_PAGE_OUTPUT_RGBA_BYTES: usize = 128 * 1024 * 1024;
+pub const MAX_FULL_PAGE_OUTPUT_PIXEL_HEIGHT: u32 = 32_768;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FullPagePlan {
+    pub document_css_width: f64,
+    pub document_css_height: f64,
+    pub viewport_css_width: f64,
+    pub viewport_css_height: f64,
+    pub scroll_offsets_y: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FullPageOutputGeometry {
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub rgba_bytes: usize,
+}
+
+pub fn plan_full_page(
+    document_css: (f64, f64),
+    viewport_css: (f64, f64),
+    original_scroll_y: f64,
+) -> Result<FullPagePlan, FullPageError>;
+
+pub fn project_full_page_output(
+    plan: &FullPagePlan,
+    native_viewport: (u32, u32),
+) -> Result<FullPageOutputGeometry, FullPageError>;
+
+pub fn stitch_full_page_tile(
+    output: &mut RgbaImage,
+    viewport_css_height: f64,
+    actual_scroll_y: f64,
+    tile: &RgbaImage,
+) -> Result<(), FullPageError>;
 ```
 
-- [ ] **Step 2: Commit the RED planner tests and require GitHub CI to fail for missing API**
+Do not add an unused `FullPageTile` wrapper; the direct-argument stitcher above is the canonical interface.
 
-Expected failure: unresolved imports/types from `localview_visual`.
+- [ ] **Step 1: RED planner tests.** Add tests that import the interfaces above and require non-finite/zero geometry rejection, one-tile short document, exact-divisible plan with no duplicate final offset, partial final tile at exact `max_scroll_y`, `>32` tile rejection and `>50_000` CSS-px rejection.
 
-- [ ] **Step 3: Implement the minimal deterministic planner**
+Representative assertion:
 
-Use checked finite arithmetic, explicit `max_scroll = (H - V).max(0.0)`, monotonic offsets, exact inclusion of `max_scroll`, and contribution intervals derived from prior covered end.
+```rust
+let plan = plan_full_page((800.0, 2500.0), (800.0, 1000.0), 250.0).unwrap();
+assert_eq!(plan.scroll_offsets_y, vec![0.0, 1000.0, 1500.0]);
+```
 
-- [ ] **Step 4: Add streaming compositor RED tests**
-
-Use small synthetic RGBA tiles with distinct row values. Prove overlapping source rows are discarded, destination rows appear exactly once, fractional CSS→pixel boundaries are contiguous, wrong tile order/dimensions fail, and output cap errors.
-
-- [ ] **Step 5: Implement bounded streaming PNG output**
-
-Use `png::Encoder` + stream writer over a custom bounded `Write` sink. Never allocate the full stitched RGBA image. For each tile contribution, derive source/destination pixel boundaries from cumulative CSS coordinates using one stable scale from actual native pixel height / viewport CSS height, then stream only contributing RGBA rows. Reject total pixel count above `64_000_000` and encoded output above `128 MiB`.
-
-- [ ] **Step 6: Run exact crate tests through GitHub CI and commit GREEN**
-
-Required command in CI/local-capable environment:
+- [ ] **Step 2: Run RED.**
 
 ```bash
-cargo test -p localview-visual --test full_page_stitching
+cargo test -p localview-visual --test full_page_stitch_contract
+```
+
+Expected: compile failure because the approved `localview_visual` full-page API does not exist yet.
+
+- [ ] **Step 3: Minimal planner GREEN.** Implement finite/positive validation, vertical-only width equality, deterministic offsets, final exact clamp, duplicate removal and strict monotonicity. No caller-supplied offset list.
+
+- [ ] **Step 4: RED output/stitch tests.** Require output height `round(document_css_height * scale_y)`, reject height `>32768`, reject checked RGBA bytes `>128 MiB`, support fractional scale, reject width/buffer mismatch, and prove the final overlapping tile overwrites only the rows mapped from acknowledged `actual_scroll_y`.
+
+- [ ] **Step 5: Minimal stitcher GREEN.** Allocate only the one final `RgbaImage`; copy rows directly from one already-redacted tile and use checked arithmetic for all pixel/byte offsets.
+
+- [ ] **Step 6: Verify Gate 1.**
+
+```bash
+cargo fmt --check
+cargo test -p localview-visual --test full_page_stitch_contract
 cargo test -p localview-visual
 ```
 
+Commit only after the focused and crate regressions are GREEN.
+
 ---
 
-## Task 2: Freeze-token stitch probe/scroll action contracts
+### Task 2: Add exact internal capture action authority
 
 **Files:**
 - Modify: `crates/live-bridge/src/lib.rs`
-- Modify: `crates/live-bridge/src/action_envelope.rs`
-- Modify: `crates/live-bridge/tests/visual_freeze_contract.rs`
-- Modify: `crates/control/src/runtime.rs`
-- Modify: `crates/control/tests/capture_visual_state.rs`
+- Modify: `crates/live-bridge/src/action_envelope.rs` if public action projection requires an exhaustive update
+- Create: `crates/live-bridge/tests/full_page_internal_action_contract.rs`
 
 **Interfaces:**
-- Produces internal variants:
 
 ```rust
-BridgeActionKind::StitchProbe { token: Uuid }
-BridgeActionKind::StitchScroll { token: Uuid, y: f64 }
+BridgeActionKind::CaptureScrollTo { token: Uuid, y: f64 }
+BridgeActionKind::CaptureTileProbe { token: Uuid }
 ```
 
-- Both variants return `None` from public action-envelope kind projection and `true` from `is_internal_capture_action()`.
+`is_internal_capture_action()` must return true for both. Public action projection/cancellation must never authorize them. `CaptureTileProbe` carries the same private selector envelope used by capture freeze so selector strings stay private while page-side geometry can be refreshed.
 
-- [ ] **Step 1: Add RED live-bridge tests** proving both variants are internal and cannot be represented as a public `PageActionKind`.
-- [ ] **Step 2: Implement enum/envelope classification and runtime summaries** using stable names `stitch_probe` and `stitch_scroll`.
-- [ ] **Step 3: Extend control capture-state tests** so internal action enqueue/claim/result plumbing accepts the two new variants without granting public cancellation authority.
-- [ ] **Step 4: Run focused tests and commit GREEN**:
+- [ ] **Step 1: RED tests.** Prove tagged serialization, internal classification, generic-public-action rejection, private selector envelope retention for tile probes, queue pressure isolation and public cancellation denial.
+- [ ] **Step 2: Run RED.**
 
 ```bash
-cargo test -p localview-live-bridge visual_freeze_contract
-cargo test -p localview-control capture_visual_state
+cargo test -p localview-live-bridge --test full_page_internal_action_contract
+```
+
+- [ ] **Step 3: Implement minimal variants/enqueue helpers** following `enqueue_capture_freeze`/capture-private queue ownership rather than the public queue.
+- [ ] **Step 4: GREEN + regression.**
+
+```bash
+cargo test -p localview-live-bridge --test full_page_internal_action_contract
+cargo test -p localview-live-bridge
 ```
 
 ---
 
-## Task 3: Page-side exact-token stitch state and privacy-safe geometry receipts
+### Task 3: Execute token-bound absolute scroll/probe in the managed WebView
 
 **Files:**
 - Modify: `crates/instrumentation/src/lib.rs`
-- Modify: `crates/instrumentation/tests/visual_freeze_contract.rs`
 - Modify: `apps/desktop/src-tauri/src/lib.rs`
-- Add focused contract test under `apps/desktop/src-tauri/tests/` if existing source-string contract style is the repository convention.
+- Create or extend focused tests under `crates/instrumentation/tests/` and `apps/desktop/src-tauri/tests/`
 
-**Interfaces:**
-- Freeze state retains original scroll coordinates and the already-private selector list keyed only by the active freeze token.
-- Page-side functions:
+**Page-side contract:**
 
 ```text
-stitchProbe(token)
-stitchScroll(token, y)
+CaptureScrollTo(token, y)
+  -> exact active freeze-token check
+  -> finite y >= 0
+  -> absolute window.scrollTo({left: original_scroll_x, top: y, behavior: 'auto'})
+  -> wait two animation frames
+  -> bounded geometry receipt
+
+CaptureTileProbe(token)
+  -> exact active freeze-token check
+  -> current scroll/document/viewport geometry
+  -> current private mask rectangles
+  -> bounded visible fixed/sticky scan
 ```
 
-- Receipt fields: `scroll_x`, `scroll_y`, `viewport_css_width`, `viewport_css_height`, `document_css_width`, `document_css_height`, `fixed_or_sticky_count`, `mask_rects`, `lease_ms`.
+The shared document-geometry helper uses identical semantics during freeze and every tile probe. Scan at most 4,096 elements; budget exhaustion is an error, not a safe assumption. No selector/tag/text/style value leaves the private executor.
 
-- [ ] **Step 1: Add RED instrumentation contract tests** requiring exact-token rejection, lease renewal, refreshed masks after scroll, fixed/sticky counting, and absence of serialized selector strings.
-- [ ] **Step 2: Implement private active-freeze state** so selectors remain page-local and are cleared on restore/lease expiry.
-- [ ] **Step 3: Implement `stitchProbe`** with finite geometry normalization, rendered fixed/sticky scan, current viewport-relative mask geometry, and lease renewal.
-- [ ] **Step 4: Implement `stitchScroll`** preserving original horizontal scroll, using `window.scrollTo`, reading actual clamped offsets, then delegating receipt production to the same probe authority.
-- [ ] **Step 5: Wire desktop queued-action JS execution cases** for `stitch_probe` and `stitch_scroll`; validate token and finite `y` before page invocation.
-- [ ] **Step 6: Run instrumentation + desktop source-contract tests and commit GREEN**.
+- [ ] **Step 1: RED tests** for wrong/expired token, absolute (not relative) scroll, two-frame acknowledgement, finite bounded geometry, fresh mask geometry, 4,096-element scan cap, visible fixed/sticky count and unchanged public relative `Scroll` behavior.
+- [ ] **Step 2: Extend freeze receipt** with `scroll_x`, `scroll_y`, `document_css_width`, `document_css_height` while preserving existing viewport/region semantics.
+- [ ] **Step 3: Implement executor cases** in the managed WebView action switch; no arbitrary eval/caller script endpoint.
+- [ ] **Step 4: Verify instrumentation/desktop executor contracts GREEN.**
 
 ---
 
-## Task 4: Full-page daemon evidence schema
+### Task 4: Add narrow authenticated control endpoints and dedicated evidence
 
 **Files:**
+- Modify: `crates/control/src/capture_settle.rs`
 - Create: `crates/control/src/visual_full_page.rs`
-- Modify: `crates/control/src/lib.rs` or router aggregation file that currently mounts `visual_region`.
-- Create: `crates/control/tests/full_page_visual_evidence.rs`
+- Modify the control router aggregation module
+- Create: `crates/control/tests/full_page_capture_control.rs`
 
-**Interfaces:**
-- Route: `POST /v1/sessions/{id}/evidence/visual-full-page`.
-- Request fields exactly match spec provenance, including `target = "full_page"`, document dimensions, tile count, DSF, scroll offsets, original scroll coordinates, `fixed_or_sticky_count = 0`, and `redaction_applied = true`.
-- Response: existing evidence ingestion shape `{ evidence_id, deduplicated }`.
+**Routes:**
 
-- [ ] **Step 1: Add RED endpoint tests** for unknown fields, NaN/non-finite numeric representations where JSON permits, invalid tile count, non-monotonic offsets, fixed/sticky nonzero, `redaction_applied=false`, non-loopback/noncanonical route behavior matching existing visual contracts, and session/artifact provenance failures.
-- [ ] **Step 2: Implement fail-closed request validation and evidence creation** following `visual_region.rs` conventions; do not accept caller verdicts.
-- [ ] **Step 3: Mount the router and run control tests GREEN**:
+```text
+POST /v1/sessions/{id}/capture-scroll
+POST /v1/sessions/{id}/capture-tile-probe
+POST /v1/sessions/{id}/evidence/visual-full-page
+```
+
+Scroll/probe endpoints accept only token/scroll inputs required by the internal action. The evidence request uses `#[serde(deny_unknown_fields)]` and contains bounded provenance only: final artifact id, canonical route, backend, viewport, revision, timestamp, final pixels, document CSS dimensions, tile count and ordered actual scroll offsets.
+
+- [ ] **Step 1: RED integration tests** for bearer auth, session existence, exact action/result id correlation, malformed/non-finite geometry, token mismatch, selector leakage, unknown evidence fields, invalid tile count/offset monotonicity/final offset and noncanonical route.
+- [ ] **Step 2: Implement scroll/probe endpoints** by reusing capture-internal LiveBridge queues and the existing bounded result wait.
+- [ ] **Step 3: Implement `/visual-full-page`** using existing evidence-store/session/route authority. Stored kind remains `EvidenceKind::Visual` with explicit full-page provenance; intermediate tiles never become evidence.
+- [ ] **Step 4: GREEN + control regression.**
 
 ```bash
-cargo test -p localview-control full_page_visual_evidence
-cargo test -p localview-control visual_evidence
+cargo test -p localview-control --test full_page_capture_control
+cargo test -p localview-control
 ```
 
 ---
 
-## Task 5: Desktop guarded full-page transaction
+### Task 5: Implement the desktop full-page transaction
 
 **Files:**
 - Modify: `apps/desktop/src-tauri/src/visual_capture.rs`
 - Modify: `apps/desktop/src-tauri/src/lib.rs`
 - Create: `apps/desktop/src-tauri/tests/full_page_capture_contract.rs`
 
-**Interfaces:**
-- Produces Tauri command:
+**Public interface:**
 
 ```rust
-capture_full_page(
+#[tauri::command]
+pub async fn capture_full_page(
     app: tauri::AppHandle,
     state: tauri::State<'_, VisualCaptureState>,
     session_id: SessionId,
     viewport: ViewportMeta,
     revision: Option<String>,
-) -> Result<FullPageCaptureReceipt, String>
+) -> Result<FullPageCaptureReceipt, String>;
 ```
 
-- `FullPageCaptureReceipt` references only the final artifact/evidence and trusted full-page provenance.
+Successful order is fixed:
 
-- [ ] **Step 1: Add RED transaction/source-contract tests** locking command registration, one session gate, settle/freeze order, exact-token scroll/probe calls, pre/post probe bracket, redaction-before-stitch, original scroll restore, visual restore, final-only persistence, and full-page evidence endpoint.
-- [ ] **Step 2: Add typed stitch receipt parsing** with `serde(deny_unknown_fields)` and finite/range validation.
-- [ ] **Step 3: Implement helper to enqueue/correlate internal stitch actions** using the same exact-session action-result authority as freeze/restore.
-- [ ] **Step 4: Implement guarded tile loop** with drift checks, per-tile settle, fixed/sticky zero check, pre/post mask equality, native viewport capture reuse, immediate redaction, decode, and stitch push.
-- [ ] **Step 5: Implement restoration guard** so every post-freeze exit attempts original scroll restoration and exact visual restore; persistence remains unreachable unless both acknowledgements succeed.
-- [ ] **Step 6: Implement final retained-resource admission/persistence and full-page evidence registration**. Preserve truth that an evidence-registration error after successful `ArtifactStore::put` fails the command but does not claim nonexistent rollback.
-- [ ] **Step 7: Run focused desktop tests GREEN**.
+```text
+managed-surface preflight
+-> session capture gate
+-> settle
+-> full-page freeze (30s internal lease)
+-> plan
+-> [CaptureScrollTo -> settle -> CaptureTileProbe -> native viewport -> redact -> decode -> stitch] * N
+-> CaptureScrollTo(original_y) + verify original x/y
+-> RestoreVisuals(exact token)
+-> encode final image
+-> retained-resource admission + one artifact persistence
+-> one dedicated full-page evidence record
+```
+
+- [ ] **Step 1: RED source/behavior tests** lock the exact order above and prove the session gate spans the whole transaction.
+- [ ] **Step 2: Add strict typed receipts** for freeze extension, scroll and probe; reject unknown fields, non-finite dimensions, geometry drift, fixed/sticky count, mask-budget overflow and stale action ids.
+- [ ] **Step 3: Implement one bounded 30-second coordinator timeout** and a cleanup path that attempts original-scroll restoration then exact visual restore on every post-freeze failure.
+- [ ] **Step 4: Implement tile loop.** Every native tile must match canonical route, viewport CSS dimensions, DSF, native dimensions and backend. Use only that tile's refreshed masks; redaction must finish before `decode_png_rgba`/stitch copy.
+- [ ] **Step 5: Implement final restoration/persistence gate.** Any scroll-restore or visual-restore failure makes persistence unreachable. Intermediate frames are dropped after copy.
+- [ ] **Step 6: Register final evidence only after one final artifact is persisted.** If evidence registration fails after a real artifact put, fail the command without inventing rollback; retained accounting must remain truthful.
+- [ ] **Step 7: GREEN desktop tests.**
+
+```bash
+cargo test -p localview-desktop --test full_page_capture_contract
+cargo test -p localview-desktop --tests
+```
 
 ---
 
-## Task 6: Regression, docs truth, and exact-head CI closure
+### Task 6: Exact-head regression, documentation truth and integration
 
 **Files:**
-- Modify after implementation gates are green: `docs/ROADMAP.md`
-- Modify after implementation gates are green: `docs/IMPLEMENTATION_STATUS.md`
-- Modify after implementation gates are green: `docs/SPEC_COVERAGE.md`
+- Modify only after Gates 1-5 are GREEN: `docs/ROADMAP.md`
+- Modify only after Gates 1-5 are GREEN: `docs/IMPLEMENTATION_STATUS.md`
+- Modify only after Gates 1-5 are GREEN: `docs/SPEC_COVERAGE.md`
 
-- [ ] **Step 1: Run/require core Rust regression**:
+- [ ] **Step 1: Run repository regression.**
 
 ```bash
-cargo test --workspace
+cargo fmt --check
+cargo test -p localview-visual
+cargo test -p localview-live-bridge
+cargo test -p localview-control
+cargo test -p localview-desktop --tests
+cargo check --workspace --all-targets
 ```
 
-- [ ] **Step 2: Require existing native rendered-pixel workflows** for Linux/WebKitGTK, macOS/WKWebView and Windows/WebView2 to remain GREEN. No platform adapter gets a full-page API.
-- [ ] **Step 3: Update docs truth** to mark guarded full-page stitching landed while preserving explicit limits: vertical-only, fixed/sticky rejection, bounded document/tile/pixel sizes, no Chromium fallback.
-- [ ] **Step 4: Re-run exact-head CI after docs commit** and require no failing/queued/in-progress required check before integration.
-- [ ] **Step 5: Review diff for privacy/authority regressions** and verify no public endpoint accepts selectors, mask rectangles, tile offsets, document dimensions, evidence verdicts or trusted IDs from callers.
-- [ ] **Step 6: Use `superpowers:verification-before-completion`, then `superpowers:finishing-a-development-branch` before marking the wave complete.**
+- [ ] **Step 2: Require the normal Linux/Windows/macOS CI and existing native rendered-pixel viewport proofs to remain GREEN.** No platform adapter receives a full-page API.
+- [ ] **Step 3: Update docs only to proven truth:** explicit guarded full-page command, vertical viewport-width stitching, managed native tiles, 32/50k/128MiB/32768 bounds, one freeze token, per-tile mask refresh, fixed/sticky rejection, restore-before-persist, dedicated evidence, no Chromium fallback.
+- [ ] **Step 4: Verify one immutable exact head** has no failing/cancelled/timed-out/queued/in-progress required checks.
+- [ ] **Step 5: Audit privacy/authority:** no public selector/mask/tile/document-authority inputs, no intermediate artifact, no stale-mask reuse, no evidence before restoration.
+- [ ] **Step 6: Use `superpowers:verification-before-completion`, then `superpowers:finishing-a-development-branch` before marking ready/merging.**
