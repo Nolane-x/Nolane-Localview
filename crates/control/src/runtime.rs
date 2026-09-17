@@ -880,6 +880,12 @@ fn sanitize_action_result(action: &BridgeAction, result: &BridgeActionResult) ->
         BridgeActionKind::RestoreVisuals { .. } => {
             action_summary(action, result, "restore_visuals", error)
         }
+        BridgeActionKind::CaptureScrollTo { .. } => {
+            action_summary(action, result, "capture_scroll_to", error)
+        }
+        BridgeActionKind::CaptureTileProbe { .. } => {
+            action_summary(action, result, "capture_tile_probe", error)
+        }
     }
 }
 
