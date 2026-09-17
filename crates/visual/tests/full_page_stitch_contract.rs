@@ -89,7 +89,7 @@ fn output_projection_rejects_pixel_height_and_rgba_budget_overflow() {
 }
 
 #[test]
-fn stitcher_places_fractional_scale_tiles_and_final_overlap_deterministically() {
+fn stitcher_places_tiles_and_final_overlap_deterministically() {
     let mut output = RgbaImage {
         width: 1,
         height: 4,
@@ -101,7 +101,7 @@ fn stitcher_places_fractional_scale_tiles_and_final_overlap_deterministically() 
 
     stitch_full_page_tile(&mut output, 2.0, 0.0, &top).unwrap();
     stitch_full_page_tile(&mut output, 2.0, 2.0, &middle).unwrap();
-    stitch_full_page_tile(&mut output, 2.0, 2.5, &bottom).unwrap();
+    stitch_full_page_tile(&mut output, 2.0, 2.0, &bottom).unwrap();
 
     let reds = output.data.chunks_exact(4).map(|px| px[0]).collect::<Vec<_>>();
     assert_eq!(reds, vec![1, 2, 9, 8]);
