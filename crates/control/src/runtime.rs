@@ -968,10 +968,11 @@ fn measure_layout_evidence_payload(
 
     let object = payload.as_object()?;
     let reference = object.get("reference")?.as_str()?;
+    let reference_hash = reference.strip_prefix("@e")?;
     if reference != expected_reference
-        || reference.is_empty()
+        || reference_hash.is_empty()
         || reference.len() > MAX_REFERENCE_BYTES
-        || !reference.starts_with("@e")
+        || !reference_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return None;
     }
@@ -1176,6 +1177,18 @@ mod tests {
             "route": "http://127.0.0.1:5173/dashboard"
         });
         assert!(measure_layout_evidence_payload(&mismatched_dimensions, "@e1").is_none());
+    }
+
+    #[test]
+    fn measure_evidence_rejects_malformed_localview_reference() {
+        let payload = serde_json::json!({
+            "reference": "@e-not-hex",
+            "rect": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0},
+            "document_rect": {"x": 10.0, "y": 220.0, "width": 100.0, "height": 40.0},
+            "viewport": {"width": 1280.0, "height": 720.0},
+            "route": "http://127.0.0.1:5173/dashboard"
+        });
+        assert!(measure_layout_evidence_payload(&payload, "@e-not-hex").is_none());
     }
 
     #[test]
