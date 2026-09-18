@@ -300,6 +300,49 @@ fn top_level_human_panels_do_not_split_language() {
 }
 
 
+
+#[test]
+fn command_palette_routes_through_canonical_command_ids() {
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let commands = include_str!("../../src/commands.ts");
+
+    assert!(commands.contains("aiOpen: 'ai.open'"));
+    assert!(tools.contains("import { COMMAND_IDS, type CommandId } from '../commands';"));
+    assert!(tools.contains("onCommand: (command: CommandId) => void"));
+    assert!(tools.contains("key={command.id}"));
+
+    for id in [
+        "COMMAND_IDS.inspectActivate",
+        "COMMAND_IDS.responsiveOpen",
+        "COMMAND_IDS.consoleOpen",
+        "COMMAND_IDS.networkOpen",
+        "COMMAND_IDS.aiOpen",
+        "COMMAND_IDS.previewOpenNative",
+        "COMMAND_IDS.settingsOpen",
+        "COMMAND_IDS.advancedOpen",
+        "COMMAND_IDS.workspaceToggleTargetBar",
+        "COMMAND_IDS.workspaceToggleToolRail",
+        "COMMAND_IDS.sessionPauseDiscovery",
+    ] {
+        assert!(
+            tools.contains(id),
+            "command palette is missing canonical command id {id}"
+        );
+    }
+
+    assert!(shell.contains("type CommandId"));
+    assert!(shell.contains("const executeCommand = useCallback("));
+    assert!(shell.contains("switch (command)"));
+    assert!(shell.contains("case COMMAND_IDS.inspectActivate:"));
+    assert!(shell.contains("case COMMAND_IDS.workspaceToggleTargetBar:"));
+    assert!(shell.contains("case COMMAND_IDS.workspaceToggleToolRail:"));
+    assert!(shell.contains("case COMMAND_IDS.sessionPauseDiscovery:"));
+    assert!(shell.contains("onCommand={executeCommand}"));
+    assert!(!tools.contains("key={command.title}"));
+}
+
+
 #[test]
 fn visual_system_uses_muted_moss_instead_of_ai_blue() {
     let styles = include_str!("../../src/styles.css");
