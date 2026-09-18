@@ -1,6 +1,23 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { DashboardState, LiveSessionState, WorkspaceBounds } from './types';
 
+export interface MeasureRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ElementMeasureReceipt {
+  reference: string;
+  rect: MeasureRect;
+  document_rect: MeasureRect;
+  viewport_css_width: number;
+  viewport_css_height: number;
+  route: string;
+  measured_at_unix_ms: number;
+}
+
 export interface VisualCaptureReceipt {
   artifact_id: string;
   evidence_id: string;
@@ -27,6 +44,7 @@ export const api = {
   resume: () => invoke<void>('resume_runtime'),
   openPreview: (sessionId: string, url: string, title: string) => invoke<void>('open_preview', { sessionId, url, title }),
   captureCurrentViewport: (sessionId: string) => invoke<VisualCaptureReceipt>('capture_current_viewport', { sessionId, revision: null }),
+  measureElement: (sessionId: string, reference: string) => invoke<ElementMeasureReceipt>('measure_current_selection', { sessionId, reference }),
   openWorkspaceSurface: (sessionId: string, url: string, bounds: WorkspaceBounds) => invoke<void>('workspace_surface_open', { sessionId, url, bounds }),
   setWorkspaceSurfaceBounds: (sessionId: string, bounds: WorkspaceBounds) => invoke<void>('workspace_surface_set_bounds', { sessionId, bounds }),
   navigateWorkspaceSurface: (sessionId: string, url: string) => invoke<void>('workspace_surface_navigate', { sessionId, url }),
