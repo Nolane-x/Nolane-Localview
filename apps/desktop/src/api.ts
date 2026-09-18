@@ -29,6 +29,42 @@ export interface HumanAskAiReceipt {
   completedAtUnixMs: number;
 }
 
+export interface AiFixCapability {
+  available: boolean;
+  providerLabel?: string | null;
+  reason?: 'not_enabled' | 'provider_unavailable' | null;
+}
+
+export interface HumanFixProposalRequest {
+  sessionId: string;
+  reference: string;
+  instruction: string;
+}
+
+export interface HumanFixProposalReceipt {
+  proposalId: string;
+  reference: string;
+  displayFile: string;
+  summary: string;
+  diff: string;
+  providerLabel: string;
+  expiresAtUnixMs: number;
+}
+
+export interface HumanApplyFixRequest {
+  proposalId: string;
+}
+
+export interface HumanApplyFixReceipt {
+  proposalId: string;
+  reference: string;
+  displayFile: string;
+  applied: true;
+  changedStartLine: number;
+  changedEndLine: number;
+  appliedAtUnixMs: number;
+}
+
 export interface HumanSourceOpenRequest {
   sessionId: string;
   reference: string;
@@ -83,6 +119,14 @@ export const api = {
     invoke<AiProviderCapability>('ai_provider_capability'),
   askAiAboutSelection: ({ sessionId, reference, question }: HumanAskAiRequest) =>
     invoke<HumanAskAiReceipt>('ask_ai_about_selection', { sessionId, reference, question }),
+  aiFixCapability: () =>
+    invoke<AiFixCapability>('ai_fix_capability'),
+  prepareFixProposal: ({ sessionId, reference, instruction }: HumanFixProposalRequest) =>
+    invoke<HumanFixProposalReceipt>('prepare_fix_proposal', { sessionId, reference, instruction }),
+  applyFixProposal: ({ proposalId }: HumanApplyFixRequest) =>
+    invoke<HumanApplyFixReceipt>('apply_fix_proposal', { proposalId }),
+  discardFixProposal: ({ proposalId }: HumanApplyFixRequest) =>
+    invoke<void>('discard_fix_proposal', { proposalId }),
   openSourceForSelection: ({ sessionId, reference }: HumanSourceOpenRequest) =>
     invoke<HumanSourceOpenReceipt>('open_source_for_selection', { sessionId, reference }),
   measureElement: (sessionId: string, reference: string) => invoke<ElementMeasureReceipt>('measure_current_selection', { sessionId, reference }),
