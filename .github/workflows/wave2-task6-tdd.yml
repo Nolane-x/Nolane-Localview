@@ -49,3 +49,5 @@ jobs:
           git push origin HEAD:feat/guarded-full-page-stitching-impl
 
 # rerun-marker: task6-handler-marker
+
+# rerun-marker: task6-cleanup-deadline
