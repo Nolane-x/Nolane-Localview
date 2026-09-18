@@ -63,6 +63,40 @@ async function assertNoPageErrors(page, state) {
   invariant(errors.length === 0, `${state}:no-page-errors`, { errors });
 }
 
+async function assertPrimaryControlsInViewport(page, state) {
+  const result = await page.locator('.top-pill, .floating-rail').evaluateAll((nodes) => {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    return nodes
+      .filter((node) => {
+        const style = getComputedStyle(node);
+        return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0;
+      })
+      .map((node) => {
+        const rect = node.getBoundingClientRect();
+        return {
+          className: node.className,
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          withinViewport:
+            rect.right > 0 &&
+            rect.bottom > 0 &&
+            rect.left < width &&
+            rect.top < height &&
+            rect.width > 0 &&
+            rect.height > 0,
+        };
+      });
+  });
+  invariant(
+    result.length > 0 && result.every((entry) => entry.withinViewport),
+    `${state}:primary-controls-in-viewport`,
+    { result },
+  );
+}
+
 async function readStoredPreferences(page) {
   return page.evaluate(() => {
     const raw = localStorage.getItem('localview.preferences.v2');
@@ -136,10 +170,41 @@ const dashboardDisconnected = {
   sessions: dashboard.sessions.map((session) => ({ ...session, status: 'disconnected' }))
 };
 
+const dashboardLongTarget = {
+  ...dashboard,
+  sessions: dashboard.sessions.map((session) => ({
+    ...session,
+    classification: {
+      ...session.classification,
+      title: 'Extremely long local development target title '.repeat(8).trim(),
+    },
+    project: {
+      ...session.project,
+      display_name: 'Extremely long LocalView project name '.repeat(10).trim(),
+    },
+  })),
+};
+
 const liveEmpty = { observer: [], action_results: [] };
 
-function init(page, locale = 'en', overrides = {}, liveState = live, dashboardState = dashboard, rawPreferences = null) {
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences }) => {
+function init(
+  page,
+  locale = 'en',
+  overrides = {},
+  liveState = live,
+  dashboardState = dashboard,
+  rawPreferences = null,
+  storageFault = false,
+) {
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault }) => {
+    if (storageFault) {
+      Storage.prototype.getItem = () => {
+        throw new DOMException('storage disabled by render audit', 'SecurityError');
+      };
+      Storage.prototype.setItem = () => {
+        throw new DOMException('storage disabled by render audit', 'SecurityError');
+      };
+    }
     const validPreferences = JSON.stringify({
       version: 2,
       locale,
@@ -156,7 +221,9 @@ function init(page, locale = 'en', overrides = {}, liveState = live, dashboardSt
       accent: 'muted-moss',
       ...overrides
     });
-    localStorage.setItem('localview.preferences.v2', rawPreferences ?? validPreferences);
+    if (!storageFault) {
+      localStorage.setItem('localview.preferences.v2', rawPreferences ?? validPreferences);
+    }
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
@@ -174,7 +241,7 @@ function init(page, locale = 'en', overrides = {}, liveState = live, dashboardSt
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault });
 }
 
 async function pageFor(
@@ -184,13 +251,14 @@ async function pageFor(
   overrides = {},
   liveState = live,
   dashboardState = dashboard,
-  rawPreferences = null
+  rawPreferences = null,
+  storageFault = false
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -489,6 +557,47 @@ await assertDocumentLocale(page, 'vi', 'partial-preferences-recovered');
 await assertVisible(page, '.top-pill', 'partial-preferences-recovered');
 await assertVisible(page, '.floating-rail', 'partial-preferences-recovered');
 await shot(page, '19-partial-preferences-recovered.png', 'partial-preferences-recovered');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  live,
+  dashboard,
+  null,
+  true
+);
+await assertDocumentLocale(page, 'en', 'storage-unavailable');
+await assertVisible(page, '.top-pill', 'storage-unavailable');
+await assertVisible(page, '.floating-rail', 'storage-unavailable');
+await page.keyboard.press('Control+Shift+T');
+await page.waitForTimeout(100);
+await assertHidden(page, '.top-pill', 'storage-unavailable-toggle');
+await page.keyboard.press('Control+Shift+T');
+await page.waitForTimeout(100);
+await assertVisible(page, '.top-pill', 'storage-unavailable-recovered');
+await assertPrimaryControlsInViewport(page, 'storage-unavailable-recovered');
+await shot(page, '28-storage-unavailable.png', 'storage-unavailable-recovered');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 320, height: 568 },
+  'en',
+  {},
+  live,
+  dashboardLongTarget
+);
+await assertVisible(page, '.top-pill', 'narrow-long-target');
+await assertVisible(page, '.floating-rail', 'narrow-long-target');
+await assertPrimaryControlsInViewport(page, 'narrow-long-target');
+await page.keyboard.press('c');
+await page.waitForTimeout(150);
+await assertVisible(page, '.panel-console', 'narrow-long-target-console');
+await assertPrimaryControlsInViewport(page, 'narrow-long-target-console');
+await shot(page, '29-narrow-long-target-console.png', 'narrow-long-target-console');
 await page.close();
 
 await fs.writeFile(
