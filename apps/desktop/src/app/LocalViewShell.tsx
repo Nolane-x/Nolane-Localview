@@ -28,6 +28,7 @@ import {
   PauseIcon,
   PlayIcon,
   ResponsiveIcon,
+  SettingsIcon,
   SparkIcon,
 } from '../components/icons';
 
@@ -296,6 +297,7 @@ function FloatingRail({ activeTool, onTool, onCommand }: { activeTool?: ToolId; 
     <RailButton tool="network" active={activeTool === 'network'} onClick={() => onTool('network')}><NetworkIcon/></RailButton>
     <div className="rail-divider"/>
     <RailButton tool="ai" active={activeTool === 'ai'} onClick={() => onTool('ai')}><SparkIcon/></RailButton>
+    <RailButton tool="settings" active={activeTool === 'settings'} onClick={() => onTool('settings')}><SettingsIcon/></RailButton>
     <RailButton tool="advanced" active={activeTool === 'advanced'} onClick={() => onTool('advanced')}><MoreIcon/></RailButton>
     <CommandRailButton active={activeTool === 'command'} onClick={onCommand}/>
   </nav>;
