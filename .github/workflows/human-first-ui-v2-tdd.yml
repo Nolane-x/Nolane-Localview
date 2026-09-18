@@ -21,5 +21,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@stable
-      - name: Verify RED contract
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify GREEN source contract
         run: cargo test -p localview-desktop --test human_first_ui_v2_contract -- --nocapture
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm install --no-audit --no-fund
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build
