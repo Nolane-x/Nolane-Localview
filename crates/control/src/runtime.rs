@@ -630,6 +630,19 @@ struct QueueActionRequest {
     action: BridgeActionKind,
 }
 
+fn valid_measure_reference(reference: Option<&str>) -> bool {
+    const MAX_MEASURE_REFERENCE_BYTES: usize = 64;
+    let Some(reference) = reference else {
+        return false;
+    };
+    let Some(hash) = reference.strip_prefix("@e") else {
+        return false;
+    };
+    !hash.is_empty()
+        && reference.len() <= MAX_MEASURE_REFERENCE_BYTES
+        && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 async fn queue_action(
     State(state): State<ControlState>,
     headers: HeaderMap,
@@ -641,6 +654,18 @@ async fn queue_action(
     }
     if let Err(error) = ensure_session(&state, id).await {
         return error.into_response();
+    }
+    if matches!(&request.action, BridgeActionKind::Measure)
+        && !valid_measure_reference(request.reference.as_deref())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "measure_reference_required",
+                "message": "Measure requires a bounded LocalView element reference"
+            })),
+        )
+            .into_response();
     }
     if request.action.is_internal_capture_action() {
         return (
@@ -769,9 +794,9 @@ async fn complete_action(
     if matches!(action.action, BridgeActionKind::Measure) && result.ok {
         if let Some(reference) = action.reference.as_deref() {
             if let Some(payload) = measure_layout_evidence_payload(&result.payload, reference) {
-            state
-                .evidence
-                .insert(EvidenceDraft {
+                state
+                    .evidence
+                    .insert(EvidenceDraft {
                     kind: EvidenceKind::Layout,
                     session_id: id,
                     region: action.reference.clone(),
@@ -786,8 +811,8 @@ async fn complete_action(
                     confidence: 1.0,
                     uncertainty: UncertaintyClass::Observed,
                     secret_taint: false,
-                })
-                .await;
+                    })
+                    .await;
             }
         }
     }
@@ -1121,6 +1146,24 @@ mod tests {
             action: kind,
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn measure_public_queue_reference_validator_is_fail_closed() {
+        for valid in [Some("@e1"), Some("@e1a2B3")] {
+            assert!(valid_measure_reference(valid));
+        }
+        for invalid in [
+            None,
+            Some(""),
+            Some("@e"),
+            Some("button#save"),
+            Some("@e-not-hex"),
+        ] {
+            assert!(!valid_measure_reference(invalid));
+        }
+        let oversize = format!("@e{}", "a".repeat(64));
+        assert!(!valid_measure_reference(Some(&oversize)));
     }
 
     #[test]
