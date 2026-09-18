@@ -25,24 +25,30 @@ jobs:
       - name: Verify RED
         run: |
           set +e
-          cargo test -p localview-desktop --test full_page_page_executor_contract -- --nocapture 2>&1 | tee /tmp/task3-red.log
-          status=${PIPESTATUS[0]}
+          cargo test -p localview-desktop --test full_page_page_executor_contract -- --nocapture 2>&1 | tee /tmp/task3-executor-red.log
+          executor_status=${PIPESTATUS[0]}
+          cargo test -p localview-live-bridge --test full_page_internal_action_contract tile_probe_result_storage_is_bounded_and_selector_free -- --nocapture 2>&1 | tee /tmp/task3-bridge-red.log
+          bridge_status=${PIPESTATUS[0]}
           set -e
-          test "$status" -ne 0
-          grep -q "instrumentation_owns_bounded_full_page_freeze_scroll_and_probe_authority" /tmp/task3-red.log
-          grep -q "FAILED" /tmp/task3-red.log
+          test "$executor_status" -ne 0
+          grep -q "instrumentation_owns_bounded_full_page_freeze_scroll_and_probe_authority" /tmp/task3-executor-red.log
+          grep -q "FAILED" /tmp/task3-executor-red.log
+          test "$bridge_status" -ne 0
+          grep -q "tile_probe_result_storage_is_bounded_and_selector_free" /tmp/task3-bridge-red.log
+          grep -q "FAILED" /tmp/task3-bridge-red.log
       - name: Apply Task 3 implementation
         run: python scripts/wave2_task3_patch.py
       - name: Verify GREEN
         run: |
-          cargo fmt --all -- --check
+          cargo fmt -p localview-instrumentation -p localview-live-bridge -p localview-desktop -- --check
           cargo test -p localview-desktop --test full_page_page_executor_contract -- --nocapture
+          cargo test -p localview-live-bridge --test full_page_internal_action_contract -- --nocapture
           cargo test -p localview-instrumentation --all-targets
       - name: Commit implementation
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/instrumentation/src/lib.rs apps/desktop/src-tauri/src/lib.rs
+          git add crates/instrumentation/src/lib.rs crates/live-bridge/src/lib.rs apps/desktop/src-tauri/src/lib.rs
           git diff --cached --check
           git commit -m "feat(capture): add token-bound full-page page executor"
           git push origin HEAD:feat/guarded-full-page-stitching-impl
