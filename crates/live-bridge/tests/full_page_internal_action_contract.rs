@@ -207,7 +207,7 @@ async fn tile_probe_result_storage_is_bounded_and_selector_free() {
                     "masked_elements": 1,
                     "mask_rects": [{"x": 10.0, "y": 20.0, "width": 30.0, "height": 40.0}],
                     "positional_elements_scanned": 250,
-                    "visible_fixed_or_sticky": 0,
+                    "visible_fixed_or_sticky": false,
                     "mask_selectors": selectors,
                     "private_page_payload": "must-not-survive"
                 }),
@@ -225,7 +225,7 @@ async fn tile_probe_result_storage_is_bounded_and_selector_free() {
     assert_eq!(payload["masked_elements"], 1);
     assert_eq!(payload["mask_rects"].as_array().map(Vec::len), Some(1));
     assert_eq!(payload["positional_elements_scanned"], 250);
-    assert_eq!(payload["visible_fixed_or_sticky"], 0);
+    assert_eq!(payload["visible_fixed_or_sticky"], false);
     let encoded = payload.to_string();
     assert!(!encoded.contains("mask_selectors"));
     assert!(!encoded.contains("data-localview-private"));
