@@ -359,15 +359,22 @@ async fn full_page_capture_after_gate(
 
     let png = encode_png_rgba(&transaction.frame.image)
         .map_err(|_| "full_page_final_encode_failed".to_string())?;
+    if tokio::time::Instant::now() >= deadline {
+        return Err("full_page_transaction_timeout".into());
+    }
 
-    persist_full_page_and_register(
-        state,
-        session_id,
-        png,
-        &transaction.frame,
-        &transaction.plan,
+    tokio::time::timeout_at(
+        deadline,
+        persist_full_page_and_register(
+            state,
+            session_id,
+            png,
+            &transaction.frame,
+            &transaction.plan,
+        ),
     )
     .await
+    .map_err(|_| "full_page_transaction_timeout".to_string())?
 }
 
 async fn capture_full_page_tiles(
