@@ -159,3 +159,41 @@ fn tauri_registers_explicit_full_page_command_without_platform_full_page_adapter
     assert!(!native.contains("FullPage"));
     assert!(!native.contains("full_page"));
 }
+
+
+#[test]
+fn final_encode_and_persistence_remain_under_absolute_transaction_deadline() {
+    let source = include_str!("../src/visual_capture.rs");
+    let start = source
+        .find("async fn full_page_capture_after_gate(")
+        .expect("guarded full-page coordinator must exist");
+    let end = source[start..]
+        .find("async fn capture_full_page_tiles(")
+        .map(|offset| start + offset)
+        .expect("tile worker must follow coordinator");
+    let transaction = &source[start..end];
+
+    let cleanup = transaction
+        .find("cleanup_full_page_state")
+        .expect("cleanup must complete before final encoding");
+    let encode = transaction
+        .find("encode_png_rgba")
+        .expect("final PNG encoding must exist");
+    assert!(cleanup < encode);
+
+    let after_encode = &transaction[encode..];
+    let post_encode_deadline = after_encode
+        .find("tokio::time::Instant::now() >= deadline")
+        .expect("deadline must be rechecked after synchronous final encoding");
+    let bounded_persistence = after_encode
+        .find("tokio::time::timeout_at(")
+        .expect("artifact/evidence persistence must remain inside the absolute deadline");
+    let persistence_call = after_encode
+        .find("persist_full_page_and_register(")
+        .expect("dedicated final persistence call must exist");
+
+    assert!(post_encode_deadline < bounded_persistence);
+    assert!(bounded_persistence < persistence_call);
+    assert!(after_encode[bounded_persistence..persistence_call].contains("deadline"));
+    assert!(after_encode.contains("full_page_transaction_timeout"));
+}
