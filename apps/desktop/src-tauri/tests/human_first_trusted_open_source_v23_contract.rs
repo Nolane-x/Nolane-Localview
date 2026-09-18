@@ -158,6 +158,24 @@ fn command_palette_uses_the_same_stable_source_authority() {
 
 
 #[test]
+fn source_failure_classifier_never_uses_broad_command_name_substrings() {
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+    let classifier = between(
+        shell,
+        "function classifySourceOpenFailure(",
+        "export default function LocalViewShell()",
+    );
+
+    assert!(classifier.contains("trusted source launcher unavailable"));
+    assert!(classifier.contains("trusted source mapping is unavailable"));
+    assert!(classifier.contains("trusted source selection is no longer available"));
+    assert!(classifier.contains("trusted source path traversal is not allowed"));
+    assert!(!classifier.contains("detail.includes('selection')"));
+    assert!(!classifier.contains("detail.includes('launcher')"));
+}
+
+
+#[test]
 fn source_open_failure_is_humanized_and_localized() {
     let tools = include_str!("../../src/features/FloatingTools.tsx");
     let i18n = include_str!("../../src/i18n.ts");
