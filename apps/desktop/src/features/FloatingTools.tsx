@@ -182,6 +182,21 @@ function PanelHeader({ title, eyebrow, locale, onClose }: { title: string; eyebr
   return <div className="panel-header"><div><span>{eyebrow}</span><strong>{title}</strong></div><button className="close-button" aria-label={`${translate(locale, 'action.close')} ${title}`} onClick={onClose}><CloseIcon /></button></div>;
 }
 
+function sourceOpenFailureMessage(
+  locale: SupportedLocale,
+  reason: Extract<HumanSourceOpenState, { status: 'failure' }>['reason'],
+): string {
+  switch (reason) {
+    case 'launcher_unavailable':
+      return translate(locale, 'source.launcherUnavailable');
+    case 'unavailable':
+      return translate(locale, 'source.unavailable');
+    case 'failed':
+    default:
+      return translate(locale, 'source.failed');
+  }
+}
+
 function Inspector({
   current,
   live,
@@ -294,16 +309,7 @@ function Inspector({
       )}
       {sourceOpenState.status === 'failure' && (
         <div className="source-open-status failure" role="status" aria-live="polite">
-          <strong>
-            {translate(
-              locale,
-              sourceOpenState.reason === 'launcher_unavailable'
-                ? 'source.launcherUnavailable'
-                : sourceOpenState.reason === 'unavailable'
-                  ? 'source.unavailable'
-                  : 'source.failed',
-            )}
-          </strong>
+          <strong>{sourceOpenFailureMessage(locale, sourceOpenState.reason)}</strong>
         </div>
       )}
 
