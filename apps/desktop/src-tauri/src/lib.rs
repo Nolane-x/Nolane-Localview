@@ -182,9 +182,15 @@ fn validate_relative_source_path(file: &str) -> Result<&Path, String> {
         || file.contains('\0')
         || file.contains(':')
         || file.contains("://")
+        || file.starts_with("\\\\")
     {
         return Err("trusted source path is invalid".into());
     }
+    #[cfg(not(windows))]
+    if file.contains('\\') {
+        return Err("trusted source path uses a non-native separator".into());
+    }
+
     let path = Path::new(file);
     if path.is_absolute() || path.has_root() {
         return Err("trusted source path must be project relative".into());
