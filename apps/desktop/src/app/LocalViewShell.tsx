@@ -197,7 +197,12 @@ export default function LocalViewShell() {
           />
         )}
         {preferences.showToolRail && (
-          <FloatingRail activeTool={activeTool} onTool={toggleTool} onCommand={() => toggleTool('command')} />
+          <FloatingRail
+            activeTool={activeTool}
+            locale={preferences.locale}
+            onTool={toggleTool}
+            onCommand={() => toggleTool('command')}
+          />
         )}
         {activeTool && (
           <FloatingPanel
@@ -289,17 +294,27 @@ function TopPill({
   </header>;
 }
 
-function FloatingRail({ activeTool, onTool, onCommand }: { activeTool?: ToolId; onTool: (tool: ToolId) => void; onCommand: () => void }) {
+function FloatingRail({
+  activeTool,
+  locale,
+  onTool,
+  onCommand,
+}: {
+  activeTool?: ToolId;
+  locale: LocalViewPreferences['locale'];
+  onTool: (tool: ToolId) => void;
+  onCommand: () => void;
+}) {
   return <nav className="floating-rail" aria-label="LocalView tools">
-    <RailButton tool="inspect" active={activeTool === 'inspect'} onClick={() => onTool('inspect')}><InspectIcon/></RailButton>
-    <RailButton tool="responsive" active={activeTool === 'responsive'} onClick={() => onTool('responsive')}><ResponsiveIcon/></RailButton>
-    <RailButton tool="console" active={activeTool === 'console'} onClick={() => onTool('console')}><ConsoleIcon/></RailButton>
-    <RailButton tool="network" active={activeTool === 'network'} onClick={() => onTool('network')}><NetworkIcon/></RailButton>
+    <RailButton tool="inspect" locale={locale} active={activeTool === 'inspect'} onClick={() => onTool('inspect')}><InspectIcon/></RailButton>
+    <RailButton tool="responsive" locale={locale} active={activeTool === 'responsive'} onClick={() => onTool('responsive')}><ResponsiveIcon/></RailButton>
+    <RailButton tool="console" locale={locale} active={activeTool === 'console'} onClick={() => onTool('console')}><ConsoleIcon/></RailButton>
+    <RailButton tool="network" locale={locale} active={activeTool === 'network'} onClick={() => onTool('network')}><NetworkIcon/></RailButton>
     <div className="rail-divider"/>
-    <RailButton tool="ai" active={activeTool === 'ai'} onClick={() => onTool('ai')}><SparkIcon/></RailButton>
-    <RailButton tool="settings" active={activeTool === 'settings'} onClick={() => onTool('settings')}><SettingsIcon/></RailButton>
-    <RailButton tool="advanced" active={activeTool === 'advanced'} onClick={() => onTool('advanced')}><MoreIcon/></RailButton>
-    <CommandRailButton active={activeTool === 'command'} onClick={onCommand}/>
+    <RailButton tool="ai" locale={locale} active={activeTool === 'ai'} onClick={() => onTool('ai')}><SparkIcon/></RailButton>
+    <RailButton tool="settings" locale={locale} active={activeTool === 'settings'} onClick={() => onTool('settings')}><SettingsIcon/></RailButton>
+    <RailButton tool="advanced" locale={locale} active={activeTool === 'advanced'} onClick={() => onTool('advanced')}><MoreIcon/></RailButton>
+    <CommandRailButton locale={locale} active={activeTool === 'command'} onClick={onCommand}/>
   </nav>;
 }
 
