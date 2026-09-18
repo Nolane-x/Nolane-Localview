@@ -206,6 +206,8 @@ fn render_audit_proves_trusted_open_source_runtime_states() {
         "59-vi-source-open-failure.png",
         "60-source-command-no-selection.png",
         "61-source-command-success.png",
+        "62-source-open-ready.png",
+        "63-source-open-opening.png",
     ] {
         assert!(
             capture.contains(artifact),
@@ -229,6 +231,9 @@ fn render_audit_proves_trusted_open_source_runtime_states() {
         "source-open:command-no-selection-disabled",
         "source-open:command-no-selection-not-invoked",
         "source-open:command-reference-only",
+        "source-open:ready-enabled",
+        "source-open:opening-aria-busy",
+        "source-open:opening-single-request",
     ] {
         assert!(
             capture.contains(marker),
