@@ -114,6 +114,17 @@ struct AiBridgeResponse {
     provider_label: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HumanAskAiReceipt {
+    pub reference: String,
+    pub answer: String,
+    pub provider_label: String,
+    pub context_version: u32,
+    pub snapshot_version: u64,
+    pub completed_at_unix_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAnswer {
     pub answer: String,
