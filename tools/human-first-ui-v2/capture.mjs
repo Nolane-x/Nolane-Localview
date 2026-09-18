@@ -164,6 +164,7 @@ await page.screenshot({ path: 'human-first-ui-v2-render/12-tool-rail-hidden.png'
 await page.keyboard.press('Control+k');
 await page.waitForTimeout(150);
 await page.getByRole('button', { name: 'Show tool rail' }).click();
+await page.keyboard.press('Escape');
 await page.waitForTimeout(150);
 await page.screenshot({ path: 'human-first-ui-v2-render/13-tool-rail-restored.png', fullPage: true });
 await page.close();
