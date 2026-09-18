@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '../api';
+import { COMMAND_IDS } from '../commands';
+import { applyDocumentLocale, translate } from '../i18n';
+import {
+  loadPreferences,
+  resetWorkspace,
+  updatePreferences as persistPreferences,
+  type LocalViewPreferences,
+} from '../preferences';
 import type { DashboardState, LiveSessionState, Session } from '../types';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import {
@@ -13,7 +21,9 @@ import {
   ConsoleIcon,
   ExpandIcon,
   ExternalIcon,
+  HideIcon,
   InspectIcon,
+  MoreIcon,
   NetworkIcon,
   PauseIcon,
   PlayIcon,
@@ -34,6 +44,8 @@ const fallback: DashboardState = {
 };
 
 const emptyLive: LiveSessionState = { observer: [], action_results: [] };
+const TOGGLE_TARGET_BAR_SHORTCUT = 'Ctrl+Shift+T';
+const TARGET_BAR_COMMAND = COMMAND_IDS.workspaceToggleTargetBar; // workspace.targetBar.toggle
 
 export default function LocalViewShell() {
   const [state, setState] = useState<DashboardState>(fallback);
@@ -42,6 +54,19 @@ export default function LocalViewShell() {
   const [error, setError] = useState<string>();
   const [live, setLive] = useState<LiveSessionState>(emptyLive);
   const [immersive, setImmersive] = useState(false);
+  const [preferences, setPreferences] = useState<LocalViewPreferences>(() => loadPreferences());
+
+  const patchPreferences = useCallback((patch: Partial<LocalViewPreferences>) => {
+    setPreferences((current) => persistPreferences(current, patch));
+  }, []);
+
+  const resetWorkspacePreferences = useCallback(() => {
+    setPreferences((current) => resetWorkspace(current));
+  }, []);
+
+  useEffect(() => {
+    applyDocumentLocale(preferences.locale);
+  }, [preferences.locale]);
 
   const refresh = useCallback(async () => {
     try {
@@ -111,19 +136,32 @@ export default function LocalViewShell() {
         toggleTool('command');
         return;
       }
+      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+        event.preventDefault();
+        toggleTool('settings');
+        return;
+      }
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 't') {
+        event.preventDefault();
+        void TARGET_BAR_COMMAND;
+        void TOGGLE_TARGET_BAR_SHORTCUT;
+        patchPreferences({ showTargetBar: !preferences.showTargetBar });
+        return;
+      }
       const shortcuts: Record<string, ToolId> = {
         i: 'inspect',
         r: 'responsive',
         c: 'console',
         n: 'network',
         a: 'ai',
+        m: 'advanced',
       };
       const tool = shortcuts[event.key.toLowerCase()];
       if (tool) toggleTool(tool);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [toggleTool]);
+  }, [patchPreferences, preferences.showTargetBar, toggleTool]);
 
   async function togglePause() {
     state.health.paused ? await api.resume() : await api.pause();
@@ -143,18 +181,23 @@ export default function LocalViewShell() {
     <div className={`localview ${immersive ? 'is-immersive' : ''}`}>
       <WorkspaceSurface current={current} url={currentUrl} support={state.workspace_surface} />
       <div className="chrome-layer" aria-label="LocalView controls">
-        <TopPill
-          state={state}
-          current={current}
-          selected={selected}
-          live={live}
-          onSelect={setSelected}
-          onSessions={() => toggleTool('sessions')}
-          onPause={() => void togglePause()}
-          onOpenNative={() => void openNative()}
-          onImmersive={() => setImmersive((value) => !value)}
-        />
-        <FloatingRail activeTool={activeTool} onTool={toggleTool} onCommand={() => toggleTool('command')} />
+        {preferences.showTargetBar && (
+          <TopPill
+            state={state}
+            current={current}
+            selected={selected}
+            locale={preferences.locale}
+            onSelect={setSelected}
+            onSessions={() => toggleTool('sessions')}
+            onPause={() => void togglePause()}
+            onOpenNative={() => void openNative()}
+            onImmersive={() => setImmersive((value) => !value)}
+            onHideTargetBar={() => patchPreferences({ showTargetBar: false })}
+          />
+        )}
+        {preferences.showToolRail && (
+          <FloatingRail activeTool={activeTool} onTool={toggleTool} onCommand={() => toggleTool('command')} />
+        )}
         {activeTool && (
           <FloatingPanel
             tool={activeTool}
@@ -162,10 +205,15 @@ export default function LocalViewShell() {
             live={live}
             current={current}
             url={currentUrl}
+            locale={preferences.locale}
+            preferences={preferences}
             onClose={() => setActiveTool(undefined)}
             onSelect={setSelected}
             onOpenNative={() => void openNative()}
             onPause={() => void togglePause()}
+            onTool={(tool) => setActiveTool(tool)}
+            onPreferencesChange={patchPreferences}
+            onResetWorkspace={resetWorkspacePreferences}
           />
         )}
         {error && <RuntimeToast error={error} onRetry={() => void refresh()} />}
@@ -174,37 +222,68 @@ export default function LocalViewShell() {
   );
 }
 
-function TopPill({ state, current, selected, live, onSelect, onSessions, onPause, onOpenNative, onImmersive }: {
+function TopPill({
+  state,
+  current,
+  selected,
+  locale,
+  onSelect,
+  onSessions,
+  onPause,
+  onOpenNative,
+  onImmersive,
+  onHideTargetBar,
+}: {
   state: DashboardState;
   current?: Session;
   selected?: string;
-  live: LiveSessionState;
+  locale: LocalViewPreferences['locale'];
   onSelect: (value: string) => void;
   onSessions: () => void;
   onPause: () => void;
   onOpenNative: () => void;
   onImmersive: () => void;
+  onHideTargetBar: () => void;
 }) {
-  const attached = live.observer.length > 0;
+  const statusLabel = state.health.paused
+    ? translate(locale, 'status.paused')
+    : current
+      ? translate(locale, 'status.ready')
+      : translate(locale, 'status.offline');
+
   return <header className="top-pill">
     <button className="logo-button" aria-label="Show sessions" onClick={onSessions}><span className="logo-glyph">L</span></button>
     <div className="top-divider"/>
     <div className="target-block">
       <div className="target-row">
         <span className={`health-dot ${state.health.paused ? 'warn' : ''}`}/>
-        <select aria-label="Current localhost session" value={current?.id ?? selected ?? ''} onChange={(event) => onSelect(event.target.value)} disabled={!state.sessions.length}>
-          {!state.sessions.length && <option value="">Waiting for localhost</option>}
-          {state.sessions.map((session) => <option key={session.id} value={session.id}>{session.project.display_name} · :{session.endpoint.port}</option>)}
+        <select
+          aria-label="Current localhost session"
+          value={current?.id ?? selected ?? ''}
+          onChange={(event) => onSelect(event.target.value)}
+          disabled={!state.sessions.length}
+        >
+          {!state.sessions.length && <option value="">LocalView</option>}
+          {state.sessions.map((session) => (
+            <option key={session.id} value={session.id}>
+              {session.project.display_name} · :{session.endpoint.port}
+            </option>
+          ))}
         </select>
       </div>
-      <span className="target-meta">{current ? `${current.classification.framework ?? 'Web'} · ${attached ? 'observer live' : current.classification.hmr_detected ? 'HMR detected' : 'HTTP live'}` : state.health.paused ? 'Detection paused' : 'Auto-discovery active'}</span>
     </div>
+    <span className="target-status" aria-label={statusLabel}>{statusLabel}</span>
     <div className="top-divider"/>
     <div className="top-actions">
-      <span className={`live-indicator ${attached ? 'attached' : ''}`} title={attached ? 'Native observer attached' : 'Native observer not attached'}>{attached ? `${live.observer.length} live` : 'observer idle'}</span>
-      <IconButton label={state.health.paused ? 'Resume discovery' : 'Pause discovery'} onClick={onPause}>{state.health.paused ? <PlayIcon/> : <PauseIcon/>}</IconButton>
-      <IconButton label="Open isolated native preview and observer" onClick={onOpenNative} disabled={!current}><ExternalIcon/></IconButton>
-      <IconButton label="Toggle immersive chrome" onClick={onImmersive}><ExpandIcon/></IconButton>
+      <IconButton
+        label={state.health.paused ? translate(locale, 'action.resumeDiscovery') : translate(locale, 'action.pauseDiscovery')}
+        onClick={onPause}
+      >
+        {state.health.paused ? <PlayIcon/> : <PauseIcon/>}
+      </IconButton>
+      <IconButton label={translate(locale, 'action.openPreview')} onClick={onOpenNative} disabled={!current}><ExternalIcon/></IconButton>
+      <IconButton label="Immersive" onClick={onImmersive}><ExpandIcon/></IconButton>
+      <IconButton label={translate(locale, 'action.hideTargetBar')} onClick={onHideTargetBar}><HideIcon/></IconButton>
     </div>
   </header>;
 }
@@ -217,6 +296,7 @@ function FloatingRail({ activeTool, onTool, onCommand }: { activeTool?: ToolId; 
     <RailButton tool="network" active={activeTool === 'network'} onClick={() => onTool('network')}><NetworkIcon/></RailButton>
     <div className="rail-divider"/>
     <RailButton tool="ai" active={activeTool === 'ai'} onClick={() => onTool('ai')}><SparkIcon/></RailButton>
+    <RailButton tool="advanced" active={activeTool === 'advanced'} onClick={() => onTool('advanced')}><MoreIcon/></RailButton>
     <CommandRailButton active={activeTool === 'command'} onClick={onCommand}/>
   </nav>;
 }
