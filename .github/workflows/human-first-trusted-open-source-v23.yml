@@ -38,6 +38,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Verify trusted Open Source V2.3 contract
         run: cargo test -p localview-desktop --test human_first_trusted_open_source_v23_contract -- --nocapture
+      - name: Verify trusted source resolver, containment and launcher validators
+        run: cargo test -p localview-desktop trusted_source --lib -- --nocapture
       - name: Verify fresh semantic snapshot authority remains green
         run: cargo test -p localview-control fresh_snapshot --lib -- --nocapture
       - name: Verify trusted Measure V2.2 remains green
