@@ -10,6 +10,7 @@ on:
       - tools/human-first-ui-v2/**
       - apps/desktop/src/**
       - apps/desktop/src-tauri/src/**
+      - apps/desktop/src-tauri/permissions/**
       - apps/desktop/src-tauri/tests/human_first_trusted_capture_v21_contract.rs
       - docs/superpowers/specs/2026-09-18-human-first-trusted-capture-v21.md
   workflow_dispatch:
