@@ -5,6 +5,7 @@ pub mod visual_capture;
 pub mod workspace_surface;
 
 use std::{
+    ffi::OsString,
     path::{Component, Path, PathBuf},
     process::Command,
 };
@@ -100,12 +101,20 @@ struct TrustedSourceTarget {
     canonical_route: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 enum SourceOpenLauncher {
     MacOpen,
     LinuxXdgOpen,
     WindowsFileProtocolHandler,
+}
+
+#[derive(Debug, Clone)]
+struct TrustedSourceLaunchPlan {
+    launcher: SourceOpenLauncher,
+    program: &'static str,
+    args: Vec<OsString>,
 }
 
 #[derive(Debug, Serialize)]
@@ -248,7 +257,9 @@ fn resolve_trusted_source_target(
     })
 }
 
-fn launch_trusted_source(target: &TrustedSourceTarget) -> Result<SourceOpenLauncher, String> {
+fn trusted_source_launch_plan(
+    target: &TrustedSourceTarget,
+) -> Result<TrustedSourceLaunchPlan, String> {
     let _ = (
         target.session_id,
         &target.reference,
@@ -258,34 +269,58 @@ fn launch_trusted_source(target: &TrustedSourceTarget) -> Result<SourceOpenLaunc
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("/usr/bin/open")
-            .arg(&target.canonical_file)
-            .spawn()
-            .map_err(|_| "trusted source launcher unavailable".to_string())?;
-        return Ok(SourceOpenLauncher::MacOpen);
+        return Ok(TrustedSourceLaunchPlan {
+            launcher: SourceOpenLauncher::MacOpen,
+            program: "/usr/bin/open",
+            args: vec![target.canonical_file.clone().into_os_string()],
+        });
     }
 
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open")
-            .arg(&target.canonical_file)
-            .spawn()
-            .map_err(|_| "trusted source launcher unavailable".to_string())?;
-        return Ok(SourceOpenLauncher::LinuxXdgOpen);
+        return Ok(TrustedSourceLaunchPlan {
+            launcher: SourceOpenLauncher::LinuxXdgOpen,
+            program: "xdg-open",
+            args: vec![target.canonical_file.clone().into_os_string()],
+        });
     }
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("rundll32.exe")
-            .arg("url.dll,FileProtocolHandler")
-            .arg(&target.canonical_file)
-            .spawn()
-            .map_err(|_| "trusted source launcher unavailable".to_string())?;
-        return Ok(SourceOpenLauncher::WindowsFileProtocolHandler);
+        return Ok(TrustedSourceLaunchPlan {
+            launcher: SourceOpenLauncher::WindowsFileProtocolHandler,
+            program: "rundll32.exe",
+            args: vec![
+                OsString::from("url.dll,FileProtocolHandler"),
+                target.canonical_file.clone().into_os_string(),
+            ],
+        });
     }
 
     #[allow(unreachable_code)]
     Err("trusted source launcher unavailable".into())
+}
+
+fn launch_trusted_source_with<F>(
+    target: &TrustedSourceTarget,
+    spawn: F,
+) -> Result<SourceOpenLauncher, String>
+where
+    F: FnOnce(&TrustedSourceLaunchPlan) -> Result<(), ()>,
+{
+    let plan = trusted_source_launch_plan(target)?;
+    spawn(&plan).map_err(|_| "trusted source launcher unavailable".to_string())?;
+    Ok(plan.launcher)
+}
+
+fn launch_trusted_source(target: &TrustedSourceTarget) -> Result<SourceOpenLauncher, String> {
+    launch_trusted_source_with(target, |plan| {
+        Command::new(plan.program)
+            .args(&plan.args)
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| ())
+    })
 }
 
 #[tauri::command]
@@ -816,6 +851,98 @@ mod trusted_source_validation_tests {
         )
         .is_err());
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trusted_source_launcher_plan_uses_fixed_program_and_exact_canonical_target() {
+        let root = temp_fixture("launcher-plan");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create src");
+        std::fs::write(src.join("Button.tsx"), "export const Button = () => null;")
+            .expect("write source");
+        let target = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source("src/Button.tsx"),
+            9,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("trusted target");
+
+        let plan = trusted_source_launch_plan(&target).expect("launch plan");
+        assert!(
+            !matches!(
+                plan.program.to_ascii_lowercase().as_str(),
+                "sh" | "bash" | "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh"
+            ),
+            "trusted source launcher must never route through a shell"
+        );
+        assert!(
+            plan.args.iter().any(|arg| arg == target.canonical_file.as_os_str()),
+            "canonical trusted target must be forwarded as one argv item"
+        );
+
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(plan.launcher, SourceOpenLauncher::LinuxXdgOpen);
+            assert_eq!(plan.program, "xdg-open");
+            assert_eq!(plan.args, vec![target.canonical_file.clone().into_os_string()]);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(plan.launcher, SourceOpenLauncher::MacOpen);
+            assert_eq!(plan.program, "/usr/bin/open");
+            assert_eq!(plan.args, vec![target.canonical_file.clone().into_os_string()]);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(plan.launcher, SourceOpenLauncher::WindowsFileProtocolHandler);
+            assert_eq!(plan.program, "rundll32.exe");
+            assert_eq!(plan.args[0], OsString::from("url.dll,FileProtocolHandler"));
+            assert_eq!(plan.args[1], target.canonical_file.clone().into_os_string());
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trusted_source_launcher_executor_is_injectable_and_sanitizes_failure() {
+        use std::cell::RefCell;
+
+        let root = temp_fixture("launcher-executor");
+        std::fs::write(root.join("App.tsx"), "export default null;").expect("write source");
+        let target = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source("App.tsx"),
+            3,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("trusted target");
+
+        let observed = RefCell::new(None::<(String, Vec<OsString>)>);
+        let launcher = launch_trusted_source_with(&target, |plan| {
+            *observed.borrow_mut() = Some((plan.program.to_owned(), plan.args.clone()));
+            Ok(())
+        })
+        .expect("fake launcher success");
+        let observed = observed.into_inner().expect("fake launcher observed plan");
+        assert!(!observed.0.is_empty());
+        assert!(observed.1.iter().any(|arg| arg == target.canonical_file.as_os_str()));
+
+        let error = launch_trusted_source_with(&target, |_plan| Err(()))
+            .expect_err("fake launcher failure must fail closed");
+        assert_eq!(error, "trusted source launcher unavailable");
+        assert!(
+            !error.contains(target.canonical_file.to_string_lossy().as_ref()),
+            "launcher error must not leak an absolute source path"
+        );
+
+        let expected = trusted_source_launch_plan(&target).expect("expected plan").launcher;
+        assert_eq!(launcher, expected);
         let _ = std::fs::remove_dir_all(root);
     }
 
