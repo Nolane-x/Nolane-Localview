@@ -1498,6 +1498,53 @@ invariant(
 await shot(page, '59-vi-source-open-failure.png', 'vi-source-open-failure');
 await page.close();
 
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveNoFocus, dashboard);
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(150);
+await assertVisible(page, '.panel-command', 'source-command-no-selection');
+const sourceCommandNoSelection = page.getByRole('button', { name: /Open source/ });
+invariant(await sourceCommandNoSelection.isDisabled(), 'source-open:command-no-selection-disabled');
+const sourceCommandNoSelectionText = await sourceCommandNoSelection.innerText();
+invariant(
+  sourceCommandNoSelectionText.includes('Select an element first.'),
+  'source-open:command-no-selection-guidance',
+  { sourceCommandNoSelectionText }
+);
+const sourceCommandNoSelectionInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'open_source_for_selection')
+);
+invariant(
+  sourceCommandNoSelectionInvokes.length === 0,
+  'source-open:command-no-selection-not-invoked',
+  { sourceCommandNoSelectionInvokes }
+);
+await shot(page, '60-source-command-no-selection.png', 'source-command-no-selection');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveMeasure, dashboard);
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(150);
+const sourceCommandReady = page.getByRole('button', { name: /Open source/ });
+invariant(!(await sourceCommandReady.isDisabled()), 'source-open:command-stable-selection-enabled');
+await sourceCommandReady.click();
+await page.waitForTimeout(150);
+const sourceCommandInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'open_source_for_selection')
+);
+invariant(sourceCommandInvokes.length === 1, 'source-open:command-shared-single-request', { sourceCommandInvokes });
+invariant(
+  sourceCommandInvokes[0]?.args?.reference === '@e1a2b3c4'
+    && typeof sourceCommandInvokes[0]?.args?.sessionId === 'string',
+  'source-open:command-reference-only',
+  { sourceCommandInvokes }
+);
+await page.keyboard.press('Escape');
+await page.keyboard.press('i');
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.success', 'source-command-success');
+await shot(page, '61-source-command-success.png', 'source-command-success');
+await page.close();
+
 await fs.writeFile(
   'human-first-ui-v2-render/audit.json',
   JSON.stringify(audit, null, 2) + '\\n',
