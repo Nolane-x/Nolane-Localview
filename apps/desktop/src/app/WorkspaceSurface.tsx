@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import { translate, type SupportedLocale } from '../i18n';
 import type { Session, WorkspaceBounds, WorkspaceSurfaceSupport } from '../types';
 
 interface WorkspaceSurfaceProps {
   current?: Session;
   url?: string;
   support: WorkspaceSurfaceSupport;
+  locale: SupportedLocale;
 }
 
 function readBounds(element: HTMLElement): WorkspaceBounds | undefined {
@@ -15,7 +17,7 @@ function readBounds(element: HTMLElement): WorkspaceBounds | undefined {
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 }
 
-export function WorkspaceSurface({ current, url, support }: WorkspaceSurfaceProps) {
+export function WorkspaceSurface({ current, url, support, locale }: WorkspaceSurfaceProps) {
   const slotRef = useRef<HTMLElement>(null);
   const openedSessionRef = useRef<string | null>(null);
   const lastUrlRef = useRef<string | null>(null);
@@ -101,10 +103,10 @@ export function WorkspaceSurface({ current, url, support }: WorkspaceSurfaceProp
     return <main className="workspace workspace-empty">
       <div className="empty-orbit" aria-hidden="true"><i/><i/><i/><span/></div>
       <div className="empty-copy">
-        <span className="micro-label">LOCALVIEW RUNTIME</span>
-        <h1>Your localhost becomes the workspace.</h1>
-        <p>Run a frontend dev server. LocalView discovers it automatically and keeps every analysis surface hidden until you ask for it.</p>
-        <div className="empty-command"><kbd>⌘</kbd><kbd>K</kbd><span>Open command palette</span></div>
+        <span className="micro-label">LOCALVIEW</span>
+        <h1>{translate(locale, 'empty.noTarget')}</h1>
+        <p>{translate(locale, 'empty.runDevServer')}</p>
+        <div className="empty-command"><kbd>⌘</kbd><kbd>K</kbd><span>{translate(locale, 'tool.command')}</span></div>
       </div>
     </main>;
   }
@@ -121,6 +123,6 @@ export function WorkspaceSurface({ current, url, support }: WorkspaceSurfaceProp
       />
     )}
     {nativeActive && <div className="native-surface-slot" aria-hidden="true" />}
-    {current.status === 'disconnected' && <div className="disconnect-shade"><div><span className="health-dot danger"/><strong>Dev server disconnected</strong><p>LocalView is preserving the session only for the reconnect grace period.</p></div></div>}
+    {current.status === 'disconnected' && <div className="disconnect-shade"><div><span className="health-dot danger"/><strong>{translate(locale, 'session.disconnected')}</strong><p>{translate(locale, 'session.reconnectGrace')}</p></div></div>}
   </main>;
 }

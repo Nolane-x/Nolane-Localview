@@ -1,0 +1,48 @@
+name: Human-first UI V2 red-green gate
+# contract paths corrected before RED proof
+
+on:
+  push:
+    branches:
+      - feat/human-first-localview-ui-v2
+    paths:
+      - .github/workflows/human-first-ui-v2-tdd.yml
+      - .github/workflows/human-first-ui-v2-render.yml
+      - apps/desktop/src/**
+      - apps/desktop/src-tauri/src/**
+      - apps/desktop/src-tauri/tests/human_first_ui_v2_contract.rs
+      - apps/desktop/package.json
+      - apps/desktop/tsconfig*.json
+      - apps/desktop/vite.config.ts
+      - docs/superpowers/specs/2026-09-18-human-first-localview-ui-ux-v2.md
+      - tools/human-first-ui-v2/**
+
+concurrency:
+  group: human-first-ui-v2-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify GREEN source contract
+        run: cargo test -p localview-desktop --test human_first_ui_v2_contract -- --nocapture
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm install --no-audit --no-fund
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build
