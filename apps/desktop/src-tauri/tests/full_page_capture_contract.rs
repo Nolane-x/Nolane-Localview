@@ -62,10 +62,12 @@ fn desktop_full_page_transaction_is_single_gate_restore_before_persistence() {
     assert!(native < redact && redact < decode && decode < stitch);
     assert!(work.contains("visible_fixed_or_sticky"));
     assert!(work.contains("full_page_fixed_or_sticky_unsupported"));
-    assert!(work.contains("full_page_document_geometry_drift"));
-    assert!(work.contains("full_page_viewport_geometry_drift"));
+    assert!(work.contains("validate_capture_scroll_receipt"));
+    assert!(work.contains("validate_capture_tile_probe"));
     assert!(work.contains("full_page_route_drift"));
     assert!(work.contains("full_page_native_geometry_drift"));
+    assert!(source.contains("full_page_document_geometry_drift"));
+    assert!(source.contains("full_page_viewport_geometry_drift"));
     assert!(!work.contains("Vec<CapturedFrame>"));
     assert!(!work.contains("Vec<RgbaImage>"));
 
@@ -98,6 +100,9 @@ fn desktop_full_page_transaction_is_single_gate_restore_before_persistence() {
     assert!(initial_settle < freeze && freeze < tile_work && tile_work < cleanup);
     assert!(cleanup < encode && encode < persist);
     assert!(transaction.contains("full_page_transaction_timeout"));
+    assert!(transaction.contains("FULL_PAGE_CLEANUP_RESERVE_MS"));
+    assert!(transaction.contains("work_deadline"));
+    assert!(transaction.contains("cleanup_full_page_state(session_id, &viewport, &freeze, deadline)"));
 }
 
 #[test]
@@ -119,7 +124,7 @@ fn full_page_cleanup_restores_scroll_before_visual_state() {
         .find("restore_visual_state")
         .expect("cleanup must restore visuals even after scroll restoration attempt");
     assert!(scroll < restore);
-    assert!(cleanup.contains("original_scroll_y"));
+    assert!(cleanup.contains("let original_scroll_y = freeze.scroll_y;"));
     assert!(cleanup.contains("full_page_scroll_restore_failed"));
     assert!(cleanup.contains("full_page_visual_restore_failed"));
 }
@@ -130,7 +135,11 @@ fn full_page_persistence_uses_one_final_artifact_and_dedicated_evidence() {
     let start = source
         .find("async fn persist_full_page_and_register")
         .expect("dedicated final persistence helper must exist");
-    let persist = &source[start..];
+    let end = source[start..]
+        .find("async fn freeze_full_page_visual_state")
+        .map(|offset| start + offset)
+        .expect("full-page freeze helper must follow final persistence");
+    let persist = &source[start..end];
 
     assert!(persist.contains("artifacts.put(\"visual/png\", &png)"));
     assert!(persist.contains("/evidence/visual-full-page"));
