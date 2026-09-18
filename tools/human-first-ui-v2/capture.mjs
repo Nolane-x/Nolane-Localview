@@ -241,13 +241,23 @@ function init(
   sourceOpenDelayMs = 0,
   sourceOpenFailure = null,
   aiOptions = {},
+  fixOptions = {},
 ) {
   const aiProviderAvailable = aiOptions.providerAvailable ?? false;
   const aiProviderLabel = aiOptions.providerLabel ?? 'Audit AI Bridge';
   const aiDelayMs = aiOptions.delayMs ?? 0;
   const aiFailure = aiOptions.failure ?? null;
   const aiAnswer = aiOptions.answer ?? 'The selected Deploy button is interactive and currently has one visible warning.';
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer }) => {
+  const fixProviderAvailable = fixOptions.providerAvailable ?? false;
+  const fixProviderLabel = fixOptions.providerLabel ?? 'Audit Fix Bridge';
+  const fixProposalDelayMs = fixOptions.proposalDelayMs ?? 0;
+  const fixApplyDelayMs = fixOptions.applyDelayMs ?? 0;
+  const fixProposalFailure = fixOptions.proposalFailure ?? null;
+  const fixApplyFailure = fixOptions.applyFailure ?? null;
+  const fixDisplayFile = fixOptions.displayFile ?? 'src/components/DeployButton.tsx';
+  const fixSummary = fixOptions.summary ?? 'Make the Deploy button state clearer.';
+  const fixDiff = fixOptions.diff ?? '--- a/src/components/DeployButton.tsx\n+++ b/src/components/DeployButton.tsx\n@@ -42,1 +42,1 @@\n-<button>Deploy</button>\n+<button aria-live="polite">Deploy</button>\n';
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -279,6 +289,9 @@ function init(
     window.__LOCALVIEW_AUDIT_LIVE_STATE__ = structuredClone(liveState);
     window.__LOCALVIEW_AUDIT_DASHBOARD_STATE__ = structuredClone(dashboardState);
     window.__LOCALVIEW_AUDIT_AI_BRIDGE_REQUEST__ = null;
+    window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__ = {};
+    window.__LOCALVIEW_AUDIT_FIX_DISCARDS__ = [];
+    window.__LOCALVIEW_AUDIT_FIX_WRITES__ = 0;
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
@@ -341,6 +354,61 @@ function init(
               completedAtUnixMs: Date.now(),
             };
           }
+          if (cmd === 'ai_fix_capability') {
+            return {
+              available: fixProviderAvailable,
+              providerLabel: fixProviderAvailable ? fixProviderLabel : null,
+              reason: fixProviderAvailable ? null : 'not_enabled',
+            };
+          }
+          if (cmd === 'prepare_fix_proposal') {
+            if (fixProposalDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, fixProposalDelayMs));
+            }
+            if (fixProposalFailure) {
+              throw new Error(fixProposalFailure);
+            }
+            const proposalId = 'fix-proposal-' + String(Object.keys(window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__).length + 1);
+            const proposal = {
+              proposalId,
+              reference: args.reference,
+              displayFile: fixDisplayFile,
+              summary: fixSummary,
+              diff: fixDiff,
+              providerLabel: fixProviderLabel,
+              expiresAtUnixMs: Date.now() + 300000,
+            };
+            window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[proposalId] = structuredClone(proposal);
+            return proposal;
+          }
+          if (cmd === 'apply_fix_proposal') {
+            if (fixApplyDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, fixApplyDelayMs));
+            }
+            if (fixApplyFailure) {
+              throw new Error(fixApplyFailure);
+            }
+            const proposal = window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[args.proposalId];
+            if (!proposal) {
+              throw new Error('trusted Fix proposal is unavailable');
+            }
+            window.__LOCALVIEW_AUDIT_FIX_WRITES__ += 1;
+            delete window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[args.proposalId];
+            return {
+              proposalId: args.proposalId,
+              reference: proposal.reference,
+              displayFile: proposal.displayFile,
+              applied: true,
+              changedStartLine: 42,
+              changedEndLine: 42,
+              appliedAtUnixMs: Date.now(),
+            };
+          }
+          if (cmd === 'discard_fix_proposal') {
+            window.__LOCALVIEW_AUDIT_FIX_DISCARDS__.push(args.proposalId);
+            delete window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[args.proposalId];
+            return null;
+          }
           if (cmd === 'open_source_for_selection') {
             if (sourceOpenDelayMs > 0) {
               await new Promise((resolve) => setTimeout(resolve, sourceOpenDelayMs));
@@ -401,7 +469,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff });
 }
 
 async function pageFor(
@@ -418,13 +486,14 @@ async function pageFor(
   measureDelayMs = 0,
   sourceOpenDelayMs = 0,
   sourceOpenFailure = null,
-  aiOptions = {}
+  aiOptions = {},
+  fixOptions = {}
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
