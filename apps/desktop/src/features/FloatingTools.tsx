@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import type { DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
+import { LOCALE_OPTIONS, translate, type SupportedLocale } from '../i18n';
+import type { LocalViewPreferences } from '../preferences';
 import {
   ActivityIcon,
   CloseIcon,
@@ -14,16 +16,31 @@ import {
   SearchIcon,
   SparkIcon,
   WarningIcon,
+  SettingsIcon,
+  MoreIcon,
+  SourceIcon,
+  RulerIcon,
+  CaptureIcon,
 } from '../components/icons';
 
-export type ToolId = 'inspect' | 'responsive' | 'console' | 'network' | 'ai' | 'sessions' | 'command';
+export type ToolId =
+  | 'inspect'
+  | 'responsive'
+  | 'console'
+  | 'network'
+  | 'ai'
+  | 'advanced'
+  | 'settings'
+  | 'sessions'
+  | 'command';
 
-export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { label: string; shortcut: string }> = {
-  inspect: { label: 'Inspect / X-Ray', shortcut: 'I' },
+export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command' | 'settings'>, { label: string; shortcut: string }> = {
+  inspect: { label: 'Inspect', shortcut: 'I' },
   responsive: { label: 'Responsive', shortcut: 'R' },
   console: { label: 'Console', shortcut: 'C' },
   network: { label: 'Network', shortcut: 'N' },
-  ai: { label: 'AI Critic', shortcut: 'A' },
+  ai: { label: 'AI', shortcut: 'A' },
+  advanced: { label: 'More', shortcut: 'M' },
 };
 
 interface FloatingPanelProps {
@@ -32,26 +49,67 @@ interface FloatingPanelProps {
   live: LiveSessionState;
   current?: Session;
   url?: string;
+  locale: SupportedLocale;
+  preferences: LocalViewPreferences;
   onClose: () => void;
   onSelect: (id: string) => void;
   onOpenNative: () => void;
   onPause: () => void;
+  onTool: (tool: ToolId) => void;
+  onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
+  onResetWorkspace: () => void;
 }
 
-export function FloatingPanel({ tool, state, live, current, url, onClose, onSelect, onOpenNative, onPause }: FloatingPanelProps) {
+export function FloatingPanel({
+  tool,
+  state,
+  live,
+  current,
+  url,
+  locale,
+  preferences,
+  onClose,
+  onSelect,
+  onOpenNative,
+  onPause,
+  onTool,
+  onPreferencesChange,
+  onResetWorkspace,
+}: FloatingPanelProps) {
   const bottomSheet = tool === 'console' || tool === 'network';
   const compact = tool === 'command';
   return (
     <section className={`floating-panel panel-${tool} ${bottomSheet ? 'bottom-sheet' : ''} ${compact ? 'command-panel' : ''}`} aria-label={`${tool} panel`}>
-      <PanelHeader title={panelTitle(tool)} eyebrow={panelEyebrow(tool)} onClose={onClose} />
+      <PanelHeader title={panelTitle(tool, locale)} eyebrow={panelEyebrow(tool)} onClose={onClose} />
       <div className="panel-body">
-        {tool === 'inspect' && <Inspector current={current} live={live} onOpenNative={onOpenNative} />}
+        {tool === 'inspect' && <Inspector current={current} live={live} onOpenNative={onOpenNative} locale={locale} />}
+        {tool === 'advanced' && <AdvancedPanel current={current} live={live} onOpenNative={onOpenNative} />}
+        {tool === 'settings' && (
+          <SettingsPanel
+            locale={locale}
+            preferences={preferences}
+            onPreferencesChange={onPreferencesChange}
+            onResetWorkspace={onResetWorkspace}
+          />
+        )}
         {tool === 'responsive' && <ResponsivePanel current={current} />}
         {tool === 'console' && <ConsolePanel live={live} onOpenNative={onOpenNative} />}
         {tool === 'network' && <NetworkPanel current={current} live={live} onOpenNative={onOpenNative} />}
-        {tool === 'ai' && <AiPanel current={current} live={live} />}
+        {tool === 'ai' && <AiPanel current={current} locale={locale} />}
         {tool === 'sessions' && <SessionsPanel state={state} current={current} onSelect={onSelect} />}
-        {tool === 'command' && <CommandPanel state={state} current={current} live={live} url={url} onOpenNative={onOpenNative} onPause={onPause} />}
+        {tool === 'command' && (
+          <CommandPanel
+            state={state}
+            current={current}
+            url={url}
+            locale={locale}
+            preferences={preferences}
+            onOpenNative={onOpenNative}
+            onPause={onPause}
+            onTool={onTool}
+            onPreferencesChange={onPreferencesChange}
+          />
+        )}
       </div>
     </section>
   );
@@ -61,17 +119,58 @@ function PanelHeader({ title, eyebrow, onClose }: { title: string; eyebrow: stri
   return <div className="panel-header"><div><span>{eyebrow}</span><strong>{title}</strong></div><button className="close-button" aria-label={`Close ${title}`} onClick={onClose}><CloseIcon /></button></div>;
 }
 
-function Inspector({ current, live, onOpenNative }: { current?: Session; live: LiveSessionState; onOpenNative: () => void }) {
-  if (!current) return <PanelEmpty title="No active target" text="Start a localhost frontend to inspect its runtime identity and semantic surface." />;
+function Inspector({
+  current,
+  live,
+  onOpenNative,
+  locale,
+}: {
+  current?: Session;
+  live: LiveSessionState;
+  onOpenNative: () => void;
+  locale: SupportedLocale;
+}) {
+  if (!current) {
+    return <PanelEmpty title={translate(locale, 'empty.noTarget')} text={translate(locale, 'empty.runDevServer')} />;
+  }
+  const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
+  const source = focused?.payload && typeof focused.payload.source === 'string'
+    ? String(focused.payload.source)
+    : undefined;
+
+  return (
+    <div className="inspector-stack human-inspector">
+      <div className="inspector-hero">
+        <div className="selection-cross"><InspectIcon /></div>
+        <div>
+          <span>{translate(locale, 'inspector.currentTarget')}</span>
+          <strong>{focused?.reference ?? current.project.display_name}</strong>
+          <p>{focused ? current.project.display_name : translate(locale, 'inspector.noSelection')}</p>
+        </div>
+      </div>
+
+      <div className="quick-action-grid" aria-label="Inspector actions">
+        <button disabled={!source} title={!source ? translate(locale, 'inspector.sourceUnavailable') : source}>
+          <SourceIcon /><span>Open source</span>
+        </button>
+        <button disabled={!focused}><RulerIcon /><span>Measure</span></button>
+        <button><CaptureIcon /><span>Capture</span></button>
+        <button disabled={!focused}><SparkIcon /><span>Ask AI</span></button>
+        <button disabled={!focused}><ActivityIcon /><span>Fix</span></button>
+      </div>
+
+      {!live.observer.length && <AttachNotice onOpenNative={onOpenNative} />}
+    </div>
+  );
+}
+
+function AdvancedPanel({ current, live, onOpenNative }: { current?: Session; live: LiveSessionState; onOpenNative: () => void }) {
+  if (!current) return <PanelEmpty title="No active target" text="Run a dev server to view diagnostics." />;
   const snapshot = [...live.observer].reverse().find((event) => event.kind === 'semantic_snapshot');
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
   const latest = live.observer.at(-1);
   return (
-    <div className="inspector-stack">
-      <div className="inspector-hero">
-        <div className="selection-cross"><InspectIcon /></div>
-        <div><span>Current target</span><strong>{current.project.display_name}</strong><p>{current.classification.framework ?? 'Generic web runtime'}</p></div>
-      </div>
+    <div className="inspector-stack diagnostics-stack">
       <InfoGrid rows={[
         ['Status', current.status],
         ['Observer', live.observer.length ? `${live.observer.length} events` : 'not attached'],
@@ -81,18 +180,87 @@ function Inspector({ current, live, onOpenNative }: { current?: Session; live: L
       {!live.observer.length && <AttachNotice onOpenNative={onOpenNative} />}
       {snapshot && <EvidenceCard event={snapshot} />}
       <div className="panel-section">
-        <SectionLabel title="Project identity" aside="port-independent" />
+        <SectionLabel title="Project identity" aside="diagnostic" />
         <code className="path-block">{current.project.git_root ?? current.project.cwd ?? 'Process-derived project identity'}</code>
       </div>
       <div className="panel-section">
-        <SectionLabel title="X-Ray pipeline" aside="live evidence" />
+        <SectionLabel title="Runtime pipeline" aside="observer" />
         <div className="pipeline-list">
           <PipelineStep n="01" title="Semantic refs" state="ready" />
           <PipelineStep n="02" title="Geometry + layout evidence" state="ready" />
-          <PipelineStep n="03" title="Source-map ranking" state="ready" />
-          <PipelineStep n="04" title="Secure native observer drain" state={live.observer.length ? 'ready' : 'idle'} />
+          <PipelineStep n="03" title="Source hints" state="ready" />
+          <PipelineStep n="04" title="Secure observer drain" state={live.observer.length ? 'ready' : 'idle'} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/* Language selector, Show target bar, Show tool rail */
+function SettingsPanel({
+  locale,
+  preferences,
+  onPreferencesChange,
+  onResetWorkspace,
+}: {
+  locale: SupportedLocale;
+  preferences: LocalViewPreferences;
+  onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
+  onResetWorkspace: () => void;
+}) {
+  return (
+    <div className="settings-panel">
+      <section className="settings-section">
+        <div className="settings-section-title">
+          <strong>{translate(locale, 'settings.language')}</strong>
+        </div>
+        <label className="settings-row">
+          <span>{translate(locale, 'settings.defaultLanguage')}</span>
+          <select
+            value={preferences.locale}
+            onChange={(event) => onPreferencesChange({ locale: event.target.value as SupportedLocale })}
+          >
+            {LOCALE_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.nativeLabel}{option.nativeLabel === option.label ? '' : ` · ${option.label}`}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-title">
+          <strong>{translate(locale, 'settings.workspace')}</strong>
+        </div>
+        <label className="settings-toggle">
+          <span>{translate(locale, 'settings.showTargetBar')}</span>
+          <input
+            type="checkbox"
+            checked={preferences.showTargetBar}
+            onChange={(event) => onPreferencesChange({ showTargetBar: event.target.checked })}
+          />
+        </label>
+        <label className="settings-toggle">
+          <span>{translate(locale, 'settings.showToolRail')}</span>
+          <input
+            type="checkbox"
+            checked={preferences.showToolRail}
+            onChange={(event) => onPreferencesChange({ showToolRail: event.target.checked })}
+          />
+        </label>
+        <label className="settings-toggle">
+          <span>{translate(locale, 'settings.rememberChrome')}</span>
+          <input
+            type="checkbox"
+            checked={preferences.rememberChromePositions}
+            onChange={(event) => onPreferencesChange({ rememberChromePositions: event.target.checked })}
+          />
+        </label>
+        <button className="settings-reset" onClick={onResetWorkspace}>
+          {translate(locale, 'action.resetWorkspace')}
+        </button>
+      </section>
     </div>
   );
 }
@@ -100,9 +268,9 @@ function Inspector({ current, live, onOpenNative }: { current?: Session; live: L
 function ResponsivePanel({ current }: { current?: Session }) {
   const presets = [['Mobile S', '320', '568'], ['Mobile', '390', '844'], ['Tablet', '768', '1024'], ['Desktop', '1440', '900']];
   return <div>
-    <div className="responsive-summary"><span>ADAPTIVE SWEEP</span><strong>{current ? current.project.display_name : 'No target'}</strong><p>Preset anchors stay lightweight; the Rust responsive engine can binary-search breakpoints only after layout evidence indicates a failure interval.</p></div>
+    <div className="responsive-summary"><span>VIEWPORTS</span><strong>{current ? current.project.display_name : 'No target'}</strong></div>
     <div className="viewport-list">{presets.map(([name, width, height]) => <button key={name} disabled={!current}><span className="viewport-icon"/><div><strong>{name}</strong><span>{width} × {height}</span></div><kbd>{width}</kbd></button>)}</div>
-    <div className="panel-note">Responsive tooling is on-demand so the normal workspace never shrinks.</div>
+    <div className="panel-note">Viewport tools open only when needed.</div>
   </div>;
 }
 
@@ -110,7 +278,7 @@ function ConsolePanel({ live, onOpenNative }: { live: LiveSessionState; onOpenNa
   const events = live.observer.filter((event) => event.kind === 'console' || event.kind === 'runtime_error').slice(-80);
   return <div className="stream-panel">
     <div className="stream-toolbar"><span className="filter-chip active">Live</span><span className="stream-status"><i className={events.length ? '' : 'muted'} /> {events.length} event{events.length === 1 ? '' : 's'}</span></div>
-    {events.length ? <div className="evidence-stream">{events.map((event) => <ConsoleRow key={`${event.seq}-${event.captured_at}`} event={event} />)}</div> : <EmptyEvidence icon={<ConsoleIcon />} title="No console evidence yet" text="Open the native preview to attach the secure observer. LocalView stays silent instead of inventing console traffic." action="Attach observer" onAction={onOpenNative} />}
+    {events.length ? <div className="evidence-stream">{events.map((event) => <ConsoleRow key={`${event.seq}-${event.captured_at}`} event={event} />)}</div> : <EmptyEvidence icon={<ConsoleIcon />} title="No console events" text="Open the preview to collect console events." action="Open preview" onAction={onOpenNative} />}
   </div>;
 }
 
@@ -123,36 +291,85 @@ function NetworkPanel({ current, live, onOpenNative }: { current?: Session; live
       <div><span>Requests</span><strong>{events.length}</strong></div>
       <div><span>Failures</span><strong>{failures}</strong></div>
     </div>
-    {events.length ? <div className="evidence-stream network-stream">{events.map((event) => <NetworkRow key={`${event.seq}-${event.captured_at}`} event={event} />)}</div> : <EmptyEvidence icon={<NetworkIcon />} title="No network evidence yet" text="Fetch/XHR metadata is captured without bodies. Open the native preview to attach the live bridge." action="Attach observer" onAction={onOpenNative} />}
+    {events.length ? <div className="evidence-stream network-stream">{events.map((event) => <NetworkRow key={`${event.seq}-${event.captured_at}`} event={event} />)}</div> : <EmptyEvidence icon={<NetworkIcon />} title="No network events" text="Open the preview to collect request metadata." action="Open preview" onAction={onOpenNative} />}
   </div>;
 }
 
-function AiPanel({ current, live }: { current?: Session; live: LiveSessionState }) {
-  const evidenceCount = live.observer.length + live.action_results.length;
-  return <div className="ai-panel-content">
-    <div className="ai-mark"><SparkIcon /></div><span className="micro-label">POINT · ASK · DIAGNOSE</span><h2>Evidence before opinion.</h2>
-    <p>{current ? `Targeting ${current.project.display_name}.` : 'Start a target to enable grounded visual questions.'} {evidenceCount ? `${evidenceCount} live evidence item(s) are available for grounding.` : 'No live evidence is attached yet.'}</p>
-    <div className="prompt-box"><span>AI judgement provider is intentionally not hard-wired</span><kbd>local</kbd></div>
-    <div className="suggestion-grid"><button disabled>Why is this misaligned?</button><button disabled>Find the source component</button><button disabled>Verify this fix</button><button disabled>Explain the visual diff</button></div>
-    <div className="panel-note">Subjective AI judgement remains model-agnostic and must cite evidence IDs before LocalView treats it as actionable.</div>
+function AiPanel({ current, locale }: { current?: Session; locale: SupportedLocale }) {
+  return <div className="ai-panel-content human-ai-panel">
+    <div className="ai-mark"><SparkIcon /></div>
+    <h2>AI</h2>
+    <div className="suggestion-grid">
+      <button disabled={!current}>{translate(locale, 'ai.askSelection')}</button>
+      <button disabled={!current}>{translate(locale, 'ai.explainIssue')}</button>
+      <button disabled={!current}>{translate(locale, 'ai.fixSelection')}</button>
+      <button disabled={!current}>{translate(locale, 'ai.verifyChange')}</button>
+    </div>
+    <span className="compact-status">{translate(locale, 'ai.unavailable')}</span>
   </div>;
 }
 
 function SessionsPanel({ state, current, onSelect }: { state: DashboardState; current?: Session; onSelect: (id: string) => void }) {
   return <div className="sessions-panel"><div className="session-overview"><strong>{state.sessions.length}</strong><span>detected localhost session{state.sessions.length === 1 ? '' : 's'}</span></div><div className="session-cards">
     {state.sessions.map((session) => <button key={session.id} className={current?.id === session.id ? 'selected' : ''} onClick={() => onSelect(session.id)}><span className={`health-dot ${session.status === 'disconnected' ? 'danger' : session.status === 'hidden' ? 'warn' : ''}`} /><div><strong>{session.project.display_name}</strong><span>{session.classification.framework ?? 'Web'} · :{session.endpoint.port}</span></div><span className="session-state">{session.status}</span></button>)}
-    {!state.sessions.length && <PanelEmpty title="Nothing detected" text="LocalView watches loopback listeners and classifies frontend candidates automatically." />}
+    {!state.sessions.length && <PanelEmpty title="No app detected" text="Run your dev server to begin." />}
   </div></div>;
 }
 
-function CommandPanel({ state, current, live, url, onOpenNative, onPause }: { state: DashboardState; current?: Session; live: LiveSessionState; url?: string; onOpenNative: () => void; onPause: () => void }) {
+function CommandPanel({
+  state,
+  current,
+  url,
+  locale,
+  preferences,
+  onOpenNative,
+  onPause,
+  onTool,
+  onPreferencesChange,
+}: {
+  state: DashboardState;
+  current?: Session;
+  url?: string;
+  locale: SupportedLocale;
+  preferences: LocalViewPreferences;
+  onOpenNative: () => void;
+  onPause: () => void;
+  onTool: (tool: ToolId) => void;
+  onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
+}) {
   const commands = [
-    { icon: <InspectIcon />, title: 'Inspect evidence', detail: `${live.observer.length} live observer events`, keys: 'I', disabled: !current },
-    { icon: <ResponsiveIcon />, title: 'Responsive lab', detail: 'Adaptive viewport sweep', keys: 'R', disabled: !current },
-    { icon: <ActivityIcon />, title: 'Attach native observer', detail: url ?? 'No active URL', keys: '↵', action: onOpenNative, disabled: !current },
-    { icon: state.health.paused ? <PlayIcon /> : <PauseIcon />, title: state.health.paused ? 'Resume discovery' : 'Pause discovery', detail: 'Runtime listener scanning', keys: 'P', action: onPause },
+    { icon: <InspectIcon />, title: translate(locale, 'tool.inspect'), detail: current?.project.display_name ?? '', keys: 'I', action: () => onTool('inspect'), disabled: !current },
+    { icon: <ResponsiveIcon />, title: translate(locale, 'tool.responsive'), detail: '', keys: 'R', action: () => onTool('responsive'), disabled: !current },
+    { icon: <ExternalIcon />, title: translate(locale, 'action.openPreview'), detail: url ?? '', keys: '↵', action: onOpenNative, disabled: !current },
+    { icon: <SettingsIcon />, title: translate(locale, 'tool.settings'), detail: '', keys: '⌘,', action: () => onTool('settings') },
+    { icon: <MoreIcon />, title: translate(locale, 'tool.advanced'), detail: '', keys: 'M', action: () => onTool('advanced'), disabled: !current },
+    {
+      icon: <InspectIcon />,
+      title: preferences.showTargetBar ? translate(locale, 'action.hideTargetBar') : translate(locale, 'action.showTargetBar'),
+      detail: '',
+      keys: '⇧⌃T',
+      action: () => onPreferencesChange({ showTargetBar: !preferences.showTargetBar }),
+    },
+    {
+      icon: <CommandIcon />,
+      title: preferences.showToolRail ? translate(locale, 'action.hideToolRail') : translate(locale, 'action.showToolRail'),
+      detail: '',
+      keys: '',
+      action: () => onPreferencesChange({ showToolRail: !preferences.showToolRail }),
+    },
+    {
+      icon: state.health.paused ? <PlayIcon /> : <PauseIcon />,
+      title: state.health.paused ? translate(locale, 'action.resumeDiscovery') : translate(locale, 'action.pauseDiscovery'),
+      detail: '',
+      keys: 'P',
+      action: onPause,
+    },
   ];
-  return <div className="command-content"><div className="command-search"><SearchIcon /><input autoFocus placeholder="Type a command…" aria-label="Search commands" /><kbd>ESC</kbd></div><div className="command-list">{commands.map((command) => <button key={command.title} onClick={command.action} disabled={command.disabled}><span className="command-icon">{command.icon}</span><div><strong>{command.title}</strong><span>{command.detail}</span></div><kbd>{command.keys}</kbd></button>)}</div><div className="command-footer"><span>LocalView v{state.health.version}</span><span>diff-first · evidence-first · localhost-only</span></div></div>;
+  return <div className="command-content">
+    <div className="command-search"><SearchIcon /><input autoFocus placeholder="Type a command…" aria-label="Search commands" /><kbd>ESC</kbd></div>
+    <div className="command-list">{commands.map((command) => <button key={command.title} onClick={command.action} disabled={command.disabled}><span className="command-icon">{command.icon}</span><div><strong>{command.title}</strong>{command.detail && <span>{command.detail}</span>}</div>{command.keys && <kbd>{command.keys}</kbd>}</button>)}</div>
+    <div className="command-footer"><span>LocalView v{state.health.version}</span></div>
+  </div>;
 }
 
 function ConsoleRow({ event }: { event: ObserverEvent }) {
@@ -187,10 +404,34 @@ function SectionLabel({ title, aside }: { title: string; aside: string }) { retu
 function PanelEmpty({ title, text }: { title: string; text: string }) { return <div className="panel-empty"><span className="empty-pulse" /><strong>{title}</strong><p>{text}</p></div>; }
 function time(value: string) { try { return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); } catch { return '—'; } }
 
-function panelTitle(tool: ToolId) { return { inspect: 'Inspector', responsive: 'Responsive Lab', console: 'Console', network: 'Network', ai: 'AI Critic', sessions: 'Local sessions', command: 'Command palette' }[tool]; }
-function panelEyebrow(tool: ToolId) { return { inspect: 'X-RAY · STRUCTURE', responsive: 'VIEWPORT · LAYOUT', console: 'BEHAVIOR · TELEMETRY', network: 'REQUEST · EVIDENCE', ai: 'VISION · SEMANTICS', sessions: 'AUTO-DISCOVERY', command: 'LOCALVIEW' }[tool]; }
+function panelTitle(tool: ToolId, locale: SupportedLocale) {
+  return {
+    inspect: translate(locale, 'inspector.title'),
+    responsive: translate(locale, 'tool.responsive'),
+    console: translate(locale, 'tool.console'),
+    network: translate(locale, 'tool.network'),
+    ai: translate(locale, 'tool.ai'),
+    advanced: translate(locale, 'advanced.title'),
+    settings: translate(locale, 'settings.title'),
+    sessions: 'Sessions',
+    command: translate(locale, 'tool.command'),
+  }[tool];
+}
+function panelEyebrow(tool: ToolId) {
+  return {
+    inspect: 'TOOLS',
+    responsive: 'TOOLS',
+    console: 'TOOLS',
+    network: 'TOOLS',
+    ai: 'TOOLS',
+    advanced: 'DIAGNOSTICS',
+    settings: 'PREFERENCES',
+    sessions: 'SESSIONS',
+    command: 'LOCALVIEW',
+  }[tool];
+}
 
-export function RailButton({ tool, active, onClick, children }: { tool: Exclude<ToolId, 'sessions' | 'command'>; active: boolean; onClick: () => void; children: ReactNode }) {
+export function RailButton({ tool, active, onClick, children }: { tool: Exclude<ToolId, 'sessions' | 'command' | 'settings'>; active: boolean; onClick: () => void; children: ReactNode }) {
   const meta = toolMeta[tool];
   return <button className={`rail-button ${active ? 'active' : ''}`} onClick={onClick} aria-pressed={active} aria-label={meta.label}>{children}<span className="rail-tooltip">{meta.label}<kbd>{meta.shortcut}</kbd></span></button>;
 }
