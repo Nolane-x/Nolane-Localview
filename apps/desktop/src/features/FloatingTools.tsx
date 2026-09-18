@@ -34,12 +34,13 @@ export type ToolId =
   | 'sessions'
   | 'command';
 
-export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command' | 'settings'>, { label: string; shortcut: string }> = {
+export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { label: string; shortcut: string }> = {
   inspect: { label: 'Inspect', shortcut: 'I' },
   responsive: { label: 'Responsive', shortcut: 'R' },
   console: { label: 'Console', shortcut: 'C' },
   network: { label: 'Network', shortcut: 'N' },
   ai: { label: 'AI', shortcut: 'A' },
+  settings: { label: 'Settings', shortcut: '⌘,' },
   advanced: { label: 'More', shortcut: 'M' },
 };
 
@@ -150,17 +151,52 @@ function Inspector({
       </div>
 
       <div className="quick-action-grid" aria-label="Inspector actions">
-        <button disabled={!source} title={!source ? translate(locale, 'inspector.sourceUnavailable') : source}>
-          <SourceIcon /><span>Open source</span>
-        </button>
-        <button disabled={!focused}><RulerIcon /><span>Measure</span></button>
-        <button><CaptureIcon /><span>Capture</span></button>
-        <button disabled={!focused}><SparkIcon /><span>Ask AI</span></button>
-        <button disabled={!focused}><ActivityIcon /><span>Fix</span></button>
+        <UnavailableInspectorAction
+          icon={<SourceIcon />}
+          label="Open source"
+          reason={source ? 'Source opening is not connected to this panel yet.' : translate(locale, 'inspector.sourceUnavailable')}
+        />
+        <UnavailableInspectorAction
+          icon={<RulerIcon />}
+          label="Measure"
+          reason={focused ? 'Measurement is not connected to this panel yet.' : translate(locale, 'inspector.noSelection')}
+        />
+        <UnavailableInspectorAction
+          icon={<CaptureIcon />}
+          label="Capture"
+          reason="Capture remains unavailable here until the panel can supply validated viewport authority."
+        />
+        <UnavailableInspectorAction
+          icon={<SparkIcon />}
+          label="Ask AI"
+          reason={focused ? translate(locale, 'ai.unavailable') : translate(locale, 'inspector.noSelection')}
+        />
+        <UnavailableInspectorAction
+          icon={<ActivityIcon />}
+          label="Fix"
+          reason={focused ? translate(locale, 'ai.unavailable') : translate(locale, 'inspector.noSelection')}
+        />
       </div>
 
       {!live.observer.length && <AttachNotice onOpenNative={onOpenNative} />}
     </div>
+  );
+}
+
+
+function UnavailableInspectorAction({
+  icon,
+  label,
+  reason,
+}: {
+  icon: ReactNode;
+  label: string;
+  reason: string;
+}) {
+  return (
+    <button disabled aria-disabled="true" title={reason}>
+      {icon}<span>{label}</span>
+    </button>
   );
 }
 
@@ -431,7 +467,7 @@ function panelEyebrow(tool: ToolId) {
   }[tool];
 }
 
-export function RailButton({ tool, active, onClick, children }: { tool: Exclude<ToolId, 'sessions' | 'command' | 'settings'>; active: boolean; onClick: () => void; children: ReactNode }) {
+export function RailButton({ tool, active, onClick, children }: { tool: Exclude<ToolId, 'sessions' | 'command'>; active: boolean; onClick: () => void; children: ReactNode }) {
   const meta = toolMeta[tool];
   return <button className={`rail-button ${active ? 'active' : ''}`} onClick={onClick} aria-pressed={active} aria-label={meta.label}>{children}<span className="rail-tooltip">{meta.label}<kbd>{meta.shortcut}</kbd></span></button>;
 }
