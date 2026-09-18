@@ -195,8 +195,9 @@ function init(
   dashboardState = dashboard,
   rawPreferences = null,
   storageFault = false,
+  failedCommands = [],
 ) {
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault }) => {
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -228,6 +229,9 @@ function init(
       configurable: true,
       value: {
         invoke: async (cmd) => {
+          if (failedCommands.includes(cmd)) {
+            throw new Error('forced audit failure for ' + cmd);
+          }
           if (cmd === 'dashboard_state') return dashboardState;
           if (cmd === 'live_session_state') return liveState;
           if (['pause_runtime','resume_runtime','open_preview','workspace_surface_open','workspace_surface_set_bounds','workspace_surface_navigate','workspace_surface_close'].includes(cmd)) return null;
@@ -241,7 +245,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands });
 }
 
 async function pageFor(
@@ -252,13 +256,14 @@ async function pageFor(
   liveState = live,
   dashboardState = dashboard,
   rawPreferences = null,
-  storageFault = false
+  storageFault = false,
+  failedCommands = []
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -598,6 +603,37 @@ await page.waitForTimeout(150);
 await assertVisible(page, '.panel-console', 'narrow-long-target-console');
 await assertPrimaryControlsInViewport(page, 'narrow-long-target-console');
 await shot(page, '29-narrow-long-target-console.png', 'narrow-long-target-console');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  live,
+  dashboard,
+  null,
+  false,
+  ['open_preview']
+);
+await assertVisible(page, '.top-pill', 'runtime-action-failure-isolated');
+await assertVisible(page, '.floating-rail', 'runtime-action-failure-isolated');
+await page.getByLabel('Open preview').click();
+await page.waitForTimeout(100);
+await assertVisible(page, '.runtime-toast', 'runtime-action-failure-isolated');
+const isolatedRuntimeText = await page.locator('.runtime-toast').innerText();
+invariant(
+  isolatedRuntimeText.includes('Runtime unavailable'),
+  'runtime-action-failure-isolated:humanized-error',
+  { isolatedRuntimeText },
+);
+invariant(
+  !isolatedRuntimeText.includes('forced audit failure'),
+  'runtime-action-failure-isolated:no-raw-error',
+  { isolatedRuntimeText },
+);
+await assertPrimaryControlsInViewport(page, 'runtime-action-failure-isolated');
+await shot(page, '30-runtime-action-failure-isolated.png', 'runtime-action-failure-isolated');
 await page.close();
 
 await fs.writeFile(
