@@ -187,9 +187,12 @@ impl FixProposalStore {
                 proposal.status = FixProposalStatus::Invalidated;
             }
         }
-        proposals.retain(|_, proposal| {
-            matches!(proposal.status, FixProposalStatus::Pending | FixProposalStatus::Applying)
-                && proposal.expires_at > now
+        proposals.retain(|_, proposal| match proposal.status {
+            FixProposalStatus::Pending => proposal.expires_at > now,
+            FixProposalStatus::Applying => true,
+            FixProposalStatus::Applied
+            | FixProposalStatus::Discarded
+            | FixProposalStatus::Invalidated => false,
         });
     }
 
@@ -221,20 +224,32 @@ impl FixProposalStore {
     }
 
     pub fn begin_apply(&self, proposal_id: &str) -> Result<FixProposalRecord, String> {
-        self.with_proposals(|proposals| {
+        let mut proposals = self
+            .proposals
+            .lock()
+            .map_err(|_| "trusted Fix proposal store unavailable".to_string())?;
+        let now = Instant::now();
+
+        let result = {
             let proposal = proposals
                 .get_mut(proposal_id)
                 .ok_or_else(|| "trusted Fix proposal is unavailable".to_string())?;
-            if proposal.expires_at <= Instant::now() {
+            if proposal.expires_at <= now {
                 proposal.status = FixProposalStatus::Invalidated;
-                return Err("trusted Fix proposal expired".into());
+                Err("trusted Fix proposal expired".to_string())
+            } else if proposal.status != FixProposalStatus::Pending {
+                Err("trusted Fix proposal is no longer pending".to_string())
+            } else {
+                proposal.status = FixProposalStatus::Applying;
+                Ok(proposal.clone())
             }
-            if proposal.status != FixProposalStatus::Pending {
-                return Err("trusted Fix proposal is no longer pending".into());
-            }
-            proposal.status = FixProposalStatus::Applying;
-            Ok(proposal.clone())
-        })
+        };
+
+        if result.is_err() {
+            proposals.remove(proposal_id);
+        }
+        Self::reap_expired_locked(&mut proposals);
+        result
     }
 
     pub fn complete_apply(&self, proposal_id: &str) -> Result<(), String> {
@@ -833,7 +848,10 @@ pub fn apply_fix_transaction(
     match verified {
         Ok(bytes) if bytes == postimage => {
             if fs::remove_file(&backup).is_err() {
-                return Err("trusted Fix applied but backup cleanup failed".into());
+                rollback(target, &backup, &temp)?;
+                return Err(
+                    "trusted Fix backup cleanup failed; original source was restored".into(),
+                );
             }
             Ok(())
         }
@@ -1051,6 +1069,65 @@ mod trusted_fix_tests {
         );
         assert!(result.unwrap_err().contains("source changed"));
         assert_eq!(fs::read(&file).unwrap(), b"new external bytes\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn expired_pending_proposal_reports_expired_before_reaping() {
+        let dir = test_dir();
+        fs::write(dir.join("App.tsx"), "one\n").unwrap();
+        let target = target_for(&dir, "App.tsx", 1);
+        let edit = FixProviderEdit {
+            start_line: 1,
+            end_line: 1,
+            replacement: "two".into(),
+        };
+        let mut proposal = new_proposal_record(
+            &target,
+            b"one\n".to_vec(),
+            b"two\n".to_vec(),
+            &edit,
+            "change".into(),
+            "diff".into(),
+            "test".into(),
+        );
+        proposal.expires_at = Instant::now() - Duration::from_millis(1);
+        let id = proposal.proposal_id.clone();
+        let store = FixProposalStore::default();
+        store.insert(proposal).unwrap();
+        let error = store.begin_apply(&id).unwrap_err();
+        assert!(error.contains("proposal expired"), "{error}");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn applying_proposal_is_not_reaped_when_ttl_passes() {
+        let dir = test_dir();
+        fs::write(dir.join("App.tsx"), "one\n").unwrap();
+        let target = target_for(&dir, "App.tsx", 1);
+        let edit = FixProviderEdit {
+            start_line: 1,
+            end_line: 1,
+            replacement: "two".into(),
+        };
+        let mut proposal = new_proposal_record(
+            &target,
+            b"one\n".to_vec(),
+            b"two\n".to_vec(),
+            &edit,
+            "change".into(),
+            "diff".into(),
+            "test".into(),
+        );
+        proposal.expires_at = Instant::now() + Duration::from_millis(10);
+        let id = proposal.proposal_id.clone();
+        let store = FixProposalStore::default();
+        store.insert(proposal).unwrap();
+        let applying = store.begin_apply(&id).unwrap();
+        assert_eq!(applying.status, FixProposalStatus::Applying);
+        std::thread::sleep(Duration::from_millis(20));
+        store.reap_expired().unwrap();
+        store.complete_apply(&id).unwrap();
         let _ = fs::remove_dir_all(dir);
     }
 
