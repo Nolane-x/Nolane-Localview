@@ -131,6 +131,11 @@ const dashboardNoTarget = {
   sessions: []
 };
 
+const dashboardDisconnected = {
+  ...dashboard,
+  sessions: dashboard.sessions.map((session) => ({ ...session, status: 'disconnected' }))
+};
+
 const liveEmpty = { observer: [], action_results: [] };
 
 function init(page, locale = 'en', overrides = {}, liveState = live, dashboardState = dashboard, rawPreferences = null) {
@@ -319,6 +324,30 @@ const viNoTargetText = await page.locator('.workspace-empty').innerText();
 invariant(viNoTargetText.includes('Chưa phát hiện ứng dụng'), 'vi-no-target:localized-title', { viNoTargetText });
 invariant(viNoTargetText.includes('Chạy dev server để bắt đầu'), 'vi-no-target:localized-guidance', { viNoTargetText });
 await shot(page, '22-vi-no-target.png', 'vi-no-target');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'vi',
+  {},
+  live,
+  dashboardDisconnected
+);
+await assertVisible(page, '.disconnect-shade', 'vi-disconnected');
+await assertDocumentLocale(page, 'vi', 'vi-disconnected');
+const viDisconnectedText = await page.locator('.disconnect-shade').innerText();
+invariant(
+  viDisconnectedText.includes('Máy chủ phát triển đã ngắt kết nối'),
+  'vi-disconnected:localized-title',
+  { viDisconnectedText },
+);
+invariant(
+  viDisconnectedText.includes('LocalView đang giữ phiên này trong khi chờ máy chủ phát triển kết nối lại.'),
+  'vi-disconnected:localized-guidance',
+  { viDisconnectedText },
+);
+await shot(page, '23-vi-disconnected.png', 'vi-disconnected');
 await page.close();
 
 page = await pageFor(browser, { width: 1440, height: 900 });

@@ -182,6 +182,7 @@ fn render_audit_covers_minimum_human_first_states() {
         "13-tool-rail-restored.png",
         "14-no-target.png",
         "22-vi-no-target.png",
+        "23-vi-disconnected.png",
         "15-ai-unavailable.png",
     ] {
         assert!(
@@ -400,6 +401,25 @@ fn workspace_empty_state_uses_active_locale() {
     assert!(shell.contains("locale={preferences.locale}"));
     assert!(!surface.contains("Your localhost becomes the workspace."));
     assert!(!surface.contains("Open command palette"));
+}
+
+
+#[test]
+fn workspace_disconnect_state_uses_active_locale() {
+    let surface = include_str!("../../src/app/WorkspaceSurface.tsx");
+    let i18n = include_str!("../../src/i18n.ts");
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    assert!(i18n.contains("'session.disconnected'"));
+    assert!(i18n.contains("'session.reconnectGrace'"));
+    assert!(surface.contains("translate(locale, 'session.disconnected')"));
+    assert!(surface.contains("translate(locale, 'session.reconnectGrace')"));
+    assert!(!surface.contains("Dev server disconnected"));
+    assert!(!surface.contains("reconnect grace period"));
+    assert!(capture.contains("dashboardDisconnected"));
+    assert!(capture.contains("23-vi-disconnected.png"));
+    assert!(capture.contains("vi-disconnected:localized-title"));
+    assert!(capture.contains("vi-disconnected:localized-guidance"));
 }
 
 #[test]

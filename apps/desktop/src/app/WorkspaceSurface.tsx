@@ -123,6 +123,6 @@ export function WorkspaceSurface({ current, url, support, locale }: WorkspaceSur
       />
     )}
     {nativeActive && <div className="native-surface-slot" aria-hidden="true" />}
-    {current.status === 'disconnected' && <div className="disconnect-shade"><div><span className="health-dot danger"/><strong>Dev server disconnected</strong><p>LocalView is preserving the session only for the reconnect grace period.</p></div></div>}
+    {current.status === 'disconnected' && <div className="disconnect-shade"><div><span className="health-dot danger"/><strong>{translate(locale, 'session.disconnected')}</strong><p>{translate(locale, 'session.reconnectGrace')}</p></div></div>}
   </main>;
 }
