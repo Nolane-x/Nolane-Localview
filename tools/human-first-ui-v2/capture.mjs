@@ -43,8 +43,21 @@ const live = {
   action_results: []
 };
 
-function init(page, locale = 'en', overrides = {}) {
-  return page.addInitScript(({ dashboard, live, locale, overrides }) => {
+const liveNoFocus = {
+  ...live,
+  observer: live.observer.filter((event) => event.kind !== 'focus')
+};
+
+const dashboardNoTarget = {
+  ...dashboard,
+  health: { ...dashboard.health, sessions: 0 },
+  sessions: []
+};
+
+const liveEmpty = { observer: [], action_results: [] };
+
+function init(page, locale = 'en', overrides = {}, liveState = live, dashboardState = dashboard) {
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides }) => {
     localStorage.setItem('localview.preferences.v2', JSON.stringify({
       version: 2,
       locale,
@@ -65,8 +78,8 @@ function init(page, locale = 'en', overrides = {}) {
       configurable: true,
       value: {
         invoke: async (cmd) => {
-          if (cmd === 'dashboard_state') return dashboard;
-          if (cmd === 'live_session_state') return live;
+          if (cmd === 'dashboard_state') return dashboardState;
+          if (cmd === 'live_session_state') return liveState;
           if (['pause_runtime','resume_runtime','open_preview','workspace_surface_open','workspace_surface_set_bounds','workspace_surface_navigate','workspace_surface_close'].includes(cmd)) return null;
           throw new Error('audit stub missing ' + cmd);
         },
@@ -78,12 +91,19 @@ function init(page, locale = 'en', overrides = {}) {
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboard, live, locale, overrides });
+  }, { dashboardState, liveState, locale, overrides });
 }
 
-async function pageFor(browser, viewport, locale = 'en', overrides = {}) {
+async function pageFor(
+  browser,
+  viewport,
+  locale = 'en',
+  overrides = {},
+  liveState = live,
+  dashboardState = dashboard
+) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
-  await init(page, locale, overrides);
+  await init(page, locale, overrides, liveState, dashboardState);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -133,5 +153,37 @@ await page.waitForTimeout(150);
 await page.screenshot({ path: 'human-first-ui-v2-render/10-mobile-inspector.png', fullPage: true });
 await page.close();
 
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveNoFocus);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.screenshot({ path: 'human-first-ui-v2-render/11-en-inspector-no-selection.png', fullPage: true });
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', { showToolRail: false });
+await page.screenshot({ path: 'human-first-ui-v2-render/12-tool-rail-hidden.png', fullPage: true });
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(150);
+await page.getByRole('button', { name: 'Show tool rail' }).click();
+await page.waitForTimeout(150);
+await page.screenshot({ path: 'human-first-ui-v2-render/13-tool-rail-restored.png', fullPage: true });
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveEmpty,
+  dashboardNoTarget
+);
+await page.screenshot({ path: 'human-first-ui-v2-render/14-no-target.png', fullPage: true });
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 });
+await page.keyboard.press('a');
+await page.waitForTimeout(150);
+await page.screenshot({ path: 'human-first-ui-v2-render/15-ai-unavailable.png', fullPage: true });
+await page.close();
+
 await browser.close();
-console.log('captured 10 human-first UI V2 screenshots');
+console.log('captured 15 human-first UI V2 screenshots');
