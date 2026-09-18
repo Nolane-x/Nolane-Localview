@@ -28,6 +28,11 @@ fn instrumentation_owns_bounded_full_page_freeze_scroll_and_probe_authority() {
     assert!(scroll.contains("left: lease.originalScrollX"));
     assert!(scroll.contains("behavior: 'auto'"));
     assert!(scroll.matches("requestAnimationFrame").count() >= 2);
+    assert!(scroll.contains("const settledGeometry = documentGeometry();"));
+    assert!(scroll.contains("requested_y: y"));
+    assert!(scroll.contains("actual_x: Number(window.scrollX || 0)"));
+    assert!(scroll.contains("actual_y: Number(window.scrollY || 0)"));
+    assert!(scroll.contains("...settledGeometry"));
     assert!(!scroll.contains("window.scrollBy"));
 
     let probe_end = instrumentation[probe_start..]
@@ -39,6 +44,7 @@ fn instrumentation_owns_bounded_full_page_freeze_scroll_and_probe_authority() {
     assert!(probe.contains("MAX_POSITIONAL_SCAN_ELEMENTS"));
     assert!(probe.contains("full_page_positional_scan_budget_exceeded"));
     assert!(probe.contains("visible_fixed_or_sticky"));
+    assert!(probe.contains("visible_fixed_or_sticky: visibleFixedOrSticky"));
     assert!(probe.contains("positional_elements_scanned"));
     assert!(!probe.contains("innerText"));
     assert!(!probe.contains("textContent"));
