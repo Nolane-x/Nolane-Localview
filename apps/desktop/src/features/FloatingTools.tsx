@@ -91,7 +91,7 @@ export type HumanAskAiState =
   | {
       status: 'failure';
       reference?: string;
-      reason: 'provider_unavailable' | 'context_unavailable' | 'invalid_question' | 'failed';
+      reason: 'provider_unavailable' | 'context_unavailable' | 'invalid_question' | 'question_too_long' | 'failed';
     };
 
 export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { messageKey: MessageKey; shortcut: string }> = {
@@ -252,6 +252,8 @@ function askAiFailureMessage(
       return translate(locale, 'ai.contextUnavailable');
     case 'invalid_question':
       return translate(locale, 'ai.enterQuestion');
+    case 'question_too_long':
+      return translate(locale, 'ai.questionTooLong');
     case 'failed':
     default:
       return translate(locale, 'ai.failed');
