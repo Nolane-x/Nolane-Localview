@@ -7,8 +7,8 @@ fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 
 #[test]
 fn human_first_ui_v2_has_persisted_settings_and_localization_foundation() {
-    let i18n = include_str!("../src/i18n.ts");
-    let preferences = include_str!("../src/preferences.ts");
+    let i18n = include_str!("../../src/i18n.ts");
+    let preferences = include_str!("../../src/preferences.ts");
 
     assert!(i18n.contains("export const DEFAULT_LOCALE = 'en'"));
     for locale in [
@@ -29,7 +29,7 @@ fn human_first_ui_v2_has_persisted_settings_and_localization_foundation() {
 
 #[test]
 fn default_human_inspector_hides_machine_diagnostics() {
-    let source = include_str!("../src/features/FloatingTools.tsx");
+    let source = include_str!("../../src/features/FloatingTools.tsx");
     let inspector = between(source, "function Inspector(", "function AdvancedPanel(");
 
     assert!(!inspector.contains("Semantic Snapshot"));
@@ -49,7 +49,7 @@ fn default_human_inspector_hides_machine_diagnostics() {
 
 #[test]
 fn top_target_bar_is_hideable_and_human_facing() {
-    let shell = include_str!("../src/app/LocalViewShell.tsx");
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
 
     assert!(shell.contains("preferences.showTargetBar"));
     assert!(shell.contains("onHideTargetBar"));
@@ -61,7 +61,7 @@ fn top_target_bar_is_hideable_and_human_facing() {
 
 #[test]
 fn settings_and_advanced_are_real_tool_surfaces() {
-    let tools = include_str!("../src/features/FloatingTools.tsx");
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
 
     assert!(tools.contains("| 'settings'"));
     assert!(tools.contains("| 'advanced'"));
@@ -74,7 +74,7 @@ fn settings_and_advanced_are_real_tool_surfaces() {
 
 #[test]
 fn visual_system_uses_muted_moss_instead_of_ai_blue() {
-    let styles = include_str!("../src/styles.css");
+    let styles = include_str!("../../src/styles.css");
 
     assert!(styles.contains("--lv-accent:#9aa982"));
     assert!(styles.contains("--lv-accent-soft"));
