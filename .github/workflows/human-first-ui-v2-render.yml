@@ -6,8 +6,11 @@ on:
       - feat/human-first-localview-ui-v2
     paths:
       - .github/workflows/human-first-ui-v2-render.yml
+      - .github/workflows/human-first-ui-v2-tdd.yml
       - tools/human-first-ui-v2/**
       - apps/desktop/src/**
+      - apps/desktop/src-tauri/tests/human_first_ui_v2_contract.rs
+      - docs/superpowers/specs/2026-09-18-human-first-localview-ui-ux-v2.md
   workflow_dispatch:
 
 permissions:
