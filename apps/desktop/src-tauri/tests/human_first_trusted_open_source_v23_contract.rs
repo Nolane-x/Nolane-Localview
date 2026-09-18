@@ -95,6 +95,8 @@ fn desktop_source_launcher_is_bounded_and_not_shell_authored() {
     for required in [
         "TrustedSourceTarget",
         "SourceOpenLauncher",
+        "trusted_source_launch_plan",
+        "launch_trusted_source_with",
         "launch_trusted_source",
         "source outside project",
     ] {
@@ -177,6 +179,14 @@ fn render_audit_proves_trusted_open_source_runtime_states() {
         "49-source-open-stale-selection.png",
         "50-source-open-outside-project.png",
         "51-vi-source-open-success.png",
+        "52-source-open-no-selection.png",
+        "53-source-open-no-session.png",
+        "54-source-open-malformed-reference.png",
+        "55-source-open-path-traversal.png",
+        "56-source-open-symlink-escape.png",
+        "57-source-open-launcher-failure.png",
+        "58-source-open-failure-isolation.png",
+        "59-vi-source-open-failure.png",
     ] {
         assert!(
             capture.contains(artifact),
@@ -189,7 +199,14 @@ fn render_audit_proves_trusted_open_source_runtime_states() {
         "sourceOpenCalls",
         "source-open:no-raw-error",
         "source-open:request-reference-only",
+        "source-open:no-caller-path-authority",
         "source-open:stale-selection-isolated",
+        "source-open:path-traversal",
+        "source-open:symlink-escape",
+        "source-open:launcher-no-raw-error",
+        "source-open:no-selection-not-invoked",
+        "source-open:no-session-not-invoked",
+        "source-open:malformed-reference-not-invoked",
     ] {
         assert!(
             capture.contains(marker),
