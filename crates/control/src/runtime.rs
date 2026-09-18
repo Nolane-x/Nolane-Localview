@@ -651,7 +651,10 @@ async fn queue_action(
         )
             .into_response();
     }
-    if !matches!(&request.action, BridgeActionKind::Snapshot) {
+    if !matches!(
+        &request.action,
+        BridgeActionKind::Snapshot | BridgeActionKind::Measure
+    ) {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
@@ -750,6 +753,30 @@ async fn complete_action(
                     payload: result.payload.clone(),
                     provenance: Provenance {
                         source: "native-semantic-snapshot".into(),
+                        engine: Some("native-webview".into()),
+                        revision: revision.clone(),
+                        parent_ids: Vec::new(),
+                        captured_at: result.completed_at,
+                    },
+                    confidence: 1.0,
+                    uncertainty: UncertaintyClass::Observed,
+                    secret_taint: false,
+                })
+                .await;
+        }
+    }
+
+    if matches!(action.action, BridgeActionKind::Measure) && result.ok {
+        if let Some(payload) = measure_layout_evidence_payload(&result.payload) {
+            state
+                .evidence
+                .insert(EvidenceDraft {
+                    kind: EvidenceKind::Layout,
+                    session_id: id,
+                    region: action.reference.clone(),
+                    payload,
+                    provenance: Provenance {
+                        source: "managed-preview-measure".into(),
                         engine: Some("native-webview".into()),
                         revision: revision.clone(),
                         parent_ids: Vec::new(),
@@ -874,6 +901,7 @@ fn sanitize_action_result(action: &BridgeAction, result: &BridgeActionResult) ->
             "error": error,
             "completed_at": result.completed_at,
         }),
+        BridgeActionKind::Measure => action_summary(action, result, "measure", error),
         BridgeActionKind::Click => action_summary(action, result, "click", error),
         BridgeActionKind::Key { .. } => action_summary(action, result, "key", error),
         BridgeActionKind::Scroll { .. } => action_summary(action, result, "scroll", error),
@@ -891,6 +919,81 @@ fn sanitize_action_result(action: &BridgeAction, result: &BridgeActionResult) ->
             action_summary(action, result, "capture_tile_probe", error)
         }
     }
+}
+
+fn measure_layout_evidence_payload(payload: &serde_json::Value) -> Option<serde_json::Value> {
+    const MAX_ROUTE_BYTES: usize = 2_048;
+    const MAX_REFERENCE_BYTES: usize = 64;
+    const MAX_ABS_COORDINATE: f64 = 1_000_000.0;
+    const MAX_CSS_DIMENSION: f64 = 100_000.0;
+
+    fn finite_number(value: Option<&serde_json::Value>) -> Option<f64> {
+        value?.as_f64().filter(|number| number.is_finite())
+    }
+
+    fn rect(
+        value: Option<&serde_json::Value>,
+        max_abs_coordinate: f64,
+        max_css_dimension: f64,
+    ) -> Option<serde_json::Value> {
+        let value = value?.as_object()?;
+        let x = finite_number(value.get("x"))?;
+        let y = finite_number(value.get("y"))?;
+        let width = finite_number(value.get("width"))?;
+        let height = finite_number(value.get("height"))?;
+        if x.abs() > max_abs_coordinate
+            || y.abs() > max_abs_coordinate
+            || width < 0.0
+            || height < 0.0
+            || width > max_css_dimension
+            || height > max_css_dimension
+            || !(x + width).is_finite()
+            || !(y + height).is_finite()
+        {
+            return None;
+        }
+        Some(serde_json::json!({
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+        }))
+    }
+
+    let object = payload.as_object()?;
+    let reference = object.get("reference")?.as_str()?;
+    if reference.is_empty() || reference.len() > MAX_REFERENCE_BYTES {
+        return None;
+    }
+    let route = object.get("route")?.as_str()?;
+    if route.is_empty() || route.len() > MAX_ROUTE_BYTES {
+        return None;
+    }
+    let viewport = object.get("viewport")?.as_object()?;
+    let viewport_width = finite_number(viewport.get("width"))?;
+    let viewport_height = finite_number(viewport.get("height"))?;
+    if viewport_width <= 0.0
+        || viewport_height <= 0.0
+        || viewport_width > MAX_CSS_DIMENSION
+        || viewport_height > MAX_CSS_DIMENSION
+    {
+        return None;
+    }
+
+    Some(serde_json::json!({
+        "reference": reference,
+        "rect": rect(object.get("rect"), MAX_ABS_COORDINATE, MAX_CSS_DIMENSION)?,
+        "document_rect": rect(
+            object.get("document_rect"),
+            MAX_ABS_COORDINATE,
+            MAX_CSS_DIMENSION,
+        )?,
+        "viewport": {
+            "width": viewport_width,
+            "height": viewport_height,
+        },
+        "route": route,
+    }))
 }
 
 fn action_summary(
@@ -983,6 +1086,39 @@ mod tests {
             action: kind,
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn measure_evidence_projects_only_bounded_layout_fields() {
+        let payload = serde_json::json!({
+            "reference": "@e1",
+            "rect": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0},
+            "document_rect": {"x": 10.0, "y": 220.0, "width": 100.0, "height": 40.0},
+            "viewport": {"width": 1280.0, "height": 720.0, "dpr": 2.0},
+            "route": "http://127.0.0.1:5173/dashboard",
+            "attributes": {"data-secret": "must-not-survive"},
+            "style": {"color": "red"},
+            "name": "must-not-survive"
+        });
+        let projected = measure_layout_evidence_payload(&payload).unwrap();
+        let text = projected.to_string();
+        assert!(text.contains("@e1"));
+        assert!(text.contains("document_rect"));
+        assert!(!text.contains("data-secret"));
+        assert!(!text.contains("must-not-survive"));
+        assert!(!text.contains("style"));
+        assert!(!text.contains("dpr"));
+    }
+
+    #[test]
+    fn measure_evidence_rejects_invalid_geometry() {
+        assert!(measure_layout_evidence_payload(&serde_json::json!({
+            "reference": "@e1",
+            "rect": {"x": 0.0, "y": 0.0, "width": -1.0, "height": 1.0},
+            "document_rect": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+            "viewport": {"width": 1280.0, "height": 720.0},
+            "route": "http://127.0.0.1:5173/"
+        })).is_none());
     }
 
     #[test]
