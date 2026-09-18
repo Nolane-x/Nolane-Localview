@@ -18,7 +18,7 @@ fn canonical_v24_spec_locks_trusted_ai_boundary() {
         "V2.4 is read-only",
         "Do not fake a connected provider",
         "source file contents are not included by default",
-        "Do not merge",
+        "exact-head closure",
     ] {
         assert!(
             spec.contains(required),
@@ -117,6 +117,7 @@ fn provider_secrets_do_not_live_in_frontend_storage() {
 #[test]
 fn trusted_context_policy_is_bounded_and_privacy_minimized() {
     let desktop = include_str!("../src/lib.rs");
+    let trusted_ai = include_str!("../src/trusted_ai.rs");
 
     for required in [
         "MAX_AI_QUESTION_BYTES",
@@ -125,12 +126,25 @@ fn trusted_context_policy_is_bounded_and_privacy_minimized() {
         "MAX_AI_CONSOLE_ISSUES",
         "MAX_AI_NETWORK_ISSUES",
         "AI_CONTEXT_VERSION",
+        "trusted_attributes",
+        "route_path_only",
+        "safe_source_locator",
+    ] {
+        assert!(
+            trusted_ai.contains(required),
+            "trusted Ask AI context policy is missing {required}"
+        );
+    }
+
+    for required in [
         "semantic-snapshot/fresh",
         "managed_surface_canonical_route",
+        "pre_route",
+        "post_route",
     ] {
         assert!(
             desktop.contains(required),
-            "trusted Ask AI context policy is missing {required}"
+            "desktop Ask AI fresh authority is missing {required}"
         );
     }
 
@@ -138,9 +152,10 @@ fn trusted_context_policy_is_bounded_and_privacy_minimized() {
         "read_to_string(project_root)",
         "recursive_repository_scan",
         "attach_full_page_screenshot",
+        "dangerouslySetInnerHTML",
     ] {
         assert!(
-            !desktop.contains(forbidden),
+            !trusted_ai.contains(forbidden) && !desktop.contains(forbidden),
             "Ask AI V2.4 must not expand context authority: {forbidden}"
         );
     }
