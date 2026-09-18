@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
-import { LOCALE_OPTIONS, translate, type SupportedLocale } from '../i18n';
+import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
 import {
   ActivityIcon,
@@ -34,14 +34,14 @@ export type ToolId =
   | 'sessions'
   | 'command';
 
-export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { label: string; shortcut: string }> = {
-  inspect: { label: 'Inspect', shortcut: 'I' },
-  responsive: { label: 'Responsive', shortcut: 'R' },
-  console: { label: 'Console', shortcut: 'C' },
-  network: { label: 'Network', shortcut: 'N' },
-  ai: { label: 'AI', shortcut: 'A' },
-  settings: { label: 'Settings', shortcut: '⌘,' },
-  advanced: { label: 'More', shortcut: 'M' },
+export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { messageKey: MessageKey; shortcut: string }> = {
+  inspect: { messageKey: 'tool.inspect', shortcut: 'I' },
+  responsive: { messageKey: 'tool.responsive', shortcut: 'R' },
+  console: { messageKey: 'tool.console', shortcut: 'C' },
+  network: { messageKey: 'tool.network', shortcut: 'N' },
+  ai: { messageKey: 'tool.ai', shortcut: 'A' },
+  settings: { messageKey: 'tool.settings', shortcut: '⌘,' },
+  advanced: { messageKey: 'tool.advanced', shortcut: 'M' },
 };
 
 interface FloatingPanelProps {
@@ -153,27 +153,27 @@ function Inspector({
       <div className="quick-action-grid" aria-label="Inspector actions">
         <UnavailableInspectorAction
           icon={<SourceIcon />}
-          label="Open source"
+          label={translate(locale, 'action.openSource')}
           reason={source ? 'Source opening is not connected to this panel yet.' : translate(locale, 'inspector.sourceUnavailable')}
         />
         <UnavailableInspectorAction
           icon={<RulerIcon />}
-          label="Measure"
+          label={translate(locale, 'action.measure')}
           reason={focused ? 'Measurement is not connected to this panel yet.' : translate(locale, 'inspector.noSelection')}
         />
         <UnavailableInspectorAction
           icon={<CaptureIcon />}
-          label="Capture"
+          label={translate(locale, 'action.capture')}
           reason="Capture remains unavailable here until the panel can supply validated viewport authority."
         />
         <UnavailableInspectorAction
           icon={<SparkIcon />}
-          label="Ask AI"
+          label={translate(locale, 'action.askAi')}
           reason={focused ? translate(locale, 'ai.unavailable') : translate(locale, 'inspector.noSelection')}
         />
         <UnavailableInspectorAction
           icon={<ActivityIcon />}
-          label="Fix"
+          label={translate(locale, 'action.fix')}
           reason={focused ? translate(locale, 'ai.unavailable') : translate(locale, 'inspector.noSelection')}
         />
       </div>
@@ -467,11 +467,25 @@ function panelEyebrow(tool: ToolId) {
   }[tool];
 }
 
-export function RailButton({ tool, active, onClick, children }: { tool: Exclude<ToolId, 'sessions' | 'command'>; active: boolean; onClick: () => void; children: ReactNode }) {
+export function RailButton({
+  tool,
+  active,
+  onClick,
+  children,
+  locale,
+}: {
+  tool: Exclude<ToolId, 'sessions' | 'command'>;
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+  locale: SupportedLocale;
+}) {
   const meta = toolMeta[tool];
-  return <button className={`rail-button ${active ? 'active' : ''}`} onClick={onClick} aria-pressed={active} aria-label={meta.label}>{children}<span className="rail-tooltip">{meta.label}<kbd>{meta.shortcut}</kbd></span></button>;
+  const label = translate(locale, meta.messageKey);
+  return <button className={`rail-button ${active ? 'active' : ''}`} onClick={onClick} aria-pressed={active} aria-label={label}>{children}<span className="rail-tooltip">{label}<kbd>{meta.shortcut}</kbd></span></button>;
 }
 
-export function CommandRailButton({ active, onClick }: { active: boolean; onClick: () => void }) {
-  return <button className={`rail-button command ${active ? 'active' : ''}`} onClick={onClick} aria-label="Command palette"><CommandIcon /><span className="rail-tooltip">Command palette <kbd>⌘K</kbd></span></button>;
+export function CommandRailButton({ active, onClick, locale }: { active: boolean; onClick: () => void; locale: SupportedLocale }) {
+  const label = translate(locale, 'tool.command');
+  return <button className={`rail-button command ${active ? 'active' : ''}`} onClick={onClick} aria-label={label}><CommandIcon /><span className="rail-tooltip">{label} <kbd>⌘K</kbd></span></button>;
 }
