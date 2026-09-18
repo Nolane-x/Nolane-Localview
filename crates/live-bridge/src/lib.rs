@@ -78,6 +78,7 @@ pub enum BridgeActionKind {
     Scroll { x: f64, y: f64 },
     Focus,
     Snapshot,
+    Measure,
     FreezeVisuals,
     RestoreVisuals { token: Uuid },
     CaptureScrollTo { token: Uuid, y: f64 },
@@ -1145,6 +1146,13 @@ mod tests {
             route: None,
             payload: Value::Null,
         }
+    }
+
+    #[test]
+    fn measure_action_serializes_as_read_only_measure_type() {
+        let encoded = serde_json::to_value(BridgeActionKind::Measure).unwrap();
+        assert_eq!(encoded, serde_json::json!({"type": "measure"}));
+        assert!(!BridgeActionKind::Measure.is_internal_capture_action());
     }
 
     #[tokio::test]
