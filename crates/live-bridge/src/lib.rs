@@ -19,7 +19,11 @@ const MAX_PRIVATE_MASK_SELECTORS: usize = 16;
 const MAX_PRIVATE_MASK_SELECTOR_BYTES: usize = 256;
 const MAX_VISUAL_MASK_RECTS: usize = 256;
 const MAX_MASKED_ELEMENTS: u64 = 4_096;
+const MAX_POSITIONAL_SCAN_ELEMENTS: u64 = 4_096;
 const MAX_CSS_VIEWPORT_DIMENSION: f64 = 100_000.0;
+const MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT: f64 = 50_000.0;
+const VIEWPORT_VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
+const FULL_PAGE_VISUAL_FREEZE_LEASE_MS: u64 = 30_000;
 const MAX_NATIVE_EXECUTOR_RESULT_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_NATIVE_EXECUTOR_ERROR_BYTES: usize = 2 * 1024;
 
@@ -76,13 +80,18 @@ pub enum BridgeActionKind {
     Snapshot,
     FreezeVisuals,
     RestoreVisuals { token: Uuid },
+    CaptureScrollTo { token: Uuid, y: f64 },
+    CaptureTileProbe { token: Uuid },
 }
 
 impl BridgeActionKind {
     pub fn is_internal_capture_action(&self) -> bool {
         matches!(
             self,
-            Self::FreezeVisuals | Self::RestoreVisuals { .. }
+            Self::FreezeVisuals
+                | Self::RestoreVisuals { .. }
+                | Self::CaptureScrollTo { .. }
+                | Self::CaptureTileProbe { .. }
         )
     }
 }
@@ -90,6 +99,8 @@ impl BridgeActionKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrivateCaptureActionData {
     pub mask_selectors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual_freeze_lease_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -323,6 +334,33 @@ impl LiveBridge {
         session_id: SessionId,
         mask_selectors: Vec<String>,
     ) -> BridgeAction {
+        self.enqueue_capture_freeze_with_lease(
+            session_id,
+            mask_selectors,
+            VIEWPORT_VISUAL_FREEZE_LEASE_MS,
+        )
+        .await
+    }
+
+    pub async fn enqueue_full_page_capture_freeze(
+        &self,
+        session_id: SessionId,
+        mask_selectors: Vec<String>,
+    ) -> BridgeAction {
+        self.enqueue_capture_freeze_with_lease(
+            session_id,
+            mask_selectors,
+            FULL_PAGE_VISUAL_FREEZE_LEASE_MS,
+        )
+        .await
+    }
+
+    async fn enqueue_capture_freeze_with_lease(
+        &self,
+        session_id: SessionId,
+        mask_selectors: Vec<String>,
+        visual_freeze_lease_ms: u64,
+    ) -> BridgeAction {
         let action = BridgeAction {
             id: Uuid::new_v4(),
             session_id,
@@ -332,6 +370,39 @@ impl LiveBridge {
         };
         let private = PrivateCaptureActionData {
             mask_selectors: sanitize_mask_selectors(mask_selectors),
+            visual_freeze_lease_ms: Some(visual_freeze_lease_ms),
+        };
+        let mut states = self.inner.write().await;
+        let state = states.entry(session_id).or_default();
+        push_bounded(
+            &mut state.capture_actions,
+            action.clone(),
+            self.action_capacity,
+        );
+        push_bounded(
+            &mut state.capture_private,
+            (action.id, private),
+            self.action_capacity,
+        );
+        action
+    }
+
+    pub async fn enqueue_capture_tile_probe(
+        &self,
+        session_id: SessionId,
+        token: Uuid,
+        mask_selectors: Vec<String>,
+    ) -> BridgeAction {
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id,
+            reference: None,
+            action: BridgeActionKind::CaptureTileProbe { token },
+            created_at: Utc::now(),
+        };
+        let private = PrivateCaptureActionData {
+            mask_selectors: sanitize_mask_selectors(mask_selectors),
+            visual_freeze_lease_ms: None,
         };
         let mut states = self.inner.write().await;
         let state = states.entry(session_id).or_default();
@@ -770,6 +841,8 @@ fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut Bridg
             }
         }
         Some(BridgeActionKind::FreezeVisuals) => sanitize_visual_freeze_result(result),
+        Some(BridgeActionKind::CaptureScrollTo { .. }) => sanitize_capture_scroll_result(result),
+        Some(BridgeActionKind::CaptureTileProbe { .. }) => sanitize_capture_tile_probe_result(result),
         Some(BridgeActionKind::RestoreVisuals { .. }) => {
             result.payload = Value::Null;
             if result.error.is_some() {
@@ -788,8 +861,7 @@ fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut Bridg
 
 fn sanitize_visual_freeze_result(result: &mut BridgeActionResult) {
     if !result.ok {
-        result.payload = Value::Null;
-        result.error = Some("visual freeze action failed".into());
+        fail_internal_capture_result(result, "visual_freeze_failed");
         return;
     }
 
@@ -815,32 +887,208 @@ fn sanitize_visual_freeze_result(result: &mut BridgeActionResult) {
         .and_then(Value::as_u64);
     let mask_rects = sanitized_mask_rects(&result.payload);
 
-    let valid_viewport = viewport_css_width.is_some_and(|value| {
-        value.is_finite() && value > 0.0 && value <= MAX_CSS_VIEWPORT_DIMENSION
-    }) && viewport_css_height.is_some_and(|value| {
-        value.is_finite() && value > 0.0 && value <= MAX_CSS_VIEWPORT_DIMENSION
-    });
+    let valid_viewport = viewport_css_width.is_some_and(valid_positive_css_dimension)
+        && viewport_css_height.is_some_and(valid_positive_css_dimension);
     let valid_counts = paused_animations.is_some()
         && web_animations_supported.is_some()
         && masked_elements.is_some_and(|value| value <= MAX_MASKED_ELEMENTS)
         && mask_rects.is_some();
 
     if !valid_viewport || !valid_counts {
-        result.ok = false;
-        result.payload = Value::Null;
-        result.error = Some("visual freeze action failed".into());
+        fail_internal_capture_result(result, "visual_freeze_metadata_invalid");
+        return;
+    }
+
+    let scroll_x = result.payload.get("scroll_x").and_then(Value::as_f64);
+    let scroll_y = result.payload.get("scroll_y").and_then(Value::as_f64);
+    let document_css_width = result
+        .payload
+        .get("document_css_width")
+        .and_then(Value::as_f64);
+    let document_css_height = result
+        .payload
+        .get("document_css_height")
+        .and_then(Value::as_f64);
+    let extension_present = result.payload.get("scroll_x").is_some()
+        || result.payload.get("scroll_y").is_some()
+        || result.payload.get("document_css_width").is_some()
+        || result.payload.get("document_css_height").is_some();
+    let extension_valid = scroll_x.is_some_and(valid_nonnegative_css_coordinate)
+        && scroll_y.is_some_and(valid_full_page_y)
+        && document_css_width.is_some_and(valid_positive_css_dimension)
+        && document_css_height.is_some_and(valid_positive_document_height);
+
+    if extension_present && !extension_valid {
+        fail_internal_capture_result(result, "visual_freeze_metadata_invalid");
+        return;
+    }
+
+    if extension_valid {
+        result.payload = serde_json::json!({
+            "paused_animations": paused_animations.expect("validated above"),
+            "web_animations_supported": web_animations_supported.expect("validated above"),
+            "viewport_css_width": viewport_css_width.expect("validated above"),
+            "viewport_css_height": viewport_css_height.expect("validated above"),
+            "masked_elements": masked_elements.expect("validated above"),
+            "mask_rects": mask_rects.expect("validated above"),
+            "scroll_x": scroll_x.expect("validated above"),
+            "scroll_y": scroll_y.expect("validated above"),
+            "document_css_width": document_css_width.expect("validated above"),
+            "document_css_height": document_css_height.expect("validated above"),
+        });
+    } else {
+        result.payload = serde_json::json!({
+            "paused_animations": paused_animations.expect("validated above"),
+            "web_animations_supported": web_animations_supported.expect("validated above"),
+            "viewport_css_width": viewport_css_width.expect("validated above"),
+            "viewport_css_height": viewport_css_height.expect("validated above"),
+            "masked_elements": masked_elements.expect("validated above"),
+            "mask_rects": mask_rects.expect("validated above"),
+        });
+    }
+    result.error = None;
+}
+
+fn sanitize_capture_scroll_result(result: &mut BridgeActionResult) {
+    if !result.ok {
+        fail_internal_capture_result(result, "capture_scroll_failed");
+        return;
+    }
+
+    let requested_y = result.payload.get("requested_y").and_then(Value::as_f64);
+    let actual_x = result.payload.get("actual_x").and_then(Value::as_f64);
+    let actual_y = result.payload.get("actual_y").and_then(Value::as_f64);
+    let document_css_width = result
+        .payload
+        .get("document_css_width")
+        .and_then(Value::as_f64);
+    let document_css_height = result
+        .payload
+        .get("document_css_height")
+        .and_then(Value::as_f64);
+    let viewport_css_width = result
+        .payload
+        .get("viewport_css_width")
+        .and_then(Value::as_f64);
+    let viewport_css_height = result
+        .payload
+        .get("viewport_css_height")
+        .and_then(Value::as_f64);
+
+    let valid = requested_y.is_some_and(valid_full_page_y)
+        && actual_x.is_some_and(valid_nonnegative_css_coordinate)
+        && actual_y.is_some_and(valid_full_page_y)
+        && document_css_width.is_some_and(valid_positive_css_dimension)
+        && document_css_height.is_some_and(valid_positive_document_height)
+        && viewport_css_width.is_some_and(valid_positive_css_dimension)
+        && viewport_css_height.is_some_and(valid_positive_css_dimension);
+
+    if !valid {
+        fail_internal_capture_result(result, "capture_scroll_metadata_invalid");
         return;
     }
 
     result.payload = serde_json::json!({
-        "paused_animations": paused_animations.expect("validated above"),
-        "web_animations_supported": web_animations_supported.expect("validated above"),
+        "requested_y": requested_y.expect("validated above"),
+        "actual_x": actual_x.expect("validated above"),
+        "actual_y": actual_y.expect("validated above"),
+        "document_css_width": document_css_width.expect("validated above"),
+        "document_css_height": document_css_height.expect("validated above"),
+        "viewport_css_width": viewport_css_width.expect("validated above"),
+        "viewport_css_height": viewport_css_height.expect("validated above"),
+    });
+    result.error = None;
+}
+
+fn sanitize_capture_tile_probe_result(result: &mut BridgeActionResult) {
+    if !result.ok {
+        fail_internal_capture_result(result, "capture_tile_probe_failed");
+        return;
+    }
+
+    let scroll_x = result.payload.get("scroll_x").and_then(Value::as_f64);
+    let scroll_y = result.payload.get("scroll_y").and_then(Value::as_f64);
+    let document_css_width = result
+        .payload
+        .get("document_css_width")
+        .and_then(Value::as_f64);
+    let document_css_height = result
+        .payload
+        .get("document_css_height")
+        .and_then(Value::as_f64);
+    let viewport_css_width = result
+        .payload
+        .get("viewport_css_width")
+        .and_then(Value::as_f64);
+    let viewport_css_height = result
+        .payload
+        .get("viewport_css_height")
+        .and_then(Value::as_f64);
+    let masked_elements = result
+        .payload
+        .get("masked_elements")
+        .and_then(Value::as_u64);
+    let mask_rects = sanitized_mask_rects(&result.payload);
+    let positional_elements_scanned = result
+        .payload
+        .get("positional_elements_scanned")
+        .and_then(Value::as_u64);
+    let visible_fixed_or_sticky = result
+        .payload
+        .get("visible_fixed_or_sticky")
+        .and_then(Value::as_bool);
+
+    let valid = scroll_x.is_some_and(valid_nonnegative_css_coordinate)
+        && scroll_y.is_some_and(valid_full_page_y)
+        && document_css_width.is_some_and(valid_positive_css_dimension)
+        && document_css_height.is_some_and(valid_positive_document_height)
+        && viewport_css_width.is_some_and(valid_positive_css_dimension)
+        && viewport_css_height.is_some_and(valid_positive_css_dimension)
+        && masked_elements.is_some_and(|value| value <= MAX_MASKED_ELEMENTS)
+        && mask_rects.is_some()
+        && positional_elements_scanned.is_some_and(|value| value <= MAX_POSITIONAL_SCAN_ELEMENTS)
+        && visible_fixed_or_sticky.is_some();
+
+    if !valid {
+        fail_internal_capture_result(result, "capture_tile_probe_metadata_invalid");
+        return;
+    }
+
+    result.payload = serde_json::json!({
+        "scroll_x": scroll_x.expect("validated above"),
+        "scroll_y": scroll_y.expect("validated above"),
+        "document_css_width": document_css_width.expect("validated above"),
+        "document_css_height": document_css_height.expect("validated above"),
         "viewport_css_width": viewport_css_width.expect("validated above"),
         "viewport_css_height": viewport_css_height.expect("validated above"),
         "masked_elements": masked_elements.expect("validated above"),
         "mask_rects": mask_rects.expect("validated above"),
+        "positional_elements_scanned": positional_elements_scanned.expect("validated above"),
+        "visible_fixed_or_sticky": visible_fixed_or_sticky.expect("validated above"),
     });
     result.error = None;
+}
+
+fn fail_internal_capture_result(result: &mut BridgeActionResult, code: &'static str) {
+    result.ok = false;
+    result.payload = Value::Null;
+    result.error = Some(code.into());
+}
+
+fn valid_positive_css_dimension(value: f64) -> bool {
+    value.is_finite() && value > 0.0 && value <= MAX_CSS_VIEWPORT_DIMENSION
+}
+
+fn valid_positive_document_height(value: f64) -> bool {
+    value.is_finite() && value > 0.0 && value <= MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT
+}
+
+fn valid_nonnegative_css_coordinate(value: f64) -> bool {
+    value.is_finite() && (0.0..=MAX_CSS_VIEWPORT_DIMENSION).contains(&value)
+}
+
+fn valid_full_page_y(value: f64) -> bool {
+    value.is_finite() && (0.0..=MAX_FULL_PAGE_DOCUMENT_CSS_HEIGHT).contains(&value)
 }
 
 fn sanitized_mask_rects(payload: &Value) -> Option<Vec<Value>> {

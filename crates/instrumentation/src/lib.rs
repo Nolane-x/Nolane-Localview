@@ -59,8 +59,31 @@ pub fn bootstrap_script(config: &InstrumentationConfig) -> String {
         )
         .replace(
             "  window.__LOCALVIEW__ = Object.freeze({",
-            r#"  const VISUAL_FREEZE_LEASE_MS = 8000;
+            r#"  const VIEWPORT_VISUAL_FREEZE_LEASE_MS = 8000;
+  const FULL_PAGE_VISUAL_FREEZE_LEASE_MS = 30000;
+  const MAX_POSITIONAL_SCAN_ELEMENTS = 4096;
   let visualFreezeLease = null;
+
+  const documentGeometry = () => {
+    const root = document.documentElement;
+    const body = document.body;
+    return {
+      viewport_css_width: Number(window.innerWidth || root?.clientWidth || 0),
+      viewport_css_height: Number(window.innerHeight || root?.clientHeight || 0),
+      document_css_width: Math.max(
+        Number(root?.scrollWidth || 0),
+        Number(root?.clientWidth || 0),
+        Number(body?.scrollWidth || 0),
+        Number(body?.clientWidth || 0)
+      ),
+      document_css_height: Math.max(
+        Number(root?.scrollHeight || 0),
+        Number(root?.clientHeight || 0),
+        Number(body?.scrollHeight || 0),
+        Number(body?.clientHeight || 0)
+      ),
+    };
+  };
 
   const restoreVisuals = (token) => {
     token = String(token || '');
@@ -68,6 +91,11 @@ pub fn bootstrap_script(config: &InstrumentationConfig) -> String {
     if (!lease || lease.token !== token) throw new Error('visual_freeze_token_mismatch');
 
     clearTimeout(lease.timer);
+    window.scrollTo({
+      left: lease.originalScrollX,
+      top: lease.originalScrollY,
+      behavior: 'auto',
+    });
     if (lease.style?.isConnected) lease.style.remove();
     const root = document.documentElement;
     if (root?.getAttribute('data-localview-visual-freeze') === token) {
@@ -81,20 +109,42 @@ pub fn bootstrap_script(config: &InstrumentationConfig) -> String {
     return { restored: true };
   };
 
-  const freezeVisuals = async (token) => {
+  const freezeVisuals = async (token, leaseMs = VIEWPORT_VISUAL_FREEZE_LEASE_MS) => {
     token = String(token || '');
     if (!token) throw new Error('visual_freeze_token_required');
+    if (leaseMs !== VIEWPORT_VISUAL_FREEZE_LEASE_MS &&
+        leaseMs !== FULL_PAGE_VISUAL_FREEZE_LEASE_MS) {
+      throw new Error('visual_freeze_lease_invalid');
+    }
     if (visualFreezeLease) {
       const lease = visualFreezeLease;
       if (lease.token !== token) throw new Error('visual_freeze_already_active');
       return {
         paused_animations: lease.pausedAnimations,
         web_animations_supported: lease.webAnimationsSupported,
+        scroll_x: lease.originalScrollX,
+        scroll_y: lease.originalScrollY,
+        document_css_width: lease.documentGeometry.document_css_width,
+        document_css_height: lease.documentGeometry.document_css_height,
       };
     }
 
     const root = document.documentElement;
     if (!root) throw new Error('visual_freeze_root_unavailable');
+    const geometry = documentGeometry();
+    if (!Number.isFinite(geometry.viewport_css_width) || geometry.viewport_css_width <= 0 ||
+        !Number.isFinite(geometry.viewport_css_height) || geometry.viewport_css_height <= 0 ||
+        !Number.isFinite(geometry.document_css_width) || geometry.document_css_width <= 0 ||
+        !Number.isFinite(geometry.document_css_height) || geometry.document_css_height <= 0) {
+      throw new Error('visual_freeze_geometry_invalid');
+    }
+    const originalScrollX = Number(window.scrollX || 0);
+    const originalScrollY = Number(window.scrollY || 0);
+    if (!Number.isFinite(originalScrollX) || originalScrollX < 0 ||
+        !Number.isFinite(originalScrollY) || originalScrollY < 0) {
+      throw new Error('visual_freeze_scroll_invalid');
+    }
+
     const webAnimationsSupported = typeof document.getAnimations === 'function';
     const animations = [];
     let pausedAnimations = 0;
@@ -134,19 +184,92 @@ html[data-localview-visual-freeze] *::after {
       animations,
       pausedAnimations,
       webAnimationsSupported,
+      originalScrollX,
+      originalScrollY,
+      documentGeometry: geometry,
       timer: 0,
     };
     visualFreezeLease = lease;
     lease.timer = setTimeout(() => {
       if (visualFreezeLease?.token !== token) return;
       try { restoreVisuals(token); } catch (_) {}
-    }, VISUAL_FREEZE_LEASE_MS);
+    }, leaseMs);
 
     await new Promise(resolve => requestAnimationFrame(() => resolve()));
     if (visualFreezeLease?.token !== token) throw new Error('visual_freeze_lease_lost');
     return {
       paused_animations: pausedAnimations,
       web_animations_supported: webAnimationsSupported,
+      scroll_x: originalScrollX,
+      scroll_y: originalScrollY,
+      document_css_width: geometry.document_css_width,
+      document_css_height: geometry.document_css_height,
+    };
+  };
+
+  const captureScrollTo = async (token, y) => {
+    token = String(token || '');
+    const lease = visualFreezeLease;
+    if (!lease || lease.token !== token) throw new Error('visual_freeze_token_mismatch');
+    y = Number(y);
+    if (!Number.isFinite(y) || y < 0) throw new Error('full_page_scroll_invalid');
+
+    const geometry = documentGeometry();
+    const maxScrollY = Math.max(0, geometry.document_css_height - geometry.viewport_css_height);
+    if (y > maxScrollY + 0.5) throw new Error('full_page_scroll_out_of_bounds');
+    const targetY = Math.min(y, maxScrollY);
+    window.scrollTo({
+      left: lease.originalScrollX,
+      top: targetY,
+      behavior: 'auto',
+    });
+    await new Promise(resolve => requestAnimationFrame(() => resolve()));
+    await new Promise(resolve => requestAnimationFrame(() => resolve()));
+    if (visualFreezeLease?.token !== token) throw new Error('visual_freeze_lease_lost');
+    const settledGeometry = documentGeometry();
+    return {
+      requested_y: y,
+      actual_x: Number(window.scrollX || 0),
+      actual_y: Number(window.scrollY || 0),
+      ...settledGeometry,
+    };
+  };
+
+  const captureTileProbe = async (token) => {
+    token = String(token || '');
+    const lease = visualFreezeLease;
+    if (!lease || lease.token !== token) throw new Error('visual_freeze_token_mismatch');
+
+    const geometry = documentGeometry();
+    const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_ELEMENT);
+    let positionalElementsScanned = 0;
+    let visibleFixedOrSticky = false;
+    let node = walker.currentNode;
+    while (node) {
+      positionalElementsScanned += 1;
+      if (positionalElementsScanned > MAX_POSITIONAL_SCAN_ELEMENTS) {
+        throw new Error('full_page_positional_scan_budget_exceeded');
+      }
+      const style = getComputedStyle(node);
+      if (style.position === 'fixed' || style.position === 'sticky') {
+        const rect = node.getBoundingClientRect();
+        const visible = rect.width > 0 && rect.height > 0 &&
+          style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' &&
+          rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth;
+        if (visible) {
+          visibleFixedOrSticky = true;
+          break;
+        }
+      }
+      node = walker.nextNode();
+    }
+    if (visualFreezeLease?.token !== token) throw new Error('visual_freeze_lease_lost');
+    return {
+      scroll_x: Number(window.scrollX || 0),
+      scroll_y: Number(window.scrollY || 0),
+      ...geometry,
+      visible_fixed_or_sticky: visibleFixedOrSticky,
+      positional_elements_scanned: positionalElementsScanned,
     };
   };
 
@@ -154,7 +277,7 @@ html[data-localview-visual-freeze] *::after {
         )
         .replace(
             "    snapshot,\n    inspect(reference)",
-            "    snapshot,\n    freezeVisuals,\n    restoreVisuals,\n    inspect(reference)",
+            "    snapshot,\n    freezeVisuals,\n    restoreVisuals,\n    captureScrollTo,\n    captureTileProbe,\n    inspect(reference)",
         )
 }
 

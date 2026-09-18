@@ -16,6 +16,7 @@ mod surface_liveness;
 mod surface_owner;
 mod surface_recovery;
 mod visual_diff;
+mod visual_full_page;
 mod visual_region;
 mod visual_verify;
 mod windows_consequential;
@@ -69,6 +70,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(resource_runtime::router(state.clone()))
         .merge(surface_liveness::router(state.clone()))
         .merge(visual_diff::router(state.clone()))
+        .merge(visual_full_page::router(state.clone()))
         .merge(visual_verify::router(state.clone()))
         .merge(windows_observe::router(state.clone()))
         .merge(windows_consequential::router(state.clone()))

@@ -1,7 +1,12 @@
 #![forbid(unsafe_code)]
 
 mod baseline;
+mod full_page;
 pub use baseline::{VisualBaselineCache, VisualBaselineContext};
+pub use full_page::{
+    plan_full_page, project_full_page_output, stitch_full_page_tile, FullPageError,
+    FullPageOutputGeometry, FullPagePlan, FullPagePolicy,
+};
 
 use std::io::{BufReader, Cursor};
 
