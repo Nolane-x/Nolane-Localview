@@ -159,6 +159,24 @@ const liveNoFocus = {
   observer: live.observer.filter((event) => event.kind !== 'focus')
 };
 
+const liveMeasure = {
+  ...live,
+  observer: live.observer.map((event) =>
+    event.kind === 'focus'
+      ? { ...event, reference: '@e1a2b3c4' }
+      : event
+  ),
+};
+
+const liveMeasureB = {
+  ...liveMeasure,
+  observer: liveMeasure.observer.map((event) =>
+    event.kind === 'focus'
+      ? { ...event, reference: '@e5d6e7f8' }
+      : event
+  ),
+};
+
 const dashboardNoTarget = {
   ...dashboard,
   health: { ...dashboard.health, sessions: 0 },
@@ -197,8 +215,9 @@ function init(
   storageFault = false,
   failedCommands = [],
   captureDelayMs = 0,
+  measureDelayMs = 0,
 ) {
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs }) => {
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -227,6 +246,7 @@ function init(
       localStorage.setItem('localview.preferences.v2', rawPreferences ?? validPreferences);
     }
     window.__LOCALVIEW_AUDIT_INVOKES__ = [];
+    window.__LOCALVIEW_AUDIT_LIVE_STATE__ = structuredClone(liveState);
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
@@ -236,7 +256,23 @@ function init(
             throw new Error('forced audit failure for ' + cmd);
           }
           if (cmd === 'dashboard_state') return dashboardState;
-          if (cmd === 'live_session_state') return liveState;
+          if (cmd === 'live_session_state') {
+            return structuredClone(window.__LOCALVIEW_AUDIT_LIVE_STATE__);
+          }
+          if (cmd === 'measure_current_selection') {
+            if (measureDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, measureDelayMs));
+            }
+            return {
+              reference: args.reference,
+              rect: { x: 24.0, y: 132.5, width: 128.4, height: 40.0 },
+              document_rect: { x: 24.0, y: 332.5, width: 128.4, height: 40.0 },
+              viewport_css_width: 1440,
+              viewport_css_height: 900,
+              route: 'http://127.0.0.1:5173/',
+              measured_at_unix_ms: Date.now(),
+            };
+          }
           if (cmd === 'capture_current_viewport') {
             if (captureDelayMs > 0) {
               await new Promise((resolve) => setTimeout(resolve, captureDelayMs));
@@ -267,7 +303,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs });
 }
 
 async function pageFor(
@@ -280,13 +316,14 @@ async function pageFor(
   rawPreferences = null,
   storageFault = false,
   failedCommands = [],
-  captureDelayMs = 0
+  captureDelayMs = 0,
+  measureDelayMs = 0
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -795,6 +832,225 @@ invariant(inFlightInvokes.length === 1, 'trusted-capture-in-progress:single-requ
 await shot(page, '35-trusted-capture-in-progress.png', 'trusted-capture-in-progress');
 await page.waitForTimeout(400);
 await assertVisible(page, '.capture-status.success', 'trusted-capture-in-progress-completes');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+const measureReadyButton = page.locator('.measure-action');
+invariant(
+  !(await measureReadyButton.isDisabled()),
+  'trusted-measure-ready:stable-reference-enabled'
+);
+const measureReadyInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'measure_current_selection')
+);
+invariant(measureReadyInvokes.length === 0, 'trusted-measure-ready:not-invoked');
+await shot(page, '36-trusted-measure-ready.png', 'trusted-measure-ready');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.measure-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.measure-status.success', 'trusted-measure-success');
+const trustedMeasureSuccessText = await page.locator('.measure-status.success').innerText();
+invariant(
+  trustedMeasureSuccessText.includes('Measured 128.4 × 40 CSS px'),
+  'trusted-measure-success:geometry',
+  { trustedMeasureSuccessText }
+);
+invariant(
+  trustedMeasureSuccessText.includes('Position x 24 · y 132.5'),
+  'trusted-measure-success:position',
+  { trustedMeasureSuccessText }
+);
+const measureSuccessInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'measure_current_selection')
+);
+invariant(measureSuccessInvokes.length === 1, 'trusted-measure-success:measure-single-request', { measureSuccessInvokes });
+const measureArgs = measureSuccessInvokes[0]?.args ?? {};
+invariant(
+  Object.keys(measureArgs).sort().join(',') === 'reference,sessionId'
+    && measureArgs.reference === '@e1a2b3c4',
+  'trusted-measure-success:authority-payload',
+  { measureArgs }
+);
+for (const forbidden of ['x', 'y', 'width', 'height', 'viewport', 'route']) {
+  invariant(!(forbidden in measureArgs), `trusted-measure-success:no-caller-${forbidden}`, { measureArgs });
+}
+await shot(page, '37-trusted-measure-success.png', 'trusted-measure-success');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  ['measure_current_selection']
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.measure-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.measure-status.failure', 'trusted-measure-failure');
+const trustedMeasureFailureText = await page.locator('.panel-inspect').innerText();
+invariant(
+  trustedMeasureFailureText.includes('Could not measure selected element'),
+  'trusted-measure-failure:humanized',
+  { trustedMeasureFailureText }
+);
+invariant(
+  !trustedMeasureFailureText.includes('forced audit failure'),
+  'trusted-measure-failure:measure-no-raw-error',
+  { trustedMeasureFailureText }
+);
+await shot(page, '38-trusted-measure-failure.png', 'trusted-measure-failure');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveNoFocus,
+  dashboard
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+const noSelectionMeasure = page.locator('.measure-action');
+invariant(await noSelectionMeasure.isDisabled(), 'no-selection-measure-disabled:disabled');
+const noSelectionMeasureInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'measure_current_selection')
+);
+invariant(
+  noSelectionMeasureInvokes.length === 0,
+  'no-selection-measure-disabled:not-invoked',
+  { noSelectionMeasureInvokes }
+);
+await shot(page, '39-no-selection-measure-disabled.png', 'no-selection-measure-disabled');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  700
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.measure-action').click();
+await page.waitForTimeout(80);
+const inFlightMeasureButton = page.locator('.measure-action');
+invariant(await inFlightMeasureButton.isDisabled(), 'trusted-measure-in-progress:disabled');
+invariant(
+  (await inFlightMeasureButton.getAttribute('aria-busy')) === 'true',
+  'trusted-measure-in-progress:aria-busy'
+);
+await inFlightMeasureButton.evaluate((button) => button.click());
+await page.waitForTimeout(40);
+const measureInFlightInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'measure_current_selection')
+);
+invariant(
+  measureInFlightInvokes.length === 1,
+  'trusted-measure-in-progress:measure-single-request',
+  { measureInFlightInvokes }
+);
+await shot(page, '40-trusted-measure-in-progress.png', 'trusted-measure-in-progress');
+await page.waitForTimeout(700);
+await assertVisible(page, '.measure-status.success', 'trusted-measure-in-progress-completes');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'vi',
+  {},
+  liveMeasure,
+  dashboard
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.measure-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.measure-status.success', 'vi-trusted-measure-success');
+const viMeasureSuccessText = await page.locator('.measure-status.success').innerText();
+invariant(
+  viMeasureSuccessText.includes('Đã đo 128.4 × 40 CSS px')
+    && viMeasureSuccessText.includes('Vị trí x 24 · y 132.5'),
+  'vi-trusted-measure-success:localized',
+  { viMeasureSuccessText }
+);
+await shot(page, '41-vi-trusted-measure-success.png', 'vi-trusted-measure-success');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  900
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.measure-action').click();
+await page.waitForTimeout(80);
+await page.evaluate((nextLive) => {
+  window.__LOCALVIEW_AUDIT_LIVE_STATE__ = structuredClone(nextLive);
+}, liveMeasureB);
+await page.waitForFunction(
+  () => document.querySelector('.inspector-hero strong')?.textContent?.includes('@e5d6e7f8'),
+  { timeout: 1800 }
+);
+await page.waitForTimeout(1000);
+const stalePanelText = await page.locator('.panel-inspect').innerText();
+invariant(
+  stalePanelText.includes('@e5d6e7f8') && !stalePanelText.includes('Measured 128.4 × 40 CSS px'),
+  'trusted-measure-stale-selection:stale-measure-result-discarded',
+  { stalePanelText }
+);
+const staleMeasureInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'measure_current_selection')
+);
+invariant(
+  staleMeasureInvokes.length === 1,
+  'trusted-measure-stale-selection:single-original-request',
+  { staleMeasureInvokes }
+);
+await shot(page, '42-trusted-measure-stale-selection.png', 'trusted-measure-stale-selection');
 await page.close();
 
 await fs.writeFile(
