@@ -8,7 +8,7 @@ use std::{
 
 use localview_protocol::{ConsoleIssue, NetworkIssue, PageSnapshot, SemanticNode, Session, SourceLocation};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use url::Url;
 
 pub const MAX_AI_QUESTION_BYTES: usize = 8 * 1024;
@@ -498,6 +498,38 @@ fn validate_provider_answer(answer: String) -> Result<String, String> {
     Ok(trimmed.to_owned())
 }
 
+pub(crate) fn provider_label(config: &AiBridgeConfig) -> &str {
+    &config.label
+}
+
+pub(crate) async fn bridge_json<TRequest, TResponse>(
+    client: &Client,
+    config: &AiBridgeConfig,
+    request: &TRequest,
+) -> Result<TResponse, String>
+where
+    TRequest: Serialize + ?Sized,
+    TResponse: DeserializeOwned,
+{
+    let mut builder = client
+        .post(config.endpoint.clone())
+        .timeout(Duration::from_secs(AI_PROVIDER_TIMEOUT_SECS))
+        .json(request);
+    if let Some(token) = &config.token {
+        builder = builder.bearer_auth(token);
+    }
+
+    builder
+        .send()
+        .await
+        .map_err(|_| "trusted AI provider unavailable".to_string())?
+        .error_for_status()
+        .map_err(|_| "trusted AI provider request failed".to_string())?
+        .json::<TResponse>()
+        .await
+        .map_err(|_| "trusted AI provider response is invalid".to_string())
+}
+
 pub async fn ask_with_provider(
     client: &Client,
     config: &AiBridgeConfig,
@@ -512,23 +544,7 @@ pub async fn ask_with_provider(
         context,
     };
 
-    let mut builder = client
-        .post(config.endpoint.clone())
-        .timeout(Duration::from_secs(AI_PROVIDER_TIMEOUT_SECS))
-        .json(&request);
-    if let Some(token) = &config.token {
-        builder = builder.bearer_auth(token);
-    }
-
-    let response = builder
-        .send()
-        .await
-        .map_err(|_| "trusted AI provider unavailable".to_string())?
-        .error_for_status()
-        .map_err(|_| "trusted AI provider request failed".to_string())?
-        .json::<AiBridgeResponse>()
-        .await
-        .map_err(|_| "trusted AI provider response is invalid".to_string())?;
+    let response = bridge_json::<_, AiBridgeResponse>(client, config, &request).await?;
 
     let answer = validate_provider_answer(response.answer)?;
     let provider_label = response
