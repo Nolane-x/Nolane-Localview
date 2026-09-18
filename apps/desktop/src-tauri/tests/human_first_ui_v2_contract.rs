@@ -181,6 +181,7 @@ fn render_audit_covers_minimum_human_first_states() {
         "12-tool-rail-hidden.png",
         "13-tool-rail-restored.png",
         "14-no-target.png",
+        "22-vi-no-target.png",
         "15-ai-unavailable.png",
     ] {
         assert!(
@@ -384,6 +385,22 @@ fn render_audit_exercises_preference_corruption_and_legacy_recovery() {
 }
 
 
+
+
+#[test]
+fn workspace_empty_state_uses_active_locale() {
+    let surface = include_str!("../../src/app/WorkspaceSurface.tsx");
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+
+    assert!(surface.contains("type SupportedLocale"));
+    assert!(surface.contains("locale: SupportedLocale"));
+    assert!(surface.contains("translate(locale, 'empty.noTarget')"));
+    assert!(surface.contains("translate(locale, 'empty.runDevServer')"));
+    assert!(surface.contains("translate(locale, 'tool.command')"));
+    assert!(shell.contains("locale={preferences.locale}"));
+    assert!(!surface.contains("Your localhost becomes the workspace."));
+    assert!(!surface.contains("Open command palette"));
+}
 
 #[test]
 fn render_audit_exercises_settings_interactions_and_live_locale_switching() {

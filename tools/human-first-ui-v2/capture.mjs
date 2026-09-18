@@ -305,6 +305,22 @@ await assertVisible(page, '.workspace-empty', 'no-target');
 await shot(page, '14-no-target.png');
 await page.close();
 
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'vi',
+  {},
+  liveEmpty,
+  dashboardNoTarget
+);
+await assertVisible(page, '.workspace-empty', 'vi-no-target');
+await assertDocumentLocale(page, 'vi', 'vi-no-target');
+const viNoTargetText = await page.locator('.workspace-empty').innerText();
+invariant(viNoTargetText.includes('Chưa phát hiện ứng dụng'), 'vi-no-target:localized-title', { viNoTargetText });
+invariant(viNoTargetText.includes('Chạy dev server để bắt đầu'), 'vi-no-target:localized-guidance', { viNoTargetText });
+await shot(page, '22-vi-no-target.png', 'vi-no-target');
+await page.close();
+
 page = await pageFor(browser, { width: 1440, height: 900 });
 await page.keyboard.press('a');
 await page.waitForTimeout(150);

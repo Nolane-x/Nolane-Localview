@@ -234,7 +234,7 @@ export default function LocalViewShell() {
 
   return (
     <div className={`localview ${immersive ? 'is-immersive' : ''} ${preferences.reducedMotion === 'reduce' ? 'is-reduced-motion' : ''}`}>
-      <WorkspaceSurface current={current} url={currentUrl} support={state.workspace_surface} />
+      <WorkspaceSurface current={current} url={currentUrl} support={state.workspace_surface} locale={preferences.locale} />
       <div className="chrome-layer" aria-label="LocalView controls">
         {preferences.showTargetBar && (
           <TopPill
