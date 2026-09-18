@@ -105,7 +105,12 @@ export default function LocalViewShell() {
   const selectedReference = useMemo(
     () => [...live.observer]
       .reverse()
-      .find((event) => event.kind === 'focus' && !!event.reference)
+      .find(
+        (event) =>
+          event.kind === 'focus'
+          && typeof event.reference === 'string'
+          && /^@e[0-9a-f]+$/i.test(event.reference),
+      )
       ?.reference,
     [live.observer],
   );
