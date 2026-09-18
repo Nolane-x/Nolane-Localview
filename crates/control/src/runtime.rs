@@ -702,6 +702,10 @@ async fn complete_action(
         )
             .into_response();
     };
+    if action.action.is_internal_capture_action() {
+        state.live.complete_action(&action, result).await;
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let revision = state
         .sessions
         .get(id)
