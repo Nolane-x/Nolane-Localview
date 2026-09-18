@@ -6,6 +6,15 @@ on:
       - feat/guarded-full-page-stitching-impl
     paths:
       - .github/workflows/wave2-gate7.yml
+      - apps/desktop/src-tauri/src/**
+      - apps/desktop/src-tauri/tests/**
+      - crates/visual/src/full_page.rs
+      - crates/visual/tests/full_page_stitch_contract.rs
+      - crates/live-bridge/src/lib.rs
+      - crates/live-bridge/tests/full_page_internal_action_contract.rs
+      - crates/instrumentation/src/lib.rs
+      - crates/control/src/**
+      - crates/control/tests/full_page_capture_control.rs
 
 permissions:
   contents: read
