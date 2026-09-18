@@ -4,14 +4,19 @@ mod native_executor_worker;
 pub mod visual_capture;
 pub mod workspace_surface;
 
-use std::path::PathBuf;
+use std::{
+    ffi::OsString,
+    io::{BufRead, BufReader},
+    path::{Component, Path, PathBuf},
+    process::Command,
+};
 
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
     ActionCancellationSignal, BridgeAction, BridgeActionKind, BridgeActionResult, IngestReport,
     ObserverBatch, ObserverEvent, PrivateBridgeAction,
 };
-use localview_protocol::{Health, Session, SessionId};
+use localview_protocol::{Health, PageSnapshot, SemanticNode, Session, SessionId, SourceLocation};
 use serde::{Deserialize, Serialize};
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
@@ -77,6 +82,279 @@ struct MeasurePayload {
     document_rect: MeasureRect,
     viewport: MeasureViewportPayload,
     route: String,
+}
+
+const MAX_SOURCE_REFERENCE_BYTES: usize = 64;
+const MAX_SOURCE_FILE_BYTES: usize = 512;
+const MAX_SOURCE_LINE: u32 = 10_000_000;
+const MAX_SOURCE_COLUMN: u32 = 100_000;
+const MAX_SOURCE_VERIFY_BYTES: u64 = 32 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+struct TrustedSourceTarget {
+    session_id: SessionId,
+    reference: String,
+    project_root: PathBuf,
+    canonical_file: PathBuf,
+    project_relative_file: String,
+    line: u32,
+    column: Option<u32>,
+    snapshot_version: u64,
+    canonical_route: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+enum SourceOpenLauncher {
+    MacOpen,
+    LinuxXdgOpen,
+    WindowsFileProtocolHandler,
+}
+
+#[derive(Debug, Clone)]
+struct TrustedSourceLaunchPlan {
+    launcher: SourceOpenLauncher,
+    program: &'static str,
+    args: Vec<OsString>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HumanSourceOpenReceipt {
+    reference: String,
+    display_file: String,
+    line: u32,
+    column: Option<u32>,
+    launcher: SourceOpenLauncher,
+    snapshot_version: u64,
+}
+
+fn validate_source_reference(reference: &str) -> Result<(), String> {
+    if reference.len() > MAX_SOURCE_REFERENCE_BYTES {
+        return Err("trusted source element reference exceeds the safety bound".into());
+    }
+    let Some(hash) = reference.strip_prefix("@e") else {
+        return Err("trusted source requires a LocalView element reference".into());
+    };
+    if hash.is_empty() || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("trusted source element reference is malformed".into());
+    }
+    Ok(())
+}
+
+fn find_source_for_reference<'a>(
+    node: &'a SemanticNode,
+    reference: &str,
+    found: &mut Option<&'a SourceLocation>,
+    matches: &mut usize,
+) {
+    if node.reference == reference {
+        *matches += 1;
+        if found.is_none() {
+            *found = node.source.as_ref();
+        }
+    }
+    for child in &node.children {
+        find_source_for_reference(child, reference, found, matches);
+    }
+}
+
+fn resolve_snapshot_source<'a>(
+    snapshot: &'a PageSnapshot,
+    reference: &str,
+) -> Result<&'a SourceLocation, String> {
+    let mut found = None;
+    let mut matches = 0usize;
+    find_source_for_reference(&snapshot.root, reference, &mut found, &mut matches);
+    if matches == 0 {
+        return Err("trusted source selection is no longer available".into());
+    }
+    if matches != 1 {
+        return Err("trusted source selection is ambiguous".into());
+    }
+    found.ok_or_else(|| "trusted source mapping is unavailable".to_string())
+}
+
+fn validate_relative_source_path(file: &str) -> Result<&Path, String> {
+    if file.is_empty()
+        || file.len() > MAX_SOURCE_FILE_BYTES
+        || file.contains('\0')
+        || file.contains(':')
+        || file.contains("://")
+        || file.starts_with("\\\\")
+    {
+        return Err("trusted source path is invalid".into());
+    }
+    #[cfg(not(windows))]
+    if file.contains('\\') {
+        return Err("trusted source path uses a non-native separator".into());
+    }
+
+    let path = Path::new(file);
+    if path.is_absolute() || path.has_root() {
+        return Err("trusted source path must be project relative".into());
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir => {
+                return Err("trusted source path traversal is not allowed".into());
+            }
+            Component::Prefix(_) => {
+                return Err("trusted source path prefix is not allowed".into());
+            }
+        }
+    }
+    Ok(path)
+}
+
+fn validate_source_line_exists(canonical_file: &Path, line: u32) -> Result<(), String> {
+    let metadata = std::fs::metadata(canonical_file)
+        .map_err(|_| "trusted source file is unavailable".to_string())?;
+    if metadata.len() > MAX_SOURCE_VERIFY_BYTES {
+        return Err("trusted source file exceeds verification bound".into());
+    }
+
+    let file = std::fs::File::open(canonical_file)
+        .map_err(|_| "trusted source file is unavailable".to_string())?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+
+    for _ in 0..line {
+        buffer.clear();
+        let read = reader
+            .read_until(b'\n', &mut buffer)
+            .map_err(|_| "trusted source file is unavailable".to_string())?;
+        if read == 0 {
+            return Err("trusted source line is unavailable".into());
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_trusted_source_target(
+    session_id: SessionId,
+    reference: &str,
+    project_root: &str,
+    source: &SourceLocation,
+    snapshot_version: u64,
+    canonical_route: &str,
+) -> Result<TrustedSourceTarget, String> {
+    validate_source_reference(reference)?;
+    if source.line == 0 || source.line > MAX_SOURCE_LINE {
+        return Err("trusted source line is outside the safety bound".into());
+    }
+    if source
+        .column
+        .is_some_and(|column| column == 0 || column > MAX_SOURCE_COLUMN)
+    {
+        return Err("trusted source column is outside the safety bound".into());
+    }
+    let relative = validate_relative_source_path(&source.file)?;
+    let canonical_project_root = std::fs::canonicalize(project_root)
+        .map_err(|_| "trusted source project root is unavailable".to_string())?;
+    if !canonical_project_root.is_dir() {
+        return Err("trusted source project root is unavailable".into());
+    }
+    let canonical_file = std::fs::canonicalize(canonical_project_root.join(relative))
+        .map_err(|_| "trusted source file is unavailable".to_string())?;
+    if !canonical_file.starts_with(&canonical_project_root) {
+        return Err("trusted source outside project".into());
+    }
+    let metadata = std::fs::metadata(&canonical_file)
+        .map_err(|_| "trusted source file is unavailable".to_string())?;
+    if !metadata.is_file() {
+        return Err("trusted source target is not a regular file".into());
+    }
+    validate_source_line_exists(&canonical_file, source.line)?;
+    let project_relative_file = canonical_file
+        .strip_prefix(&canonical_project_root)
+        .map_err(|_| "trusted source outside project".to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    if project_relative_file.is_empty() {
+        return Err("trusted source file is unavailable".into());
+    }
+
+    Ok(TrustedSourceTarget {
+        session_id,
+        reference: reference.to_owned(),
+        project_root: canonical_project_root,
+        canonical_file,
+        project_relative_file,
+        line: source.line,
+        column: source.column,
+        snapshot_version,
+        canonical_route: canonical_route.to_owned(),
+    })
+}
+
+fn trusted_source_launch_plan(
+    target: &TrustedSourceTarget,
+) -> Result<TrustedSourceLaunchPlan, String> {
+    let _ = (
+        target.session_id,
+        &target.reference,
+        &target.project_root,
+        &target.canonical_route,
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        return Ok(TrustedSourceLaunchPlan {
+            launcher: SourceOpenLauncher::MacOpen,
+            program: "/usr/bin/open",
+            args: vec![target.canonical_file.clone().into_os_string()],
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return Ok(TrustedSourceLaunchPlan {
+            launcher: SourceOpenLauncher::LinuxXdgOpen,
+            program: "xdg-open",
+            args: vec![target.canonical_file.clone().into_os_string()],
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return Ok(TrustedSourceLaunchPlan {
+            launcher: SourceOpenLauncher::WindowsFileProtocolHandler,
+            program: "rundll32.exe",
+            args: vec![
+                OsString::from("url.dll,FileProtocolHandler"),
+                target.canonical_file.clone().into_os_string(),
+            ],
+        });
+    }
+
+    #[allow(unreachable_code)]
+    Err("trusted source launcher unavailable".into())
+}
+
+fn launch_trusted_source_with<F>(
+    target: &TrustedSourceTarget,
+    spawn: F,
+) -> Result<SourceOpenLauncher, String>
+where
+    F: FnOnce(&TrustedSourceLaunchPlan) -> Result<(), ()>,
+{
+    let plan = trusted_source_launch_plan(target)?;
+    spawn(&plan).map_err(|_| "trusted source launcher unavailable".to_string())?;
+    Ok(plan.launcher)
+}
+
+fn launch_trusted_source(target: &TrustedSourceTarget) -> Result<SourceOpenLauncher, String> {
+    launch_trusted_source_with(target, |plan| {
+        Command::new(plan.program)
+            .args(&plan.args)
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| ())
+    })
 }
 
 #[tauri::command]
@@ -178,6 +456,81 @@ async fn live_session_state(session_id: SessionId) -> Result<LiveSessionState, S
     Ok(LiveSessionState {
         observer,
         action_results,
+    })
+}
+
+#[tauri::command]
+async fn open_source_for_selection(
+    app: tauri::AppHandle,
+    session_id: SessionId,
+    reference: String,
+) -> Result<HumanSourceOpenReceipt, String> {
+    validate_source_reference(&reference)?;
+    let pre_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+    let token = read_token().await?;
+    let client = control_client()?;
+
+    let session = client
+        .get(format!("http://127.0.0.1:45454/v1/sessions/{session_id}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "trusted source runtime unavailable".to_string())?
+        .error_for_status()
+        .map_err(|_| "trusted source session is unavailable".to_string())?
+        .json::<Session>()
+        .await
+        .map_err(|_| "trusted source session is unavailable".to_string())?;
+
+    let snapshot = client
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/semantic-snapshot/fresh"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "trusted source runtime unavailable".to_string())?
+        .error_for_status()
+        .map_err(|_| "trusted source mapping is unavailable".to_string())?
+        .json::<PageSnapshot>()
+        .await
+        .map_err(|_| "trusted source mapping is unavailable".to_string())?;
+
+    let snapshot_route = visual_capture::canonical_visual_diff_route(&snapshot.route)?;
+    if snapshot_route != pre_route {
+        return Err("trusted source route changed before resolution".into());
+    }
+
+    let source = resolve_snapshot_source(&snapshot, &reference)?;
+    let project_root = session
+        .project
+        .git_root
+        .as_deref()
+        .or(session.project.cwd.as_deref())
+        .ok_or_else(|| "trusted source project root is unavailable".to_string())?;
+
+    let target = resolve_trusted_source_target(
+        session_id,
+        &reference,
+        project_root,
+        source,
+        snapshot.version,
+        &pre_route,
+    )?;
+
+    let post_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+    if pre_route != post_route {
+        return Err("trusted source route changed while resolution was in flight".into());
+    }
+
+    let launcher = launch_trusted_source(&target)?;
+    Ok(HumanSourceOpenReceipt {
+        reference,
+        display_file: target.project_relative_file,
+        line: target.line,
+        column: target.column,
+        launcher,
+        snapshot_version: target.snapshot_version,
     })
 }
 
@@ -344,6 +697,423 @@ fn validate_measure_payload(
         route,
         measured_at_unix_ms,
     })
+}
+
+#[cfg(test)]
+mod trusted_source_validation_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn semantic_node(reference: &str, source: Option<SourceLocation>, children: Vec<SemanticNode>) -> SemanticNode {
+        SemanticNode {
+            reference: reference.to_owned(),
+            role: None,
+            name: None,
+            tag: "div".into(),
+            rect: None,
+            interactive: true,
+            attributes: BTreeMap::new(),
+            source,
+            children,
+        }
+    }
+
+    fn snapshot(root: SemanticNode) -> PageSnapshot {
+        PageSnapshot {
+            version: 7,
+            route: "http://127.0.0.1:5173/".into(),
+            viewport: (1440, 900),
+            root,
+            console_errors: Vec::new(),
+            failed_requests: Vec::new(),
+            captured_at: chrono::Utc::now(),
+        }
+    }
+
+    fn source(file: &str) -> SourceLocation {
+        SourceLocation {
+            file: file.into(),
+            line: 1,
+            column: Some(3),
+            component: Some(format!("{file}:42")),
+        }
+    }
+
+    fn temp_fixture(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "localview-source-v23-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create source fixture root");
+        root
+    }
+
+    #[test]
+    fn trusted_source_reference_validator_is_fail_closed() {
+        for valid in ["@e1", "@e1a2b3", "@eABCDEF"] {
+            assert!(validate_source_reference(valid).is_ok(), "{valid}");
+        }
+        for invalid in ["", "@e", "@e-not-hex", "button#save", "@g123", "../src/App.tsx"] {
+            assert!(validate_source_reference(invalid).is_err(), "{invalid}");
+        }
+        let oversize = format!("@e{}", "a".repeat(MAX_SOURCE_REFERENCE_BYTES));
+        assert!(oversize.len() > MAX_SOURCE_REFERENCE_BYTES);
+        assert!(validate_source_reference(&oversize).is_err());
+    }
+
+    #[test]
+    fn trusted_source_relative_path_validator_rejects_escape_and_uri_inputs() {
+        for valid in [
+            "src/App.tsx",
+            "./src/components/Button.tsx",
+            "src//components///Button.tsx",
+            "Button.tsx",
+        ] {
+            assert!(validate_relative_source_path(valid).is_ok(), "{valid}");
+        }
+        for invalid in [
+            "",
+            "../secret.txt",
+            "src/../../secret.txt",
+            "/etc/passwd",
+            "C:\\Windows\\System32\\drivers\\etc\\hosts",
+            "\\\\server\\share\\file.tsx",
+            "file://src/App.tsx",
+            "https://example.com/App.tsx",
+            "src/App.tsx:42",
+            "src/\0App.tsx",
+        ] {
+            assert!(validate_relative_source_path(invalid).is_err(), "{invalid}");
+        }
+        let oversized = format!("src/{}", "a".repeat(MAX_SOURCE_FILE_BYTES));
+        assert!(oversized.len() > MAX_SOURCE_FILE_BYTES);
+        assert!(validate_relative_source_path(&oversized).is_err());
+    }
+
+    #[test]
+    fn trusted_source_snapshot_resolution_requires_one_exact_reference_with_source() {
+        let selected = semantic_node("@e1", Some(source("src/Button.tsx")), Vec::new());
+        let root = semantic_node("@eroot", None, vec![selected]);
+        let snap = snapshot(root);
+        let resolved = resolve_snapshot_source(&snap, "@e1").expect("source must resolve");
+        assert_eq!(resolved.file, "src/Button.tsx");
+        assert!(resolve_snapshot_source(&snap, "@e2").is_err());
+
+        let missing_source = snapshot(semantic_node(
+            "@eroot",
+            None,
+            vec![semantic_node("@e1", None, Vec::new())],
+        ));
+        assert!(resolve_snapshot_source(&missing_source, "@e1").is_err());
+
+        let duplicate = snapshot(semantic_node(
+            "@eroot",
+            None,
+            vec![
+                semantic_node("@e1", Some(source("src/A.tsx")), Vec::new()),
+                semantic_node("@e1", Some(source("src/B.tsx")), Vec::new()),
+            ],
+        ));
+        assert!(resolve_snapshot_source(&duplicate, "@e1").is_err());
+    }
+
+    #[test]
+    fn trusted_source_target_must_be_canonical_regular_file_inside_project_root() {
+        let root = temp_fixture("inside");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create src");
+        std::fs::write(src.join("Button.tsx"), "export const Button = () => null;")
+            .expect("write source");
+
+        let receipt = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source("src/Button.tsx"),
+            9,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("trusted target");
+        assert_eq!(receipt.project_relative_file, "src/Button.tsx");
+        assert!(receipt.canonical_file.starts_with(&receipt.project_root));
+        assert_eq!(receipt.line, 1);
+        assert_eq!(receipt.column, Some(3));
+
+        let directory_source = SourceLocation {
+            file: "src".into(),
+            line: 1,
+            column: None,
+            component: None,
+        };
+        assert!(resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &directory_source,
+            9,
+            "http://127.0.0.1:5173/",
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trusted_source_target_rejects_missing_file_and_invalid_line_column() {
+        let root = temp_fixture("bounds");
+        let bad_line = SourceLocation {
+            file: "missing.tsx".into(),
+            line: 0,
+            column: None,
+            component: None,
+        };
+        assert!(resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &bad_line,
+            1,
+            "http://127.0.0.1:5173/",
+        )
+        .is_err());
+
+        let missing = SourceLocation {
+            file: "missing.tsx".into(),
+            line: 1,
+            column: Some(1),
+            component: None,
+        };
+        assert!(resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &missing,
+            1,
+            "http://127.0.0.1:5173/",
+        )
+        .is_err());
+
+        std::fs::write(root.join("short.tsx"), "export const onlyLine = true;")
+            .expect("write short source");
+        let stale_line = SourceLocation {
+            file: "short.tsx".into(),
+            line: 2,
+            column: Some(1),
+            component: None,
+        };
+        let stale_line_error = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &stale_line,
+            1,
+            "http://127.0.0.1:5173/",
+        )
+        .expect_err("stale source line must fail closed");
+        assert_eq!(stale_line_error, "trusted source line is unavailable");
+
+        let bad_column = SourceLocation {
+            file: "short.tsx".into(),
+            line: 1,
+            column: Some(MAX_SOURCE_COLUMN + 1),
+            component: None,
+        };
+        assert!(resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &bad_column,
+            1,
+            "http://127.0.0.1:5173/",
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trusted_source_launcher_plan_uses_fixed_program_and_exact_canonical_target() {
+        let root = temp_fixture("launcher-plan");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create src");
+        std::fs::write(src.join("Button.tsx"), "export const Button = () => null;")
+            .expect("write source");
+        let target = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source("src/Button.tsx"),
+            9,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("trusted target");
+
+        let plan = trusted_source_launch_plan(&target).expect("launch plan");
+        assert!(
+            !matches!(
+                plan.program.to_ascii_lowercase().as_str(),
+                "sh" | "bash" | "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh"
+            ),
+            "trusted source launcher must never route through a shell"
+        );
+        assert!(
+            plan.args.iter().any(|arg| arg.as_os_str() == target.canonical_file.as_os_str()),
+            "canonical trusted target must be forwarded as one argv item"
+        );
+
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(plan.launcher, SourceOpenLauncher::LinuxXdgOpen);
+            assert_eq!(plan.program, "xdg-open");
+            assert_eq!(plan.args, vec![target.canonical_file.clone().into_os_string()]);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(plan.launcher, SourceOpenLauncher::MacOpen);
+            assert_eq!(plan.program, "/usr/bin/open");
+            assert_eq!(plan.args, vec![target.canonical_file.clone().into_os_string()]);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(plan.launcher, SourceOpenLauncher::WindowsFileProtocolHandler);
+            assert_eq!(plan.program, "rundll32.exe");
+            assert_eq!(plan.args[0], OsString::from("url.dll,FileProtocolHandler"));
+            assert_eq!(plan.args[1], target.canonical_file.clone().into_os_string());
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trusted_source_launcher_treats_shell_metacharacters_as_plain_argv_data() {
+        let root = temp_fixture("launcher-metacharacters");
+        let filename = "Button; echo not-a-shell.tsx";
+        std::fs::write(root.join(filename), "export default null;").expect("write source");
+        let target = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source(filename),
+            4,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("trusted target");
+
+        let plan = trusted_source_launch_plan(&target).expect("launch plan");
+        assert!(
+            plan.args
+                .iter()
+                .any(|arg| arg.as_os_str() == target.canonical_file.as_os_str())
+        );
+        assert!(
+            !matches!(
+                plan.program.to_ascii_lowercase().as_str(),
+                "sh" | "bash" | "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh"
+            )
+        );
+        assert_eq!(
+            plan.args
+                .iter()
+                .filter(|arg| arg.as_os_str() == target.canonical_file.as_os_str())
+                .count(),
+            1,
+            "trusted file path must remain one argv item"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trusted_source_launcher_executor_is_injectable_and_sanitizes_failure() {
+        use std::cell::RefCell;
+
+        let root = temp_fixture("launcher-executor");
+        std::fs::write(root.join("App.tsx"), "export default null;").expect("write source");
+        let target = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source("App.tsx"),
+            3,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("trusted target");
+
+        let observed = RefCell::new(None::<(String, Vec<OsString>)>);
+        let launcher = launch_trusted_source_with(&target, |plan| {
+            *observed.borrow_mut() = Some((plan.program.to_owned(), plan.args.clone()));
+            Ok(())
+        })
+        .expect("fake launcher success");
+        let observed = observed.into_inner().expect("fake launcher observed plan");
+        assert!(!observed.0.is_empty());
+        assert!(observed.1.iter().any(|arg| arg.as_os_str() == target.canonical_file.as_os_str()));
+
+        let error = launch_trusted_source_with(&target, |_plan| Err(()))
+            .expect_err("fake launcher failure must fail closed");
+        assert_eq!(error, "trusted source launcher unavailable");
+        assert!(
+            !error.contains(target.canonical_file.to_string_lossy().as_ref()),
+            "launcher error must not leak an absolute source path"
+        );
+
+        let expected = trusted_source_launch_plan(&target).expect("expected plan").launcher;
+        assert_eq!(launcher, expected);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_source_target_allows_symlink_that_resolves_inside_project() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_fixture("symlink-inside");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create source dir");
+        let target_file = src.join("Target.tsx");
+        std::fs::write(&target_file, "export const inside = true;").expect("write target");
+        symlink(&target_file, root.join("Alias.tsx")).expect("create inside symlink");
+
+        let resolved = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source("Alias.tsx"),
+            2,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("inside-project symlink should resolve");
+        assert_eq!(resolved.canonical_file, std::fs::canonicalize(&target_file).unwrap());
+        assert_eq!(resolved.project_relative_file, "src/Target.tsx");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_source_target_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = temp_fixture("symlink");
+        let root = fixture.join("project");
+        std::fs::create_dir_all(&root).expect("create project");
+        let outside = fixture.join("outside.tsx");
+        std::fs::write(&outside, "export const secret = true;").expect("write outside");
+        symlink(&outside, root.join("escape.tsx")).expect("create symlink");
+
+        let escaped = source("escape.tsx");
+        let result = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &escaped,
+            1,
+            "http://127.0.0.1:5173/",
+        );
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(fixture);
+    }
 }
 
 #[cfg(test)]
@@ -1342,6 +2112,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             dashboard_state,
             live_session_state,
+            open_source_for_selection,
             measure_current_selection,
             pause_runtime,
             resume_runtime,

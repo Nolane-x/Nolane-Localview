@@ -16,6 +16,7 @@ import {
   RailButton,
   type HumanCaptureState,
   type HumanMeasureState,
+  type HumanSourceOpenState,
   type ToolId,
 } from '../features/FloatingTools';
 import {
@@ -49,6 +50,35 @@ const fallback: DashboardState = {
 const emptyLive: LiveSessionState = { observer: [], action_results: [] };
 const TOGGLE_TARGET_BAR_SHORTCUT = 'Ctrl+Shift+T';
 
+function classifySourceOpenFailure(cause: unknown): 'launcher_unavailable' | 'unavailable' | 'failed' {
+  const detail = String(cause).toLowerCase();
+
+  if (detail.includes('trusted source launcher unavailable')) {
+    return 'launcher_unavailable';
+  }
+
+  const trustedUnavailablePhrases = [
+    'trusted source mapping is unavailable',
+    'trusted source file is unavailable',
+    'trusted source project root is unavailable',
+    'trusted source selection is no longer available',
+    'trusted source selection is ambiguous',
+    'trusted source outside project',
+    'trusted source path traversal is not allowed',
+    'trusted source path uses a non-native separator',
+    'trusted source path is invalid',
+    'trusted source path must be project relative',
+    'trusted source path prefix is not allowed',
+    'trusted source line is unavailable',
+    'trusted source file exceeds verification bound',
+    'trusted source symlink escape',
+  ];
+
+  return trustedUnavailablePhrases.some((phrase) => detail.includes(phrase))
+    ? 'unavailable'
+    : 'failed';
+}
+
 export default function LocalViewShell() {
   const [state, setState] = useState<DashboardState>(fallback);
   const [selected, setSelected] = useState<string>();
@@ -59,10 +89,13 @@ export default function LocalViewShell() {
   const [preferences, setPreferences] = useState<LocalViewPreferences>(() => loadPreferences());
   const [captureState, setCaptureState] = useState<HumanCaptureState>({ status: 'idle' });
   const [measureState, setMeasureState] = useState<HumanMeasureState>({ status: 'idle' });
+  const [sourceOpenState, setSourceOpenState] = useState<HumanSourceOpenState>({ status: 'idle' });
   const captureInFlight = useRef(false);
   const captureGeneration = useRef(0);
   const measureInFlight = useRef(false);
   const measureGeneration = useRef(0);
+  const sourceOpenInFlight = useRef(false);
+  const sourceOpenGeneration = useRef(0);
   const selectedReferenceRef = useRef<string | undefined>(undefined);
 
   const patchPreferences = useCallback((patch: Partial<LocalViewPreferences>) => {
@@ -120,6 +153,9 @@ export default function LocalViewShell() {
     measureGeneration.current += 1;
     measureInFlight.current = false;
     setMeasureState({ status: 'idle' });
+    sourceOpenGeneration.current += 1;
+    sourceOpenInFlight.current = false;
+    setSourceOpenState({ status: 'idle' });
   }, [selectedReference]);
 
   useEffect(() => {
@@ -130,6 +166,9 @@ export default function LocalViewShell() {
     measureInFlight.current = false;
     selectedReferenceRef.current = undefined;
     setMeasureState({ status: 'idle' });
+    sourceOpenGeneration.current += 1;
+    sourceOpenInFlight.current = false;
+    setSourceOpenState({ status: 'idle' });
   }, [current?.id]);
 
   useEffect(() => {
@@ -261,10 +300,60 @@ export default function LocalViewShell() {
     }
   }, [current]);
 
+  const openSourceForSelection = useCallback(async (reference: string) => {
+    const session = current;
+    if (!session || !reference || sourceOpenInFlight.current) return;
+
+    const sourceOpenReference = reference;
+    const sourceOpenRequest = {
+      sessionId: session.id,
+      reference: sourceOpenReference,
+    };
+
+    sourceOpenInFlight.current = true;
+    const generation = ++sourceOpenGeneration.current;
+    selectedReferenceRef.current = sourceOpenReference;
+    setSourceOpenState({ status: 'opening', reference: sourceOpenReference });
+
+    try {
+      const receipt = await api.openSourceForSelection(sourceOpenRequest);
+      if (
+        generation !== sourceOpenGeneration.current
+        || sourceOpenReference !== selectedReferenceRef.current
+      ) {
+        return;
+      }
+      setSourceOpenState({
+        status: 'success',
+        reference: sourceOpenReference,
+        displayFile: receipt.displayFile,
+        line: receipt.line,
+        column: receipt.column ?? undefined,
+      });
+    } catch (cause) {
+      if (
+        generation !== sourceOpenGeneration.current
+        || sourceOpenReference !== selectedReferenceRef.current
+      ) {
+        return;
+      }
+      const reason = classifySourceOpenFailure(cause);
+      setSourceOpenState({ status: 'failure', reference: sourceOpenReference, reason });
+    } finally {
+      if (generation === sourceOpenGeneration.current) {
+        sourceOpenInFlight.current = false;
+      }
+    }
+  }, [current]);
+
   const executeCommand = useCallback((command: CommandId) => {
     switch (command) {
       case COMMAND_IDS.inspectActivate:
         setActiveTool('inspect');
+        return;
+      case COMMAND_IDS.sourceOpen:
+        setActiveTool('inspect');
+        if (selectedReference) void openSourceForSelection(selectedReference);
         return;
       case COMMAND_IDS.responsiveOpen:
         setActiveTool('responsive');
@@ -309,10 +398,12 @@ export default function LocalViewShell() {
     }
   }, [
     openNative,
+    openSourceForSelection,
     patchPreferences,
     preferences.showTargetBar,
     preferences.showToolRail,
     resetWorkspacePreferences,
+    selectedReference,
     togglePause,
   ]);
 
@@ -396,6 +487,9 @@ export default function LocalViewShell() {
             onOpenNative={() => void openNative()}
             captureState={captureState}
             onCapture={() => void captureCurrentViewport()}
+            sourceOpenState={sourceOpenState}
+            selectedReference={selectedReference}
+            onOpenSource={(reference) => void openSourceForSelection(reference)}
             measureState={measureState}
             onMeasure={(reference) => void measureCurrentSelection(reference)}
             onCommand={executeCommand}

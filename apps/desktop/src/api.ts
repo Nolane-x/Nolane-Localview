@@ -8,6 +8,20 @@ export interface MeasureRect {
   height: number;
 }
 
+export interface HumanSourceOpenRequest {
+  sessionId: string;
+  reference: string;
+}
+
+export interface HumanSourceOpenReceipt {
+  reference: string;
+  displayFile: string;
+  line: number;
+  column?: number | null;
+  launcher: 'mac_open' | 'linux_xdg_open' | 'windows_file_protocol_handler';
+  snapshotVersion: number;
+}
+
 export interface ElementMeasureReceipt {
   reference: string;
   rect: MeasureRect;
@@ -44,6 +58,8 @@ export const api = {
   resume: () => invoke<void>('resume_runtime'),
   openPreview: (sessionId: string, url: string, title: string) => invoke<void>('open_preview', { sessionId, url, title }),
   captureCurrentViewport: (sessionId: string) => invoke<VisualCaptureReceipt>('capture_current_viewport', { sessionId, revision: null }),
+  openSourceForSelection: ({ sessionId, reference }: HumanSourceOpenRequest) =>
+    invoke<HumanSourceOpenReceipt>('open_source_for_selection', { sessionId, reference }),
   measureElement: (sessionId: string, reference: string) => invoke<ElementMeasureReceipt>('measure_current_selection', { sessionId, reference }),
   openWorkspaceSurface: (sessionId: string, url: string, bounds: WorkspaceBounds) => invoke<void>('workspace_surface_open', { sessionId, url, bounds }),
   setWorkspaceSurfaceBounds: (sessionId: string, bounds: WorkspaceBounds) => invoke<void>('workspace_surface_set_bounds', { sessionId, bounds }),
