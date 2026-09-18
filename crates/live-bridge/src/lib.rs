@@ -78,6 +78,7 @@ pub enum BridgeActionKind {
     Scroll { x: f64, y: f64 },
     Focus,
     Snapshot,
+    Measure,
     FreezeVisuals,
     RestoreVisuals { token: Uuid },
     CaptureScrollTo { token: Uuid, y: f64 },
@@ -830,6 +831,13 @@ fn sanitize_native_executor_result(
 }
 
 fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut BridgeActionResult) {
+    if let Some(action) = action {
+        if matches!(action.action, BridgeActionKind::Measure) {
+            sanitize_measure_result(action, result);
+            return;
+        }
+    }
+
     match action.map(|action| &action.action) {
         Some(BridgeActionKind::TypeText { text, .. }) => {
             result.payload = Value::Null;
@@ -857,6 +865,159 @@ fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut Bridg
             }
         }
     }
+}
+
+fn sanitize_measure_result(action: &BridgeAction, result: &mut BridgeActionResult) {
+    const MAX_MEASURE_REFERENCE_BYTES: usize = 64;
+    const MAX_MEASURE_ROUTE_BYTES: usize = 2_048;
+    const MAX_MEASURE_ABS_COORDINATE: f64 = 1_000_000.0;
+    const MEASURE_DIMENSION_TOLERANCE: f64 = 0.2;
+
+    fn rect(value: Option<&Value>) -> Option<Value> {
+        let value = value?.as_object()?;
+        let x = value.get("x")?.as_f64()?;
+        let y = value.get("y")?.as_f64()?;
+        let width = value.get("width")?.as_f64()?;
+        let height = value.get("height")?.as_f64()?;
+        if !x.is_finite()
+            || !y.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || x.abs() > MAX_MEASURE_ABS_COORDINATE
+            || y.abs() > MAX_MEASURE_ABS_COORDINATE
+            || width < 0.0
+            || height < 0.0
+            || width > MAX_CSS_VIEWPORT_DIMENSION
+            || height > MAX_CSS_VIEWPORT_DIMENSION
+            || !(x + width).is_finite()
+            || !(y + height).is_finite()
+        {
+            return None;
+        }
+        Some(serde_json::json!({
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+        }))
+    }
+
+    fn fail(result: &mut BridgeActionResult) {
+        result.ok = false;
+        result.payload = Value::Null;
+        result.error = Some("measure action failed".into());
+    }
+
+    if !result.ok {
+        result.payload = Value::Null;
+        if result.error.is_some() {
+            result.error = Some("measure action failed".into());
+        }
+        return;
+    }
+
+    let Some(expected_reference) = action.reference.as_deref() else {
+        fail(result);
+        return;
+    };
+    let Some(reference) = result.payload.get("reference").and_then(Value::as_str) else {
+        fail(result);
+        return;
+    };
+    let Some(reference_hash) = reference.strip_prefix("@e") else {
+        fail(result);
+        return;
+    };
+    if reference != expected_reference
+        || reference.len() > MAX_MEASURE_REFERENCE_BYTES
+        || reference_hash.is_empty()
+        || !reference_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        fail(result);
+        return;
+    }
+
+    let Some(viewport) = result.payload.get("viewport").and_then(Value::as_object) else {
+        fail(result);
+        return;
+    };
+    let Some(viewport_width) = viewport.get("width").and_then(Value::as_f64) else {
+        fail(result);
+        return;
+    };
+    let Some(viewport_height) = viewport.get("height").and_then(Value::as_f64) else {
+        fail(result);
+        return;
+    };
+    if !valid_positive_css_dimension(viewport_width)
+        || !valid_positive_css_dimension(viewport_height)
+    {
+        fail(result);
+        return;
+    }
+
+    let Some(viewport_rect) = rect(result.payload.get("rect")) else {
+        fail(result);
+        return;
+    };
+    let Some(document_rect) = rect(result.payload.get("document_rect")) else {
+        fail(result);
+        return;
+    };
+    let viewport_rect_width = viewport_rect.get("width").and_then(Value::as_f64).unwrap_or(-1.0);
+    let viewport_rect_height = viewport_rect.get("height").and_then(Value::as_f64).unwrap_or(-1.0);
+    let document_rect_width = document_rect.get("width").and_then(Value::as_f64).unwrap_or(-1.0);
+    let document_rect_height = document_rect.get("height").and_then(Value::as_f64).unwrap_or(-1.0);
+    if (viewport_rect_width - document_rect_width).abs() > MEASURE_DIMENSION_TOLERANCE
+        || (viewport_rect_height - document_rect_height).abs() > MEASURE_DIMENSION_TOLERANCE
+    {
+        fail(result);
+        return;
+    }
+
+    let Some(route) = result.payload.get("route").and_then(Value::as_str) else {
+        fail(result);
+        return;
+    };
+    if route.len() > MAX_MEASURE_ROUTE_BYTES {
+        fail(result);
+        return;
+    }
+    let Ok(mut route_url) = url::Url::parse(route) else {
+        fail(result);
+        return;
+    };
+    if !matches!(route_url.scheme(), "http" | "https") {
+        fail(result);
+        return;
+    }
+    let Some(host) = route_url.host_str() else {
+        fail(result);
+        return;
+    };
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false);
+    if !loopback {
+        fail(result);
+        return;
+    }
+    route_url.set_query(None);
+    route_url.set_fragment(None);
+
+    result.payload = serde_json::json!({
+        "reference": reference,
+        "rect": viewport_rect,
+        "document_rect": document_rect,
+        "viewport": {
+            "width": viewport_width,
+            "height": viewport_height,
+        },
+        "route": route_url.to_string(),
+    });
+    result.error = None;
 }
 
 fn sanitize_visual_freeze_result(result: &mut BridgeActionResult) {
@@ -1145,6 +1306,111 @@ mod tests {
             route: None,
             payload: Value::Null,
         }
+    }
+
+    #[test]
+    fn measure_result_storage_projects_geometry_and_strips_extra_fields() {
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            reference: Some("@e1a2".into()),
+            action: BridgeActionKind::Measure,
+            created_at: Utc::now(),
+        };
+        let mut result = BridgeActionResult {
+            action_id: action.id,
+            ok: true,
+            error: None,
+            payload: serde_json::json!({
+                "reference": "@e1a2",
+                "rect": {"x": -2.5, "y": 20.0, "width": 100.0, "height": 40.0},
+                "document_rect": {"x": -2.5, "y": 220.0, "width": 100.0, "height": 40.0},
+                "viewport": {"width": 1280.0, "height": 720.0, "dpr": 2.0},
+                "route": "http://127.0.0.1:5173/dashboard?secret=drop-me#fragment",
+                "attributes": {"data-secret": "must-not-survive"},
+                "name": "must-not-survive"
+            }),
+            completed_at: Utc::now(),
+        };
+
+        sanitize_result_for_storage(Some(&action), &mut result);
+        assert!(result.ok);
+        let text = result.payload.to_string();
+        assert!(text.contains("@e1a2"));
+        assert!(text.contains("document_rect"));
+        assert!(!text.contains("must-not-survive"));
+        assert!(!text.contains("data-secret"));
+        assert!(!text.contains("dpr"));
+        assert!(!text.contains("drop-me"));
+        assert!(!text.contains("fragment"));
+    }
+
+    #[test]
+    fn measure_result_storage_fails_closed_on_reference_or_route_mismatch() {
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            reference: Some("@e1".into()),
+            action: BridgeActionKind::Measure,
+            created_at: Utc::now(),
+        };
+
+        for payload in [
+            serde_json::json!({
+                "reference": "@e2",
+                "rect": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0},
+                "document_rect": {"x": 0.0, "y": 100.0, "width": 10.0, "height": 10.0},
+                "viewport": {"width": 1280.0, "height": 720.0},
+                "route": "http://127.0.0.1:5173/"
+            }),
+            serde_json::json!({
+                "reference": "@e1",
+                "rect": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0},
+                "document_rect": {"x": 0.0, "y": 100.0, "width": 10.0, "height": 10.0},
+                "viewport": {"width": 1280.0, "height": 720.0},
+                "route": "https://example.com/"
+            }),
+        ] {
+            let mut result = BridgeActionResult {
+                action_id: action.id,
+                ok: true,
+                error: Some("raw target error".into()),
+                payload,
+                completed_at: Utc::now(),
+            };
+            sanitize_result_for_storage(Some(&action), &mut result);
+            assert!(!result.ok);
+            assert_eq!(result.payload, Value::Null);
+            assert_eq!(result.error.as_deref(), Some("measure action failed"));
+        }
+    }
+
+    #[test]
+    fn measure_failure_storage_drops_payload_and_raw_error() {
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            reference: Some("@e1".into()),
+            action: BridgeActionKind::Measure,
+            created_at: Utc::now(),
+        };
+        let mut result = BridgeActionResult {
+            action_id: action.id,
+            ok: false,
+            error: Some("secret target exception".into()),
+            payload: serde_json::json!({"secret":"must-not-survive"}),
+            completed_at: Utc::now(),
+        };
+        sanitize_result_for_storage(Some(&action), &mut result);
+        assert_eq!(result.payload, Value::Null);
+        assert_eq!(result.error.as_deref(), Some("measure action failed"));
+    }
+
+    #[test]
+    fn measure_action_serializes_as_read_only_measure_type() {
+        let encoded = serde_json::to_value(BridgeActionKind::Measure).unwrap();
+        assert_eq!(encoded, serde_json::json!({"type": "measure"}));
+        assert!(!BridgeActionKind::Measure.is_internal_capture_action());
     }
 
     #[tokio::test]

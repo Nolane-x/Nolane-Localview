@@ -63,6 +63,33 @@ async fn fixture() -> (axum::Router, LiveBridge, Uuid) {
     (app, live, session_id)
 }
 
+async fn post_action_with_reference(
+    app: &axum::Router,
+    session_id: Uuid,
+    reference: Option<&str>,
+    action: Value,
+) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{session_id}/actions"))
+                .header(AUTHORIZATION, "Bearer test-token")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "reference": reference,
+                        "action": action,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
 async fn post_action(app: &axum::Router, session_id: Uuid, action: Value) -> StatusCode {
     app.clone()
         .oneshot(
@@ -108,6 +135,47 @@ async fn legacy_public_route_rejects_all_consequential_action_kinds_without_enqu
         live.take_actions(session_id, 64).await.is_empty(),
         "rejected consequential actions must not mutate the legacy action queue"
     );
+}
+
+#[tokio::test]
+async fn measure_public_route_accepts_only_bounded_stable_reference() {
+    let (app, live, session_id) = fixture().await;
+
+    assert_eq!(
+        post_action_with_reference(
+            &app,
+            session_id,
+            Some("@e1a2b3"),
+            json!({"type": "measure"}),
+        )
+        .await,
+        StatusCode::ACCEPTED
+    );
+
+    let queued = live.take_actions(session_id, 64).await;
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].reference.as_deref(), Some("@e1a2b3"));
+    assert!(matches!(
+        queued[0].action,
+        localview_live_bridge::BridgeActionKind::Measure
+    ));
+}
+
+#[tokio::test]
+async fn measure_public_route_rejects_missing_or_malformed_reference_without_enqueueing() {
+    for reference in [None, Some(""), Some("@e"), Some("button#save"), Some("@e-not-hex")] {
+        let (app, live, session_id) = fixture().await;
+        assert_eq!(
+            post_action_with_reference(&app, session_id, reference, json!({"type": "measure"}))
+                .await,
+            StatusCode::BAD_REQUEST,
+            "invalid Measure reference must fail before queue mutation: {reference:?}"
+        );
+        assert!(
+            live.take_actions(session_id, 64).await.is_empty(),
+            "invalid Measure reference must not mutate the public action queue"
+        );
+    }
 }
 
 #[tokio::test]

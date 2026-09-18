@@ -8,11 +8,11 @@ use std::path::PathBuf;
 
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
-    ActionCancellationSignal, BridgeAction, BridgeActionResult, IngestReport, ObserverBatch,
-    ObserverEvent, PrivateBridgeAction,
+    ActionCancellationSignal, BridgeAction, BridgeActionKind, BridgeActionResult, IngestReport,
+    ObserverBatch, ObserverEvent, PrivateBridgeAction,
 };
 use localview_protocol::{Health, Session, SessionId};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
@@ -36,6 +36,47 @@ struct EngineInfo {
 struct LiveSessionState {
     observer: Vec<ObserverEvent>,
     action_results: Vec<BridgeActionResult>,
+}
+
+const MEASURE_RESULT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2_500);
+const MEASURE_RESULT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+const MAX_MEASURE_REFERENCE_BYTES: usize = 64;
+const MAX_MEASURE_CSS_DIMENSION: f64 = 100_000.0;
+const MAX_MEASURE_ABS_COORDINATE: f64 = 1_000_000.0;
+const MEASURE_DIMENSION_TOLERANCE: f64 = 0.2;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MeasureRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ElementMeasureReceipt {
+    reference: String,
+    rect: MeasureRect,
+    document_rect: MeasureRect,
+    viewport_css_width: f64,
+    viewport_css_height: f64,
+    route: String,
+    measured_at_unix_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct MeasureViewportPayload {
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct MeasurePayload {
+    reference: String,
+    rect: MeasureRect,
+    document_rect: MeasureRect,
+    viewport: MeasureViewportPayload,
+    route: String,
 }
 
 #[tauri::command]
@@ -138,6 +179,353 @@ async fn live_session_state(session_id: SessionId) -> Result<LiveSessionState, S
         observer,
         action_results,
     })
+}
+
+#[tauri::command]
+async fn measure_current_selection(
+    app: tauri::AppHandle,
+    session_id: SessionId,
+    reference: String,
+) -> Result<ElementMeasureReceipt, String> {
+    validate_measure_reference(&reference)?;
+    let pre_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+
+    let token = read_token().await?;
+    let client = control_client()?;
+    let action = client
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions"
+        ))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "reference": reference,
+            "action": {"type": "measure"}
+        }))
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json::<BridgeAction>()
+        .await
+        .map_err(err)?;
+
+    if action.session_id != session_id
+        || action.reference.as_deref() != Some(reference.as_str())
+        || !matches!(action.action, BridgeActionKind::Measure)
+    {
+        return Err("trusted Measure queue acknowledgement mismatch".into());
+    }
+
+    let result = tokio::time::timeout(MEASURE_RESULT_TIMEOUT, async {
+        loop {
+            let results = client
+                .get(format!(
+                    "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/results"
+                ))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(err)?
+                .error_for_status()
+                .map_err(err)?
+                .json::<Vec<BridgeActionResult>>()
+                .await
+                .map_err(err)?;
+
+            if let Some(result) = results.into_iter().find(|result| result.action_id == action.id) {
+                return Ok::<BridgeActionResult, String>(result);
+            }
+            tokio::time::sleep(MEASURE_RESULT_POLL).await;
+        }
+    })
+    .await
+    .map_err(|_| "trusted Measure timed out waiting for the managed preview".to_string())??;
+
+    if !result.ok {
+        return Err("trusted Measure could not resolve the selected element".into());
+    }
+
+    let post_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+    if pre_route != post_route {
+        return Err("trusted Measure route changed while measurement was in flight".into());
+    }
+
+    validate_measure_payload(
+        &reference,
+        &pre_route,
+        result.payload,
+        result.completed_at.timestamp_millis().max(0) as u64,
+    )
+}
+
+fn validate_measure_reference(reference: &str) -> Result<(), String> {
+    if reference.len() > MAX_MEASURE_REFERENCE_BYTES {
+        return Err("trusted Measure element reference exceeds the safety bound".into());
+    }
+    let Some(hash) = reference.strip_prefix("@e") else {
+        return Err("trusted Measure requires a LocalView element reference".into());
+    };
+    if hash.is_empty() || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("trusted Measure element reference is malformed".into());
+    }
+    Ok(())
+}
+
+fn validate_measure_rect(rect: &MeasureRect, field: &str) -> Result<(), String> {
+    let right = rect.x + rect.width;
+    let bottom = rect.y + rect.height;
+    if !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || !right.is_finite()
+        || !bottom.is_finite()
+        || rect.x.abs() > MAX_MEASURE_ABS_COORDINATE
+        || rect.y.abs() > MAX_MEASURE_ABS_COORDINATE
+        || rect.width < 0.0
+        || rect.height < 0.0
+        || rect.width > MAX_MEASURE_CSS_DIMENSION
+        || rect.height > MAX_MEASURE_CSS_DIMENSION
+    {
+        return Err(format!("trusted Measure {field} geometry is outside the safety range"));
+    }
+    Ok(())
+}
+
+fn validate_measure_payload(
+    reference: &str,
+    expected_route: &str,
+    payload: serde_json::Value,
+    measured_at_unix_ms: u64,
+) -> Result<ElementMeasureReceipt, String> {
+    let payload: MeasurePayload = serde_json::from_value(payload)
+        .map_err(|_| "trusted Measure returned an invalid geometry payload".to_string())?;
+
+    if payload.reference != reference {
+        return Err("trusted Measure result reference mismatch".into());
+    }
+    validate_measure_rect(&payload.rect, "viewport")?;
+    validate_measure_rect(&payload.document_rect, "document")?;
+
+    if (payload.rect.width - payload.document_rect.width).abs() > MEASURE_DIMENSION_TOLERANCE
+        || (payload.rect.height - payload.document_rect.height).abs()
+            > MEASURE_DIMENSION_TOLERANCE
+    {
+        return Err("trusted Measure viewport/document dimensions disagree".into());
+    }
+
+    if !payload.viewport.width.is_finite()
+        || !payload.viewport.height.is_finite()
+        || payload.viewport.width <= 0.0
+        || payload.viewport.height <= 0.0
+        || payload.viewport.width > MAX_MEASURE_CSS_DIMENSION
+        || payload.viewport.height > MAX_MEASURE_CSS_DIMENSION
+    {
+        return Err("trusted Measure viewport is outside the safety range".into());
+    }
+
+    let route_url = url::Url::parse(&payload.route)
+        .map_err(|_| "trusted Measure returned an invalid route".to_string())?;
+    if !workspace_surface::workspace_navigation_allowed(&route_url) {
+        return Err("trusted Measure returned a non-loopback route".into());
+    }
+    let route = visual_capture::canonical_visual_diff_route(&payload.route)?;
+    if route != expected_route {
+        return Err("trusted Measure result route does not match the managed surface".into());
+    }
+
+    Ok(ElementMeasureReceipt {
+        reference: payload.reference,
+        rect: payload.rect,
+        document_rect: payload.document_rect,
+        viewport_css_width: payload.viewport.width,
+        viewport_css_height: payload.viewport.height,
+        route,
+        measured_at_unix_ms,
+    })
+}
+
+#[cfg(test)]
+mod measure_validation_tests {
+    use super::*;
+
+    fn payload(
+        reference: &str,
+        route: &str,
+        rect: MeasureRect,
+        document_rect: MeasureRect,
+        viewport_width: f64,
+        viewport_height: f64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "reference": reference,
+            "rect": rect,
+            "document_rect": document_rect,
+            "viewport": {
+                "width": viewport_width,
+                "height": viewport_height,
+            },
+            "route": route,
+        })
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> MeasureRect {
+        MeasureRect { x, y, width, height }
+    }
+
+    #[test]
+    fn measure_validation_accepts_stable_reference_and_fractional_geometry() {
+        assert!(validate_measure_reference("@e1a2b3").is_ok());
+        let receipt = validate_measure_payload(
+            "@e1a2b3",
+            "http://127.0.0.1:5173/dashboard",
+            payload(
+                "@e1a2b3",
+                "http://127.0.0.1:5173/dashboard?ignored=1",
+                rect(-0.1, 12.3, 128.4, 40.0),
+                rect(-0.1, 212.3, 128.4, 40.0),
+                1440.0,
+                900.0,
+            ),
+            1234,
+        )
+        .expect("valid trusted measurement");
+        assert_eq!(receipt.reference, "@e1a2b3");
+        assert_eq!(receipt.rect.width, 128.4);
+        assert_eq!(receipt.measured_at_unix_ms, 1234);
+    }
+
+    #[test]
+    fn measure_validation_rejects_malformed_and_oversize_references() {
+        for invalid in ["", "button#save", "@e", "@e-not-hex", "@g123"] {
+            assert!(validate_measure_reference(invalid).is_err(), "{invalid}");
+        }
+        let oversize = format!("@e{}", "a".repeat(MAX_MEASURE_REFERENCE_BYTES));
+        assert!(oversize.len() > MAX_MEASURE_REFERENCE_BYTES);
+        assert!(validate_measure_reference(&oversize).is_err());
+    }
+
+    #[test]
+    fn measure_validation_rejects_non_finite_negative_and_absurd_geometry() {
+        for invalid in [
+            rect(f64::NAN, 0.0, 1.0, 1.0),
+            rect(0.0, f64::INFINITY, 1.0, 1.0),
+            rect(0.0, 0.0, -0.1, 1.0),
+            rect(0.0, 0.0, 1.0, -0.1),
+            rect(MAX_MEASURE_ABS_COORDINATE + 1.0, 0.0, 1.0, 1.0),
+            rect(0.0, 0.0, MAX_MEASURE_CSS_DIMENSION + 1.0, 1.0),
+        ] {
+            assert!(validate_measure_rect(&invalid, "test").is_err());
+        }
+    }
+
+    #[test]
+    fn measure_validation_rejects_viewport_and_document_dimension_mismatch() {
+        let mismatch = payload(
+            "@e1",
+            "http://127.0.0.1:5173/",
+            rect(0.0, 0.0, 100.0, 40.0),
+            rect(0.0, 200.0, 101.0, 40.0),
+            1440.0,
+            900.0,
+        );
+        assert!(validate_measure_payload(
+            "@e1",
+            "http://127.0.0.1:5173/",
+            mismatch,
+            1,
+        )
+        .is_err());
+
+        for (width, height) in [
+            (0.0, 900.0),
+            (1440.0, -1.0),
+            (MAX_MEASURE_CSS_DIMENSION + 1.0, 900.0),
+        ] {
+            let viewport = payload(
+                "@e1",
+                "http://127.0.0.1:5173/",
+                rect(0.0, 0.0, 100.0, 40.0),
+                rect(0.0, 200.0, 100.0, 40.0),
+                width,
+                height,
+            );
+            assert!(validate_measure_payload(
+                "@e1",
+                "http://127.0.0.1:5173/",
+                viewport,
+                1,
+            )
+            .is_err());
+        }
+
+        let malformed_viewport = serde_json::json!({
+            "reference": "@e1",
+            "rect": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 40.0},
+            "document_rect": {"x": 0.0, "y": 200.0, "width": 100.0, "height": 40.0},
+            "viewport": {"width": "NaN", "height": 900.0},
+            "route": "http://127.0.0.1:5173/"
+        });
+        assert!(validate_measure_payload(
+            "@e1",
+            "http://127.0.0.1:5173/",
+            malformed_viewport,
+            1,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn measure_validation_rejects_reference_route_and_origin_mismatch() {
+        let base = || {
+            payload(
+                "@e1",
+                "http://127.0.0.1:5173/dashboard",
+                rect(0.0, 0.0, 100.0, 40.0),
+                rect(0.0, 200.0, 100.0, 40.0),
+                1440.0,
+                900.0,
+            )
+        };
+        assert!(validate_measure_payload(
+            "@e2",
+            "http://127.0.0.1:5173/dashboard",
+            base(),
+            1,
+        )
+        .is_err());
+        assert!(validate_measure_payload(
+            "@e1",
+            "http://127.0.0.1:5173/other",
+            base(),
+            1,
+        )
+        .is_err());
+
+        let external = payload(
+            "@e1",
+            "https://example.com/dashboard",
+            rect(0.0, 0.0, 100.0, 40.0),
+            rect(0.0, 200.0, 100.0, 40.0),
+            1440.0,
+            900.0,
+        );
+        assert!(validate_measure_payload(
+            "@e1",
+            "http://127.0.0.1:5173/dashboard",
+            external,
+            1,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn measure_request_lifecycle_is_strictly_bounded() {
+        assert!(MEASURE_RESULT_TIMEOUT <= std::time::Duration::from_millis(2_500));
+        assert!(MEASURE_RESULT_POLL >= std::time::Duration::from_millis(40));
+        assert!(MEASURE_RESULT_POLL <= std::time::Duration::from_millis(75));
+    }
 }
 
 #[tauri::command]
@@ -750,6 +1138,21 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
       }
       case 'restore_visuals':
         return window.__LOCALVIEW__?.restoreVisuals?.(String(action.token || '')) ?? null;
+      case 'measure': {
+        if (!queued.reference) throw new Error('measure requires an element reference');
+        const api = window.__LOCALVIEW__;
+        const inspected = api?.inspect?.(queued.reference) ?? null;
+        if (!inspected) throw new Error('measure element reference unavailable');
+        return {
+          reference: inspected.reference,
+          rect: inspected.node?.rect ?? null,
+          document_rect: inspected.node?.documentRect ?? null,
+          viewport: inspected.viewport
+            ? { width: inspected.viewport.width, height: inspected.viewport.height }
+            : null,
+          route: inspected.route ?? null,
+        };
+      }
       case 'inspect': {
         if (!queued.reference) throw new Error('inspect requires an element reference');
         const api = window.__LOCALVIEW__;
@@ -939,6 +1342,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             dashboard_state,
             live_session_state,
+            measure_current_selection,
             pause_runtime,
             resume_runtime,
             open_preview,

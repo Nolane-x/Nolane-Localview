@@ -47,6 +47,19 @@ export type HumanCaptureState =
     }
   | { status: 'failure'; reason: 'unavailable' | 'failed' };
 
+export type HumanMeasureState =
+  | { status: 'idle' }
+  | { status: 'measuring'; reference: string }
+  | {
+      status: 'success';
+      reference: string;
+      width: number;
+      height: number;
+      x: number;
+      y: number;
+    }
+  | { status: 'failure'; reason: 'failed' | 'unavailable' };
+
 export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { messageKey: MessageKey; shortcut: string }> = {
   inspect: { messageKey: 'tool.inspect', shortcut: 'I' },
   responsive: { messageKey: 'tool.responsive', shortcut: 'R' },
@@ -70,6 +83,8 @@ interface FloatingPanelProps {
   onOpenNative: () => void;
   captureState: HumanCaptureState;
   onCapture: () => void;
+  measureState: HumanMeasureState;
+  onMeasure: (reference: string) => void;
   onCommand: (command: CommandId) => void;
   onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
   onResetWorkspace: () => void;
@@ -88,6 +103,8 @@ export function FloatingPanel({
   onOpenNative,
   captureState,
   onCapture,
+  measureState,
+  onMeasure,
   onCommand,
   onPreferencesChange,
   onResetWorkspace,
@@ -106,6 +123,8 @@ export function FloatingPanel({
             locale={locale}
             captureState={captureState}
             onCapture={onCapture}
+            measureState={measureState}
+            onMeasure={onMeasure}
           />
         )}
         {tool === 'advanced' && <AdvancedPanel current={current} live={live} locale={locale} onOpenNative={onOpenNative} />}
@@ -148,6 +167,8 @@ function Inspector({
   locale,
   captureState,
   onCapture,
+  measureState,
+  onMeasure,
 }: {
   current?: Session;
   live: LiveSessionState;
@@ -155,12 +176,19 @@ function Inspector({
   locale: SupportedLocale;
   captureState: HumanCaptureState;
   onCapture: () => void;
+  measureState: HumanMeasureState;
+  onMeasure: (reference: string) => void;
 }) {
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
   const source = focused?.payload && typeof focused.payload.source === 'string'
     ? String(focused.payload.source)
     : undefined;
+  const measureReference = typeof focused?.reference === 'string'
+    && /^@e[0-9a-f]+$/i.test(focused.reference)
+    ? focused.reference
+    : undefined;
   const captureBusy = captureState.status === 'capturing';
+  const measureBusy = measureState.status === 'measuring';
 
   return (
     <div className="inspector-stack human-inspector">
@@ -183,11 +211,22 @@ function Inspector({
           label={translate(locale, 'action.openSource')}
           reason={source ? 'Source opening is not connected to this panel yet.' : translate(locale, 'inspector.sourceUnavailable')}
         />
-        <UnavailableInspectorAction
-          icon={<RulerIcon />}
-          label={translate(locale, 'action.measure')}
-          reason={focused ? 'Measurement is not connected to this panel yet.' : translate(locale, 'inspector.noSelection')}
-        />
+        <button
+          className="measure-action"
+          onClick={() => measureReference && onMeasure(measureReference)}
+          disabled={!current || !measureReference || measureBusy}
+          aria-busy={measureBusy}
+          title={
+            !current
+              ? translate(locale, 'measure.unavailable')
+              : !measureReference
+                ? translate(locale, 'measure.selectFirst')
+                : translate(locale, 'action.measure')
+          }
+        >
+          <RulerIcon />
+          <span>{measureBusy ? translate(locale, 'measure.inProgress') : translate(locale, 'action.measure')}</span>
+        </button>
         <button
           className="capture-action"
           onClick={onCapture}
@@ -209,6 +248,18 @@ function Inspector({
           reason={focused ? translate(locale, 'ai.unavailable') : translate(locale, 'inspector.noSelection')}
         />
       </div>
+
+      {measureState.status === 'success' && (
+        <div className="measure-status success" role="status" aria-live="polite">
+          <strong>{translate(locale, 'measure.success')} {measureState.width} × {measureState.height} CSS px</strong>
+          <span>{translate(locale, 'measure.position')} x {measureState.x} · y {measureState.y}</span>
+        </div>
+      )}
+      {measureState.status === 'failure' && (
+        <div className="measure-status failure" role="status" aria-live="polite">
+          <strong>{translate(locale, 'measure.failed')}</strong>
+        </div>
+      )}
 
       {captureState.status === 'success' && (
         <div className="capture-status success" role="status" aria-live="polite">
