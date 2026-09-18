@@ -66,7 +66,7 @@ fn desktop_resolves_source_from_fresh_session_authority() {
         "open_source_for_selection",
         "validate_source_reference",
         "resolve_trusted_source_target",
-        "acquire_fresh_semantic_snapshot",
+        "semantic-snapshot/fresh",
         "canonicalize",
         "canonical_project_root",
         "canonical_file",
