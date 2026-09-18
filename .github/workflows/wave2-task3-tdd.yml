@@ -25,7 +25,7 @@ jobs:
       - name: Verify RED
         run: |
           set +e
-          cargo test -p localview-desktop --test full_page_stitch_instrumentation_contract -- --nocapture 2>&1 | tee /tmp/task3-red.log
+          cargo test -p localview-desktop --test full_page_page_executor_contract -- --nocapture 2>&1 | tee /tmp/task3-red.log
           status=${PIPESTATUS[0]}
           set -e
           test "$status" -ne 0
@@ -36,7 +36,7 @@ jobs:
       - name: Verify GREEN
         run: |
           cargo fmt --all -- --check
-          cargo test -p localview-desktop --test full_page_stitch_instrumentation_contract -- --nocapture
+          cargo test -p localview-desktop --test full_page_page_executor_contract -- --nocapture
           cargo test -p localview-instrumentation --all-targets
       - name: Commit implementation
         run: |
