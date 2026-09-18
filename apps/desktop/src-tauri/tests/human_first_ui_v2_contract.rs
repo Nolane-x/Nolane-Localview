@@ -409,8 +409,8 @@ fn render_audit_exercises_settings_interactions_and_live_locale_switching() {
     assert!(capture.contains("getByLabel('Show target bar').setChecked(false)"));
     assert!(capture.contains("getByLabel('Show tool rail').setChecked(false)"));
     assert!(capture.contains("getByRole('button', { name: 'Reset workspace' }).click()"));
-    assert!(capture.contains("selectOption('en')"));
-    assert!(capture.contains("selectOption('vi')"));
+    assert!(capture.contains("locator('.panel-settings select').selectOption('en')"));
+    assert!(capture.contains("locator('.panel-settings select').selectOption('vi')"));
     assert!(capture.contains("settingsRecoveredPreferences?.showTargetBar === true"));
     assert!(capture.contains("settingsRecoveredPreferences?.showToolRail === true"));
     assert!(capture.contains("liveLocalePreferences?.locale === 'en'"));
