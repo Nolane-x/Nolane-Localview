@@ -217,6 +217,40 @@ fn render_audit_is_executable_not_screenshot_only() {
 }
 
 
+
+#[test]
+fn primary_target_bar_and_runtime_error_copy_are_localized_and_humanized() {
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+    let i18n = include_str!("../../src/i18n.ts");
+    let runtime = between(shell, "function RuntimeToast(", "function IconButton(");
+
+    for key in [
+        "action.showSessions",
+        "action.immersive",
+        "action.retry",
+        "aria.currentSession",
+        "runtime.unavailable",
+        "runtime.unavailableHint",
+    ] {
+        assert!(
+            i18n.contains(&format!("'{key}'")),
+            "missing primary chrome localization key {key}"
+        );
+    }
+
+    assert!(shell.contains("translate(locale, 'action.showSessions')"));
+    assert!(shell.contains("translate(locale, 'aria.currentSession')"));
+    assert!(shell.contains("translate(locale, 'action.immersive')"));
+    assert!(runtime.contains("translate(locale, 'runtime.unavailable')"));
+    assert!(runtime.contains("translate(locale, 'runtime.unavailableHint')"));
+    assert!(runtime.contains("translate(locale, 'action.retry')"));
+    assert!(
+        !runtime.contains("{error}"),
+        "primary runtime toast must not expose raw internal exception text"
+    );
+}
+
+
 #[test]
 fn visual_system_uses_muted_moss_instead_of_ai_blue() {
     let styles = include_str!("../../src/styles.css");
