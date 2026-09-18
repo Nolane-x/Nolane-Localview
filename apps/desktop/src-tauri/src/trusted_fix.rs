@@ -824,6 +824,7 @@ pub fn apply_fix_transaction(
         .map_err(|_| "trusted Fix temporary write failed".to_string())?;
     fs::set_permissions(&temp, permissions)
         .map_err(|_| "trusted Fix could not preserve file permissions".to_string())?;
+    drop(temp_file);
 
     let final_preimage = fs::read(target)
         .map_err(|_| "trusted Fix source is unavailable".to_string())?;
@@ -1033,6 +1034,23 @@ mod trusted_fix_tests {
         assert!(diff.contains("-two"));
         assert!(diff.contains("+TWO"));
         assert!(!diff.contains("/home/"));
+    }
+
+    #[test]
+    fn trusted_fix_transaction_releases_temp_handle_before_replace() {
+        let source = include_str!("trusted_fix.rs");
+        let set_permissions = source
+            .find("fs::set_permissions(&temp, permissions)")
+            .expect("permission preservation must exist");
+        let drop_handle = source[set_permissions..]
+            .find("drop(temp_file)")
+            .map(|offset| set_permissions + offset)
+            .expect("temporary file handle must be released");
+        let replace = source[drop_handle..]
+            .find("fs::rename(&temp, target)")
+            .map(|offset| drop_handle + offset)
+            .expect("temporary source replacement must exist");
+        assert!(drop_handle < replace);
     }
 
     #[test]
