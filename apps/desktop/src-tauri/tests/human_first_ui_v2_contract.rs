@@ -48,6 +48,23 @@ fn default_human_inspector_hides_machine_diagnostics() {
 }
 
 #[test]
+fn inspector_never_presents_unwired_primary_actions_as_enabled() {
+    let source = include_str!("../../src/features/FloatingTools.tsx");
+    let inspector = between(source, "function Inspector(", "function AdvancedPanel(");
+
+    assert!(inspector.contains("function UnavailableInspectorAction("));
+    for label in ["Open source", "Measure", "Capture", "Ask AI", "Fix"] {
+        assert!(
+            inspector.contains(&format!("label=\"{label}\"")),
+            "missing explicit unavailable action for {label}"
+        );
+    }
+    assert!(inspector.contains("disabled"));
+    assert!(inspector.contains("aria-disabled=\"true\""));
+    assert!(!inspector.contains("<button><CaptureIcon"));
+}
+
+#[test]
 fn top_target_bar_is_hideable_and_human_facing() {
     let shell = include_str!("../../src/app/LocalViewShell.tsx");
 
@@ -62,6 +79,7 @@ fn top_target_bar_is_hideable_and_human_facing() {
 #[test]
 fn settings_and_advanced_are_real_tool_surfaces() {
     let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
 
     assert!(tools.contains("| 'settings'"));
     assert!(tools.contains("| 'advanced'"));
@@ -70,6 +88,8 @@ fn settings_and_advanced_are_real_tool_surfaces() {
     assert!(tools.contains("Language"));
     assert!(tools.contains("Show target bar"));
     assert!(tools.contains("Show tool rail"));
+    assert!(shell.contains("<RailButton tool=\"settings\""));
+    assert!(shell.contains("<SettingsIcon/>"));
 }
 
 #[test]
