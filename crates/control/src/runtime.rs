@@ -931,6 +931,7 @@ fn measure_layout_evidence_payload(
     const MAX_REFERENCE_BYTES: usize = 64;
     const MAX_ABS_COORDINATE: f64 = 1_000_000.0;
     const MAX_CSS_DIMENSION: f64 = 100_000.0;
+    const DIMENSION_TOLERANCE: f64 = 0.2;
 
     fn finite_number(value: Option<&serde_json::Value>) -> Option<f64> {
         value?.as_f64().filter(|number| number.is_finite())
@@ -978,6 +979,19 @@ fn measure_layout_evidence_payload(
     if route.is_empty() || route.len() > MAX_ROUTE_BYTES {
         return None;
     }
+    let route_url = url::Url::parse(route).ok()?;
+    if !matches!(route_url.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = route_url.host_str()?;
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false);
+    if !loopback {
+        return None;
+    }
     let viewport = object.get("viewport")?.as_object()?;
     let viewport_width = finite_number(viewport.get("width"))?;
     let viewport_height = finite_number(viewport.get("height"))?;
@@ -989,19 +1003,30 @@ fn measure_layout_evidence_payload(
         return None;
     }
 
+    let viewport_rect = rect(object.get("rect"), MAX_ABS_COORDINATE, MAX_CSS_DIMENSION)?;
+    let document_rect = rect(
+        object.get("document_rect"),
+        MAX_ABS_COORDINATE,
+        MAX_CSS_DIMENSION,
+    )?;
+    let viewport_rect_width = viewport_rect.get("width")?.as_f64()?;
+    let viewport_rect_height = viewport_rect.get("height")?.as_f64()?;
+    let document_rect_width = document_rect.get("width")?.as_f64()?;
+    let document_rect_height = document_rect.get("height")?.as_f64()?;
+    if (viewport_rect_width - document_rect_width).abs() > DIMENSION_TOLERANCE
+        || (viewport_rect_height - document_rect_height).abs() > DIMENSION_TOLERANCE
+    {
+        return None;
+    }
+
     Some(serde_json::json!({
         "reference": reference,
-        "rect": rect(object.get("rect"), MAX_ABS_COORDINATE, MAX_CSS_DIMENSION)?,
-        "document_rect": rect(
-            object.get("document_rect"),
-            MAX_ABS_COORDINATE,
-            MAX_CSS_DIMENSION,
-        )?,
+        "rect": viewport_rect,
+        "document_rect": document_rect,
         "viewport": {
             "width": viewport_width,
             "height": viewport_height,
         },
-        "route": route,
     }))
 }
 
@@ -1104,7 +1129,7 @@ mod tests {
             "rect": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0},
             "document_rect": {"x": 10.0, "y": 220.0, "width": 100.0, "height": 40.0},
             "viewport": {"width": 1280.0, "height": 720.0, "dpr": 2.0},
-            "route": "http://127.0.0.1:5173/dashboard",
+            "route": "http://127.0.0.1:5173/dashboard?token=route-secret",
             "attributes": {"data-secret": "must-not-survive"},
             "style": {"color": "red"},
             "name": "must-not-survive"
@@ -1117,6 +1142,8 @@ mod tests {
         assert!(!text.contains("must-not-survive"));
         assert!(!text.contains("style"));
         assert!(!text.contains("dpr"));
+        assert!(!text.contains("route-secret"));
+        assert!(!text.contains("dashboard"));
     }
 
     #[test]
@@ -1128,6 +1155,27 @@ mod tests {
             "viewport": {"width": 1280.0, "height": 720.0},
             "route": "http://127.0.0.1:5173/"
         }), "@e1").is_none());
+    }
+
+    #[test]
+    fn measure_evidence_rejects_non_loopback_route_and_dimension_mismatch() {
+        let non_loopback = serde_json::json!({
+            "reference": "@e1",
+            "rect": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0},
+            "document_rect": {"x": 10.0, "y": 220.0, "width": 100.0, "height": 40.0},
+            "viewport": {"width": 1280.0, "height": 720.0},
+            "route": "https://example.com/dashboard"
+        });
+        assert!(measure_layout_evidence_payload(&non_loopback, "@e1").is_none());
+
+        let mismatched_dimensions = serde_json::json!({
+            "reference": "@e1",
+            "rect": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0},
+            "document_rect": {"x": 10.0, "y": 220.0, "width": 101.0, "height": 40.0},
+            "viewport": {"width": 1280.0, "height": 720.0},
+            "route": "http://127.0.0.1:5173/dashboard"
+        });
+        assert!(measure_layout_evidence_payload(&mismatched_dimensions, "@e1").is_none());
     }
 
     #[test]
