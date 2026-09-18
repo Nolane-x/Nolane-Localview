@@ -7,6 +7,7 @@ on:
       - feat/human-first-localview-ui-v2
     paths:
       - .github/workflows/human-first-ui-v2-tdd.yml
+      - .github/workflows/human-first-ui-v2-render.yml
       - apps/desktop/src/**
       - apps/desktop/src-tauri/src/**
       - apps/desktop/src-tauri/tests/human_first_ui_v2_contract.rs
@@ -14,6 +15,7 @@ on:
       - apps/desktop/tsconfig*.json
       - apps/desktop/vite.config.ts
       - docs/superpowers/specs/2026-09-18-human-first-localview-ui-ux-v2.md
+      - tools/human-first-ui-v2/**
 
 permissions:
   contents: read
