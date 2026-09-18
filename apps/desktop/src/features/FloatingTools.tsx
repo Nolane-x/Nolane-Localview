@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
@@ -377,6 +377,7 @@ function CommandPanel({
   onTool: (tool: ToolId) => void;
   onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
 }) {
+  const [query, setQuery] = useState('');
   const commands = [
     { icon: <InspectIcon />, title: translate(locale, 'tool.inspect'), detail: current?.project.display_name ?? '', keys: 'I', action: () => onTool('inspect'), disabled: !current },
     { icon: <ResponsiveIcon />, title: translate(locale, 'tool.responsive'), detail: '', keys: 'R', action: () => onTool('responsive'), disabled: !current },
@@ -405,9 +406,14 @@ function CommandPanel({
       action: onPause,
     },
   ];
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleCommands = commands.filter((command) => {
+    if (!normalizedQuery) return true;
+    return `${command.title} ${command.detail}`.toLocaleLowerCase().includes(normalizedQuery);
+  });
   return <div className="command-content">
-    <div className="command-search"><SearchIcon /><input autoFocus placeholder="Type a command…" aria-label="Search commands" /><kbd>ESC</kbd></div>
-    <div className="command-list">{commands.map((command) => <button key={command.title} onClick={command.action} disabled={command.disabled}><span className="command-icon">{command.icon}</span><div><strong>{command.title}</strong>{command.detail && <span>{command.detail}</span>}</div>{command.keys && <kbd>{command.keys}</kbd>}</button>)}</div>
+    <div className="command-search"><SearchIcon /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type a command…" aria-label="Search commands" /><kbd>ESC</kbd></div>
+    <div className="command-list">{visibleCommands.map((command) => <button key={command.title} onClick={command.action} disabled={command.disabled}><span className="command-icon">{command.icon}</span><div><strong>{command.title}</strong>{command.detail && <span>{command.detail}</span>}</div>{command.keys && <kbd>{command.keys}</kbd>}</button>)}</div>
     <div className="command-footer"><span>LocalView v{state.health.version}</span></div>
   </div>;
 }
