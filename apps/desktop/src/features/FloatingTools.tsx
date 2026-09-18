@@ -183,6 +183,10 @@ function Inspector({
   const source = focused?.payload && typeof focused.payload.source === 'string'
     ? String(focused.payload.source)
     : undefined;
+  const measureReference = typeof focused?.reference === 'string'
+    && /^@e[0-9a-f]+$/i.test(focused.reference)
+    ? focused.reference
+    : undefined;
   const captureBusy = captureState.status === 'capturing';
   const measureBusy = measureState.status === 'measuring';
 
@@ -209,13 +213,13 @@ function Inspector({
         />
         <button
           className="measure-action"
-          onClick={() => focused?.reference && onMeasure(focused.reference)}
-          disabled={!current || !focused?.reference || measureBusy}
+          onClick={() => measureReference && onMeasure(measureReference)}
+          disabled={!current || !measureReference || measureBusy}
           aria-busy={measureBusy}
           title={
             !current
               ? translate(locale, 'measure.unavailable')
-              : !focused?.reference
+              : !measureReference
                 ? translate(locale, 'measure.selectFirst')
                 : translate(locale, 'action.measure')
           }
