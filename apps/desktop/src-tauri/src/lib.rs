@@ -346,6 +346,174 @@ fn validate_measure_payload(
     })
 }
 
+#[cfg(test)]
+mod measure_validation_tests {
+    use super::*;
+
+    fn payload(
+        reference: &str,
+        route: &str,
+        rect: MeasureRect,
+        document_rect: MeasureRect,
+        viewport_width: f64,
+        viewport_height: f64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "reference": reference,
+            "rect": rect,
+            "document_rect": document_rect,
+            "viewport": {
+                "width": viewport_width,
+                "height": viewport_height,
+            },
+            "route": route,
+        })
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> MeasureRect {
+        MeasureRect { x, y, width, height }
+    }
+
+    #[test]
+    fn measure_validation_accepts_stable_reference_and_fractional_geometry() {
+        assert!(validate_measure_reference("@e1a2b3").is_ok());
+        let receipt = validate_measure_payload(
+            "@e1a2b3",
+            "http://127.0.0.1:5173/dashboard",
+            payload(
+                "@e1a2b3",
+                "http://127.0.0.1:5173/dashboard?ignored=1",
+                rect(-0.1, 12.3, 128.4, 40.0),
+                rect(-0.1, 212.3, 128.4, 40.0),
+                1440.0,
+                900.0,
+            ),
+            1234,
+        )
+        .expect("valid trusted measurement");
+        assert_eq!(receipt.reference, "@e1a2b3");
+        assert_eq!(receipt.rect.width, 128.4);
+        assert_eq!(receipt.measured_at_unix_ms, 1234);
+    }
+
+    #[test]
+    fn measure_validation_rejects_malformed_and_oversize_references() {
+        for invalid in ["", "button#save", "@e", "@e-not-hex", "@g123"] {
+            assert!(validate_measure_reference(invalid).is_err(), "{invalid}");
+        }
+        let oversize = format!("@e{}", "a".repeat(MAX_MEASURE_REFERENCE_BYTES));
+        assert!(oversize.len() > MAX_MEASURE_REFERENCE_BYTES);
+        assert!(validate_measure_reference(&oversize).is_err());
+    }
+
+    #[test]
+    fn measure_validation_rejects_non_finite_negative_and_absurd_geometry() {
+        for invalid in [
+            rect(f64::NAN, 0.0, 1.0, 1.0),
+            rect(0.0, f64::INFINITY, 1.0, 1.0),
+            rect(0.0, 0.0, -0.1, 1.0),
+            rect(0.0, 0.0, 1.0, -0.1),
+            rect(MAX_MEASURE_ABS_COORDINATE + 1.0, 0.0, 1.0, 1.0),
+            rect(0.0, 0.0, MAX_MEASURE_CSS_DIMENSION + 1.0, 1.0),
+        ] {
+            assert!(validate_measure_rect(&invalid, "test").is_err());
+        }
+    }
+
+    #[test]
+    fn measure_validation_rejects_viewport_and_document_dimension_mismatch() {
+        let mismatch = payload(
+            "@e1",
+            "http://127.0.0.1:5173/",
+            rect(0.0, 0.0, 100.0, 40.0),
+            rect(0.0, 200.0, 101.0, 40.0),
+            1440.0,
+            900.0,
+        );
+        assert!(validate_measure_payload(
+            "@e1",
+            "http://127.0.0.1:5173/",
+            mismatch,
+            1,
+        )
+        .is_err());
+
+        for (width, height) in [
+            (0.0, 900.0),
+            (1440.0, -1.0),
+            (f64::INFINITY, 900.0),
+            (MAX_MEASURE_CSS_DIMENSION + 1.0, 900.0),
+        ] {
+            let viewport = payload(
+                "@e1",
+                "http://127.0.0.1:5173/",
+                rect(0.0, 0.0, 100.0, 40.0),
+                rect(0.0, 200.0, 100.0, 40.0),
+                width,
+                height,
+            );
+            assert!(validate_measure_payload(
+                "@e1",
+                "http://127.0.0.1:5173/",
+                viewport,
+                1,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn measure_validation_rejects_reference_route_and_origin_mismatch() {
+        let base = || {
+            payload(
+                "@e1",
+                "http://127.0.0.1:5173/dashboard",
+                rect(0.0, 0.0, 100.0, 40.0),
+                rect(0.0, 200.0, 100.0, 40.0),
+                1440.0,
+                900.0,
+            )
+        };
+        assert!(validate_measure_payload(
+            "@e2",
+            "http://127.0.0.1:5173/dashboard",
+            base(),
+            1,
+        )
+        .is_err());
+        assert!(validate_measure_payload(
+            "@e1",
+            "http://127.0.0.1:5173/other",
+            base(),
+            1,
+        )
+        .is_err());
+
+        let external = payload(
+            "@e1",
+            "https://example.com/dashboard",
+            rect(0.0, 0.0, 100.0, 40.0),
+            rect(0.0, 200.0, 100.0, 40.0),
+            1440.0,
+            900.0,
+        );
+        assert!(validate_measure_payload(
+            "@e1",
+            "http://127.0.0.1:5173/dashboard",
+            external,
+            1,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn measure_request_lifecycle_is_strictly_bounded() {
+        assert!(MEASURE_RESULT_TIMEOUT <= std::time::Duration::from_millis(2_500));
+        assert!(MEASURE_RESULT_POLL >= std::time::Duration::from_millis(40));
+        assert!(MEASURE_RESULT_POLL <= std::time::Duration::from_millis(75));
+    }
+}
+
 #[tauri::command]
 async fn pause_runtime() -> Result<(), String> {
     post_control("/v1/runtime/pause").await
