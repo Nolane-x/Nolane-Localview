@@ -763,7 +763,12 @@ mod trusted_source_validation_tests {
 
     #[test]
     fn trusted_source_relative_path_validator_rejects_escape_and_uri_inputs() {
-        for valid in ["src/App.tsx", "./src/components/Button.tsx", "Button.tsx"] {
+        for valid in [
+            "src/App.tsx",
+            "./src/components/Button.tsx",
+            "src//components///Button.tsx",
+            "Button.tsx",
+        ] {
             assert!(validate_relative_source_path(valid).is_ok(), "{valid}");
         }
         for invalid in [
@@ -780,6 +785,9 @@ mod trusted_source_validation_tests {
         ] {
             assert!(validate_relative_source_path(invalid).is_err(), "{invalid}");
         }
+        let oversized = format!("src/{}", "a".repeat(MAX_SOURCE_FILE_BYTES));
+        assert!(oversized.len() > MAX_SOURCE_FILE_BYTES);
+        assert!(validate_relative_source_path(&oversized).is_err());
     }
 
     #[test]
@@ -904,6 +912,22 @@ mod trusted_source_validation_tests {
         .expect_err("stale source line must fail closed");
         assert_eq!(stale_line_error, "trusted source line is unavailable");
 
+        let bad_column = SourceLocation {
+            file: "short.tsx".into(),
+            line: 1,
+            column: Some(MAX_SOURCE_COLUMN + 1),
+            component: None,
+        };
+        assert!(resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &bad_column,
+            1,
+            "http://127.0.0.1:5173/",
+        )
+        .is_err());
+
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -961,6 +985,45 @@ mod trusted_source_validation_tests {
     }
 
     #[test]
+    fn trusted_source_launcher_treats_shell_metacharacters_as_plain_argv_data() {
+        let root = temp_fixture("launcher-metacharacters");
+        let filename = "Button; echo not-a-shell.tsx";
+        std::fs::write(root.join(filename), "export default null;").expect("write source");
+        let target = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source(filename),
+            4,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("trusted target");
+
+        let plan = trusted_source_launch_plan(&target).expect("launch plan");
+        assert!(
+            plan.args
+                .iter()
+                .any(|arg| arg.as_os_str() == target.canonical_file.as_os_str())
+        );
+        assert!(
+            !matches!(
+                plan.program.to_ascii_lowercase().as_str(),
+                "sh" | "bash" | "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh"
+            )
+        );
+        assert_eq!(
+            plan.args
+                .iter()
+                .filter(|arg| arg.as_os_str() == target.canonical_file.as_os_str())
+                .count(),
+            1,
+            "trusted file path must remain one argv item"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn trusted_source_launcher_executor_is_injectable_and_sanitizes_failure() {
         use std::cell::RefCell;
 
@@ -996,6 +1059,33 @@ mod trusted_source_validation_tests {
 
         let expected = trusted_source_launch_plan(&target).expect("expected plan").launcher;
         assert_eq!(launcher, expected);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_source_target_allows_symlink_that_resolves_inside_project() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_fixture("symlink-inside");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create source dir");
+        let target_file = src.join("Target.tsx");
+        std::fs::write(&target_file, "export const inside = true;").expect("write target");
+        symlink(&target_file, root.join("Alias.tsx")).expect("create inside symlink");
+
+        let resolved = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source("Alias.tsx"),
+            2,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("inside-project symlink should resolve");
+        assert_eq!(resolved.canonical_file, std::fs::canonicalize(&target_file).unwrap());
+        assert_eq!(resolved.project_relative_file, "src/Target.tsx");
+
         let _ = std::fs::remove_dir_all(root);
     }
 
