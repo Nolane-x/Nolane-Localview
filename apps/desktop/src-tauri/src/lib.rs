@@ -184,7 +184,6 @@ fn validate_relative_source_path(file: &str) -> Result<&Path, String> {
             Component::ParentDir | Component::RootDir => {
                 return Err("trusted source path traversal is not allowed".into());
             }
-            #[cfg(windows)]
             Component::Prefix(_) => {
                 return Err("trusted source path prefix is not allowed".into());
             }
@@ -629,6 +628,222 @@ fn validate_measure_payload(
         route,
         measured_at_unix_ms,
     })
+}
+
+#[cfg(test)]
+mod trusted_source_validation_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn semantic_node(reference: &str, source: Option<SourceLocation>, children: Vec<SemanticNode>) -> SemanticNode {
+        SemanticNode {
+            reference: reference.to_owned(),
+            role: None,
+            name: None,
+            tag: "div".into(),
+            rect: None,
+            interactive: true,
+            attributes: BTreeMap::new(),
+            source,
+            children,
+        }
+    }
+
+    fn snapshot(root: SemanticNode) -> PageSnapshot {
+        PageSnapshot {
+            version: 7,
+            route: "http://127.0.0.1:5173/".into(),
+            viewport: (1440, 900),
+            root,
+            console_errors: Vec::new(),
+            failed_requests: Vec::new(),
+            captured_at: chrono::Utc::now(),
+        }
+    }
+
+    fn source(file: &str) -> SourceLocation {
+        SourceLocation {
+            file: file.into(),
+            line: 42,
+            column: Some(3),
+            component: Some(format!("{file}:42")),
+        }
+    }
+
+    fn temp_fixture(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "localview-source-v23-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create source fixture root");
+        root
+    }
+
+    #[test]
+    fn trusted_source_reference_validator_is_fail_closed() {
+        for valid in ["@e1", "@e1a2b3", "@eABCDEF"] {
+            assert!(validate_source_reference(valid).is_ok(), "{valid}");
+        }
+        for invalid in ["", "@e", "@e-not-hex", "button#save", "@g123", "../src/App.tsx"] {
+            assert!(validate_source_reference(invalid).is_err(), "{invalid}");
+        }
+        let oversize = format!("@e{}", "a".repeat(MAX_SOURCE_REFERENCE_BYTES));
+        assert!(oversize.len() > MAX_SOURCE_REFERENCE_BYTES);
+        assert!(validate_source_reference(&oversize).is_err());
+    }
+
+    #[test]
+    fn trusted_source_relative_path_validator_rejects_escape_and_uri_inputs() {
+        for valid in ["src/App.tsx", "./src/components/Button.tsx", "Button.tsx"] {
+            assert!(validate_relative_source_path(valid).is_ok(), "{valid}");
+        }
+        for invalid in [
+            "",
+            "../secret.txt",
+            "src/../../secret.txt",
+            "/etc/passwd",
+            "C:\\Windows\\System32\\drivers\\etc\\hosts",
+            "\\\\server\\share\\file.tsx",
+            "file://src/App.tsx",
+            "https://example.com/App.tsx",
+            "src/App.tsx:42",
+            "src/\0App.tsx",
+        ] {
+            assert!(validate_relative_source_path(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn trusted_source_snapshot_resolution_requires_one_exact_reference_with_source() {
+        let selected = semantic_node("@e1", Some(source("src/Button.tsx")), Vec::new());
+        let root = semantic_node("@eroot", None, vec![selected]);
+        let snap = snapshot(root);
+        let resolved = resolve_snapshot_source(&snap, "@e1").expect("source must resolve");
+        assert_eq!(resolved.file, "src/Button.tsx");
+        assert!(resolve_snapshot_source(&snap, "@e2").is_err());
+
+        let missing_source = snapshot(semantic_node(
+            "@eroot",
+            None,
+            vec![semantic_node("@e1", None, Vec::new())],
+        ));
+        assert!(resolve_snapshot_source(&missing_source, "@e1").is_err());
+
+        let duplicate = snapshot(semantic_node(
+            "@eroot",
+            None,
+            vec![
+                semantic_node("@e1", Some(source("src/A.tsx")), Vec::new()),
+                semantic_node("@e1", Some(source("src/B.tsx")), Vec::new()),
+            ],
+        ));
+        assert!(resolve_snapshot_source(&duplicate, "@e1").is_err());
+    }
+
+    #[test]
+    fn trusted_source_target_must_be_canonical_regular_file_inside_project_root() {
+        let root = temp_fixture("inside");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create src");
+        std::fs::write(src.join("Button.tsx"), "export const Button = () => null;")
+            .expect("write source");
+
+        let receipt = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &source("src/Button.tsx"),
+            9,
+            "http://127.0.0.1:5173/",
+        )
+        .expect("trusted target");
+        assert_eq!(receipt.project_relative_file, "src/Button.tsx");
+        assert!(receipt.canonical_file.starts_with(&receipt.project_root));
+        assert_eq!(receipt.line, 42);
+        assert_eq!(receipt.column, Some(3));
+
+        let directory_source = SourceLocation {
+            file: "src".into(),
+            line: 1,
+            column: None,
+            component: None,
+        };
+        assert!(resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &directory_source,
+            9,
+            "http://127.0.0.1:5173/",
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trusted_source_target_rejects_missing_file_and_invalid_line_column() {
+        let root = temp_fixture("bounds");
+        let bad_line = SourceLocation {
+            file: "missing.tsx".into(),
+            line: 0,
+            column: None,
+            component: None,
+        };
+        assert!(resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &bad_line,
+            1,
+            "http://127.0.0.1:5173/",
+        )
+        .is_err());
+
+        let missing = SourceLocation {
+            file: "missing.tsx".into(),
+            line: 1,
+            column: Some(1),
+            component: None,
+        };
+        assert!(resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &missing,
+            1,
+            "http://127.0.0.1:5173/",
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_source_target_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = temp_fixture("symlink");
+        let root = fixture.join("project");
+        std::fs::create_dir_all(&root).expect("create project");
+        let outside = fixture.join("outside.tsx");
+        std::fs::write(&outside, "export const secret = true;").expect("write outside");
+        symlink(&outside, root.join("escape.tsx")).expect("create symlink");
+
+        let escaped = source("escape.tsx");
+        let result = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &escaped,
+            1,
+            "http://127.0.0.1:5173/",
+        );
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(fixture);
+    }
 }
 
 #[cfg(test)]
