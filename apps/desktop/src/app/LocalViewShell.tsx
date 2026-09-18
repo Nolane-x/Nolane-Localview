@@ -124,17 +124,25 @@ export default function LocalViewShell() {
   }, []);
 
   const togglePause = useCallback(async () => {
-    state.health.paused ? await api.resume() : await api.pause();
-    await refresh();
+    try {
+      state.health.paused ? await api.resume() : await api.pause();
+      await refresh();
+    } catch (cause) {
+      setError(String(cause));
+    }
   }, [refresh, state.health.paused]);
 
   const openNative = useCallback(async (session: Session | undefined = current) => {
     if (!session) return;
-    await api.openPreview(
-      session.id,
-      `${session.endpoint.scheme}://${session.endpoint.host}:${session.endpoint.port}/`,
-      session.project.display_name,
-    );
+    try {
+      await api.openPreview(
+        session.id,
+        `${session.endpoint.scheme}://${session.endpoint.host}:${session.endpoint.port}/`,
+        session.project.display_name,
+      );
+    } catch (cause) {
+      setError(String(cause));
+    }
   }, [current]);
 
   const executeCommand = useCallback((command: CommandId) => {
