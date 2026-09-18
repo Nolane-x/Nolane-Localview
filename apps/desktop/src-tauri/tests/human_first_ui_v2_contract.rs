@@ -101,6 +101,20 @@ fn settings_and_advanced_are_real_tool_surfaces() {
 }
 
 
+
+#[test]
+fn human_first_panels_do_not_enable_unwired_responsive_or_ai_actions() {
+    let source = include_str!("../../src/features/FloatingTools.tsx");
+    let responsive = between(source, "function ResponsivePanel(", "function ConsolePanel(");
+    let ai = between(source, "function AiPanel(", "function SessionsPanel(");
+
+    assert!(!responsive.contains("disabled={!current}"));
+    assert!(responsive.contains("disabled aria-disabled=\"true\""));
+    assert!(!ai.contains("disabled={!current}"));
+    assert!(ai.matches("disabled aria-disabled=\"true\"").count() >= 4);
+    assert!(ai.contains("translate(locale, 'ai.unavailable')"));
+}
+
 #[test]
 fn primary_tool_rail_uses_active_locale() {
     let shell = include_str!("../../src/app/LocalViewShell.tsx");
