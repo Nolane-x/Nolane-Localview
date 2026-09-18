@@ -81,7 +81,7 @@ export function FloatingPanel({
   const compact = tool === 'command';
   return (
     <section className={`floating-panel panel-${tool} ${bottomSheet ? 'bottom-sheet' : ''} ${compact ? 'command-panel' : ''}`} aria-label={`${tool} panel`}>
-      <PanelHeader title={panelTitle(tool, locale)} eyebrow={panelEyebrow(tool)} onClose={onClose} />
+      <PanelHeader title={panelTitle(tool, locale)} eyebrow={panelEyebrow(tool)} locale={locale} onClose={onClose} />
       <div className="panel-body">
         {tool === 'inspect' && <Inspector current={current} live={live} onOpenNative={onOpenNative} locale={locale} />}
         {tool === 'advanced' && <AdvancedPanel current={current} live={live} onOpenNative={onOpenNative} />}
@@ -93,11 +93,11 @@ export function FloatingPanel({
             onResetWorkspace={onResetWorkspace}
           />
         )}
-        {tool === 'responsive' && <ResponsivePanel current={current} />}
+        {tool === 'responsive' && <ResponsivePanel current={current} locale={locale} />}
         {tool === 'console' && <ConsolePanel live={live} onOpenNative={onOpenNative} />}
         {tool === 'network' && <NetworkPanel current={current} live={live} onOpenNative={onOpenNative} />}
         {tool === 'ai' && <AiPanel current={current} locale={locale} />}
-        {tool === 'sessions' && <SessionsPanel state={state} current={current} onSelect={onSelect} />}
+        {tool === 'sessions' && <SessionsPanel state={state} current={current} locale={locale} onSelect={onSelect} />}
         {tool === 'command' && (
           <CommandPanel
             state={state}
@@ -116,8 +116,8 @@ export function FloatingPanel({
   );
 }
 
-function PanelHeader({ title, eyebrow, onClose }: { title: string; eyebrow: string; onClose: () => void }) {
-  return <div className="panel-header"><div><span>{eyebrow}</span><strong>{title}</strong></div><button className="close-button" aria-label={`Close ${title}`} onClick={onClose}><CloseIcon /></button></div>;
+function PanelHeader({ title, eyebrow, locale, onClose }: { title: string; eyebrow: string; locale: SupportedLocale; onClose: () => void }) {
+  return <div className="panel-header"><div><span>{eyebrow}</span><strong>{title}</strong></div><button className="close-button" aria-label={`${translate(locale, 'action.close')} ${title}`} onClick={onClose}><CloseIcon /></button></div>;
 }
 
 function Inspector({
@@ -293,18 +293,17 @@ function SettingsPanel({
   );
 }
 
-function ResponsivePanel({ current }: { current?: Session }) {
+function ResponsivePanel({ current, locale }: { current?: Session; locale: SupportedLocale }) {
   const presets = [['Mobile S', '320', '568'], ['Mobile', '390', '844'], ['Tablet', '768', '1024'], ['Desktop', '1440', '900']];
   const unavailableReason = current
-    ? 'Responsive viewport control is not connected to this panel yet.'
-    : 'No active target';
+    ? translate(locale, 'responsive.unavailable')
+    : translate(locale, 'empty.noTarget');
   return <div>
-    <div className="responsive-summary"><span>VIEWPORTS</span><strong>{current ? current.project.display_name : 'No target'}</strong></div>
+    <div className="responsive-summary"><span>{translate(locale, 'responsive.viewports')}</span><strong>{current ? current.project.display_name : translate(locale, 'empty.noTarget')}</strong></div>
     <div className="viewport-list">{presets.map(([name, width, height]) => <button key={name} disabled aria-disabled="true" title={unavailableReason}><span className="viewport-icon"/><div><strong>{name}</strong><span>{width} × {height}</span></div><kbd>{width}</kbd></button>)}</div>
-    <div className="panel-note">Viewport tools open only when needed.</div>
+    <div className="panel-note">{translate(locale, 'responsive.note')}</div>
   </div>;
 }
-
 function ConsolePanel({ live, onOpenNative }: { live: LiveSessionState; onOpenNative: () => void }) {
   const events = live.observer.filter((event) => event.kind === 'console' || event.kind === 'runtime_error').slice(-80);
   return <div className="stream-panel">
@@ -341,13 +340,15 @@ function AiPanel({ current, locale }: { current?: Session; locale: SupportedLoca
   </div>;
 }
 
-function SessionsPanel({ state, current, onSelect }: { state: DashboardState; current?: Session; onSelect: (id: string) => void }) {
-  return <div className="sessions-panel"><div className="session-overview"><strong>{state.sessions.length}</strong><span>detected localhost session{state.sessions.length === 1 ? '' : 's'}</span></div><div className="session-cards">
+function SessionsPanel({ state, current, locale, onSelect }: { state: DashboardState; current?: Session; locale: SupportedLocale; onSelect: (id: string) => void }) {
+  const detectedLabel = state.sessions.length === 1
+    ? translate(locale, 'sessions.detectedOne')
+    : translate(locale, 'sessions.detectedMany');
+  return <div className="sessions-panel"><div className="session-overview"><strong>{state.sessions.length}</strong><span>{detectedLabel}</span></div><div className="session-cards">
     {state.sessions.map((session) => <button key={session.id} className={current?.id === session.id ? 'selected' : ''} onClick={() => onSelect(session.id)}><span className={`health-dot ${session.status === 'disconnected' ? 'danger' : session.status === 'hidden' ? 'warn' : ''}`} /><div><strong>{session.project.display_name}</strong><span>{session.classification.framework ?? 'Web'} · :{session.endpoint.port}</span></div><span className="session-state">{session.status}</span></button>)}
-    {!state.sessions.length && <PanelEmpty title="No app detected" text="Run your dev server to begin." />}
+    {!state.sessions.length && <PanelEmpty title={translate(locale, 'empty.noTarget')} text={translate(locale, 'empty.runDevServer')} />}
   </div></div>;
 }
-
 function CommandPanel({
   state,
   current,
@@ -404,7 +405,7 @@ function CommandPanel({
     return `${command.title} ${command.detail}`.toLocaleLowerCase().includes(normalizedQuery);
   });
   return <div className="command-content">
-    <div className="command-search"><SearchIcon /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type a command…" aria-label="Search commands" /><kbd>ESC</kbd></div>
+    <div className="command-search"><SearchIcon /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={translate(locale, 'command.searchPlaceholder')} aria-label={translate(locale, 'command.searchAria')} /><kbd>ESC</kbd></div>
     <div className="command-list">{visibleCommands.map((command) => <button key={command.title} onClick={command.action} disabled={command.disabled}><span className="command-icon">{command.icon}</span><div><strong>{command.title}</strong>{command.detail && <span>{command.detail}</span>}</div>{command.keys && <kbd>{command.keys}</kbd>}</button>)}</div>
     <div className="command-footer"><span>LocalView v{state.health.version}</span></div>
   </div>;
@@ -451,7 +452,7 @@ function panelTitle(tool: ToolId, locale: SupportedLocale) {
     ai: translate(locale, 'tool.ai'),
     advanced: translate(locale, 'advanced.title'),
     settings: translate(locale, 'settings.title'),
-    sessions: 'Sessions',
+    sessions: translate(locale, 'sessions.title'),
     command: translate(locale, 'tool.command'),
   }[tool];
 }
