@@ -191,6 +191,32 @@ fn render_audit_covers_minimum_human_first_states() {
     assert!(capture.contains("dashboardNoTarget"));
 }
 
+
+#[test]
+fn render_audit_is_executable_not_screenshot_only() {
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    for marker in [
+        "assertNoHorizontalOverflow",
+        "assertVisibleButtonsNamed",
+        "assertVisible",
+        "assertHidden",
+        "assertDocumentLocale",
+        "audit.json",
+        "malformed-preferences-recovered",
+    ] {
+        assert!(
+            capture.contains(marker),
+            "render audit is missing executable invariant marker {marker}"
+        );
+    }
+
+    assert!(capture.contains("document.documentElement.scrollWidth"));
+    assert!(capture.contains("localview.preferences.v2"));
+    assert!(capture.contains("JSON.stringify(audit"));
+}
+
+
 #[test]
 fn visual_system_uses_muted_moss_instead_of_ai_blue() {
     let styles = include_str!("../../src/styles.css");
