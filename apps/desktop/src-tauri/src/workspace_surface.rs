@@ -82,10 +82,13 @@ pub fn validate_workspace_bounds(bounds: WorkspaceBounds) -> Result<WorkspaceBou
 }
 
 pub fn workspace_navigation_allowed(url: &url::Url) -> bool {
-    matches!(
-        url.host_str(),
-        Some("localhost") | Some("127.0.0.1") | Some("::1")
-    ) && matches!(url.scheme(), "http" | "https")
+    let loopback = match url.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    };
+    loopback && matches!(url.scheme(), "http" | "https")
 }
 
 fn surface_label(prefix: &str, session_id: SessionId, max_id_chars: usize) -> String {
