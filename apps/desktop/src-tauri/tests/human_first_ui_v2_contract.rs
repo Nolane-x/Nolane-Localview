@@ -384,6 +384,39 @@ fn render_audit_exercises_preference_corruption_and_legacy_recovery() {
 }
 
 
+
+#[test]
+fn render_audit_exercises_settings_interactions_and_live_locale_switching() {
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    for marker in [
+        "settings-target-hidden",
+        "settings-rail-hidden",
+        "settings-reset-recovered",
+        "20-settings-reset-recovered.png",
+        "settings-live-locale-switch-en",
+        "settings-live-locale-switch-vi",
+        "21-settings-live-locale-switch.png",
+        "settings-reset-recovered:target-visible",
+        "settings-reset-recovered:rail-visible",
+    ] {
+        assert!(
+            capture.contains(marker),
+            "render audit is missing Settings interaction marker {marker}"
+        );
+    }
+
+    assert!(capture.contains("getByLabel('Show target bar').setChecked(false)"));
+    assert!(capture.contains("getByLabel('Show tool rail').setChecked(false)"));
+    assert!(capture.contains("getByRole('button', { name: 'Reset workspace' }).click()"));
+    assert!(capture.contains("selectOption('en')"));
+    assert!(capture.contains("selectOption('vi')"));
+    assert!(capture.contains("settingsRecoveredPreferences?.showTargetBar === true"));
+    assert!(capture.contains("settingsRecoveredPreferences?.showToolRail === true"));
+    assert!(capture.contains("liveLocalePreferences?.locale === 'en'"));
+    assert!(capture.contains("liveLocalePreferences?.locale === 'vi'"));
+}
+
 #[test]
 fn visual_system_uses_muted_moss_instead_of_ai_blue() {
     let styles = include_str!("../../src/styles.css");
