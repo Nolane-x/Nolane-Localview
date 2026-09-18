@@ -143,6 +143,21 @@ fn inspector_open_source_is_real_but_never_uses_focus_payload_as_authority() {
 }
 
 #[test]
+fn command_palette_uses_the_same_stable_source_authority() {
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+
+    assert!(shell.contains("selectedReference={selectedReference}"));
+    assert!(tools.contains("selectedReference?: string"));
+    assert!(tools.contains("disabled: !current || !selectedReference"));
+    assert!(tools.contains("translate(locale, 'source.selectFirst')"));
+    assert!(tools.contains("COMMAND_IDS.sourceOpen"));
+    assert!(shell.contains("case COMMAND_IDS.sourceOpen:"));
+    assert!(shell.contains("if (selectedReference) void openSourceForSelection(selectedReference);"));
+}
+
+
+#[test]
 fn source_open_failure_is_humanized_and_localized() {
     let tools = include_str!("../../src/features/FloatingTools.tsx");
     let i18n = include_str!("../../src/i18n.ts");
@@ -189,6 +204,8 @@ fn render_audit_proves_trusted_open_source_runtime_states() {
         "57-source-open-launcher-failure.png",
         "58-source-open-failure-isolation.png",
         "59-vi-source-open-failure.png",
+        "60-source-command-no-selection.png",
+        "61-source-command-success.png",
     ] {
         assert!(
             capture.contains(artifact),
@@ -209,6 +226,9 @@ fn render_audit_proves_trusted_open_source_runtime_states() {
         "source-open:no-selection-not-invoked",
         "source-open:no-session-not-invoked",
         "source-open:malformed-reference-not-invoked",
+        "source-open:command-no-selection-disabled",
+        "source-open:command-no-selection-not-invoked",
+        "source-open:command-reference-only",
     ] {
         assert!(
             capture.contains(marker),
