@@ -19,6 +19,8 @@ fn human_first_ui_v2_has_persisted_settings_and_localization_foundation() {
     }
     assert!(i18n.contains("fallback"));
     assert!(i18n.contains("document.documentElement.lang"));
+    assert!(i18n.contains("type Dictionary = Record<MessageKey, string>;"));
+    assert!(!i18n.contains("Partial<Record<MessageKey, string>>"));
 
     assert!(preferences.contains("showTargetBar: true"));
     assert!(preferences.contains("showToolRail: true"));
