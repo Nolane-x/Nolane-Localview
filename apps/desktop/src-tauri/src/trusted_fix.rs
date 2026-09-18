@@ -1267,6 +1267,28 @@ mod trusted_fix_tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[tokio::test]
+    async fn trusted_fix_same_file_apply_gate_serializes_and_reaps() {
+        let store = FixProposalStore::default();
+        let path = PathBuf::from("src/App.tsx");
+
+        let first = store.apply_gate_for(&path).unwrap();
+        let second = store.apply_gate_for(&path).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let first_guard = first.lock().await;
+        assert!(second.try_lock().is_err(), "second apply must wait for same-file gate");
+        drop(first_guard);
+        assert!(second.try_lock().is_ok());
+
+        let weak = Arc::downgrade(&first);
+        drop(first);
+        drop(second);
+        let replacement = store.apply_gate_for(&path).unwrap();
+        assert!(weak.upgrade().is_none(), "orphaned apply gate should be reaped");
+        assert_eq!(Arc::strong_count(&replacement), 2);
+    }
+
     #[test]
     fn proposal_store_is_one_shot_and_discardable() {
         let dir = test_dir();
