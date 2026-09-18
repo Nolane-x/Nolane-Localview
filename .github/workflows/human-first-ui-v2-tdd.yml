@@ -1,4 +1,5 @@
 name: Human-first UI V2 red-green gate
+# contract paths corrected before RED proof
 
 on:
   push:
