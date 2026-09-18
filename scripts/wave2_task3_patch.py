@@ -186,7 +186,13 @@ html[data-localview-visual-freeze] *::after {
     await new Promise(resolve => requestAnimationFrame(() => resolve()));
     await new Promise(resolve => requestAnimationFrame(() => resolve()));
     if (visualFreezeLease?.token !== token) throw new Error('visual_freeze_lease_lost');
-    return { scroll_x: Number(window.scrollX || 0), scroll_y: Number(window.scrollY || 0) };
+    const settledGeometry = documentGeometry();
+    return {
+      requested_y: y,
+      actual_x: Number(window.scrollX || 0),
+      actual_y: Number(window.scrollY || 0),
+      ...settledGeometry,
+    };
   };
 
   const captureTileProbe = async (token) => {
@@ -276,3 +282,31 @@ new_block = '''      case 'freeze_visuals': {
 '''
 desktop = desktop[:block_start] + new_block + desktop[block_end:]
 desktop_path.write_text(desktop)
+
+
+live_bridge_path = Path("crates/live-bridge/src/lib.rs")
+live_bridge = live_bridge_path.read_text()
+live_bridge = replace_once(
+    live_bridge,
+    '''    let visible_fixed_or_sticky = result
+        .payload
+        .get("visible_fixed_or_sticky")
+        .and_then(Value::as_u64);''',
+    '''    let visible_fixed_or_sticky = result
+        .payload
+        .get("visible_fixed_or_sticky")
+        .and_then(Value::as_bool);''',
+    "tile probe boolean metadata",
+)
+live_bridge = replace_once(
+    live_bridge,
+    '''        && positional_elements_scanned.is_some_and(|value| value <= MAX_POSITIONAL_SCAN_ELEMENTS)
+        && visible_fixed_or_sticky.is_some_and(|value| {
+            value <= positional_elements_scanned.unwrap_or_default()
+                && value <= MAX_POSITIONAL_SCAN_ELEMENTS
+        });''',
+    '''        && positional_elements_scanned.is_some_and(|value| value <= MAX_POSITIONAL_SCAN_ELEMENTS)
+        && visible_fixed_or_sticky.is_some();''',
+    "tile probe boolean validation",
+)
+live_bridge_path.write_text(live_bridge)
