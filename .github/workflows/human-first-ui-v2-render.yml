@@ -13,6 +13,10 @@ on:
       - docs/superpowers/specs/2026-09-18-human-first-localview-ui-ux-v2.md
   workflow_dispatch:
 
+concurrency:
+  group: human-first-ui-v2-render-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
