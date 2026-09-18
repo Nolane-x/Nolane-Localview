@@ -235,7 +235,7 @@ export default function LocalViewShell() {
   return (
     <div className={`localview ${immersive ? 'is-immersive' : ''} ${preferences.reducedMotion === 'reduce' ? 'is-reduced-motion' : ''}`}>
       <WorkspaceSurface current={current} url={currentUrl} support={state.workspace_surface} locale={preferences.locale} />
-      <div className="chrome-layer" aria-label="LocalView controls">
+      <div className="chrome-layer" aria-label={translate(preferences.locale, 'aria.localViewControls')}>
         {preferences.showTargetBar && (
           <TopPill
             state={state}
@@ -358,7 +358,7 @@ function FloatingRail({
   onTool: (tool: ToolId) => void;
   onCommand: () => void;
 }) {
-  return <nav className="floating-rail" aria-label="LocalView tools">
+  return <nav className="floating-rail" aria-label={translate(locale, 'aria.localViewTools')}>
     <RailButton tool="inspect" locale={locale} active={activeTool === 'inspect'} onClick={() => onTool('inspect')}><InspectIcon/></RailButton>
     <RailButton tool="responsive" locale={locale} active={activeTool === 'responsive'} onClick={() => onTool('responsive')}><ResponsiveIcon/></RailButton>
     <RailButton tool="console" locale={locale} active={activeTool === 'console'} onClick={() => onTool('console')}><ConsoleIcon/></RailButton>

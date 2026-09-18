@@ -79,8 +79,8 @@ export function FloatingPanel({
   const bottomSheet = tool === 'console' || tool === 'network';
   const compact = tool === 'command';
   return (
-    <section className={`floating-panel panel-${tool} ${bottomSheet ? 'bottom-sheet' : ''} ${compact ? 'command-panel' : ''}`} aria-label={`${tool} panel`}>
-      <PanelHeader title={panelTitle(tool, locale)} eyebrow={panelEyebrow(tool)} locale={locale} onClose={onClose} />
+    <section className={`floating-panel panel-${tool} ${bottomSheet ? 'bottom-sheet' : ''} ${compact ? 'command-panel' : ''}`} aria-label={panelTitle(tool, locale)}>
+      <PanelHeader title={panelTitle(tool, locale)} eyebrow={panelEyebrow(tool, locale)} locale={locale} onClose={onClose} />
       <div className="panel-body">
         {tool === 'inspect' && <Inspector current={current} live={live} onOpenNative={onOpenNative} locale={locale} />}
         {tool === 'advanced' && <AdvancedPanel current={current} live={live} onOpenNative={onOpenNative} />}
@@ -146,7 +146,7 @@ function Inspector({
         </div>
       </div>
 
-      <div className="quick-action-grid" aria-label="Inspector actions">
+      <div className="quick-action-grid" aria-label={translate(locale, 'aria.inspectorActions')}>
         <UnavailableInspectorAction
           icon={<SourceIcon />}
           label={translate(locale, 'action.openSource')}
@@ -459,16 +459,16 @@ function panelTitle(tool: ToolId, locale: SupportedLocale) {
     command: translate(locale, 'tool.command'),
   }[tool];
 }
-function panelEyebrow(tool: ToolId) {
+function panelEyebrow(tool: ToolId, locale: SupportedLocale) {
   return {
-    inspect: 'TOOLS',
-    responsive: 'TOOLS',
-    console: 'TOOLS',
-    network: 'TOOLS',
-    ai: 'TOOLS',
-    advanced: 'DIAGNOSTICS',
-    settings: 'PREFERENCES',
-    sessions: 'SESSIONS',
+    inspect: translate(locale, 'panel.tools'),
+    responsive: translate(locale, 'panel.tools'),
+    console: translate(locale, 'panel.tools'),
+    network: translate(locale, 'panel.tools'),
+    ai: translate(locale, 'panel.tools'),
+    advanced: translate(locale, 'panel.diagnostics'),
+    settings: translate(locale, 'panel.preferences'),
+    sessions: translate(locale, 'panel.sessions'),
     command: 'LOCALVIEW',
   }[tool];
 }

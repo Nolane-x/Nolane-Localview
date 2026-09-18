@@ -183,6 +183,7 @@ fn render_audit_covers_minimum_human_first_states() {
         "14-no-target.png",
         "22-vi-no-target.png",
         "23-vi-disconnected.png",
+        "24-vi-inspector-accessibility.png",
         "15-ai-unavailable.png",
     ] {
         assert!(
@@ -403,6 +404,41 @@ fn workspace_empty_state_uses_active_locale() {
     assert!(!surface.contains("Open command palette"));
 }
 
+
+
+#[test]
+fn primary_chrome_accessible_names_and_panel_eyebrows_use_active_locale() {
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let i18n = include_str!("../../src/i18n.ts");
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    for key in [
+        "aria.localViewControls",
+        "aria.localViewTools",
+        "aria.inspectorActions",
+        "panel.tools",
+        "panel.diagnostics",
+        "panel.preferences",
+        "panel.sessions",
+    ] {
+        assert!(i18n.contains(&format!("'{key}'")), "missing localized chrome key {key}");
+    }
+
+    assert!(shell.contains("translate(preferences.locale, 'aria.localViewControls')"));
+    assert!(shell.contains("translate(locale, 'aria.localViewTools')"));
+    assert!(tools.contains("aria-label={panelTitle(tool, locale)}"));
+    assert!(tools.contains("translate(locale, 'aria.inspectorActions')"));
+    assert!(tools.contains("panelEyebrow(tool, locale)"));
+    assert!(tools.contains("translate(locale, 'panel.preferences')"));
+    assert!(!shell.contains("aria-label=\"LocalView controls\""));
+    assert!(!shell.contains("aria-label=\"LocalView tools\""));
+    assert!(!tools.contains("aria-label=\"Inspector actions\""));
+    assert!(!tools.contains("settings: 'PREFERENCES'"));
+    assert!(capture.contains("vi-accessibility:chrome-label"));
+    assert!(capture.contains("vi-accessibility:tool-rail-label"));
+    assert!(capture.contains("vi-accessibility:inspector-actions-label"));
+}
 
 #[test]
 fn workspace_disconnect_state_uses_active_locale() {
