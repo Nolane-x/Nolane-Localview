@@ -303,9 +303,12 @@ function SettingsPanel({
 
 function ResponsivePanel({ current }: { current?: Session }) {
   const presets = [['Mobile S', '320', '568'], ['Mobile', '390', '844'], ['Tablet', '768', '1024'], ['Desktop', '1440', '900']];
+  const unavailableReason = current
+    ? 'Responsive viewport control is not connected to this panel yet.'
+    : 'No active target';
   return <div>
     <div className="responsive-summary"><span>VIEWPORTS</span><strong>{current ? current.project.display_name : 'No target'}</strong></div>
-    <div className="viewport-list">{presets.map(([name, width, height]) => <button key={name} disabled={!current}><span className="viewport-icon"/><div><strong>{name}</strong><span>{width} × {height}</span></div><kbd>{width}</kbd></button>)}</div>
+    <div className="viewport-list">{presets.map(([name, width, height]) => <button key={name} disabled aria-disabled="true" title={unavailableReason}><span className="viewport-icon"/><div><strong>{name}</strong><span>{width} × {height}</span></div><kbd>{width}</kbd></button>)}</div>
     <div className="panel-note">Viewport tools open only when needed.</div>
   </div>;
 }
@@ -332,14 +335,15 @@ function NetworkPanel({ current, live, onOpenNative }: { current?: Session; live
 }
 
 function AiPanel({ current, locale }: { current?: Session; locale: SupportedLocale }) {
+  const unavailableReason = current ? translate(locale, 'ai.unavailable') : translate(locale, 'empty.noTarget');
   return <div className="ai-panel-content human-ai-panel">
     <div className="ai-mark"><SparkIcon /></div>
     <h2>AI</h2>
     <div className="suggestion-grid">
-      <button disabled={!current}>{translate(locale, 'ai.askSelection')}</button>
-      <button disabled={!current}>{translate(locale, 'ai.explainIssue')}</button>
-      <button disabled={!current}>{translate(locale, 'ai.fixSelection')}</button>
-      <button disabled={!current}>{translate(locale, 'ai.verifyChange')}</button>
+      <button disabled aria-disabled="true" title={unavailableReason}>{translate(locale, 'ai.askSelection')}</button>
+      <button disabled aria-disabled="true" title={unavailableReason}>{translate(locale, 'ai.explainIssue')}</button>
+      <button disabled aria-disabled="true" title={unavailableReason}>{translate(locale, 'ai.fixSelection')}</button>
+      <button disabled aria-disabled="true" title={unavailableReason}>{translate(locale, 'ai.verifyChange')}</button>
     </div>
     <span className="compact-status">{translate(locale, 'ai.unavailable')}</span>
   </div>;
