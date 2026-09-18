@@ -159,6 +159,16 @@ fn primary_tool_rail_uses_active_locale() {
 }
 
 
+
+#[test]
+fn immersive_chrome_recovers_for_keyboard_focus() {
+    let styles = include_str!("../../src/styles.css");
+
+    assert!(styles.contains(".is-immersive .top-pill:focus-within"));
+    assert!(styles.contains(".is-immersive .floating-rail:focus-within"));
+    assert!(styles.contains("button:focus-visible"));
+}
+
 #[test]
 fn render_audit_covers_minimum_human_first_states() {
     let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
