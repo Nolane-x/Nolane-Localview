@@ -63,7 +63,7 @@ export default function LocalViewShell() {
   const captureGeneration = useRef(0);
   const measureInFlight = useRef(false);
   const measureGeneration = useRef(0);
-  const selectedReferenceRef = useRef<string>();
+  const selectedReferenceRef = useRef<string | undefined>(undefined);
 
   const patchPreferences = useCallback((patch: Partial<LocalViewPreferences>) => {
     setPreferences((current) => persistPreferences(current, patch));
@@ -222,7 +222,7 @@ export default function LocalViewShell() {
 
     measureInFlight.current = true;
     const generation = ++measureGeneration.current;
-    selectedReferenceRef.current = selectedReference;
+    selectedReferenceRef.current = reference;
     setMeasureState({ status: 'measuring', reference });
 
     try {
@@ -254,7 +254,7 @@ export default function LocalViewShell() {
         measureInFlight.current = false;
       }
     }
-  }, [current, selectedReference]);
+  }, [current]);
 
   const executeCommand = useCallback((command: CommandId) => {
     switch (command) {
