@@ -78,7 +78,9 @@ fn top_target_bar_is_hideable_and_human_facing() {
 
     assert!(shell.contains("preferences.showTargetBar"));
     assert!(shell.contains("onHideTargetBar"));
-    assert!(shell.contains("workspace.targetBar.toggle"));
+    assert!(shell.contains("COMMAND_IDS.workspaceToggleTargetBar"));
+    let commands = include_str!("../../src/commands.ts");
+    assert!(commands.contains("workspaceToggleTargetBar: 'workspace.targetBar.toggle'"));
     assert!(shell.contains("Ctrl+Shift+T"));
     assert!(!shell.contains("observer idle"));
     assert!(!shell.contains("Native observer attached"));
