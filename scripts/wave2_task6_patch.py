@@ -794,12 +794,12 @@ path.write_text(text)
 
 lib_path = Path("apps/desktop/src-tauri/src/lib.rs")
 lib = lib_path.read_text()
-needle = "            visual_capture::capture_viewport,\\n"
+needle = "            visual_capture::capture_viewport,\n"
 if lib.count(needle) != 1:
     raise SystemExit("Tauri visual capture handler marker mismatch")
 lib = lib.replace(
     needle,
-    "            visual_capture::capture_full_page,\\n" + needle,
+    "            visual_capture::capture_full_page,\n" + needle,
     1,
 )
 lib_path.write_text(lib)
