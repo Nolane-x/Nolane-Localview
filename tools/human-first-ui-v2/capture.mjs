@@ -177,6 +177,15 @@ const liveMeasureB = {
   ),
 };
 
+const liveMalformedSource = {
+  ...live,
+  observer: live.observer.map((event) =>
+    event.kind === 'focus'
+      ? { ...event, reference: 'button#deploy' }
+      : event
+  ),
+};
+
 const dashboardNoTarget = {
   ...dashboard,
   health: { ...dashboard.health, sessions: 0 },
@@ -216,8 +225,10 @@ function init(
   failedCommands = [],
   captureDelayMs = 0,
   measureDelayMs = 0,
+  sourceOpenDelayMs = 0,
+  sourceOpenFailure = null,
 ) {
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs }) => {
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -258,6 +269,22 @@ function init(
           if (cmd === 'dashboard_state') return dashboardState;
           if (cmd === 'live_session_state') {
             return structuredClone(window.__LOCALVIEW_AUDIT_LIVE_STATE__);
+          }
+          if (cmd === 'open_source_for_selection') {
+            if (sourceOpenDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, sourceOpenDelayMs));
+            }
+            if (sourceOpenFailure) {
+              throw new Error(sourceOpenFailure);
+            }
+            return {
+              reference: args.reference,
+              displayFile: 'src/components/DeployButton.tsx',
+              line: 42,
+              column: 3,
+              launcher: 'linux_xdg_open',
+              snapshotVersion: 11,
+            };
           }
           if (cmd === 'measure_current_selection') {
             if (measureDelayMs > 0) {
@@ -303,7 +330,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure });
 }
 
 async function pageFor(
@@ -317,13 +344,15 @@ async function pageFor(
   storageFault = false,
   failedCommands = [],
   captureDelayMs = 0,
-  measureDelayMs = 0
+  measureDelayMs = 0,
+  sourceOpenDelayMs = 0,
+  sourceOpenFailure = null
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -1143,6 +1172,330 @@ invariant(
   { viMeasureFailureText }
 );
 await shot(page, '45-vi-trusted-measure-failure.png', 'vi-trusted-measure-failure');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.success', 'source-open-success');
+const sourceSuccessText = await page.locator('.source-open-status.success').innerText();
+invariant(
+  sourceSuccessText.includes('Opened source')
+    && sourceSuccessText.includes('src/components/DeployButton.tsx:42:3'),
+  'source-open:success-receipt',
+  { sourceSuccessText }
+);
+const sourceOpenCalls = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'open_source_for_selection')
+);
+invariant(sourceOpenCalls.length === 1, 'source-open:single-request', { sourceOpenCalls });
+const sourceOpenArgs = sourceOpenCalls[0]?.args ?? {};
+invariant(
+  sourceOpenArgs.reference === '@e1a2b3c4'
+    && typeof sourceOpenArgs.sessionId === 'string',
+  'source-open:request-reference-only',
+  { sourceOpenArgs }
+);
+const forbiddenSourceFields = ['file', 'path', 'root', 'line', 'column', 'route', 'editor', 'command']
+  .filter((field) => field in sourceOpenArgs);
+invariant(
+  forbiddenSourceFields.length === 0,
+  'source-open:no-caller-path-authority',
+  { sourceOpenArgs, forbiddenSourceFields }
+);
+await shot(page, '46-source-open-success.png', 'source-open-success');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  ['open_source_for_selection']
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.failure', 'source-open-failure');
+const sourceFailureText = await page.locator('.source-open-status.failure').innerText();
+invariant(sourceFailureText.includes('Could not open source'), 'source-open:humanized-failure', { sourceFailureText });
+invariant(!sourceFailureText.includes('forced audit failure'), 'source-open:no-raw-error', { sourceFailureText });
+await shot(page, '47-source-open-failure.png', 'source-open-failure');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  'trusted source mapping is unavailable'
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.failure', 'source-open-unavailable');
+const sourceUnavailableText = await page.locator('.source-open-status.failure').innerText();
+invariant(sourceUnavailableText.includes('Source mapping unavailable'), 'source-open:unavailable-humanized', { sourceUnavailableText });
+invariant(!sourceUnavailableText.includes('trusted source mapping'), 'source-open:unavailable-no-raw-error', { sourceUnavailableText });
+await shot(page, '48-source-open-unavailable.png', 'source-open-unavailable');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  900
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(80);
+await page.evaluate((nextLive) => {
+  window.__LOCALVIEW_AUDIT_LIVE_STATE__ = structuredClone(nextLive);
+}, liveMeasureB);
+await page.waitForFunction(
+  () => document.querySelector('.inspector-hero strong')?.textContent?.includes('@e5d6e7f8'),
+  null,
+  { timeout: 1800 }
+);
+await page.waitForTimeout(1000);
+const staleSourcePanelText = await page.locator('.panel-inspect').innerText();
+invariant(
+  staleSourcePanelText.includes('@e5d6e7f8')
+    && !staleSourcePanelText.includes('Opened source'),
+  'source-open:stale-selection-isolated',
+  { staleSourcePanelText }
+);
+await shot(page, '49-source-open-stale-selection.png', 'source-open-stale-selection');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  'trusted source outside project'
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.failure', 'source-open-outside-project');
+const outsideProjectText = await page.locator('.source-open-status.failure').innerText();
+invariant(outsideProjectText.includes('Source mapping unavailable'), 'source-open:outside-project-humanized', { outsideProjectText });
+invariant(!outsideProjectText.includes('outside project'), 'source-open:outside-project-no-raw-error', { outsideProjectText });
+await shot(page, '50-source-open-outside-project.png', 'source-open-outside-project');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'vi',
+  {},
+  liveMeasure,
+  dashboard
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.success', 'vi-source-open-success');
+const viSourceSuccessText = await page.locator('.source-open-status.success').innerText();
+invariant(
+  viSourceSuccessText.includes('Đã mở mã nguồn')
+    && viSourceSuccessText.includes('src/components/DeployButton.tsx:42:3'),
+  'source-open:vi-success-localized',
+  { viSourceSuccessText }
+);
+await shot(page, '51-vi-source-open-success.png', 'vi-source-open-success');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveNoFocus, dashboard);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+const noSelectionSource = page.locator('.source-open-action');
+invariant(await noSelectionSource.isDisabled(), 'source-open:no-selection-disabled');
+invariant(
+  (await noSelectionSource.getAttribute('title')) === 'Select an element first.',
+  'source-open:no-selection-guidance'
+);
+const noSelectionSourceInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'open_source_for_selection')
+);
+invariant(noSelectionSourceInvokes.length === 0, 'source-open:no-selection-not-invoked', { noSelectionSourceInvokes });
+await shot(page, '52-source-open-no-selection.png', 'source-open-no-selection');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveMeasure, dashboardNoTarget);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+const noSessionSource = page.locator('.source-open-action');
+invariant(await noSessionSource.isDisabled(), 'source-open:no-session-disabled');
+const noSessionSourceInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'open_source_for_selection')
+);
+invariant(noSessionSourceInvokes.length === 0, 'source-open:no-session-not-invoked', { noSessionSourceInvokes });
+await shot(page, '53-source-open-no-session.png', 'source-open-no-session');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveMalformedSource, dashboard);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+const malformedSourceButton = page.locator('.source-open-action');
+invariant(await malformedSourceButton.isDisabled(), 'source-open:malformed-reference-disabled');
+const malformedSourceInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'open_source_for_selection')
+);
+invariant(malformedSourceInvokes.length === 0, 'source-open:malformed-reference-not-invoked', { malformedSourceInvokes });
+await shot(page, '54-source-open-malformed-reference.png', 'source-open-malformed-reference');
+await page.close();
+
+for (const attack of [
+  ['55-source-open-path-traversal.png', 'trusted source path traversal is not allowed', 'source-open-path-traversal'],
+  ['56-source-open-symlink-escape.png', 'trusted source symlink escape', 'source-open-symlink-escape'],
+]) {
+  const [filename, backendFailure, stateName] = attack;
+  page = await pageFor(
+    browser,
+    { width: 1440, height: 900 },
+    'en',
+    {},
+    liveMeasure,
+    dashboard,
+    null,
+    false,
+    [],
+    0,
+    0,
+    0,
+    backendFailure
+  );
+  await page.keyboard.press('i');
+  await page.waitForTimeout(150);
+  await page.locator('.source-open-action').click();
+  await page.waitForTimeout(120);
+  await assertVisible(page, '.source-open-status.failure', stateName);
+  const attackText = await page.locator('.source-open-status.failure').innerText();
+  invariant(attackText.includes('Source mapping unavailable'), `${stateName}:humanized`, { attackText });
+  invariant(!attackText.includes('trusted source'), `${stateName}:no-raw-error`, { attackText });
+  await shot(page, filename, stateName);
+  await page.close();
+}
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  'trusted source launcher unavailable'
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.failure', 'source-open-launcher-failure');
+const launcherFailureText = await page.locator('.source-open-status.failure').innerText();
+invariant(launcherFailureText.includes('No source launcher is available'), 'source-open:launcher-humanized', { launcherFailureText });
+invariant(!launcherFailureText.includes('trusted source launcher'), 'source-open:launcher-no-raw-error', { launcherFailureText });
+await shot(page, '57-source-open-launcher-failure.png', 'source-open-launcher-failure');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 390, height: 844 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  ['open_source_for_selection']
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.failure', 'source-open-failure-isolation');
+await page.locator('.measure-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.measure-status.success', 'source-open-failure-isolation-measure');
+await page.locator('.capture-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.capture-status.success', 'source-open-failure-isolation-capture');
+await assertPrimaryControlsInViewport(page, 'source-open-failure-isolation');
+await shot(page, '58-source-open-failure-isolation.png', 'source-open-failure-isolation');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'vi',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  ['open_source_for_selection']
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.failure', 'vi-source-open-failure');
+const viSourceFailureText = await page.locator('.source-open-status.failure').innerText();
+invariant(
+  viSourceFailureText.includes('Không thể mở mã nguồn'),
+  'source-open:vi-failure-localized',
+  { viSourceFailureText }
+);
+await shot(page, '59-vi-source-open-failure.png', 'vi-source-open-failure');
 await page.close();
 
 await fs.writeFile(
