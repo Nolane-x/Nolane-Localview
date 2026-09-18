@@ -947,6 +947,7 @@ pub fn run() {
             preview_action_cancellation,
             preview_ack_action_cancellation,
             preview_complete_action,
+            visual_capture::capture_full_page,
             visual_capture::capture_viewport,
             visual_capture::capture_region,
             visual_capture::capture_changed_regions,
