@@ -848,12 +848,10 @@ pub fn apply_fix_transaction(
         .map_err(|_| "trusted Fix post-write verification failed".to_string());
     match verified {
         Ok(bytes) if bytes == postimage => {
-            if fs::remove_file(&backup).is_err() {
-                rollback(target, &backup, &temp)?;
-                return Err(
-                    "trusted Fix backup cleanup failed; original source was restored".into(),
-                );
-            }
+            // The committed target has already been verified byte-for-byte. Backup cleanup is
+            // deliberately best-effort: turning a cleanup-only issue into rollback can be more
+            // destructive on Windows when an indexer or antivirus temporarily holds the backup.
+            let _ = fs::remove_file(&backup);
             Ok(())
         }
         _ => {
@@ -1034,6 +1032,23 @@ mod trusted_fix_tests {
         assert!(diff.contains("-two"));
         assert!(diff.contains("+TWO"));
         assert!(!diff.contains("/home/"));
+    }
+
+    #[test]
+    fn verified_commit_does_not_rollback_for_backup_cleanup_only() {
+        let source = include_str!("trusted_fix.rs");
+        let verified_branch = source
+            .split("Ok(bytes) if bytes == postimage =>")
+            .nth(1)
+            .expect("verified postimage branch must exist")
+            .split("_ =>")
+            .next()
+            .expect("verified branch must end before mismatch branch");
+        assert!(verified_branch.contains("let _ = fs::remove_file(&backup)"));
+        assert!(
+            !verified_branch.contains("rollback(target"),
+            "verified source must not be destroyed merely because backup cleanup is delayed"
+        );
     }
 
     #[test]
