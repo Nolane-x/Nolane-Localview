@@ -1,0 +1,20 @@
+name: Human-first UI V2 red-green gate
+
+on:
+  push:
+    branches:
+      - feat/human-first-localview-ui-v2
+    paths:
+      - .github/workflows/human-first-ui-v2-tdd.yml
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify RED contract
+        run: cargo test -p localview-desktop --test human_first_ui_v2_contract -- --nocapture
