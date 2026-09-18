@@ -927,7 +927,7 @@ mod trusted_source_validation_tests {
             "trusted source launcher must never route through a shell"
         );
         assert!(
-            plan.args.iter().any(|arg| arg == target.canonical_file.as_os_str()),
+            plan.args.iter().any(|arg| arg.as_os_str() == target.canonical_file.as_os_str()),
             "canonical trusted target must be forwarded as one argv item"
         );
 
@@ -978,7 +978,7 @@ mod trusted_source_validation_tests {
         .expect("fake launcher success");
         let observed = observed.into_inner().expect("fake launcher observed plan");
         assert!(!observed.0.is_empty());
-        assert!(observed.1.iter().any(|arg| arg == target.canonical_file.as_os_str()));
+        assert!(observed.1.iter().any(|arg| arg.as_os_str() == target.canonical_file.as_os_str()));
 
         let error = launch_trusted_source_with(&target, |_plan| Err(()))
             .expect_err("fake launcher failure must fail closed");
