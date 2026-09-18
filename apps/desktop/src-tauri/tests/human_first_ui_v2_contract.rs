@@ -96,6 +96,9 @@ fn settings_and_advanced_are_real_tool_surfaces() {
     assert!(tools.contains("Language"));
     assert!(tools.contains("Show target bar"));
     assert!(tools.contains("Show tool rail"));
+    let settings = between(tools, "function SettingsPanel(", "function ResponsivePanel(");
+    assert!(!settings.contains("settings.rememberChrome"));
+    assert!(!settings.contains("rememberChromePositions"));
     assert!(shell.contains("<RailButton tool=\"settings\""));
     assert!(shell.contains("<SettingsIcon/>"));
 }
