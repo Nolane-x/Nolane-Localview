@@ -130,3 +130,53 @@ fn capture_human_copy_is_localized() {
 
     assert!(i18n.contains("type Dictionary = Record<MessageKey, string>;"));
 }
+
+#[test]
+fn trusted_capture_runtime_audit_is_executable_and_geometry_free() {
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    for artifact in [
+        "31-trusted-capture-success.png",
+        "32-trusted-capture-failure.png",
+        "33-vi-trusted-capture-success.png",
+        "34-no-target-capture-disabled.png",
+        "35-trusted-capture-in-progress.png",
+    ] {
+        assert!(
+            capture.contains(artifact),
+            "trusted Capture runtime audit is missing {artifact}"
+        );
+    }
+
+    for marker in [
+        "__LOCALVIEW_AUDIT_INVOKES__",
+        "capture_current_viewport",
+        "no-caller-viewport",
+        "single-request",
+        "no-raw-error",
+    ] {
+        assert!(
+            capture.contains(marker),
+            "trusted Capture runtime audit is missing invariant marker {marker}"
+        );
+    }
+}
+
+#[test]
+fn trusted_capture_shell_invalidates_stale_session_results_and_guards_duplicates() {
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+
+    for marker in [
+        "useRef",
+        "captureInFlight",
+        "captureGeneration",
+        "captureGeneration.current += 1",
+        "captureInFlight.current = false",
+        "generation !== captureGeneration.current",
+    ] {
+        assert!(
+            shell.contains(marker),
+            "trusted Capture lifecycle is missing guard marker {marker}"
+        );
+    }
+}
