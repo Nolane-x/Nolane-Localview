@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { COMMAND_IDS, type CommandId } from '../commands';
 import type { DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
@@ -55,8 +56,7 @@ interface FloatingPanelProps {
   onClose: () => void;
   onSelect: (id: string) => void;
   onOpenNative: () => void;
-  onPause: () => void;
-  onTool: (tool: ToolId) => void;
+  onCommand: (command: CommandId) => void;
   onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
   onResetWorkspace: () => void;
 }
@@ -72,8 +72,7 @@ export function FloatingPanel({
   onClose,
   onSelect,
   onOpenNative,
-  onPause,
-  onTool,
+  onCommand,
   onPreferencesChange,
   onResetWorkspace,
 }: FloatingPanelProps) {
@@ -105,10 +104,7 @@ export function FloatingPanel({
             url={url}
             locale={locale}
             preferences={preferences}
-            onOpenNative={onOpenNative}
-            onPause={onPause}
-            onTool={onTool}
-            onPreferencesChange={onPreferencesChange}
+            onCommand={onCommand}
           />
         )}
       </div>
@@ -355,48 +351,56 @@ function CommandPanel({
   url,
   locale,
   preferences,
-  onOpenNative,
-  onPause,
-  onTool,
-  onPreferencesChange,
+  onCommand,
 }: {
   state: DashboardState;
   current?: Session;
   url?: string;
   locale: SupportedLocale;
   preferences: LocalViewPreferences;
-  onOpenNative: () => void;
-  onPause: () => void;
-  onTool: (tool: ToolId) => void;
-  onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
+  onCommand: (command: CommandId) => void;
 }) {
   const [query, setQuery] = useState('');
   const commands = [
-    { icon: <InspectIcon />, title: translate(locale, 'tool.inspect'), detail: current?.project.display_name ?? '', keys: 'I', action: () => onTool('inspect'), disabled: !current },
-    { icon: <ResponsiveIcon />, title: translate(locale, 'tool.responsive'), detail: '', keys: 'R', action: () => onTool('responsive'), disabled: !current },
-    { icon: <ExternalIcon />, title: translate(locale, 'action.openPreview'), detail: url ?? '', keys: '↵', action: onOpenNative, disabled: !current },
-    { icon: <SettingsIcon />, title: translate(locale, 'tool.settings'), detail: '', keys: '⌘,', action: () => onTool('settings') },
-    { icon: <MoreIcon />, title: translate(locale, 'tool.advanced'), detail: '', keys: 'M', action: () => onTool('advanced'), disabled: !current },
+    { id: COMMAND_IDS.inspectActivate, icon: <InspectIcon />, title: translate(locale, 'tool.inspect'), detail: current?.project.display_name ?? '', keys: 'I', disabled: !current },
+    { id: COMMAND_IDS.responsiveOpen, icon: <ResponsiveIcon />, title: translate(locale, 'tool.responsive'), detail: '', keys: 'R', disabled: !current },
+    { id: COMMAND_IDS.consoleOpen, icon: <ConsoleIcon />, title: translate(locale, 'tool.console'), detail: '', keys: 'C', disabled: !current },
+    { id: COMMAND_IDS.networkOpen, icon: <NetworkIcon />, title: translate(locale, 'tool.network'), detail: '', keys: 'N', disabled: !current },
+    { id: COMMAND_IDS.aiOpen, icon: <SparkIcon />, title: translate(locale, 'tool.ai'), detail: '', keys: 'A', disabled: !current },
+    { id: COMMAND_IDS.previewOpenNative, icon: <ExternalIcon />, title: translate(locale, 'action.openPreview'), detail: url ?? '', keys: '↵', disabled: !current },
+    { id: COMMAND_IDS.settingsOpen, icon: <SettingsIcon />, title: translate(locale, 'tool.settings'), detail: '', keys: '⌘,', disabled: false },
+    { id: COMMAND_IDS.advancedOpen, icon: <MoreIcon />, title: translate(locale, 'tool.advanced'), detail: '', keys: 'M', disabled: !current },
     {
+      id: COMMAND_IDS.workspaceToggleTargetBar,
       icon: <InspectIcon />,
       title: preferences.showTargetBar ? translate(locale, 'action.hideTargetBar') : translate(locale, 'action.showTargetBar'),
       detail: '',
       keys: '⇧⌃T',
-      action: () => onPreferencesChange({ showTargetBar: !preferences.showTargetBar }),
+      disabled: false,
     },
     {
+      id: COMMAND_IDS.workspaceToggleToolRail,
       icon: <CommandIcon />,
       title: preferences.showToolRail ? translate(locale, 'action.hideToolRail') : translate(locale, 'action.showToolRail'),
       detail: '',
       keys: '',
-      action: () => onPreferencesChange({ showToolRail: !preferences.showToolRail }),
+      disabled: false,
     },
     {
+      id: COMMAND_IDS.workspaceResetLayout,
+      icon: <CommandIcon />,
+      title: translate(locale, 'action.resetWorkspace'),
+      detail: '',
+      keys: '',
+      disabled: false,
+    },
+    {
+      id: COMMAND_IDS.sessionPauseDiscovery,
       icon: state.health.paused ? <PlayIcon /> : <PauseIcon />,
       title: state.health.paused ? translate(locale, 'action.resumeDiscovery') : translate(locale, 'action.pauseDiscovery'),
       detail: '',
       keys: 'P',
-      action: onPause,
+      disabled: false,
     },
   ];
   const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -406,11 +410,10 @@ function CommandPanel({
   });
   return <div className="command-content">
     <div className="command-search"><SearchIcon /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={translate(locale, 'command.searchPlaceholder')} aria-label={translate(locale, 'command.searchAria')} /><kbd>ESC</kbd></div>
-    <div className="command-list">{visibleCommands.map((command) => <button key={command.title} onClick={command.action} disabled={command.disabled}><span className="command-icon">{command.icon}</span><div><strong>{command.title}</strong>{command.detail && <span>{command.detail}</span>}</div>{command.keys && <kbd>{command.keys}</kbd>}</button>)}</div>
+    <div className="command-list">{visibleCommands.map((command) => <button key={command.id} onClick={() => onCommand(command.id)} disabled={command.disabled}><span className="command-icon">{command.icon}</span><div><strong>{command.title}</strong>{command.detail && <span>{command.detail}</span>}</div>{command.keys && <kbd>{command.keys}</kbd>}</button>)}</div>
     <div className="command-footer"><span>LocalView v{state.health.version}</span></div>
   </div>;
 }
-
 function ConsoleRow({ event }: { event: ObserverEvent }) {
   const level = String(event.payload.level ?? (event.kind === 'runtime_error' ? 'error' : 'log'));
   const message = String(event.payload.message ?? event.kind);

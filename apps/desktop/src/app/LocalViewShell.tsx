@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '../api';
-import { COMMAND_IDS } from '../commands';
+import { COMMAND_IDS, type CommandId } from '../commands';
 import { applyDocumentLocale, translate } from '../i18n';
 import {
   loadPreferences,
@@ -46,7 +46,6 @@ const fallback: DashboardState = {
 
 const emptyLive: LiveSessionState = { observer: [], action_results: [] };
 const TOGGLE_TARGET_BAR_SHORTCUT = 'Ctrl+Shift+T';
-const TARGET_BAR_COMMAND = COMMAND_IDS.workspaceToggleTargetBar; // workspace.targetBar.toggle
 
 export default function LocalViewShell() {
   const [state, setState] = useState<DashboardState>(fallback);
@@ -124,6 +123,75 @@ export default function LocalViewShell() {
     setActiveTool((active) => active === tool ? undefined : tool);
   }, []);
 
+  const togglePause = useCallback(async () => {
+    state.health.paused ? await api.resume() : await api.pause();
+    await refresh();
+  }, [refresh, state.health.paused]);
+
+  const openNative = useCallback(async (session: Session | undefined = current) => {
+    if (!session) return;
+    await api.openPreview(
+      session.id,
+      `${session.endpoint.scheme}://${session.endpoint.host}:${session.endpoint.port}/`,
+      session.project.display_name,
+    );
+  }, [current]);
+
+  const executeCommand = useCallback((command: CommandId) => {
+    switch (command) {
+      case COMMAND_IDS.inspectActivate:
+        setActiveTool('inspect');
+        return;
+      case COMMAND_IDS.responsiveOpen:
+        setActiveTool('responsive');
+        return;
+      case COMMAND_IDS.consoleOpen:
+        setActiveTool('console');
+        return;
+      case COMMAND_IDS.networkOpen:
+        setActiveTool('network');
+        return;
+      case COMMAND_IDS.aiOpen:
+        setActiveTool('ai');
+        return;
+      case COMMAND_IDS.advancedOpen:
+        setActiveTool('advanced');
+        return;
+      case COMMAND_IDS.settingsOpen:
+        setActiveTool('settings');
+        return;
+      case COMMAND_IDS.previewOpenNative:
+        void openNative();
+        return;
+      case COMMAND_IDS.workspaceToggleTargetBar:
+        patchPreferences({ showTargetBar: !preferences.showTargetBar });
+        return;
+      case COMMAND_IDS.workspaceToggleToolRail:
+        patchPreferences({ showToolRail: !preferences.showToolRail });
+        return;
+      case COMMAND_IDS.workspaceToggleChrome: {
+        const anyVisible = preferences.showTargetBar || preferences.showToolRail;
+        patchPreferences({ showTargetBar: !anyVisible, showToolRail: !anyVisible });
+        return;
+      }
+      case COMMAND_IDS.workspaceResetLayout:
+        resetWorkspacePreferences();
+        return;
+      case COMMAND_IDS.sessionPauseDiscovery:
+        void togglePause();
+        return;
+      default:
+        return;
+    }
+  }, [
+    openNative,
+    patchPreferences,
+    preferences.showTargetBar,
+    preferences.showToolRail,
+    resetWorkspacePreferences,
+    togglePause,
+  ]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -139,44 +207,30 @@ export default function LocalViewShell() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
         event.preventDefault();
-        toggleTool('settings');
+        executeCommand(COMMAND_IDS.settingsOpen);
         return;
       }
       if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 't') {
         event.preventDefault();
-        void TARGET_BAR_COMMAND;
         void TOGGLE_TARGET_BAR_SHORTCUT;
-        patchPreferences({ showTargetBar: !preferences.showTargetBar });
+        executeCommand(COMMAND_IDS.workspaceToggleTargetBar);
         return;
       }
-      const shortcuts: Record<string, ToolId> = {
-        i: 'inspect',
-        r: 'responsive',
-        c: 'console',
-        n: 'network',
-        a: 'ai',
-        m: 'advanced',
+      const shortcuts: Record<string, CommandId> = {
+        i: COMMAND_IDS.inspectActivate,
+        r: COMMAND_IDS.responsiveOpen,
+        c: COMMAND_IDS.consoleOpen,
+        n: COMMAND_IDS.networkOpen,
+        a: COMMAND_IDS.aiOpen,
+        m: COMMAND_IDS.advancedOpen,
+        p: COMMAND_IDS.sessionPauseDiscovery,
       };
-      const tool = shortcuts[event.key.toLowerCase()];
-      if (tool) toggleTool(tool);
+      const command = shortcuts[event.key.toLowerCase()];
+      if (command) executeCommand(command);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [patchPreferences, preferences.showTargetBar, toggleTool]);
-
-  async function togglePause() {
-    state.health.paused ? await api.resume() : await api.pause();
-    await refresh();
-  }
-
-  async function openNative(session = current) {
-    if (!session) return;
-    await api.openPreview(
-      session.id,
-      `${session.endpoint.scheme}://${session.endpoint.host}:${session.endpoint.port}/`,
-      session.project.display_name,
-    );
-  }
+  }, [executeCommand, toggleTool]);
 
   return (
     <div className={`localview ${immersive ? 'is-immersive' : ''}`}>
@@ -216,8 +270,7 @@ export default function LocalViewShell() {
             onClose={() => setActiveTool(undefined)}
             onSelect={setSelected}
             onOpenNative={() => void openNative()}
-            onPause={() => void togglePause()}
-            onTool={(tool) => setActiveTool(tool)}
+            onCommand={executeCommand}
             onPreferencesChange={patchPreferences}
             onResetWorkspace={resetWorkspacePreferences}
           />

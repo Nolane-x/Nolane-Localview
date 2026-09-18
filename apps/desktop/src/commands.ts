@@ -11,6 +11,7 @@ export const COMMAND_IDS = {
   responsiveOpen: 'responsive.open',
   consoleOpen: 'console.open',
   networkOpen: 'network.open',
+  aiOpen: 'ai.open',
   aiAskSelection: 'ai.askSelection',
   aiFixSelection: 'ai.fixSelection',
   advancedOpen: 'advanced.open',
