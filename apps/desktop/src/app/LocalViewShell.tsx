@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, type AiProviderCapability } from '../api';
+import { api, type AiFixCapability, type AiProviderCapability } from '../api';
 import { COMMAND_IDS, type CommandId } from '../commands';
 import { applyDocumentLocale, translate } from '../i18n';
 import {
@@ -16,6 +16,7 @@ import {
   RailButton,
   type HumanCaptureState,
   type HumanAskAiState,
+  type HumanFixState,
   type HumanMeasureState,
   type HumanSourceOpenState,
   type ToolId,
@@ -56,6 +57,68 @@ const unavailableAiProvider: AiProviderCapability = {
   label: null,
   reason: 'not_configured',
 };
+
+const unavailableFixCapability: AiFixCapability = {
+  available: false,
+  providerLabel: null,
+  reason: 'not_enabled',
+};
+
+function classifyFixFailure(
+  cause: unknown,
+): Extract<HumanFixState, { status: 'failure' }>['reason'] {
+  const detail = String(cause).toLowerCase();
+
+  if (detail.includes('instruction exceeds the safety bound')) return 'instruction_too_long';
+  if (detail.includes('instruction is empty') || detail.includes('instruction is invalid')) {
+    return 'invalid_instruction';
+  }
+  if (detail.includes('sensitive source')) return 'sensitive_source';
+  if (detail.includes('source type is unsupported')) return 'unsupported_source';
+  if (detail.includes('proposal expired')) return 'proposal_expired';
+  if (
+    detail.includes('proposal is unavailable')
+    || detail.includes('proposal is no longer pending')
+    || detail.includes('proposal is not applying')
+  ) {
+    return 'proposal_invalid';
+  }
+  if (
+    detail.includes('source changed')
+    || detail.includes('route changed')
+    || detail.includes('source mapping changed')
+  ) {
+    return 'source_changed';
+  }
+  if (
+    detail.includes('source mapping is unavailable')
+    || detail.includes('source is unavailable')
+    || detail.includes('project root is unavailable')
+    || detail.includes('source outside project')
+    || detail.includes('source symlink')
+  ) {
+    return 'source_unavailable';
+  }
+  if (
+    detail.includes('provider unavailable')
+    || detail.includes('provider is not configured')
+    || detail.includes('provider configuration is unsupported')
+    || detail.includes('provider bridge must be loopback')
+  ) {
+    return 'provider_unavailable';
+  }
+  if (
+    detail.includes('write transaction')
+    || detail.includes('replace the source file')
+    || detail.includes('post-write verification')
+    || detail.includes('rollback')
+    || detail.includes('temporary write')
+    || detail.includes('preserve file permissions')
+  ) {
+    return 'apply_failed';
+  }
+  return 'failed';
+}
 
 function classifyAskAiFailure(
   cause: unknown,
@@ -142,6 +205,8 @@ export default function LocalViewShell() {
   const [sourceOpenState, setSourceOpenState] = useState<HumanSourceOpenState>({ status: 'idle' });
   const [aiProviderCapability, setAiProviderCapability] = useState<AiProviderCapability>(unavailableAiProvider);
   const [askAiState, setAskAiState] = useState<HumanAskAiState>({ status: 'idle' });
+  const [fixCapability, setFixCapability] = useState<AiFixCapability>(unavailableFixCapability);
+  const [fixState, setFixState] = useState<HumanFixState>({ status: 'idle' });
   const captureInFlight = useRef(false);
   const captureGeneration = useRef(0);
   const measureInFlight = useRef(false);
@@ -150,6 +215,10 @@ export default function LocalViewShell() {
   const sourceOpenGeneration = useRef(0);
   const askAiInFlight = useRef(false);
   const askAiGeneration = useRef(0);
+  const fixProposalInFlight = useRef(false);
+  const fixApplyInFlight = useRef(false);
+  const fixGeneration = useRef(0);
+  const fixProposalIdRef = useRef<string | undefined>(undefined);
   const selectedReferenceRef = useRef<string | undefined>(undefined);
   const currentSessionIdRef = useRef<string | undefined>(undefined);
 
@@ -204,6 +273,21 @@ export default function LocalViewShell() {
     return () => window.clearInterval(timer);
   }, [refreshAiProviderCapability]);
 
+  const refreshFixCapability = useCallback(async () => {
+    try {
+      const capability = await api.aiFixCapability();
+      setFixCapability(capability);
+    } catch {
+      setFixCapability(unavailableFixCapability);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshFixCapability();
+    const timer = window.setInterval(() => void refreshFixCapability(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [refreshFixCapability]);
+
   const current = useMemo(
     () => state.sessions.find((session) => session.id === selected) ?? state.sessions[0],
     [state.sessions, selected],
@@ -233,6 +317,13 @@ export default function LocalViewShell() {
     askAiGeneration.current += 1;
     askAiInFlight.current = false;
     setAskAiState({ status: 'idle' });
+    fixGeneration.current += 1;
+    fixProposalInFlight.current = false;
+    fixApplyInFlight.current = false;
+    const staleProposalId = fixProposalIdRef.current;
+    fixProposalIdRef.current = undefined;
+    if (staleProposalId) void api.discardFixProposal({ proposalId: staleProposalId });
+    setFixState({ status: 'idle' });
   }, [selectedReference]);
 
   useEffect(() => {
@@ -250,6 +341,13 @@ export default function LocalViewShell() {
     askAiGeneration.current += 1;
     askAiInFlight.current = false;
     setAskAiState({ status: 'idle' });
+    fixGeneration.current += 1;
+    fixProposalInFlight.current = false;
+    fixApplyInFlight.current = false;
+    const staleProposalId = fixProposalIdRef.current;
+    fixProposalIdRef.current = undefined;
+    if (staleProposalId) void api.discardFixProposal({ proposalId: staleProposalId });
+    setFixState({ status: 'idle' });
   }, [current?.id]);
 
   useEffect(() => {
@@ -505,6 +603,158 @@ export default function LocalViewShell() {
     }
   }, [aiProviderCapability.available, current, selectedReference]);
 
+  const beginFixReview = useCallback(() => {
+    const session = current;
+    const reference = selectedReference;
+    if (!session || !reference || !fixCapability.available) return;
+
+    const oldProposal = fixProposalIdRef.current;
+    fixGeneration.current += 1;
+    fixProposalInFlight.current = false;
+    fixApplyInFlight.current = false;
+    fixProposalIdRef.current = undefined;
+    if (oldProposal) void api.discardFixProposal({ proposalId: oldProposal });
+    setActiveTool('ai');
+    setFixState({ status: 'disclosure', reference });
+  }, [current, fixCapability.available, selectedReference]);
+
+  const prepareFixProposal = useCallback(async (instruction: string) => {
+    const session = current;
+    const reference = selectedReference;
+    if (
+      !session
+      || !reference
+      || !fixCapability.available
+      || fixProposalInFlight.current
+      || fixApplyInFlight.current
+    ) {
+      return;
+    }
+
+    const normalized = instruction.trim();
+    const bytes = new TextEncoder().encode(normalized).length;
+    if (!normalized || bytes > 8 * 1024) {
+      setActiveTool('ai');
+      setFixState({
+        status: 'failure',
+        reference,
+        reason: bytes > 8 * 1024 ? 'instruction_too_long' : 'invalid_instruction',
+      });
+      return;
+    }
+
+    const requestSessionId = session.id;
+    const requestReference = reference;
+    const generation = ++fixGeneration.current;
+    fixProposalInFlight.current = true;
+    selectedReferenceRef.current = requestReference;
+    currentSessionIdRef.current = requestSessionId;
+    setActiveTool('ai');
+    setFixState({ status: 'proposing', reference: requestReference, instruction: normalized });
+
+    try {
+      const receipt = await api.prepareFixProposal({
+        sessionId: requestSessionId,
+        reference: requestReference,
+        instruction: normalized,
+      });
+      if (
+        generation !== fixGeneration.current
+        || requestReference !== selectedReferenceRef.current
+        || requestSessionId !== currentSessionIdRef.current
+      ) {
+        void api.discardFixProposal({ proposalId: receipt.proposalId });
+        return;
+      }
+
+      fixProposalIdRef.current = receipt.proposalId;
+      setFixState({
+        status: 'proposal',
+        proposalId: receipt.proposalId,
+        reference: requestReference,
+        instruction: normalized,
+        displayFile: receipt.displayFile,
+        summary: receipt.summary,
+        diff: receipt.diff,
+        providerLabel: receipt.providerLabel,
+        expiresAtUnixMs: receipt.expiresAtUnixMs,
+      });
+    } catch (cause) {
+      if (
+        generation !== fixGeneration.current
+        || requestReference !== selectedReferenceRef.current
+        || requestSessionId !== currentSessionIdRef.current
+      ) {
+        return;
+      }
+      setFixState({
+        status: 'failure',
+        reference: requestReference,
+        reason: classifyFixFailure(cause),
+      });
+    } finally {
+      if (generation === fixGeneration.current) {
+        fixProposalInFlight.current = false;
+      }
+    }
+  }, [current, fixCapability.available, selectedReference]);
+
+  const applyFixProposal = useCallback(async () => {
+    if (fixState.status !== 'proposal' || fixApplyInFlight.current) return;
+
+    const proposal = fixState;
+    const generation = fixGeneration.current;
+    fixApplyInFlight.current = true;
+    setFixState({
+      status: 'applying',
+      proposalId: proposal.proposalId,
+      reference: proposal.reference,
+      displayFile: proposal.displayFile,
+    });
+
+    try {
+      const receipt = await api.applyFixProposal({ proposalId: proposal.proposalId });
+      if (generation !== fixGeneration.current) return;
+      fixProposalIdRef.current = undefined;
+      setFixState({
+        status: 'success',
+        displayFile: receipt.displayFile,
+        changedStartLine: receipt.changedStartLine,
+        changedEndLine: receipt.changedEndLine,
+      });
+    } catch (cause) {
+      if (generation !== fixGeneration.current) return;
+      fixProposalIdRef.current = undefined;
+      setFixState({
+        status: 'failure',
+        reference: proposal.reference,
+        reason: classifyFixFailure(cause),
+      });
+    } finally {
+      if (generation === fixGeneration.current) {
+        fixApplyInFlight.current = false;
+      }
+    }
+  }, [fixState]);
+
+  const discardFixProposal = useCallback(async () => {
+    const proposalId = fixProposalIdRef.current;
+    const generation = ++fixGeneration.current;
+    fixProposalInFlight.current = false;
+    fixApplyInFlight.current = false;
+    fixProposalIdRef.current = undefined;
+    if (proposalId) {
+      try {
+        await api.discardFixProposal({ proposalId });
+      } catch {
+        // The backend proposal may already be expired or invalidated.
+      }
+    }
+    if (generation === fixGeneration.current) {
+      setFixState({ status: 'idle' });
+    }
+  }, []);
+
   const executeCommand = useCallback((command: CommandId) => {
     switch (command) {
       case COMMAND_IDS.inspectActivate:
@@ -531,6 +781,9 @@ export default function LocalViewShell() {
         if (selectedReference && aiProviderCapability.available) {
           void askAiAboutSelection(translate(preferences.locale, 'ai.defaultQuestion'));
         }
+        return;
+      case COMMAND_IDS.aiFixSelection:
+        beginFixReview();
         return;
       case COMMAND_IDS.advancedOpen:
         setActiveTool('advanced');
@@ -564,6 +817,7 @@ export default function LocalViewShell() {
   }, [
     aiProviderCapability.available,
     askAiAboutSelection,
+    beginFixReview,
     openNative,
     openSourceForSelection,
     patchPreferences,
@@ -664,6 +918,13 @@ export default function LocalViewShell() {
             askAiState={askAiState}
             onAskAi={(question) => void askAiAboutSelection(question)}
             onRefreshAiProvider={() => void refreshAiProviderCapability()}
+            fixCapability={fixCapability}
+            fixState={fixState}
+            onBeginFix={beginFixReview}
+            onPrepareFix={(instruction) => void prepareFixProposal(instruction)}
+            onApplyFix={() => void applyFixProposal()}
+            onDiscardFix={() => void discardFixProposal()}
+            onRefreshFixCapability={() => void refreshFixCapability()}
             onCommand={executeCommand}
             onPreferencesChange={patchPreferences}
             onResetWorkspace={resetWorkspacePreferences}
