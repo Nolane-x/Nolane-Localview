@@ -16,6 +16,7 @@ import {
   RailButton,
   type HumanCaptureState,
   type HumanMeasureState,
+  type HumanSourceOpenState,
   type ToolId,
 } from '../features/FloatingTools';
 import {
@@ -59,10 +60,13 @@ export default function LocalViewShell() {
   const [preferences, setPreferences] = useState<LocalViewPreferences>(() => loadPreferences());
   const [captureState, setCaptureState] = useState<HumanCaptureState>({ status: 'idle' });
   const [measureState, setMeasureState] = useState<HumanMeasureState>({ status: 'idle' });
+  const [sourceOpenState, setSourceOpenState] = useState<HumanSourceOpenState>({ status: 'idle' });
   const captureInFlight = useRef(false);
   const captureGeneration = useRef(0);
   const measureInFlight = useRef(false);
   const measureGeneration = useRef(0);
+  const sourceOpenInFlight = useRef(false);
+  const sourceOpenGeneration = useRef(0);
   const selectedReferenceRef = useRef<string | undefined>(undefined);
 
   const patchPreferences = useCallback((patch: Partial<LocalViewPreferences>) => {
@@ -120,6 +124,9 @@ export default function LocalViewShell() {
     measureGeneration.current += 1;
     measureInFlight.current = false;
     setMeasureState({ status: 'idle' });
+    sourceOpenGeneration.current += 1;
+    sourceOpenInFlight.current = false;
+    setSourceOpenState({ status: 'idle' });
   }, [selectedReference]);
 
   useEffect(() => {
@@ -130,6 +137,9 @@ export default function LocalViewShell() {
     measureInFlight.current = false;
     selectedReferenceRef.current = undefined;
     setMeasureState({ status: 'idle' });
+    sourceOpenGeneration.current += 1;
+    sourceOpenInFlight.current = false;
+    setSourceOpenState({ status: 'idle' });
   }, [current?.id]);
 
   useEffect(() => {
@@ -261,10 +271,63 @@ export default function LocalViewShell() {
     }
   }, [current]);
 
+  const openSourceForSelection = useCallback(async (reference: string) => {
+    const session = current;
+    if (!session || !reference || sourceOpenInFlight.current) return;
+
+    sourceOpenInFlight.current = true;
+    const generation = ++sourceOpenGeneration.current;
+    selectedReferenceRef.current = reference;
+    setSourceOpenState({ status: 'opening', reference });
+
+    try {
+      const receipt = await api.openSourceForSelection(session.id, reference);
+      if (
+        generation !== sourceOpenGeneration.current
+        || reference !== selectedReferenceRef.current
+      ) {
+        return;
+      }
+      setSourceOpenState({
+        status: 'success',
+        reference,
+        displayFile: receipt.displayFile,
+        line: receipt.line,
+        column: receipt.column ?? undefined,
+      });
+    } catch (cause) {
+      if (
+        generation !== sourceOpenGeneration.current
+        || reference !== selectedReferenceRef.current
+      ) {
+        return;
+      }
+      const detail = String(cause).toLowerCase();
+      const reason = detail.includes('launcher')
+        ? 'launcher_unavailable'
+        : detail.includes('mapping')
+          || detail.includes('source file')
+          || detail.includes('project root')
+          || detail.includes('selection')
+          || detail.includes('outside project')
+            ? 'unavailable'
+            : 'failed';
+      setSourceOpenState({ status: 'failure', reference, reason });
+    } finally {
+      if (generation === sourceOpenGeneration.current) {
+        sourceOpenInFlight.current = false;
+      }
+    }
+  }, [current]);
+
   const executeCommand = useCallback((command: CommandId) => {
     switch (command) {
       case COMMAND_IDS.inspectActivate:
         setActiveTool('inspect');
+        return;
+      case COMMAND_IDS.sourceOpen:
+        setActiveTool('inspect');
+        if (selectedReference) void openSourceForSelection(selectedReference);
         return;
       case COMMAND_IDS.responsiveOpen:
         setActiveTool('responsive');
@@ -309,10 +372,12 @@ export default function LocalViewShell() {
     }
   }, [
     openNative,
+    openSourceForSelection,
     patchPreferences,
     preferences.showTargetBar,
     preferences.showToolRail,
     resetWorkspacePreferences,
+    selectedReference,
     togglePause,
   ]);
 
@@ -396,6 +461,8 @@ export default function LocalViewShell() {
             onOpenNative={() => void openNative()}
             captureState={captureState}
             onCapture={() => void captureCurrentViewport()}
+            sourceOpenState={sourceOpenState}
+            onOpenSource={(reference) => void openSourceForSelection(reference)}
             measureState={measureState}
             onMeasure={(reference) => void measureCurrentSelection(reference)}
             onCommand={executeCommand}
