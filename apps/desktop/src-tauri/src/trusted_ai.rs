@@ -379,7 +379,10 @@ fn sanitized_network_path(raw: &str) -> String {
     if let Ok(url) = Url::parse(raw) {
         return bounded_text(url.path(), MAX_AI_ISSUE_TEXT_BYTES);
     }
-    let before_query = raw.split(['?', '#']).next().unwrap_or(raw);
+    let before_query = raw
+        .split(|character| character == '?' || character == '#')
+        .next()
+        .unwrap_or(raw);
     bounded_text(before_query, MAX_AI_ISSUE_TEXT_BYTES)
 }
 
@@ -545,10 +548,7 @@ pub async fn ask_with_provider(
 mod trusted_ai_tests {
     use super::*;
     use chrono::Utc;
-    use localview_protocol::{
-        Classification, Endpoint, ProjectIdentity, ServerKind, SessionStatus,
-    };
-    use smallvec::smallvec;
+    use localview_protocol::{Classification, Endpoint, ProjectIdentity, ServerKind, SessionStatus};
     use uuid::Uuid;
 
     fn node(
@@ -588,7 +588,7 @@ mod trusted_ai_tests {
                 framework: Some("React".into()),
                 title: Some("Fixture".into()),
                 hmr_detected: true,
-                evidence: smallvec!["vite".into()],
+                ..Classification::default()
             },
             project: ProjectIdentity {
                 key: "fixture".into(),
