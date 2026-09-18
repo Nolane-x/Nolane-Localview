@@ -284,9 +284,9 @@ await page.keyboard.press('Escape');
 await page.keyboard.press('n');
 await page.waitForTimeout(150);
 const viNetworkText = await page.locator('.panel-network').innerText();
-invariant(viNetworkText.includes('Mục tiêu'), 'vi-network:localized-target', { viNetworkText });
-invariant(viNetworkText.includes('Yêu cầu'), 'vi-network:localized-requests', { viNetworkText });
-invariant(viNetworkText.includes('Lỗi'), 'vi-network:localized-failures', { viNetworkText });
+invariant(viNetworkText.includes('MỤC TIÊU'), 'vi-network:localized-target', { viNetworkText });
+invariant(viNetworkText.includes('YÊU CẦU'), 'vi-network:localized-requests', { viNetworkText });
+invariant(viNetworkText.includes('LỖI'), 'vi-network:localized-failures', { viNetworkText });
 await shot(page, '26-vi-network.png', 'vi-network');
 await page.close();
 
