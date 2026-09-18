@@ -42,6 +42,7 @@ const MAX_POSITIONAL_SCAN_ELEMENTS: u64 = 4_096;
 const MAX_VISUAL_MASK_RECTS: usize = 256;
 const MAX_MASKED_ELEMENTS: u64 = 4_096;
 const MAX_CSS_VIEWPORT_DIMENSION: f64 = 100_000.0;
+const TRUSTED_VIEWPORT_INTEGRAL_TOLERANCE_CSS: f64 = 0.01;
 
 pub struct VisualCaptureState {
     pub(crate) artifacts: Mutex<Option<ArtifactStore>>,
@@ -973,6 +974,61 @@ pub async fn capture_viewport(
 }
 
 #[tauri::command]
+pub async fn capture_current_viewport(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, VisualCaptureState>,
+    session_id: SessionId,
+    revision: Option<String>,
+) -> Result<VisualCaptureReceipt, String> {
+    preflight_managed_surface(&app, session_id)?;
+
+    let capture_gate = session_capture_gate(&state, session_id).await?;
+    let _capture_guard = capture_gate.lock().await;
+
+    wait_for_capture_settle(session_id).await?;
+    let freeze = freeze_visual_state(session_id).await?;
+
+    let capture_result = match trusted_viewport_from_freeze(&app, session_id, &freeze) {
+        Ok(viewport) => {
+            let expected_scale_factor = viewport.device_scale_factor;
+            capture_managed_surface(&app, session_id, viewport, revision)
+                .await
+                .and_then(|frame| {
+                    validate_trusted_current_viewport(
+                        &app,
+                        session_id,
+                        &frame,
+                        &freeze,
+                        expected_scale_factor,
+                    )?;
+                    Ok(frame)
+                })
+        }
+        Err(error) => Err(error),
+    };
+    let restore_result = restore_visual_state(session_id, &freeze.token).await;
+
+    let frame = match (capture_result, restore_result) {
+        (Ok(frame), Ok(())) => frame,
+        (Err(capture_error), Ok(())) => return Err(capture_error),
+        (Ok(_), Err(_)) | (Err(_), Err(_)) => {
+            return Err(
+                "trusted current viewport restore acknowledgement failed; pixels discarded".into(),
+            );
+        }
+    };
+
+    let frame = redact_private_pixels(frame, &freeze)?;
+    persist_and_register(
+        &state,
+        session_id,
+        frame,
+        &RequestedCaptureTarget::Viewport,
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn capture_region(
     app: tauri::AppHandle,
     state: tauri::State<'_, VisualCaptureState>,
@@ -1424,6 +1480,118 @@ fn validate_viewport(viewport: &ViewportMeta) -> Result<(), String> {
         || viewport.device_scale_factor > 8.0
     {
         return Err("visual capture device scale factor is outside the safety range".into());
+    }
+    Ok(())
+}
+
+fn trusted_css_dimension(value: f64, axis: &str) -> Result<u32, String> {
+    if !value.is_finite()
+        || value <= 0.0
+        || value > MAX_CSS_VIEWPORT_DIMENSION
+    {
+        return Err(format!("trusted viewport {axis} is outside the safety range"));
+    }
+
+    let rounded = value.round();
+    if (value - rounded).abs() > TRUSTED_VIEWPORT_INTEGRAL_TOLERANCE_CSS {
+        return Err(format!(
+            "trusted viewport {axis} is not an integral CSS dimension"
+        ));
+    }
+    if rounded > u32::MAX as f64 {
+        return Err(format!("trusted viewport {axis} exceeds u32::MAX"));
+    }
+
+    let dimension = rounded as u32;
+    if dimension == 0 {
+        return Err(format!("trusted viewport {axis} must be positive"));
+    }
+    Ok(dimension)
+}
+
+fn managed_surface_scale_factor(
+    app: &tauri::AppHandle,
+    session_id: SessionId,
+) -> Result<f64, String> {
+    let preview_label = workspace_surface::preview_surface_label(session_id);
+    if let Some(window) = app.get_webview_window(&preview_label) {
+        if !bridge_surface_label_allowed(window.label(), session_id) {
+            return Err("trusted capture preview/session ownership mismatch".into());
+        }
+        let route_url = window.url().map_err(err)?;
+        if !workspace_navigation_allowed(&route_url) {
+            return Err("trusted capture refuses a non-loopback managed surface".into());
+        }
+        let scale_factor = window.scale_factor().map_err(err)?;
+        validate_trusted_scale_factor(scale_factor)?;
+        return Ok(scale_factor);
+    }
+
+    #[cfg(feature = "native-workspace")]
+    {
+        let label = workspace_surface::workspace_label(session_id);
+        if let Some(webview) = app.get_webview(&label) {
+            if !bridge_surface_label_allowed(webview.label(), session_id) {
+                return Err("trusted capture workspace/session ownership mismatch".into());
+            }
+            let route_url = webview.url().map_err(err)?;
+            if !workspace_navigation_allowed(&route_url) {
+                return Err("trusted capture refuses a non-loopback managed surface".into());
+            }
+            let parent = app
+                .get_window("main")
+                .ok_or_else(|| "trusted capture main window is unavailable".to_string())?;
+            let scale_factor = parent.scale_factor().map_err(err)?;
+            validate_trusted_scale_factor(scale_factor)?;
+            return Ok(scale_factor);
+        }
+    }
+
+    Err("trusted capture managed surface is unavailable".into())
+}
+
+fn validate_trusted_scale_factor(scale_factor: f64) -> Result<(), String> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 || scale_factor > 8.0 {
+        return Err("trusted capture device scale factor is outside the safety range".into());
+    }
+    Ok(())
+}
+
+fn trusted_viewport_from_freeze(
+    app: &tauri::AppHandle,
+    session_id: SessionId,
+    freeze: &FreezeVisualStateReceipt,
+) -> Result<ViewportMeta, String> {
+    let viewport = ViewportMeta {
+        css_width: trusted_css_dimension(freeze.viewport_css_width, "width")?,
+        css_height: trusted_css_dimension(freeze.viewport_css_height, "height")?,
+        device_scale_factor: managed_surface_scale_factor(app, session_id)?,
+    };
+    validate_viewport(&viewport)?;
+    Ok(viewport)
+}
+
+fn validate_trusted_current_viewport(
+    app: &tauri::AppHandle,
+    session_id: SessionId,
+    frame: &CapturedFrame,
+    freeze: &FreezeVisualStateReceipt,
+    expected_scale_factor: f64,
+) -> Result<(), String> {
+    let css_width = trusted_css_dimension(freeze.viewport_css_width, "width")?;
+    let css_height = trusted_css_dimension(freeze.viewport_css_height, "height")?;
+    if frame.viewport.css_width != css_width || frame.viewport.css_height != css_height {
+        return Err("trusted current viewport geometry drifted during capture; pixels discarded".into());
+    }
+    if frame.viewport.device_scale_factor != expected_scale_factor {
+        return Err("trusted current viewport scale factor metadata mismatch; pixels discarded".into());
+    }
+    let current_scale_factor = managed_surface_scale_factor(app, session_id)?;
+    if (current_scale_factor - expected_scale_factor).abs() > f64::EPSILON {
+        return Err("trusted current viewport device scale factor changed during capture; pixels discarded".into());
+    }
+    if frame.pixel_width == 0 || frame.pixel_height == 0 {
+        return Err("trusted current viewport native pixel dimensions are invalid; pixels discarded".into());
     }
     Ok(())
 }
@@ -2023,6 +2191,37 @@ fn progressive_route_signature(
         url.path().to_string(),
         query,
     ))
+}
+
+#[cfg(test)]
+mod trusted_capture_v21_tests {
+    use super::*;
+
+    #[test]
+    fn trusted_css_dimension_accepts_integral_geometry() {
+        assert_eq!(trusted_css_dimension(1280.0, "width").unwrap(), 1280);
+        assert_eq!(trusted_css_dimension(719.995, "height").unwrap(), 720);
+    }
+
+    #[test]
+    fn trusted_css_dimension_rejects_non_integral_and_invalid_geometry() {
+        assert!(trusted_css_dimension(1280.25, "width").is_err());
+        assert!(trusted_css_dimension(0.0, "width").is_err());
+        assert!(trusted_css_dimension(-1.0, "width").is_err());
+        assert!(trusted_css_dimension(f64::NAN, "width").is_err());
+        assert!(trusted_css_dimension(f64::INFINITY, "width").is_err());
+        assert!(trusted_css_dimension(MAX_CSS_VIEWPORT_DIMENSION + 1.0, "width").is_err());
+    }
+
+    #[test]
+    fn trusted_scale_factor_is_bounded() {
+        assert!(validate_trusted_scale_factor(1.0).is_ok());
+        assert!(validate_trusted_scale_factor(2.0).is_ok());
+        assert!(validate_trusted_scale_factor(0.0).is_err());
+        assert!(validate_trusted_scale_factor(-1.0).is_err());
+        assert!(validate_trusted_scale_factor(f64::NAN).is_err());
+        assert!(validate_trusted_scale_factor(8.01).is_err());
+    }
 }
 
 include!("visual_packet_impl.rs");

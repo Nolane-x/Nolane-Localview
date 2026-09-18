@@ -91,6 +91,29 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .quick-action-grid button:disabled{opacity:.38;cursor:not-allowed}
 .quick-action-grid button svg{width:17px;height:17px;color:var(--lv-accent)}
 .quick-action-grid button span{font-size:10px;font-weight:570}
+.capture-action[aria-busy="true"]{border-color:rgba(154,169,130,.2);background:rgba(154,169,130,.055)}
+.capture-status{
+  margin-top:10px;
+  border:1px solid rgba(255,255,255,.07);
+  border-radius:10px;
+  padding:9px 10px;
+  display:grid;
+  gap:3px;
+  background:rgba(255,255,255,.018)
+}
+.capture-status strong{font-size:10px;font-weight:620}
+.capture-status span,.capture-status code{
+  min-width:0;
+  color:var(--lv-muted);
+  font-size:8px;
+  line-height:1.45;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap
+}
+.capture-status code{font-family:"SFMono-Regular",Consolas,monospace}
+.capture-status.success{border-color:rgba(154,169,130,.17);background:rgba(154,169,130,.045)}
+.capture-status.failure{border-color:rgba(222,132,132,.13);background:rgba(222,132,132,.035)}
 
 .panel-settings{width:min(390px,calc(100vw - 110px))}
 .panel-advanced{width:min(390px,calc(100vw - 110px))}

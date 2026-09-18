@@ -8,6 +8,7 @@ commands.allow = [
   "resume_runtime",
   "open_preview",
   "capture_viewport",
+  "capture_current_viewport",
   "workspace_surface_open",
   "workspace_surface_set_bounds",
   "workspace_surface_navigate",

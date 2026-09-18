@@ -35,6 +35,18 @@ export type ToolId =
   | 'sessions'
   | 'command';
 
+export type HumanCaptureState =
+  | { status: 'idle' }
+  | { status: 'capturing' }
+  | {
+      status: 'success';
+      evidenceId: string;
+      pixelWidth: number;
+      pixelHeight: number;
+      backend: string;
+    }
+  | { status: 'failure'; reason: 'unavailable' | 'failed' };
+
 export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { messageKey: MessageKey; shortcut: string }> = {
   inspect: { messageKey: 'tool.inspect', shortcut: 'I' },
   responsive: { messageKey: 'tool.responsive', shortcut: 'R' },
@@ -56,6 +68,8 @@ interface FloatingPanelProps {
   onClose: () => void;
   onSelect: (id: string) => void;
   onOpenNative: () => void;
+  captureState: HumanCaptureState;
+  onCapture: () => void;
   onCommand: (command: CommandId) => void;
   onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
   onResetWorkspace: () => void;
@@ -72,6 +86,8 @@ export function FloatingPanel({
   onClose,
   onSelect,
   onOpenNative,
+  captureState,
+  onCapture,
   onCommand,
   onPreferencesChange,
   onResetWorkspace,
@@ -82,7 +98,16 @@ export function FloatingPanel({
     <section className={`floating-panel panel-${tool} ${bottomSheet ? 'bottom-sheet' : ''} ${compact ? 'command-panel' : ''}`} aria-label={panelTitle(tool, locale)}>
       <PanelHeader title={panelTitle(tool, locale)} eyebrow={panelEyebrow(tool, locale)} locale={locale} onClose={onClose} />
       <div className="panel-body">
-        {tool === 'inspect' && <Inspector current={current} live={live} onOpenNative={onOpenNative} locale={locale} />}
+        {tool === 'inspect' && (
+          <Inspector
+            current={current}
+            live={live}
+            onOpenNative={onOpenNative}
+            locale={locale}
+            captureState={captureState}
+            onCapture={onCapture}
+          />
+        )}
         {tool === 'advanced' && <AdvancedPanel current={current} live={live} locale={locale} onOpenNative={onOpenNative} />}
         {tool === 'settings' && (
           <SettingsPanel
@@ -121,30 +146,36 @@ function Inspector({
   live,
   onOpenNative,
   locale,
+  captureState,
+  onCapture,
 }: {
   current?: Session;
   live: LiveSessionState;
   onOpenNative: () => void;
   locale: SupportedLocale;
+  captureState: HumanCaptureState;
+  onCapture: () => void;
 }) {
-  if (!current) {
-    return <PanelEmpty title={translate(locale, 'empty.noTarget')} text={translate(locale, 'empty.runDevServer')} />;
-  }
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
   const source = focused?.payload && typeof focused.payload.source === 'string'
     ? String(focused.payload.source)
     : undefined;
+  const captureBusy = captureState.status === 'capturing';
 
   return (
     <div className="inspector-stack human-inspector">
-      <div className="inspector-hero">
-        <div className="selection-cross"><InspectIcon /></div>
-        <div>
-          <span>{translate(locale, 'inspector.currentTarget')}</span>
-          <strong>{focused?.reference ?? current.project.display_name}</strong>
-          <p>{focused ? current.project.display_name : translate(locale, 'inspector.noSelection')}</p>
+      {current ? (
+        <div className="inspector-hero">
+          <div className="selection-cross"><InspectIcon /></div>
+          <div>
+            <span>{translate(locale, 'inspector.currentTarget')}</span>
+            <strong>{focused?.reference ?? current.project.display_name}</strong>
+            <p>{focused ? current.project.display_name : translate(locale, 'inspector.noSelection')}</p>
+          </div>
         </div>
-      </div>
+      ) : (
+        <PanelEmpty title={translate(locale, 'empty.noTarget')} text={translate(locale, 'empty.runDevServer')} />
+      )}
 
       <div className="quick-action-grid" aria-label={translate(locale, 'aria.inspectorActions')}>
         <UnavailableInspectorAction
@@ -157,11 +188,16 @@ function Inspector({
           label={translate(locale, 'action.measure')}
           reason={focused ? 'Measurement is not connected to this panel yet.' : translate(locale, 'inspector.noSelection')}
         />
-        <UnavailableInspectorAction
-          icon={<CaptureIcon />}
-          label={translate(locale, 'action.capture')}
-          reason="Capture remains unavailable here until the panel can supply validated viewport authority."
-        />
+        <button
+          className="capture-action"
+          onClick={onCapture}
+          disabled={!current || captureBusy}
+          aria-busy={captureBusy}
+          title={!current ? translate(locale, 'capture.unavailable') : translate(locale, 'action.capture')}
+        >
+          <CaptureIcon />
+          <span>{captureBusy ? translate(locale, 'capture.inProgress') : translate(locale, 'action.capture')}</span>
+        </button>
         <UnavailableInspectorAction
           icon={<SparkIcon />}
           label={translate(locale, 'action.askAi')}
@@ -174,7 +210,25 @@ function Inspector({
         />
       </div>
 
-      {!live.observer.length && <AttachNotice locale={locale} onOpenNative={onOpenNative} />}
+      {captureState.status === 'success' && (
+        <div className="capture-status success" role="status" aria-live="polite">
+          <strong>{translate(locale, 'capture.success')}</strong>
+          <span>{captureState.pixelWidth}×{captureState.pixelHeight} · {captureState.backend}</span>
+          <code title={captureState.evidenceId}>{translate(locale, 'capture.evidence')} {captureState.evidenceId.slice(0, 12)}</code>
+        </div>
+      )}
+      {captureState.status === 'failure' && (
+        <div className="capture-status failure" role="status" aria-live="polite">
+          <strong>
+            {translate(
+              locale,
+              captureState.reason === 'unavailable' ? 'capture.unavailable' : 'capture.failed',
+            )}
+          </strong>
+        </div>
+      )}
+
+      {current && !live.observer.length && <AttachNotice locale={locale} onOpenNative={onOpenNative} />}
     </div>
   );
 }

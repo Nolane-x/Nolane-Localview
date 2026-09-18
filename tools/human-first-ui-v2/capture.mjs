@@ -196,8 +196,9 @@ function init(
   rawPreferences = null,
   storageFault = false,
   failedCommands = [],
+  captureDelayMs = 0,
 ) {
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands }) => {
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -225,15 +226,36 @@ function init(
     if (!storageFault) {
       localStorage.setItem('localview.preferences.v2', rawPreferences ?? validPreferences);
     }
+    window.__LOCALVIEW_AUDIT_INVOKES__ = [];
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
-        invoke: async (cmd) => {
+        invoke: async (cmd, args = {}) => {
+          window.__LOCALVIEW_AUDIT_INVOKES__.push({ cmd, args: structuredClone(args ?? {}) });
           if (failedCommands.includes(cmd)) {
             throw new Error('forced audit failure for ' + cmd);
           }
           if (cmd === 'dashboard_state') return dashboardState;
           if (cmd === 'live_session_state') return liveState;
+          if (cmd === 'capture_current_viewport') {
+            if (captureDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, captureDelayMs));
+            }
+            return {
+              artifact_id: 'artifact-v21-audit',
+              evidence_id: 'evidence-v21-0123456789abcdef',
+              deduplicated: false,
+              backend: 'audit-native',
+              route: 'http://127.0.0.1:5173/',
+              viewport: { css_width: 1440, css_height: 900, device_scale_factor: 1 },
+              pixel_width: 1440,
+              pixel_height: 900,
+              revision: null,
+              captured_at_unix_ms: Date.now(),
+              target: 'viewport',
+              region: null,
+            };
+          }
           if (['pause_runtime','resume_runtime','open_preview','workspace_surface_open','workspace_surface_set_bounds','workspace_surface_navigate','workspace_surface_close'].includes(cmd)) return null;
           throw new Error('audit stub missing ' + cmd);
         },
@@ -245,7 +267,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs });
 }
 
 async function pageFor(
@@ -257,13 +279,14 @@ async function pageFor(
   dashboardState = dashboard,
   rawPreferences = null,
   storageFault = false,
-  failedCommands = []
+  failedCommands = [],
+  captureDelayMs = 0
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -285,8 +308,15 @@ invariant(!/Semantic Snapshot|Project identity|X-Ray pipeline/.test(inspectorTex
 const inspectorActions = await page.locator('.quick-action-grid button').evaluateAll((buttons) => ({
   count: buttons.length,
   disabled: buttons.filter((button) => button.disabled).length,
+  captureEnabled: !buttons.find((button) => button.classList.contains('capture-action'))?.disabled,
 }));
-invariant(inspectorActions.count >= 5 && inspectorActions.disabled === inspectorActions.count, 'en-inspector:unwired-actions-fail-closed', inspectorActions);
+invariant(
+  inspectorActions.count >= 5 &&
+    inspectorActions.disabled === inspectorActions.count - 1 &&
+    inspectorActions.captureEnabled,
+  'en-inspector:only-trusted-capture-enabled',
+  inspectorActions,
+);
 await shot(page, '02-en-inspector.png');
 await page.keyboard.press('Escape');
 await page.keyboard.press('Control+,');
@@ -634,6 +664,137 @@ invariant(
 );
 await assertPrimaryControlsInViewport(page, 'runtime-action-failure-isolated');
 await shot(page, '30-runtime-action-failure-isolated.png', 'runtime-action-failure-isolated');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 });
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await assertVisible(page, '.capture-action', 'trusted-capture-success');
+await page.locator('.capture-action').click();
+await page.waitForTimeout(100);
+await assertVisible(page, '.capture-status.success', 'trusted-capture-success');
+const trustedCaptureSuccessText = await page.locator('.capture-status.success').innerText();
+invariant(
+  trustedCaptureSuccessText.includes('Captured current viewport'),
+  'trusted-capture-success:human-copy',
+  { trustedCaptureSuccessText },
+);
+invariant(
+  trustedCaptureSuccessText.includes('1440×900'),
+  'trusted-capture-success:pixel-metadata',
+  { trustedCaptureSuccessText },
+);
+const trustedCaptureInvokes = await page.evaluate(() => window.__LOCALVIEW_AUDIT_INVOKES__);
+const trustedCaptureCall = trustedCaptureInvokes.find((entry) => entry.cmd === 'capture_current_viewport');
+invariant(!!trustedCaptureCall, 'trusted-capture-success:command-invoked', { trustedCaptureInvokes });
+invariant(
+  trustedCaptureCall?.args?.sessionId === dashboard.sessions[0].id,
+  'trusted-capture-success:session-authority',
+  { args: trustedCaptureCall?.args },
+);
+invariant(
+  !trustedCaptureCall?.args || !Object.prototype.hasOwnProperty.call(trustedCaptureCall.args, 'viewport'),
+  'trusted-capture-success:no-caller-viewport',
+  { args: trustedCaptureCall?.args },
+);
+await shot(page, '31-trusted-capture-success.png', 'trusted-capture-success');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  live,
+  dashboard,
+  null,
+  false,
+  ['capture_current_viewport']
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.capture-action').click();
+await page.waitForTimeout(100);
+await assertVisible(page, '.capture-status.failure', 'trusted-capture-failure');
+const trustedCaptureFailureText = await page.locator('.capture-status.failure').innerText();
+invariant(
+  trustedCaptureFailureText.includes('Could not capture current viewport'),
+  'trusted-capture-failure:human-copy',
+  { trustedCaptureFailureText },
+);
+invariant(
+  !trustedCaptureFailureText.includes('forced audit failure'),
+  'trusted-capture-failure:no-raw-error',
+  { trustedCaptureFailureText },
+);
+await shot(page, '32-trusted-capture-failure.png', 'trusted-capture-failure');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'vi');
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.capture-action').click();
+await page.waitForTimeout(100);
+await assertVisible(page, '.capture-status.success', 'vi-trusted-capture-success');
+const viTrustedCaptureText = await page.locator('.capture-status.success').innerText();
+invariant(
+  viTrustedCaptureText.includes('Đã chụp khung nhìn hiện tại'),
+  'vi-trusted-capture-success:localized',
+  { viTrustedCaptureText },
+);
+await shot(page, '33-vi-trusted-capture-success.png', 'vi-trusted-capture-success');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 390, height: 844 },
+  'en',
+  {},
+  liveEmpty,
+  dashboardNoTarget
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await assertVisible(page, '.capture-action', 'no-target-capture-disabled');
+const noTargetCaptureDisabled = await page.locator('.capture-action').isDisabled();
+invariant(noTargetCaptureDisabled, 'no-target-capture-disabled:semantic-disabled');
+const noTargetInvokes = await page.evaluate(() => window.__LOCALVIEW_AUDIT_INVOKES__);
+invariant(
+  !noTargetInvokes.some((entry) => entry.cmd === 'capture_current_viewport'),
+  'no-target-capture-disabled:not-invoked',
+  { noTargetInvokes },
+);
+await shot(page, '34-no-target-capture-disabled.png', 'no-target-capture-disabled');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 390, height: 844 },
+  'en',
+  {},
+  live,
+  dashboard,
+  null,
+  false,
+  [],
+  350
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+const inFlightCapture = page.locator('.capture-action');
+await inFlightCapture.click();
+await page.waitForTimeout(60);
+const captureBusy = await inFlightCapture.getAttribute('aria-busy');
+const capturingText = await inFlightCapture.innerText();
+invariant(captureBusy === 'true', 'trusted-capture-in-progress:aria-busy', { captureBusy });
+invariant(capturingText.includes('Capturing'), 'trusted-capture-in-progress:label', { capturingText });
+const inFlightInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'capture_current_viewport')
+);
+invariant(inFlightInvokes.length === 1, 'trusted-capture-in-progress:single-request', { inFlightInvokes });
+await shot(page, '35-trusted-capture-in-progress.png', 'trusted-capture-in-progress');
+await page.waitForTimeout(400);
+await assertVisible(page, '.capture-status.success', 'trusted-capture-in-progress-completes');
 await page.close();
 
 await fs.writeFile(
