@@ -9,6 +9,7 @@ on:
       - .github/workflows/human-first-trusted-capture-v21-render.yml
       - apps/desktop/src/**
       - apps/desktop/src-tauri/src/**
+      - apps/desktop/src-tauri/permissions/**
       - apps/desktop/src-tauri/tests/human_first_trusted_capture_v21_contract.rs
       - docs/superpowers/specs/2026-09-18-human-first-trusted-capture-v21.md
   workflow_dispatch:
@@ -33,6 +34,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Verify trusted Capture V2.1 contract
         run: cargo test -p localview-desktop --test human_first_trusted_capture_v21_contract -- --nocapture
+      - name: Verify trusted Capture geometry and scale-factor unit tests
+        run: cargo test -p localview-desktop trusted_capture_v21_tests --lib -- --nocapture
+      - name: Verify existing native capture contract remains green
+        run: cargo test -p localview-desktop --test native_capture_contract -- --nocapture
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
