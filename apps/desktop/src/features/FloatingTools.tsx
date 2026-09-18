@@ -285,14 +285,6 @@ function SettingsPanel({
             onChange={(event) => onPreferencesChange({ showToolRail: event.target.checked })}
           />
         </label>
-        <label className="settings-toggle">
-          <span>{translate(locale, 'settings.rememberChrome')}</span>
-          <input
-            type="checkbox"
-            checked={preferences.rememberChromePositions}
-            onChange={(event) => onPreferencesChange({ rememberChromePositions: event.target.checked })}
-          />
-        </label>
         <button className="settings-reset" onClick={onResetWorkspace}>
           {translate(locale, 'action.resetWorkspace')}
         </button>
