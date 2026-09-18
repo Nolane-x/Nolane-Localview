@@ -17,6 +17,10 @@ on:
       - docs/superpowers/specs/2026-09-18-human-first-localview-ui-ux-v2.md
       - tools/human-first-ui-v2/**
 
+concurrency:
+  group: human-first-ui-v2-contract-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
