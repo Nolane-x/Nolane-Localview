@@ -10,7 +10,7 @@ use axum::{
 use chrono::Utc;
 use localview_capture::StableCapturePolicy;
 use localview_control::{router, ControlState};
-use localview_evidence::EvidenceStore;
+use localview_evidence::{EvidenceKind, EvidenceStore};
 use localview_live_bridge::{BridgeActionKind, BridgeActionResult, LiveBridge};
 use localview_observation::ObservationBus;
 use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
@@ -456,4 +456,179 @@ async fn internal_capture_completion_never_creates_public_interaction_evidence()
     assert_eq!(stored.len(), 1);
     assert!(stored[0].ok);
     assert!(!stored[0].payload.to_string().contains("secret"));
+}
+
+
+fn valid_full_page_evidence() -> Value {
+    json!({
+        "artifact_id": "lv-0123456789abcdef",
+        "pixel_width": 800,
+        "pixel_height": 1600,
+        "backend": "webview2",
+        "route": "http://127.0.0.1:5173/page?token=must-not-survive#fragment",
+        "viewport": {
+            "css_width": 800,
+            "css_height": 600,
+            "device_scale_factor": 1.0
+        },
+        "revision": "abc123",
+        "captured_at_unix_ms": 123,
+        "document_css_width": 800.0,
+        "document_css_height": 1600.0,
+        "tile_count": 3,
+        "scroll_offsets_y": [0.0, 600.0, 1000.0]
+    })
+}
+
+#[tokio::test]
+async fn full_page_visual_evidence_is_strict_canonical_and_content_free() {
+    let (state, session_id) = test_state().await;
+    let (status, body) = post(
+        state.clone(),
+        format!("/v1/sessions/{session_id}/evidence/visual-full-page"),
+        true,
+        Some(valid_full_page_evidence()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["evidence_id"].as_str().is_some());
+    assert!(body["deduplicated"].as_bool().is_some());
+
+    let recent = state.evidence.recent_for_session(session_id, 8).await;
+    assert_eq!(recent.len(), 1);
+    let visual = &recent[0];
+    assert_eq!(visual.kind, EvidenceKind::Visual);
+    assert_eq!(visual.region.as_deref(), Some("full_page"));
+    assert_eq!(visual.provenance.source, "native-capture");
+    assert_eq!(visual.payload["route"], "http://127.0.0.1:5173/page");
+    assert_eq!(visual.payload["tile_count"], 3);
+    assert_eq!(visual.payload["scroll_offsets_y"], json!([0.0, 600.0, 1000.0]));
+    let stored = visual.payload.to_string();
+    assert!(!stored.contains("must-not-survive"));
+    assert!(!stored.contains("token"));
+    assert!(!stored.contains("mask"));
+    assert!(!stored.contains("png"));
+}
+
+#[tokio::test]
+async fn full_page_visual_evidence_rejects_spoofed_geometry_and_offsets() {
+    let (state, session_id) = test_state().await;
+
+    let mut cases = Vec::new();
+
+    let mut bad_id = valid_full_page_evidence();
+    bad_id["artifact_id"] = json!("arbitrary-id");
+    cases.push(bad_id);
+
+    let mut bad_backend = valid_full_page_evidence();
+    bad_backend["backend"] = json!("chromium");
+    cases.push(bad_backend);
+
+    let mut bad_route = valid_full_page_evidence();
+    bad_route["route"] = json!("https://example.com/");
+    cases.push(bad_route);
+
+    let mut zero_pixels = valid_full_page_evidence();
+    zero_pixels["pixel_width"] = json!(0);
+    cases.push(zero_pixels);
+
+    let mut width_mismatch = valid_full_page_evidence();
+    width_mismatch["document_css_width"] = json!(801.0);
+    cases.push(width_mismatch);
+
+    let mut too_tall = valid_full_page_evidence();
+    too_tall["document_css_height"] = json!(50_001.0);
+    cases.push(too_tall);
+
+    let mut zero_tiles = valid_full_page_evidence();
+    zero_tiles["tile_count"] = json!(0);
+    zero_tiles["scroll_offsets_y"] = json!([]);
+    cases.push(zero_tiles);
+
+    let mut length_mismatch = valid_full_page_evidence();
+    length_mismatch["scroll_offsets_y"] = json!([0.0, 1000.0]);
+    cases.push(length_mismatch);
+
+    let mut duplicate = valid_full_page_evidence();
+    duplicate["scroll_offsets_y"] = json!([0.0, 600.0, 600.0]);
+    cases.push(duplicate);
+
+    let mut nonzero_first = valid_full_page_evidence();
+    nonzero_first["scroll_offsets_y"] = json!([1.0, 600.0, 1000.0]);
+    cases.push(nonzero_first);
+
+    let mut skipped_middle = valid_full_page_evidence();
+    skipped_middle["scroll_offsets_y"] = json!([0.0, 700.0, 1000.0]);
+    cases.push(skipped_middle);
+
+    let mut impossible_final = valid_full_page_evidence();
+    impossible_final["scroll_offsets_y"] = json!([0.0, 600.0, 999.0]);
+    cases.push(impossible_final);
+
+    let mut too_many = valid_full_page_evidence();
+    too_many["tile_count"] = json!(33);
+    too_many["scroll_offsets_y"] = Value::Array(
+        (0..33)
+            .map(|index| json!(index as f64 * 10.0))
+            .collect(),
+    );
+    cases.push(too_many);
+
+    for payload in cases {
+        let (status, _) = post(
+            state.clone(),
+            format!("/v1/sessions/{session_id}/evidence/visual-full-page"),
+            true,
+            Some(payload),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    assert!(state.evidence.recent_for_session(session_id, 8).await.is_empty());
+}
+
+#[tokio::test]
+async fn full_page_visual_evidence_requires_auth_session_and_exact_schema() {
+    let (state, session_id) = test_state().await;
+    assert_eq!(
+        post(
+            state.clone(),
+            format!("/v1/sessions/{session_id}/evidence/visual-full-page"),
+            false,
+            Some(valid_full_page_evidence()),
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    assert_eq!(
+        post(
+            state.clone(),
+            format!(
+                "/v1/sessions/{}/evidence/visual-full-page",
+                Uuid::new_v4()
+            ),
+            true,
+            Some(valid_full_page_evidence()),
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    let mut unknown = valid_full_page_evidence();
+    unknown["freeze_token"] = json!("must-not-be-accepted");
+    assert_eq!(
+        post(
+            state,
+            format!("/v1/sessions/{session_id}/evidence/visual-full-page"),
+            true,
+            Some(unknown),
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 }
