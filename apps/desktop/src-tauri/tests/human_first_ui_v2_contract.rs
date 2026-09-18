@@ -201,6 +201,33 @@ fn render_audit_covers_minimum_human_first_states() {
 
 
 #[test]
+#[test]
+fn render_audit_covers_storage_denial_and_narrow_long_target_stress() {
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    for artifact in [
+        "28-storage-unavailable.png",
+        "29-narrow-long-target-console.png",
+    ] {
+        assert!(
+            capture.contains(artifact),
+            "render audit is missing resilience artifact {artifact}"
+        );
+    }
+
+    for marker in [
+        "storageFault",
+        "assertPrimaryControlsInViewport",
+        "dashboardLongTarget",
+    ] {
+        assert!(
+            capture.contains(marker),
+            "render audit is missing resilience marker {marker}"
+        );
+    }
+}
+
+
 fn render_audit_is_executable_not_screenshot_only() {
     let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
 
