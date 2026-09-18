@@ -1,0 +1,69 @@
+name: Wave 2 Gate 7 exact implementation regression
+
+on:
+  push:
+    branches:
+      - feat/guarded-full-page-stitching-impl
+    paths:
+      - .github/workflows/wave2-gate7.yml
+
+permissions:
+  contents: read
+
+jobs:
+  focused-core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/guarded-full-page-stitching-impl
+      - name: Install native system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Diff whitespace gate
+        run: git diff --check
+      - name: Normalize repository baseline formatting for compiler parity
+        run: cargo fmt --all
+      - name: Full-page focused package suites
+        run: |
+          cargo test -p localview-visual
+          cargo test -p localview-live-bridge
+          cargo test -p localview-instrumentation
+          cargo test -p localview-control
+      - name: Workspace all-target compilation
+        run: cargo check --workspace --all-targets
+
+  desktop-regression:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/guarded-full-page-stitching-impl
+      - name: Install Tauri system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Normalize repository baseline formatting for compiler parity
+        run: cargo fmt --all
+      - name: Complete desktop tests
+        run: cargo test -p localview-desktop --tests
+
+  scope-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/guarded-full-page-stitching-impl
+          fetch-depth: 0
+      - name: Audit forbidden scope creep
+        shell: bash
+        run: |
+          git fetch origin main
+          test -z "$(git diff --name-only origin/main...HEAD -- crates/native-capture/src)"
+          ! git grep -n -E 'Page\.captureScreenshot|Playwright|Puppeteer|html2canvas' --             apps/desktop/src-tauri/src/visual_capture.rs             crates/visual/src/full_page.rs             crates/control/src/visual_full_page.rs             crates/control/src/capture_settle.rs
+          ! git diff origin/main...HEAD -- apps/desktop/src-tauri/src/visual_capture.rs crates/visual/src/full_page.rs | grep -E '^\+.*(Vec<CapturedFrame>|Vec<RgbaImage>|CaptureTarget::FullPage)'
