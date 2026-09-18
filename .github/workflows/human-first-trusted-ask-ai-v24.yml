@@ -6,6 +6,7 @@ on:
       - feat/human-first-trusted-ask-ai-v24
     paths:
       - .github/workflows/human-first-trusted-ask-ai-v24.yml
+      - .github/workflows/human-first-trusted-ask-ai-v24-render.yml
       - docs/superpowers/specs/2026-09-18-human-first-trusted-ask-ai-v24.md
       - apps/desktop/src/**
       - apps/desktop/src-tauri/src/**
