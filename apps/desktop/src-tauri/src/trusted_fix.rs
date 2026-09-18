@@ -839,6 +839,13 @@ pub fn apply_fix_transaction(
             "trusted Fix could not begin the write transaction".to_string()
         })?;
 
+    let backup_preimage = fs::read(&backup)
+        .map_err(|_| "trusted Fix could not verify the write transaction preimage".to_string())?;
+    if backup_preimage != preimage {
+        rollback(target, &backup, &temp)?;
+        return Err("trusted Fix source changed during apply".into());
+    }
+
     if fs::rename(&temp, target).is_err() {
         rollback(target, &backup, &temp)?;
         return Err("trusted Fix could not replace the source file".into());
@@ -1066,6 +1073,26 @@ mod trusted_fix_tests {
             .map(|offset| drop_handle + offset)
             .expect("temporary source replacement must exist");
         assert!(drop_handle < replace);
+    }
+
+    #[test]
+    fn trusted_fix_transaction_verifies_backup_preimage_before_commit() {
+        let source = include_str!("trusted_fix.rs");
+        let rename = source
+            .find("fs::rename(target, &backup)")
+            .expect("backup rename must exist");
+        let verify = source[rename..]
+            .find("let backup_preimage = fs::read(&backup)")
+            .map(|offset| rename + offset)
+            .expect("renamed backup must be verified");
+        let commit = source[verify..]
+            .find("fs::rename(&temp, target)")
+            .map(|offset| verify + offset)
+            .expect("temp commit must exist after backup verification");
+
+        assert!(rename < verify && verify < commit);
+        assert!(source[verify..commit].contains("backup_preimage != preimage"));
+        assert!(source[verify..commit].contains("rollback(target, &backup, &temp)"));
     }
 
     #[test]
