@@ -8,6 +8,7 @@ on:
       - .github/workflows/human-first-trusted-measure-v22.yml
       - .github/workflows/human-first-trusted-measure-v22-render.yml
       - crates/live-bridge/src/**
+      - crates/live-bridge/Cargo.toml
       - crates/control/src/**
       - crates/control/tests/**
       - apps/desktop/src/**
