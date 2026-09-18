@@ -45,7 +45,7 @@ button,input,select{font:inherit;color:inherit}button{border:0}.localview{positi
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid rgba(154,169,130,.78);outline-offset:2px}
 @keyframes panel-in{from{opacity:0;transform:translateX(-6px) scale(.985)}to{opacity:1;transform:none}}@keyframes command-in{from{opacity:0;transform:translateX(-50%) translateY(-6px) scale(.985)}to{opacity:1;transform:translateX(-50%)}}@keyframes orbit-pulse{0%,100%{opacity:.55;transform:scale(.85)}50%{opacity:1;transform:scale(1.1)}}
 @media(max-width:980px){.top-pill{max-width:calc(100vw - 92px);left:62px;right:16px;transform:none}.target-meta{max-width:220px}.command-panel{left:62px;right:16px;transform:none;width:auto}@keyframes command-in{from{opacity:0;transform:translateY(-6px) scale(.985)}to{opacity:1;transform:none}}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
+.is-reduced-motion *,.is-reduced-motion *::before,.is-reduced-motion *::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}\n@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
 
 
 /* Human-first V2: actionable surfaces use readable sizes; diagnostics may remain denser. */

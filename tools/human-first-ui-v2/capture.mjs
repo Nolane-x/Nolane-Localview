@@ -63,6 +63,13 @@ async function assertNoPageErrors(page, state) {
   invariant(errors.length === 0, `${state}:no-page-errors`, { errors });
 }
 
+async function readStoredPreferences(page) {
+  return page.evaluate(() => {
+    const raw = localStorage.getItem('localview.preferences.v2');
+    return raw ? JSON.parse(raw) : null;
+  });
+}
+
 async function shot(page, filename, state = filename) {
   await assertNoHorizontalOverflow(page, state);
   await assertVisibleButtonsNamed(page, state);
@@ -300,6 +307,73 @@ await assertDocumentLocale(page, 'en', 'malformed-preferences-recovered');
 await assertVisible(page, '.top-pill', 'malformed-preferences-recovered');
 await assertVisible(page, '.floating-rail', 'malformed-preferences-recovered');
 await shot(page, '16-malformed-preferences-recovered.png', 'malformed-preferences-recovered');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', { reducedMotion: 'reduce' });
+await assertVisible(page, '.is-reduced-motion', 'explicit-reduced-motion');
+await page.keyboard.press('i');
+await page.waitForTimeout(50);
+await assertVisible(page, '.panel-inspect', 'explicit-reduced-motion');
+const reducedMotionDuration = await page.locator('.panel-inspect').evaluate((element) =>
+  getComputedStyle(element).animationDuration
+);
+invariant(
+  Number.parseFloat(reducedMotionDuration) <= 0.001,
+  'explicit-reduced-motion:animation-collapsed',
+  { animationDuration: reducedMotionDuration },
+);
+await shot(page, '17-explicit-reduced-motion.png', 'explicit-reduced-motion');
+await page.close();
+
+const invalidPreferencePayload = '{"version":1,"locale":"xx-ZZ","showTargetBar":"yes","showToolRail":null,"rememberChromePositions":"no","targetBarPosition":{"x":1e309,"y":12},"toolRailPosition":{"x":12,"y":1e309},"annotationPersistence":"forever","notifications":"everything","autoOpen":"magic","reducedMotion":"spin","density":"tiny","accent":"electric-blue"}';
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  live,
+  dashboard,
+  invalidPreferencePayload
+);
+await assertDocumentLocale(page, 'en', 'invalid-preferences-normalized');
+await assertVisible(page, '.top-pill', 'invalid-preferences-normalized');
+await assertVisible(page, '.floating-rail', 'invalid-preferences-normalized');
+await page.keyboard.press('Control+Shift+T');
+await page.waitForTimeout(100);
+await assertHidden(page, '.top-pill', 'invalid-preferences-normalized');
+const normalizedPreferences = await readStoredPreferences(page);
+invariant(normalizedPreferences?.version === 2, 'invalid-preferences-normalized:version');
+invariant(normalizedPreferences?.locale === 'en', 'invalid-preferences-normalized:locale');
+invariant(normalizedPreferences?.showTargetBar === false, 'invalid-preferences-normalized:target-toggle-persists');
+invariant(normalizedPreferences?.showToolRail === true, 'invalid-preferences-normalized:tool-rail-default');
+invariant(normalizedPreferences?.rememberChromePositions === true, 'invalid-preferences-normalized:remember-default');
+invariant(normalizedPreferences?.targetBarPosition === null, 'invalid-preferences-normalized:target-position-rejected');
+invariant(normalizedPreferences?.toolRailPosition === null, 'invalid-preferences-normalized:rail-position-rejected');
+invariant(normalizedPreferences?.annotationPersistence === 'session', 'invalid-preferences-normalized:annotation');
+invariant(normalizedPreferences?.notifications === 'important', 'invalid-preferences-normalized:notifications');
+invariant(normalizedPreferences?.autoOpen === 'first_session', 'invalid-preferences-normalized:auto-open');
+invariant(normalizedPreferences?.reducedMotion === 'system', 'invalid-preferences-normalized:motion');
+invariant(normalizedPreferences?.density === 'comfortable', 'invalid-preferences-normalized:density');
+invariant(normalizedPreferences?.accent === 'muted-moss', 'invalid-preferences-normalized:accent');
+await page.keyboard.press('Control+Shift+T');
+await page.waitForTimeout(100);
+await assertVisible(page, '.top-pill', 'invalid-preferences-normalized');
+await shot(page, '18-invalid-preferences-normalized.png', 'invalid-preferences-normalized');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  live,
+  dashboard,
+  '{"locale":"vi"}'
+);
+await assertDocumentLocale(page, 'vi', 'partial-preferences-recovered');
+await assertVisible(page, '.top-pill', 'partial-preferences-recovered');
+await assertVisible(page, '.floating-rail', 'partial-preferences-recovered');
+await shot(page, '19-partial-preferences-recovered.png', 'partial-preferences-recovered');
 await page.close();
 
 await fs.writeFile(
