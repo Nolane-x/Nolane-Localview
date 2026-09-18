@@ -470,6 +470,7 @@ export default function LocalViewShell() {
             captureState={captureState}
             onCapture={() => void captureCurrentViewport()}
             sourceOpenState={sourceOpenState}
+            selectedReference={selectedReference}
             onOpenSource={(reference) => void openSourceForSelection(reference)}
             measureState={measureState}
             onMeasure={(reference) => void measureCurrentSelection(reference)}
