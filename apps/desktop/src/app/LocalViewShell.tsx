@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import { COMMAND_IDS, type CommandId } from '../commands';
 import { applyDocumentLocale, translate } from '../i18n';
@@ -14,6 +14,7 @@ import {
   CommandRailButton,
   FloatingPanel,
   RailButton,
+  type HumanCaptureState,
   type ToolId,
 } from '../features/FloatingTools';
 import {
@@ -55,6 +56,9 @@ export default function LocalViewShell() {
   const [live, setLive] = useState<LiveSessionState>(emptyLive);
   const [immersive, setImmersive] = useState(false);
   const [preferences, setPreferences] = useState<LocalViewPreferences>(() => loadPreferences());
+  const [captureState, setCaptureState] = useState<HumanCaptureState>({ status: 'idle' });
+  const captureInFlight = useRef(false);
+  const captureGeneration = useRef(0);
 
   const patchPreferences = useCallback((patch: Partial<LocalViewPreferences>) => {
     setPreferences((current) => persistPreferences(current, patch));
@@ -92,6 +96,12 @@ export default function LocalViewShell() {
     () => state.sessions.find((session) => session.id === selected) ?? state.sessions[0],
     [state.sessions, selected],
   );
+
+  useEffect(() => {
+    captureGeneration.current += 1;
+    captureInFlight.current = false;
+    setCaptureState({ status: 'idle' });
+  }, [current?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,6 +152,43 @@ export default function LocalViewShell() {
       );
     } catch (cause) {
       setError(String(cause));
+    }
+  }, [current]);
+
+  const captureCurrentViewport = useCallback(async () => {
+    const session = current;
+    if (!session || captureInFlight.current) return;
+
+    captureInFlight.current = true;
+    const generation = ++captureGeneration.current;
+    setCaptureState({ status: 'capturing' });
+
+    try {
+      const receipt = await api.captureCurrentViewport(session.id);
+      if (generation !== captureGeneration.current) return;
+      setCaptureState({
+        status: 'success',
+        evidenceId: receipt.evidence_id,
+        pixelWidth: receipt.pixel_width,
+        pixelHeight: receipt.pixel_height,
+        backend: receipt.backend,
+      });
+    } catch (cause) {
+      if (generation !== captureGeneration.current) return;
+      const detail = String(cause).toLowerCase();
+      const unavailable =
+        detail.includes('managed surface') ||
+        detail.includes('surface is unavailable') ||
+        detail.includes('no localview-managed') ||
+        detail.includes('open preview');
+      setCaptureState({
+        status: 'failure',
+        reason: unavailable ? 'unavailable' : 'failed',
+      });
+    } finally {
+      if (generation === captureGeneration.current) {
+        captureInFlight.current = false;
+      }
     }
   }, [current]);
 
@@ -278,6 +325,8 @@ export default function LocalViewShell() {
             onClose={() => setActiveTool(undefined)}
             onSelect={setSelected}
             onOpenNative={() => void openNative()}
+            captureState={captureState}
+            onCapture={() => void captureCurrentViewport()}
             onCommand={executeCommand}
             onPreferencesChange={patchPreferences}
             onResetWorkspace={resetWorkspacePreferences}
