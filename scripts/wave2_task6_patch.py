@@ -31,6 +31,7 @@ const MAX_PAUSED_ANIMATIONS: u64 = 2_048;''',
     '''const VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
 const FULL_PAGE_VISUAL_FREEZE_LEASE_MS: u64 = 30_000;
 const FULL_PAGE_TRANSACTION_TIMEOUT_MS: u64 = 30_000;
+const FULL_PAGE_CLEANUP_RESERVE_MS: u64 = 2_000;
 const MAX_PAUSED_ANIMATIONS: u64 = 2_048;
 const MAX_POSITIONAL_SCAN_ELEMENTS: u64 = 4_096;''',
     "full-page desktop constants",
@@ -159,18 +160,20 @@ async fn full_page_capture_after_gate(
 ) -> Result<FullPageCaptureReceipt, String> {
     let expected_route = managed_surface_canonical_route(&app, session_id)
         .map_err(|_| "full_page_route_drift".to_string())?;
+    let work_deadline =
+        deadline - Duration::from_millis(FULL_PAGE_CLEANUP_RESERVE_MS);
 
-    tokio::time::timeout_at(deadline, wait_for_capture_settle(session_id))
+    tokio::time::timeout_at(work_deadline, wait_for_capture_settle(session_id))
         .await
         .map_err(|_| "full_page_transaction_timeout".to_string())?
         .map_err(|_| "full_page_settle_failed".to_string())?;
 
-    let freeze = tokio::time::timeout_at(deadline, freeze_full_page_visual_state(session_id))
+    let freeze = tokio::time::timeout_at(work_deadline, freeze_full_page_visual_state(session_id))
         .await
         .map_err(|_| "full_page_transaction_timeout".to_string())?
         .map_err(|_| "full_page_visual_freeze_failed".to_string())?;
 
-    let work = tokio::time::timeout_at(deadline, async {
+    let work = tokio::time::timeout_at(work_deadline, async {
         validate_full_page_freeze_context(&freeze, &viewport)?;
         let plan = plan_full_page(
             freeze.document_css_width,
@@ -199,7 +202,7 @@ async fn full_page_capture_after_gate(
     .unwrap_or_else(|_| Err("full_page_transaction_timeout".to_string()));
 
     let cleanup =
-        cleanup_full_page_state(session_id, &viewport, &freeze).await;
+        cleanup_full_page_state(session_id, &viewport, &freeze, deadline).await;
 
     let transaction = match (work, cleanup) {
         (Ok(transaction), Ok(())) => transaction,
@@ -367,15 +370,32 @@ async fn cleanup_full_page_state(
     session_id: SessionId,
     viewport: &ViewportMeta,
     freeze: &FullPageFreezeVisualStateReceipt,
+    deadline: tokio::time::Instant,
 ) -> Result<(), String> {
-    let scroll_restore = match capture_scroll_to(session_id, &freeze.token, freeze.scroll_y).await {
-        Ok(receipt) => {
-            validate_capture_scroll_receipt(&receipt, freeze, viewport, freeze.scroll_y).is_ok()
-        }
-        Err(_) => false,
+    let original_scroll_y = freeze.scroll_y;
+    let scroll_restore = match tokio::time::timeout_at(
+        deadline,
+        capture_scroll_to(session_id, &freeze.token, original_scroll_y),
+    )
+    .await
+    {
+        Ok(Ok(receipt)) => validate_capture_scroll_receipt(
+            &receipt,
+            freeze,
+            viewport,
+            original_scroll_y,
+        )
+        .is_ok(),
+        _ => false,
     };
 
-    let visual_restore = restore_visual_state(session_id, &freeze.token).await.is_ok();
+    let visual_restore =
+        match tokio::time::timeout_at(deadline, restore_visual_state(session_id, &freeze.token))
+            .await
+        {
+            Ok(Ok(())) => true,
+            _ => false,
+        };
 
     match (scroll_restore, visual_restore) {
         (true, true) => Ok(()),
