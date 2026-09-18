@@ -47,6 +47,22 @@ export type HumanCaptureState =
     }
   | { status: 'failure'; reason: 'unavailable' | 'failed' };
 
+export type HumanSourceOpenState =
+  | { status: 'idle' }
+  | { status: 'opening'; reference: string }
+  | {
+      status: 'success';
+      reference: string;
+      displayFile: string;
+      line: number;
+      column?: number;
+    }
+  | {
+      status: 'failure';
+      reference: string;
+      reason: 'unavailable' | 'launcher_unavailable' | 'failed';
+    };
+
 export type HumanMeasureState =
   | { status: 'idle' }
   | { status: 'measuring'; reference: string }
@@ -83,6 +99,8 @@ interface FloatingPanelProps {
   onOpenNative: () => void;
   captureState: HumanCaptureState;
   onCapture: () => void;
+  sourceOpenState: HumanSourceOpenState;
+  onOpenSource: (reference: string) => void;
   measureState: HumanMeasureState;
   onMeasure: (reference: string) => void;
   onCommand: (command: CommandId) => void;
@@ -103,6 +121,8 @@ export function FloatingPanel({
   onOpenNative,
   captureState,
   onCapture,
+  sourceOpenState,
+  onOpenSource,
   measureState,
   onMeasure,
   onCommand,
@@ -123,6 +143,8 @@ export function FloatingPanel({
             locale={locale}
             captureState={captureState}
             onCapture={onCapture}
+            sourceOpenState={sourceOpenState}
+            onOpenSource={onOpenSource}
             measureState={measureState}
             onMeasure={onMeasure}
           />
@@ -167,6 +189,8 @@ function Inspector({
   locale,
   captureState,
   onCapture,
+  sourceOpenState,
+  onOpenSource,
   measureState,
   onMeasure,
 }: {
@@ -176,18 +200,18 @@ function Inspector({
   locale: SupportedLocale;
   captureState: HumanCaptureState;
   onCapture: () => void;
+  sourceOpenState: HumanSourceOpenState;
+  onOpenSource: (reference: string) => void;
   measureState: HumanMeasureState;
   onMeasure: (reference: string) => void;
 }) {
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
-  const source = focused?.payload && typeof focused.payload.source === 'string'
-    ? String(focused.payload.source)
-    : undefined;
   const measureReference = typeof focused?.reference === 'string'
     && /^@e[0-9a-f]+$/i.test(focused.reference)
     ? focused.reference
     : undefined;
   const captureBusy = captureState.status === 'capturing';
+  const sourceOpenBusy = sourceOpenState.status === 'opening';
   const measureBusy = measureState.status === 'measuring';
 
   return (
@@ -206,11 +230,22 @@ function Inspector({
       )}
 
       <div className="quick-action-grid" aria-label={translate(locale, 'aria.inspectorActions')}>
-        <UnavailableInspectorAction
-          icon={<SourceIcon />}
-          label={translate(locale, 'action.openSource')}
-          reason={source ? 'Source opening is not connected to this panel yet.' : translate(locale, 'inspector.sourceUnavailable')}
-        />
+        <button
+          className="source-open-action"
+          onClick={() => measureReference && onOpenSource(measureReference)}
+          disabled={!current || !measureReference || sourceOpenBusy}
+          aria-busy={sourceOpenBusy}
+          title={
+            !current
+              ? translate(locale, 'source.unavailable')
+              : !measureReference
+                ? translate(locale, 'source.selectFirst')
+                : translate(locale, 'action.openSource')
+          }
+        >
+          <SourceIcon />
+          <span>{sourceOpenBusy ? translate(locale, 'source.opening') : translate(locale, 'action.openSource')}</span>
+        </button>
         <button
           className="measure-action"
           onClick={() => measureReference && onMeasure(measureReference)}
@@ -248,6 +283,29 @@ function Inspector({
           reason={focused ? translate(locale, 'ai.unavailable') : translate(locale, 'inspector.noSelection')}
         />
       </div>
+
+      {sourceOpenState.status === 'success' && (
+        <div className="source-open-status success" role="status" aria-live="polite">
+          <strong>{translate(locale, 'source.opened')}</strong>
+          <code title={sourceOpenState.displayFile}>
+            {sourceOpenState.displayFile}:{sourceOpenState.line}{sourceOpenState.column ? `:${sourceOpenState.column}` : ''}
+          </code>
+        </div>
+      )}
+      {sourceOpenState.status === 'failure' && (
+        <div className="source-open-status failure" role="status" aria-live="polite">
+          <strong>
+            {translate(
+              locale,
+              sourceOpenState.reason === 'launcher_unavailable'
+                ? 'source.launcherUnavailable'
+                : sourceOpenState.reason === 'unavailable'
+                  ? 'source.unavailable'
+                  : 'source.failed',
+            )}
+          </strong>
+        </div>
+      )}
 
       {measureState.status === 'success' && (
         <div className="measure-status success" role="status" aria-live="polite">
@@ -469,6 +527,7 @@ function CommandPanel({
   const [query, setQuery] = useState('');
   const commands = [
     { id: COMMAND_IDS.inspectActivate, icon: <InspectIcon />, title: translate(locale, 'tool.inspect'), detail: current?.project.display_name ?? '', keys: 'I', disabled: !current },
+    { id: COMMAND_IDS.sourceOpen, icon: <SourceIcon />, title: translate(locale, 'action.openSource'), detail: '', keys: '', disabled: !current },
     { id: COMMAND_IDS.responsiveOpen, icon: <ResponsiveIcon />, title: translate(locale, 'tool.responsive'), detail: '', keys: 'R', disabled: !current },
     { id: COMMAND_IDS.consoleOpen, icon: <ConsoleIcon />, title: translate(locale, 'tool.console'), detail: '', keys: 'C', disabled: !current },
     { id: COMMAND_IDS.networkOpen, icon: <NetworkIcon />, title: translate(locale, 'tool.network'), detail: '', keys: 'N', disabled: !current },
