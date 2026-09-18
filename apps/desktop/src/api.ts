@@ -8,6 +8,27 @@ export interface MeasureRect {
   height: number;
 }
 
+export interface AiProviderCapability {
+  available: boolean;
+  label?: string | null;
+  reason?: 'not_configured' | 'unsupported' | null;
+}
+
+export interface HumanAskAiRequest {
+  sessionId: string;
+  reference: string;
+  question: string;
+}
+
+export interface HumanAskAiReceipt {
+  reference: string;
+  answer: string;
+  providerLabel: string;
+  contextVersion: number;
+  snapshotVersion: number;
+  completedAtUnixMs: number;
+}
+
 export interface HumanSourceOpenRequest {
   sessionId: string;
   reference: string;
@@ -58,6 +79,10 @@ export const api = {
   resume: () => invoke<void>('resume_runtime'),
   openPreview: (sessionId: string, url: string, title: string) => invoke<void>('open_preview', { sessionId, url, title }),
   captureCurrentViewport: (sessionId: string) => invoke<VisualCaptureReceipt>('capture_current_viewport', { sessionId, revision: null }),
+  aiProviderCapability: () =>
+    invoke<AiProviderCapability>('ai_provider_capability'),
+  askAiAboutSelection: ({ sessionId, reference, question }: HumanAskAiRequest) =>
+    invoke<HumanAskAiReceipt>('ask_ai_about_selection', { sessionId, reference, question }),
   openSourceForSelection: ({ sessionId, reference }: HumanSourceOpenRequest) =>
     invoke<HumanSourceOpenReceipt>('open_source_for_selection', { sessionId, reference }),
   measureElement: (sessionId: string, reference: string) => invoke<ElementMeasureReceipt>('measure_current_selection', { sessionId, reference }),
