@@ -499,6 +499,34 @@ async function pageFor(
   return page;
 }
 
+async function fixPageFor(
+  browser,
+  viewport = { width: 1440, height: 900 },
+  locale = 'en',
+  liveState = liveMeasure,
+  dashboardState = dashboard,
+  fixOptions = {},
+  aiOptions = { providerAvailable: true, providerLabel: 'Audit AI Bridge' },
+) {
+  return pageFor(
+    browser,
+    viewport,
+    locale,
+    {},
+    liveState,
+    dashboardState,
+    null,
+    false,
+    [],
+    0,
+    0,
+    0,
+    null,
+    aiOptions,
+    { providerAvailable: true, providerLabel: 'Audit Fix Bridge', ...fixOptions },
+  );
+}
+
 await fs.mkdir('human-first-ui-v2-render', { recursive: true });
 const browser = await chromium.launch({ headless: true });
 
