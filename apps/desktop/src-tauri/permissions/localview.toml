@@ -1,6 +1,6 @@
 [[permission]]
 identifier = "maincommands"
-description = "Allows the bundled LocalView dashboard to inspect runtime state and live evidence, pause or resume discovery, open a localhost preview, capture a bounded managed viewport, and manage the bounded native workspace surface when compiled."
+description = "Allows the bundled LocalView dashboard to inspect runtime state and live evidence, pause or resume discovery, open a localhost preview, open trusted selected-element source, capture a bounded managed viewport, and manage the bounded native workspace surface when compiled."
 commands.allow = [
   "dashboard_state",
   "live_session_state",
@@ -9,6 +9,7 @@ commands.allow = [
   "open_preview",
   "capture_viewport",
   "capture_current_viewport",
+  "open_source_for_selection",
   "measure_current_selection",
   "workspace_surface_open",
   "workspace_surface_set_bounds",
