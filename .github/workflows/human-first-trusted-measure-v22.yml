@@ -47,6 +47,8 @@ jobs:
         run: cargo test -p localview-live-bridge measure --lib -- --nocapture
       - name: Verify control read-only measure authority tests
         run: cargo test -p localview-control measure --lib -- --nocapture
+      - name: Verify control Measure HTTP queue authority
+        run: cargo test -p localview-control --test public_action_authority measure_public_route -- --nocapture
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
