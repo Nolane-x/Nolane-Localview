@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod native_executor_worker;
+mod trusted_ai;
 pub mod visual_capture;
 pub mod workspace_surface;
 
@@ -456,6 +457,78 @@ async fn live_session_state(session_id: SessionId) -> Result<LiveSessionState, S
     Ok(LiveSessionState {
         observer,
         action_results,
+    })
+}
+
+#[tauri::command]
+fn ai_provider_capability() -> Result<trusted_ai::AiProviderCapability, String> {
+    Ok(trusted_ai::provider_capability_from_env())
+}
+
+#[tauri::command]
+async fn ask_ai_about_selection(
+    app: tauri::AppHandle,
+    session_id: SessionId,
+    reference: String,
+    question: String,
+) -> Result<trusted_ai::HumanAskAiReceipt, String> {
+    trusted_ai::validate_reference(&reference)?;
+    let question = trusted_ai::validate_question(&question)?;
+    let pre_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+
+    let token = read_token().await?;
+    let client = control_client()?;
+
+    let session = client
+        .get(format!("http://127.0.0.1:45454/v1/sessions/{session_id}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "trusted AI runtime unavailable".to_string())?
+        .error_for_status()
+        .map_err(|_| "trusted AI session is unavailable".to_string())?
+        .json::<Session>()
+        .await
+        .map_err(|_| "trusted AI session is unavailable".to_string())?;
+
+    let snapshot = client
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/semantic-snapshot/fresh"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "trusted AI runtime unavailable".to_string())?
+        .error_for_status()
+        .map_err(|_| "trusted AI context is unavailable".to_string())?
+        .json::<PageSnapshot>()
+        .await
+        .map_err(|_| "trusted AI context is unavailable".to_string())?;
+
+    let snapshot_route = visual_capture::canonical_visual_diff_route(&snapshot.route)?;
+    if snapshot_route != pre_route {
+        return Err("trusted AI route changed before context resolution".into());
+    }
+
+    let context = trusted_ai::build_trusted_ai_context(&session, &snapshot, &reference)?;
+
+    let post_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+    if post_route != pre_route {
+        return Err("trusted AI route changed while context was being prepared".into());
+    }
+
+    let provider = trusted_ai::provider_config_from_env()
+        .map_err(|_| "trusted AI provider unavailable".to_string())?;
+    let provider_answer =
+        trusted_ai::ask_with_provider(&client, &provider, &context, &question).await?;
+
+    Ok(trusted_ai::HumanAskAiReceipt {
+        reference,
+        answer: provider_answer.answer,
+        provider_label: provider_answer.provider_label,
+        context_version: context.context_version,
+        snapshot_version: context.snapshot_version,
+        completed_at_unix_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
     })
 }
 
@@ -2112,6 +2185,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             dashboard_state,
             live_session_state,
+            ai_provider_capability,
+            ask_ai_about_selection,
             open_source_for_selection,
             measure_current_selection,
             pause_runtime,

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { COMMAND_IDS, type CommandId } from '../commands';
+import type { AiProviderCapability } from '../api';
 import type { DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
@@ -76,6 +77,23 @@ export type HumanMeasureState =
     }
   | { status: 'failure'; reason: 'failed' | 'unavailable' };
 
+export type HumanAskAiState =
+  | { status: 'idle' }
+  | { status: 'asking'; reference: string; question: string }
+  | {
+      status: 'success';
+      reference: string;
+      question: string;
+      answer: string;
+      providerLabel: string;
+      snapshotVersion: number;
+    }
+  | {
+      status: 'failure';
+      reference?: string;
+      reason: 'provider_unavailable' | 'context_unavailable' | 'invalid_question' | 'question_too_long' | 'failed';
+    };
+
 export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { messageKey: MessageKey; shortcut: string }> = {
   inspect: { messageKey: 'tool.inspect', shortcut: 'I' },
   responsive: { messageKey: 'tool.responsive', shortcut: 'R' },
@@ -104,6 +122,10 @@ interface FloatingPanelProps {
   onOpenSource: (reference: string) => void;
   measureState: HumanMeasureState;
   onMeasure: (reference: string) => void;
+  aiProviderCapability: AiProviderCapability;
+  askAiState: HumanAskAiState;
+  onAskAi: (question: string) => void;
+  onRefreshAiProvider: () => void;
   onCommand: (command: CommandId) => void;
   onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
   onResetWorkspace: () => void;
@@ -127,6 +149,10 @@ export function FloatingPanel({
   onOpenSource,
   measureState,
   onMeasure,
+  aiProviderCapability,
+  askAiState,
+  onAskAi,
+  onRefreshAiProvider,
   onCommand,
   onPreferencesChange,
   onResetWorkspace,
@@ -150,6 +176,9 @@ export function FloatingPanel({
             onOpenSource={onOpenSource}
             measureState={measureState}
             onMeasure={onMeasure}
+            aiProviderCapability={aiProviderCapability}
+            askAiState={askAiState}
+            onAskAi={onAskAi}
           />
         )}
         {tool === 'advanced' && <AdvancedPanel current={current} live={live} locale={locale} onOpenNative={onOpenNative} />}
@@ -164,7 +193,17 @@ export function FloatingPanel({
         {tool === 'responsive' && <ResponsivePanel current={current} locale={locale} />}
         {tool === 'console' && <ConsolePanel live={live} locale={locale} onOpenNative={onOpenNative} />}
         {tool === 'network' && <NetworkPanel current={current} live={live} locale={locale} onOpenNative={onOpenNative} />}
-        {tool === 'ai' && <AiPanel current={current} locale={locale} />}
+        {tool === 'ai' && (
+          <AiPanel
+            current={current}
+            locale={locale}
+            selectedReference={selectedReference}
+            providerCapability={aiProviderCapability}
+            askAiState={askAiState}
+            onAskAi={onAskAi}
+            onRefreshProvider={onRefreshAiProvider}
+          />
+        )}
         {tool === 'sessions' && <SessionsPanel state={state} current={current} locale={locale} onSelect={onSelect} />}
         {tool === 'command' && (
           <CommandPanel
@@ -174,6 +213,7 @@ export function FloatingPanel({
             locale={locale}
             preferences={preferences}
             selectedReference={selectedReference}
+            providerCapability={aiProviderCapability}
             onCommand={onCommand}
           />
         )}
@@ -201,6 +241,25 @@ function sourceOpenFailureMessage(
   }
 }
 
+function askAiFailureMessage(
+  locale: SupportedLocale,
+  reason: Extract<HumanAskAiState, { status: 'failure' }>['reason'],
+): string {
+  switch (reason) {
+    case 'provider_unavailable':
+      return translate(locale, 'ai.unavailable');
+    case 'context_unavailable':
+      return translate(locale, 'ai.contextUnavailable');
+    case 'invalid_question':
+      return translate(locale, 'ai.enterQuestion');
+    case 'question_too_long':
+      return translate(locale, 'ai.questionTooLong');
+    case 'failed':
+    default:
+      return translate(locale, 'ai.failed');
+  }
+}
+
 function Inspector({
   current,
   live,
@@ -213,6 +272,9 @@ function Inspector({
   onOpenSource,
   measureState,
   onMeasure,
+  aiProviderCapability,
+  askAiState,
+  onAskAi,
 }: {
   current?: Session;
   live: LiveSessionState;
@@ -225,12 +287,16 @@ function Inspector({
   onOpenSource: (reference: string) => void;
   measureState: HumanMeasureState;
   onMeasure: (reference: string) => void;
+  aiProviderCapability: AiProviderCapability;
+  askAiState: HumanAskAiState;
+  onAskAi: (question: string) => void;
 }) {
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
   const measureReference = selectedReference;
   const captureBusy = captureState.status === 'capturing';
   const sourceOpenBusy = sourceOpenState.status === 'opening';
   const measureBusy = measureState.status === 'measuring';
+  const askAiBusy = askAiState.status === 'asking';
 
   return (
     <div className="inspector-stack human-inspector">
@@ -290,11 +356,24 @@ function Inspector({
           <CaptureIcon />
           <span>{captureBusy ? translate(locale, 'capture.inProgress') : translate(locale, 'action.capture')}</span>
         </button>
-        <UnavailableInspectorAction
-          icon={<SparkIcon />}
-          label={translate(locale, 'action.askAi')}
-          reason={focused ? translate(locale, 'ai.unavailable') : translate(locale, 'inspector.noSelection')}
-        />
+        <button
+          className="ask-ai-action"
+          onClick={() => onAskAi(translate(locale, 'ai.defaultQuestion'))}
+          disabled={!current || !measureReference || !aiProviderCapability.available || askAiBusy}
+          aria-busy={askAiBusy}
+          title={
+            !current
+              ? translate(locale, 'empty.noTarget')
+              : !measureReference
+                ? translate(locale, 'inspector.noSelection')
+                : !aiProviderCapability.available
+                  ? translate(locale, 'ai.unavailable')
+                  : translate(locale, 'action.askAi')
+          }
+        >
+          <SparkIcon />
+          <span>{askAiBusy ? translate(locale, 'ai.asking') : translate(locale, 'action.askAi')}</span>
+        </button>
         <UnavailableInspectorAction
           icon={<ActivityIcon />}
           label={translate(locale, 'action.fix')}
@@ -494,18 +573,123 @@ function NetworkPanel({ current, live, locale, onOpenNative }: { current?: Sessi
   </div>;
 }
 
-function AiPanel({ current, locale }: { current?: Session; locale: SupportedLocale }) {
-  const unavailableReason = current ? translate(locale, 'ai.unavailable') : translate(locale, 'empty.noTarget');
+function AiPanel({
+  current,
+  locale,
+  selectedReference,
+  providerCapability,
+  askAiState,
+  onAskAi,
+  onRefreshProvider,
+}: {
+  current?: Session;
+  locale: SupportedLocale;
+  selectedReference?: string;
+  providerCapability: AiProviderCapability;
+  askAiState: HumanAskAiState;
+  onAskAi: (question: string) => void;
+  onRefreshProvider: () => void;
+}) {
+  const [question, setQuestion] = useState(() => translate(locale, 'ai.defaultQuestion'));
+  const busy = askAiState.status === 'asking';
+  const canAsk = !!current && !!selectedReference && providerCapability.available && !busy;
+  const unavailableReason = !current
+    ? translate(locale, 'empty.noTarget')
+    : !selectedReference
+      ? translate(locale, 'inspector.noSelection')
+      : translate(locale, 'ai.unavailable');
+
+  const submit = () => {
+    if (!canAsk) return;
+    onAskAi(question);
+  };
+
   return <div className="ai-panel-content human-ai-panel">
-    <div className="ai-mark"><SparkIcon /></div>
-    <h2>AI</h2>
-    <div className="suggestion-grid">
-      <button disabled aria-disabled="true" title={unavailableReason}>{translate(locale, 'ai.askSelection')}</button>
-      <button disabled aria-disabled="true" title={unavailableReason}>{translate(locale, 'ai.explainIssue')}</button>
-      <button disabled aria-disabled="true" title={unavailableReason}>{translate(locale, 'ai.fixSelection')}</button>
-      <button disabled aria-disabled="true" title={unavailableReason}>{translate(locale, 'ai.verifyChange')}</button>
+    <div className="ai-panel-heading">
+      <div className="ai-mark"><SparkIcon /></div>
+      <div>
+        <h2>AI</h2>
+        <span className={`compact-status ${providerCapability.available ? 'success' : ''}`}>
+          {providerCapability.available
+            ? `${translate(locale, 'ai.providerConnected')}${providerCapability.label ? ` · ${providerCapability.label}` : ''}`
+            : translate(locale, 'ai.unavailable')}
+        </span>
+      </div>
     </div>
-    <span className="compact-status">{translate(locale, 'ai.unavailable')}</span>
+
+    <div className="ai-selection-summary">
+      <span>{translate(locale, 'inspector.currentTarget')}</span>
+      <strong>{selectedReference ?? translate(locale, 'inspector.noSelection')}</strong>
+      {current && <small>{current.project.display_name}</small>}
+    </div>
+
+    <label className="ai-question-label">
+      <span>{translate(locale, 'ai.question')}</span>
+      <textarea
+        value={question}
+        onChange={(event) => setQuestion(event.target.value)}
+        disabled={!current || busy}
+        placeholder={translate(locale, 'ai.enterQuestion')}
+        rows={4}
+      />
+    </label>
+
+    <div className="ai-primary-actions">
+      <button
+        className="ai-submit-action"
+        onClick={submit}
+        disabled={!canAsk}
+        aria-busy={busy}
+        title={canAsk ? translate(locale, 'ai.ask') : unavailableReason}
+      >
+        <SparkIcon />
+        <span>{busy ? translate(locale, 'ai.asking') : translate(locale, 'ai.ask')}</span>
+      </button>
+      {!providerCapability.available && (
+        <button className="ai-retry-action" onClick={onRefreshProvider}>
+          {translate(locale, 'action.retry')}
+        </button>
+      )}
+    </div>
+
+    <div className="suggestion-grid">
+      <button
+        onClick={() => onAskAi(translate(locale, 'ai.defaultQuestion'))}
+        disabled={!canAsk}
+        aria-disabled={!canAsk}
+        title={canAsk ? translate(locale, 'ai.askSelection') : unavailableReason}
+      >
+        {translate(locale, 'ai.askSelection')}
+      </button>
+      <button disabled aria-disabled="true" title={translate(locale, 'ai.notImplementedYet')}>
+        {translate(locale, 'ai.explainIssue')}
+      </button>
+      <button disabled aria-disabled="true" title={translate(locale, 'ai.fixUnavailable')}>
+        {translate(locale, 'ai.fixSelection')}
+      </button>
+      <button disabled aria-disabled="true" title={translate(locale, 'ai.notImplementedYet')}>
+        {translate(locale, 'ai.verifyChange')}
+      </button>
+    </div>
+
+    {askAiState.status === 'success' && (
+      <section className="ai-answer" role="status" aria-live="polite">
+        <div className="ai-answer-header">
+          <strong>{translate(locale, 'ai.answer')}</strong>
+          <span>{askAiState.providerLabel}</span>
+        </div>
+        <pre className="ai-answer-text">{askAiState.answer}</pre>
+        <small>{translate(locale, 'ai.advisory')}</small>
+      </section>
+    )}
+
+    {askAiState.status === 'failure' && (
+      <div className="ai-status failure" role="status" aria-live="polite">
+        <strong>{askAiFailureMessage(locale, askAiState.reason)}</strong>
+      </div>
+    )}
+
+    <p className="ai-privacy-note">{translate(locale, 'ai.privacyNote')}</p>
   </div>;
 }
 
@@ -525,6 +709,7 @@ function CommandPanel({
   locale,
   preferences,
   selectedReference,
+  providerCapability,
   onCommand,
 }: {
   state: DashboardState;
@@ -533,6 +718,7 @@ function CommandPanel({
   locale: SupportedLocale;
   preferences: LocalViewPreferences;
   selectedReference?: string;
+  providerCapability: AiProviderCapability;
   onCommand: (command: CommandId) => void;
 }) {
   const [query, setQuery] = useState('');
@@ -550,6 +736,20 @@ function CommandPanel({
     { id: COMMAND_IDS.consoleOpen, icon: <ConsoleIcon />, title: translate(locale, 'tool.console'), detail: '', keys: 'C', disabled: !current },
     { id: COMMAND_IDS.networkOpen, icon: <NetworkIcon />, title: translate(locale, 'tool.network'), detail: '', keys: 'N', disabled: !current },
     { id: COMMAND_IDS.aiOpen, icon: <SparkIcon />, title: translate(locale, 'tool.ai'), detail: '', keys: 'A', disabled: !current },
+    {
+      id: COMMAND_IDS.aiAskSelection,
+      icon: <SparkIcon />,
+      title: translate(locale, 'ai.askSelection'),
+      detail: !current
+        ? translate(locale, 'empty.noTarget')
+        : !selectedReference
+          ? translate(locale, 'inspector.noSelection')
+          : !providerCapability.available
+            ? translate(locale, 'ai.unavailable')
+            : selectedReference,
+      keys: '',
+      disabled: !current || !selectedReference || !providerCapability.available,
+    },
     { id: COMMAND_IDS.previewOpenNative, icon: <ExternalIcon />, title: translate(locale, 'action.openPreview'), detail: url ?? '', keys: '↵', disabled: !current },
     { id: COMMAND_IDS.settingsOpen, icon: <SettingsIcon />, title: translate(locale, 'tool.settings'), detail: '', keys: '⌘,', disabled: false },
     { id: COMMAND_IDS.advancedOpen, icon: <MoreIcon />, title: translate(locale, 'tool.advanced'), detail: '', keys: 'M', disabled: !current },
