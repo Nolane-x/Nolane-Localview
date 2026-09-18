@@ -15,6 +15,7 @@ import {
   FloatingPanel,
   RailButton,
   type HumanCaptureState,
+  type HumanMeasureState,
   type ToolId,
 } from '../features/FloatingTools';
 import {
@@ -57,8 +58,12 @@ export default function LocalViewShell() {
   const [immersive, setImmersive] = useState(false);
   const [preferences, setPreferences] = useState<LocalViewPreferences>(() => loadPreferences());
   const [captureState, setCaptureState] = useState<HumanCaptureState>({ status: 'idle' });
+  const [measureState, setMeasureState] = useState<HumanMeasureState>({ status: 'idle' });
   const captureInFlight = useRef(false);
   const captureGeneration = useRef(0);
+  const measureInFlight = useRef(false);
+  const measureGeneration = useRef(0);
+  const selectedReferenceRef = useRef<string>();
 
   const patchPreferences = useCallback((patch: Partial<LocalViewPreferences>) => {
     setPreferences((current) => persistPreferences(current, patch));
@@ -97,10 +102,29 @@ export default function LocalViewShell() {
     [state.sessions, selected],
   );
 
+  const selectedReference = useMemo(
+    () => [...live.observer]
+      .reverse()
+      .find((event) => event.kind === 'focus' && !!event.reference)
+      ?.reference,
+    [live.observer],
+  );
+
+  useEffect(() => {
+    selectedReferenceRef.current = selectedReference;
+    measureGeneration.current += 1;
+    measureInFlight.current = false;
+    setMeasureState({ status: 'idle' });
+  }, [selectedReference]);
+
   useEffect(() => {
     captureGeneration.current += 1;
     captureInFlight.current = false;
     setCaptureState({ status: 'idle' });
+    measureGeneration.current += 1;
+    measureInFlight.current = false;
+    selectedReferenceRef.current = undefined;
+    setMeasureState({ status: 'idle' });
   }, [current?.id]);
 
   useEffect(() => {
@@ -191,6 +215,46 @@ export default function LocalViewShell() {
       }
     }
   }, [current]);
+
+  const measureCurrentSelection = useCallback(async (reference: string) => {
+    const session = current;
+    if (!session || !reference || measureInFlight.current) return;
+
+    measureInFlight.current = true;
+    const generation = ++measureGeneration.current;
+    selectedReferenceRef.current = selectedReference;
+    setMeasureState({ status: 'measuring', reference });
+
+    try {
+      const receipt = await api.measureElement(session.id, reference);
+      if (
+        generation !== measureGeneration.current
+        || reference !== selectedReferenceRef.current
+      ) {
+        return;
+      }
+      setMeasureState({
+        status: 'success',
+        reference,
+        width: receipt.rect.width,
+        height: receipt.rect.height,
+        x: receipt.rect.x,
+        y: receipt.rect.y,
+      });
+    } catch {
+      if (
+        generation !== measureGeneration.current
+        || reference !== selectedReferenceRef.current
+      ) {
+        return;
+      }
+      setMeasureState({ status: 'failure', reason: 'failed' });
+    } finally {
+      if (generation === measureGeneration.current) {
+        measureInFlight.current = false;
+      }
+    }
+  }, [current, selectedReference]);
 
   const executeCommand = useCallback((command: CommandId) => {
     switch (command) {
@@ -327,6 +391,8 @@ export default function LocalViewShell() {
             onOpenNative={() => void openNative()}
             captureState={captureState}
             onCapture={() => void captureCurrentViewport()}
+            measureState={measureState}
+            onMeasure={(reference) => void measureCurrentSelection(reference)}
             onCommand={executeCommand}
             onPreferencesChange={patchPreferences}
             onResetWorkspace={resetWorkspacePreferences}
