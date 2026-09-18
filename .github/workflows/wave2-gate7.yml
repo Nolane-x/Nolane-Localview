@@ -15,6 +15,9 @@ on:
       - crates/instrumentation/src/lib.rs
       - crates/control/src/**
       - crates/control/tests/full_page_capture_control.rs
+      - docs/ROADMAP.md
+      - docs/IMPLEMENTATION_STATUS.md
+      - docs/SPEC_COVERAGE.md
 
 permissions:
   contents: read
