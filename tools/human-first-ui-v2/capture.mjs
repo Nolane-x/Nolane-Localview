@@ -1545,6 +1545,58 @@ await assertVisible(page, '.source-open-status.success', 'source-command-success
 await shot(page, '61-source-command-success.png', 'source-command-success');
 await page.close();
 
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveMeasure, dashboard);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+const sourceReadyButton = page.locator('.source-open-action');
+invariant(!(await sourceReadyButton.isDisabled()), 'source-open:ready-enabled');
+invariant((await sourceReadyButton.getAttribute('aria-busy')) === 'false', 'source-open:ready-not-busy');
+invariant(
+  (await sourceReadyButton.getAttribute('title')) === 'Open source',
+  'source-open:ready-accessible-title'
+);
+await shot(page, '62-source-open-ready.png', 'source-open-ready');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  700
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+const sourceOpeningButton = page.locator('.source-open-action');
+await sourceOpeningButton.click();
+await page.waitForTimeout(80);
+invariant(await sourceOpeningButton.isDisabled(), 'source-open:opening-disabled');
+invariant(
+  (await sourceOpeningButton.getAttribute('aria-busy')) === 'true',
+  'source-open:opening-aria-busy'
+);
+invariant(
+  (await sourceOpeningButton.innerText()).includes('Opening source…'),
+  'source-open:opening-copy'
+);
+await sourceOpeningButton.evaluate((button) => button.click());
+await page.waitForTimeout(50);
+const sourceOpeningCalls = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'open_source_for_selection')
+);
+invariant(sourceOpeningCalls.length === 1, 'source-open:opening-single-request', { sourceOpeningCalls });
+await shot(page, '63-source-open-opening.png', 'source-open-opening');
+await page.waitForTimeout(700);
+await assertVisible(page, '.source-open-status.success', 'source-open-opening-completes');
+await page.close();
+
 await fs.writeFile(
   'human-first-ui-v2-render/audit.json',
   JSON.stringify(audit, null, 2) + '\\n',
