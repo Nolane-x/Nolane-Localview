@@ -831,21 +831,35 @@ fn apply_fix_transaction_inner(
         .write(true)
         .open(&temp)
         .map_err(|_| "trusted Fix temporary write is unavailable".to_string())?;
-    temp_file
-        .write_all(postimage)
-        .map_err(|_| "trusted Fix temporary write failed".to_string())?;
-    temp_file
-        .flush()
-        .map_err(|_| "trusted Fix temporary write failed".to_string())?;
-    temp_file
-        .sync_all()
-        .map_err(|_| "trusted Fix temporary write failed".to_string())?;
-    fs::set_permissions(&temp, permissions)
-        .map_err(|_| "trusted Fix could not preserve file permissions".to_string())?;
+    if temp_file.write_all(postimage).is_err() {
+        drop(temp_file);
+        let _ = fs::remove_file(&temp);
+        return Err("trusted Fix temporary write failed".into());
+    }
+    if temp_file.flush().is_err() {
+        drop(temp_file);
+        let _ = fs::remove_file(&temp);
+        return Err("trusted Fix temporary write failed".into());
+    }
+    if temp_file.sync_all().is_err() {
+        drop(temp_file);
+        let _ = fs::remove_file(&temp);
+        return Err("trusted Fix temporary write failed".into());
+    }
+    if fs::set_permissions(&temp, permissions).is_err() {
+        drop(temp_file);
+        let _ = fs::remove_file(&temp);
+        return Err("trusted Fix could not preserve file permissions".into());
+    }
     drop(temp_file);
 
-    let final_preimage = fs::read(target)
-        .map_err(|_| "trusted Fix source is unavailable".to_string())?;
+    let final_preimage = match fs::read(target) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            let _ = fs::remove_file(&temp);
+            return Err("trusted Fix source is unavailable".into());
+        }
+    };
     if final_preimage != preimage {
         let _ = fs::remove_file(&temp);
         return Err("trusted Fix source changed since proposal".into());
@@ -857,8 +871,13 @@ fn apply_fix_transaction_inner(
             "trusted Fix could not begin the write transaction".to_string()
         })?;
 
-    let backup_preimage = fs::read(&backup)
-        .map_err(|_| "trusted Fix could not verify the write transaction preimage".to_string())?;
+    let backup_preimage = match fs::read(&backup) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            rollback(target, &backup, &temp)?;
+            return Err("trusted Fix could not verify the write transaction preimage".into());
+        }
+    };
     if backup_preimage != preimage {
         rollback(target, &backup, &temp)?;
         return Err("trusted Fix source changed during apply".into());
@@ -1099,6 +1118,44 @@ mod trusted_fix_tests {
             .map(|offset| drop_handle + offset)
             .expect("temporary source replacement must exist");
         assert!(drop_handle < replace);
+    }
+
+    #[test]
+    fn trusted_fix_transaction_failure_paths_cleanup_or_rollback_before_return() {
+        let source = include_str!("trusted_fix.rs");
+        let transaction = source
+            .split("fn apply_fix_transaction_inner(")
+            .nth(1)
+            .expect("transaction inner function must exist")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("transaction body must end before tests");
+
+        for operation in [
+            "temp_file.write_all(postimage).is_err()",
+            "temp_file.flush().is_err()",
+            "temp_file.sync_all().is_err()",
+            "fs::set_permissions(&temp, permissions).is_err()",
+        ] {
+            let branch = transaction
+                .split(operation)
+                .nth(1)
+                .expect("pre-commit failure branch must exist");
+            let branch = branch.split('}').next().unwrap_or(branch);
+            assert!(
+                branch.contains("fs::remove_file(&temp)"),
+                "{operation} must clean the temporary file before returning"
+            );
+        }
+
+        let backup_read = transaction
+            .split("let backup_preimage = match fs::read(&backup)")
+            .nth(1)
+            .expect("backup verification read must exist")
+            .split("if backup_preimage != preimage")
+            .next()
+            .expect("backup read branch must precede comparison");
+        assert!(backup_read.contains("rollback(target, &backup, &temp)"));
     }
 
     #[test]
