@@ -180,3 +180,20 @@ fn trusted_capture_shell_invalidates_stale_session_results_and_guards_duplicates
         );
     }
 }
+
+#[test]
+fn trusted_capture_command_is_allowed_by_main_dashboard_permission() {
+    let permissions = include_str!("../permissions/localview.toml");
+    let main = permissions
+        .split("identifier = \"maincommands\"")
+        .nth(1)
+        .expect("main dashboard permission must exist")
+        .split("[[permission]]")
+        .next()
+        .expect("main dashboard permission must be bounded");
+
+    assert!(
+        main.contains("\"capture_current_viewport\""),
+        "trusted Capture command must be callable by the bundled dashboard"
+    );
+}
