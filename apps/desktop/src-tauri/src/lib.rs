@@ -441,7 +441,6 @@ mod measure_validation_tests {
         for (width, height) in [
             (0.0, 900.0),
             (1440.0, -1.0),
-            (f64::INFINITY, 900.0),
             (MAX_MEASURE_CSS_DIMENSION + 1.0, 900.0),
         ] {
             let viewport = payload(
@@ -460,6 +459,21 @@ mod measure_validation_tests {
             )
             .is_err());
         }
+
+        let malformed_viewport = serde_json::json!({
+            "reference": "@e1",
+            "rect": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 40.0},
+            "document_rect": {"x": 0.0, "y": 200.0, "width": 100.0, "height": 40.0},
+            "viewport": {"width": "NaN", "height": 900.0},
+            "route": "http://127.0.0.1:5173/"
+        });
+        assert!(validate_measure_payload(
+            "@e1",
+            "http://127.0.0.1:5173/",
+            malformed_viewport,
+            1,
+        )
+        .is_err());
     }
 
     #[test]
