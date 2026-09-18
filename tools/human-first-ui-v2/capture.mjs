@@ -1033,6 +1033,7 @@ await page.evaluate((nextLive) => {
 }, liveMeasureB);
 await page.waitForFunction(
   () => document.querySelector('.inspector-hero strong')?.textContent?.includes('@e5d6e7f8'),
+  null,
   { timeout: 1800 }
 );
 await page.waitForTimeout(1000);
