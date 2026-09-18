@@ -100,6 +100,7 @@ interface FloatingPanelProps {
   captureState: HumanCaptureState;
   onCapture: () => void;
   sourceOpenState: HumanSourceOpenState;
+  selectedReference?: string;
   onOpenSource: (reference: string) => void;
   measureState: HumanMeasureState;
   onMeasure: (reference: string) => void;
@@ -122,6 +123,7 @@ export function FloatingPanel({
   captureState,
   onCapture,
   sourceOpenState,
+  selectedReference,
   onOpenSource,
   measureState,
   onMeasure,
@@ -144,6 +146,7 @@ export function FloatingPanel({
             captureState={captureState}
             onCapture={onCapture}
             sourceOpenState={sourceOpenState}
+            selectedReference={selectedReference}
             onOpenSource={onOpenSource}
             measureState={measureState}
             onMeasure={onMeasure}
@@ -170,6 +173,7 @@ export function FloatingPanel({
             url={url}
             locale={locale}
             preferences={preferences}
+            selectedReference={selectedReference}
             onCommand={onCommand}
           />
         )}
@@ -205,6 +209,7 @@ function Inspector({
   captureState,
   onCapture,
   sourceOpenState,
+  selectedReference,
   onOpenSource,
   measureState,
   onMeasure,
@@ -216,15 +221,13 @@ function Inspector({
   captureState: HumanCaptureState;
   onCapture: () => void;
   sourceOpenState: HumanSourceOpenState;
+  selectedReference?: string;
   onOpenSource: (reference: string) => void;
   measureState: HumanMeasureState;
   onMeasure: (reference: string) => void;
 }) {
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
-  const measureReference = typeof focused?.reference === 'string'
-    && /^@e[0-9a-f]+$/i.test(focused.reference)
-    ? focused.reference
-    : undefined;
+  const measureReference = selectedReference;
   const captureBusy = captureState.status === 'capturing';
   const sourceOpenBusy = sourceOpenState.status === 'opening';
   const measureBusy = measureState.status === 'measuring';
@@ -521,6 +524,7 @@ function CommandPanel({
   url,
   locale,
   preferences,
+  selectedReference,
   onCommand,
 }: {
   state: DashboardState;
@@ -528,12 +532,20 @@ function CommandPanel({
   url?: string;
   locale: SupportedLocale;
   preferences: LocalViewPreferences;
+  selectedReference?: string;
   onCommand: (command: CommandId) => void;
 }) {
   const [query, setQuery] = useState('');
   const commands = [
     { id: COMMAND_IDS.inspectActivate, icon: <InspectIcon />, title: translate(locale, 'tool.inspect'), detail: current?.project.display_name ?? '', keys: 'I', disabled: !current },
-    { id: COMMAND_IDS.sourceOpen, icon: <SourceIcon />, title: translate(locale, 'action.openSource'), detail: '', keys: '', disabled: !current },
+    {
+      id: COMMAND_IDS.sourceOpen,
+      icon: <SourceIcon />,
+      title: translate(locale, 'action.openSource'),
+      detail: selectedReference ?? (current ? translate(locale, 'source.selectFirst') : translate(locale, 'source.unavailable')),
+      keys: '',
+      disabled: !current || !selectedReference,
+    },
     { id: COMMAND_IDS.responsiveOpen, icon: <ResponsiveIcon />, title: translate(locale, 'tool.responsive'), detail: '', keys: 'R', disabled: !current },
     { id: COMMAND_IDS.consoleOpen, icon: <ConsoleIcon />, title: translate(locale, 'tool.console'), detail: '', keys: 'C', disabled: !current },
     { id: COMMAND_IDS.networkOpen, icon: <NetworkIcon />, title: translate(locale, 'tool.network'), detail: '', keys: 'N', disabled: !current },
