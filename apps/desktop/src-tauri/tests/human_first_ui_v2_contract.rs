@@ -228,6 +228,27 @@ fn render_audit_covers_storage_denial_and_narrow_long_target_stress() {
 }
 
 
+#[test]
+fn render_audit_proves_runtime_action_failures_are_isolated() {
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+
+    assert!(capture.contains("30-runtime-action-failure-isolated.png"));
+    assert!(capture.contains("failedCommands"));
+    assert!(capture.contains("runtime-action-failure-isolated"));
+
+    let pause = between(shell, "const togglePause = useCallback(", "const openNative = useCallback(");
+    assert!(pause.contains("try {"));
+    assert!(pause.contains("catch (cause)"));
+    assert!(pause.contains("setError(String(cause))"));
+
+    let native = between(shell, "const openNative = useCallback(", "const executeCommand = useCallback(");
+    assert!(native.contains("try {"));
+    assert!(native.contains("catch (cause)"));
+    assert!(native.contains("setError(String(cause))"));
+}
+
+
 fn render_audit_is_executable_not_screenshot_only() {
     let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
 
