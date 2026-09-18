@@ -891,6 +891,13 @@ invariant(
   'trusted-measure-success:authority-payload',
   { measureArgs }
 );
+const callerGeometryFields = ['x', 'y', 'width', 'height', 'viewport', 'route']
+  .filter((field) => field in measureArgs);
+invariant(
+  callerGeometryFields.length === 0,
+  'trusted-measure-success:no-caller-geometry',
+  { measureArgs, callerGeometryFields }
+);
 for (const forbidden of ['x', 'y', 'width', 'height', 'viewport', 'route']) {
   invariant(!(forbidden in measureArgs), `trusted-measure-success:no-caller-${forbidden}`, { measureArgs });
 }
@@ -1052,6 +1059,90 @@ invariant(
   { staleMeasureInvokes }
 );
 await shot(page, '42-trusted-measure-stale-selection.png', 'trusted-measure-stale-selection');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 390, height: 844 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.measure-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.measure-status.success', 'narrow-trusted-measure-success');
+await assertPrimaryControlsInViewport(page, 'narrow-trusted-measure-success');
+const narrowMeasurePanel = await page.locator('.panel-inspect').evaluate((node) => {
+  const rect = node.getBoundingClientRect();
+  return {
+    left: rect.left,
+    right: rect.right,
+    top: rect.top,
+    bottom: rect.bottom,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight,
+  };
+});
+invariant(
+  narrowMeasurePanel.left >= 0
+    && narrowMeasurePanel.right <= narrowMeasurePanel.viewportWidth + 1
+    && narrowMeasurePanel.top >= 0
+    && narrowMeasurePanel.bottom <= narrowMeasurePanel.viewportHeight + 1,
+  'narrow-trusted-measure-success:panel-in-viewport',
+  { narrowMeasurePanel }
+);
+await shot(page, '43-narrow-trusted-measure-success.png', 'narrow-trusted-measure-success');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboardNoTarget
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+const noSessionMeasure = page.locator('.measure-action');
+invariant(await noSessionMeasure.isDisabled(), 'no-session-measure-disabled:disabled');
+const noSessionMeasureInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'measure_current_selection')
+);
+invariant(
+  noSessionMeasureInvokes.length === 0,
+  'no-session-measure-disabled:not-invoked',
+  { noSessionMeasureInvokes }
+);
+await shot(page, '44-no-session-measure-disabled.png', 'no-session-measure-disabled');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'vi',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  ['measure_current_selection']
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await page.locator('.measure-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.measure-status.failure', 'vi-trusted-measure-failure');
+const viMeasureFailureText = await page.locator('.measure-status.failure').innerText();
+invariant(
+  viMeasureFailureText.includes('Không thể đo phần tử đã chọn'),
+  'vi-trusted-measure-failure:localized',
+  { viMeasureFailureText }
+);
+await shot(page, '45-vi-trusted-measure-failure.png', 'vi-trusted-measure-failure');
 await page.close();
 
 await fs.writeFile(
