@@ -1,12 +1,32 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { DashboardState, LiveSessionState, WorkspaceBounds } from './types';
 
+export interface VisualCaptureReceipt {
+  artifact_id: string;
+  evidence_id: string;
+  deduplicated: boolean;
+  backend: string;
+  route: string;
+  viewport: {
+    css_width: number;
+    css_height: number;
+    device_scale_factor: number;
+  };
+  pixel_width: number;
+  pixel_height: number;
+  revision?: string | null;
+  captured_at_unix_ms: number;
+  target: string;
+  region?: { x: number; y: number; width: number; height: number } | null;
+}
+
 export const api = {
   dashboard: () => invoke<DashboardState>('dashboard_state'),
   liveSession: (sessionId: string) => invoke<LiveSessionState>('live_session_state', { sessionId }),
   pause: () => invoke<void>('pause_runtime'),
   resume: () => invoke<void>('resume_runtime'),
   openPreview: (sessionId: string, url: string, title: string) => invoke<void>('open_preview', { sessionId, url, title }),
+  captureCurrentViewport: (sessionId: string) => invoke<VisualCaptureReceipt>('capture_current_viewport', { sessionId, revision: null }),
   openWorkspaceSurface: (sessionId: string, url: string, bounds: WorkspaceBounds) => invoke<void>('workspace_surface_open', { sessionId, url, bounds }),
   setWorkspaceSurfaceBounds: (sessionId: string, bounds: WorkspaceBounds) => invoke<void>('workspace_surface_set_bounds', { sessionId, bounds }),
   navigateWorkspaceSurface: (sessionId: string, url: string) => invoke<void>('workspace_surface_navigate', { sessionId, url }),
