@@ -275,22 +275,28 @@ export default function LocalViewShell() {
     const session = current;
     if (!session || !reference || sourceOpenInFlight.current) return;
 
+    const sourceOpenReference = reference;
+    const sourceOpenRequest = {
+      sessionId: session.id,
+      reference: sourceOpenReference,
+    };
+
     sourceOpenInFlight.current = true;
     const generation = ++sourceOpenGeneration.current;
-    selectedReferenceRef.current = reference;
-    setSourceOpenState({ status: 'opening', reference });
+    selectedReferenceRef.current = sourceOpenReference;
+    setSourceOpenState({ status: 'opening', reference: sourceOpenReference });
 
     try {
-      const receipt = await api.openSourceForSelection(session.id, reference);
+      const receipt = await api.openSourceForSelection(sourceOpenRequest);
       if (
         generation !== sourceOpenGeneration.current
-        || reference !== selectedReferenceRef.current
+        || sourceOpenReference !== selectedReferenceRef.current
       ) {
         return;
       }
       setSourceOpenState({
         status: 'success',
-        reference,
+        reference: sourceOpenReference,
         displayFile: receipt.displayFile,
         line: receipt.line,
         column: receipt.column ?? undefined,
@@ -298,7 +304,7 @@ export default function LocalViewShell() {
     } catch (cause) {
       if (
         generation !== sourceOpenGeneration.current
-        || reference !== selectedReferenceRef.current
+        || sourceOpenReference !== selectedReferenceRef.current
       ) {
         return;
       }
@@ -310,9 +316,11 @@ export default function LocalViewShell() {
           || detail.includes('project root')
           || detail.includes('selection')
           || detail.includes('outside project')
+          || detail.includes('path traversal')
+          || detail.includes('symlink')
             ? 'unavailable'
             : 'failed';
-      setSourceOpenState({ status: 'failure', reference, reason });
+      setSourceOpenState({ status: 'failure', reference: sourceOpenReference, reason });
     } finally {
       if (generation === sourceOpenGeneration.current) {
         sourceOpenInFlight.current = false;
