@@ -48,10 +48,10 @@ const en = {
   'tool.command': 'Command palette',
   'sessions.title': 'Sessions',
   'sessions.detectedOne': 'detected localhost session',
-  'sessions.detectedMany': 'detected localhost sessions'
+  'sessions.detectedMany': 'detected localhost sessions',
   'responsive.viewports': 'Viewports',
   'responsive.unavailable': 'Responsive viewport control is not connected yet.',
-  'responsive.note': 'Viewport controls become available when a trusted resize path is connected.'
+  'responsive.note': 'Viewport controls become available when a trusted resize path is connected.',
   'command.searchPlaceholder': 'Type a command…',
   'command.searchAria': 'Search commands',
   'action.close': 'Close',
