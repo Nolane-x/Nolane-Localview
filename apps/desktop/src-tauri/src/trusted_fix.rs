@@ -97,6 +97,7 @@ struct FixProviderResponse {
 #[serde(rename_all = "camelCase")]
 struct FixBridgeRequest<'a> {
     schema: u32,
+    context_version: u32,
     mode: &'static str,
     system_instruction: &'static str,
     instruction: &'a str,
@@ -694,6 +695,7 @@ pub async fn request_fix_proposal(
     let instruction = validate_fix_instruction(instruction)?;
     let request = FixBridgeRequest {
         schema: FIX_PROPOSAL_SCHEMA,
+        context_version: FIX_CONTEXT_VERSION,
         mode: "fix_proposal",
         system_instruction: FIX_PROVIDER_SYSTEM_INSTRUCTION,
         instruction: &instruction,
