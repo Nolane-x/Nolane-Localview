@@ -949,6 +949,7 @@ pub fn run() {
             preview_complete_action,
             visual_capture::capture_full_page,
             visual_capture::capture_viewport,
+            visual_capture::capture_current_viewport,
             visual_capture::capture_region,
             visual_capture::capture_changed_regions,
             visual_capture::capture_progressive_target,
