@@ -158,6 +158,29 @@ fn primary_tool_rail_uses_active_locale() {
     assert!(tools.contains("translate(locale, 'tool.command')"));
 }
 
+
+#[test]
+fn render_audit_covers_minimum_human_first_states() {
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    for artifact in [
+        "02-en-inspector.png",
+        "11-en-inspector-no-selection.png",
+        "12-tool-rail-hidden.png",
+        "13-tool-rail-restored.png",
+        "14-no-target.png",
+        "15-ai-unavailable.png",
+    ] {
+        assert!(
+            capture.contains(artifact),
+            "render audit is missing required state artifact {artifact}"
+        );
+    }
+    assert!(capture.contains("Show tool rail"));
+    assert!(capture.contains("liveNoFocus"));
+    assert!(capture.contains("dashboardNoTarget"));
+}
+
 #[test]
 fn visual_system_uses_muted_moss_instead_of_ai_blue() {
     let styles = include_str!("../../src/styles.css");
