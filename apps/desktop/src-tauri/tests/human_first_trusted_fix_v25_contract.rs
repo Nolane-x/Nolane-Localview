@@ -253,11 +253,11 @@ fn transaction_has_backend_owned_temp_backup_verification_and_rollback() {
     }
 
     for forbidden in [
-        "Command::new("git")",
-        "Command::new("patch")",
-        "Command::new("sh")",
-        "Command::new("cmd")",
-        "Command::new("powershell")",
+        "Command::new(\\"git\\")",
+        "Command::new(\\"patch\\")",
+        "Command::new(\\"sh\\")",
+        "Command::new(\\"cmd\\")",
+        "Command::new(\\"powershell\\")",
     ] {
         assert!(
             !fix.contains(forbidden),
