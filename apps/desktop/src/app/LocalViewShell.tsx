@@ -50,6 +50,35 @@ const fallback: DashboardState = {
 const emptyLive: LiveSessionState = { observer: [], action_results: [] };
 const TOGGLE_TARGET_BAR_SHORTCUT = 'Ctrl+Shift+T';
 
+function classifySourceOpenFailure(cause: unknown): 'launcher_unavailable' | 'unavailable' | 'failed' {
+  const detail = String(cause).toLowerCase();
+
+  if (detail.includes('trusted source launcher unavailable')) {
+    return 'launcher_unavailable';
+  }
+
+  const trustedUnavailablePhrases = [
+    'trusted source mapping is unavailable',
+    'trusted source file is unavailable',
+    'trusted source project root is unavailable',
+    'trusted source selection is no longer available',
+    'trusted source selection is ambiguous',
+    'trusted source outside project',
+    'trusted source path traversal is not allowed',
+    'trusted source path uses a non-native separator',
+    'trusted source path is invalid',
+    'trusted source path must be project relative',
+    'trusted source path prefix is not allowed',
+    'trusted source line is unavailable',
+    'trusted source file exceeds verification bound',
+    'trusted source symlink escape',
+  ];
+
+  return trustedUnavailablePhrases.some((phrase) => detail.includes(phrase))
+    ? 'unavailable'
+    : 'failed';
+}
+
 export default function LocalViewShell() {
   const [state, setState] = useState<DashboardState>(fallback);
   const [selected, setSelected] = useState<string>();
@@ -308,18 +337,7 @@ export default function LocalViewShell() {
       ) {
         return;
       }
-      const detail = String(cause).toLowerCase();
-      const reason = detail.includes('launcher')
-        ? 'launcher_unavailable'
-        : detail.includes('mapping')
-          || detail.includes('source file')
-          || detail.includes('project root')
-          || detail.includes('selection')
-          || detail.includes('outside project')
-          || detail.includes('path traversal')
-          || detail.includes('symlink')
-            ? 'unavailable'
-            : 'failed';
+      const reason = classifySourceOpenFailure(cause);
       setSourceOpenState({ status: 'failure', reference: sourceOpenReference, reason });
     } finally {
       if (generation === sourceOpenGeneration.current) {
