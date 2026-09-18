@@ -920,7 +920,7 @@ fn full_page_plan_error(error: FullPageError) -> String {
     .to_string()
 }
 
-fn managed_surface_canonical_route(
+pub(crate) fn managed_surface_canonical_route(
     app: &tauri::AppHandle,
     session_id: SessionId,
 ) -> Result<String, String> {
@@ -1444,7 +1444,7 @@ async fn register_visual_diff_evidence(
         .map_err(err)
 }
 
-fn canonical_visual_diff_route(route: &str) -> Result<String, String> {
+pub(crate) fn canonical_visual_diff_route(route: &str) -> Result<String, String> {
     let mut route = url::Url::parse(route)
         .map_err(|_| "visual diff route is not a valid URL".to_string())?;
     route.set_query(None);
