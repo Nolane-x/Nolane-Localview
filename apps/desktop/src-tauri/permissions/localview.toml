@@ -4,6 +4,8 @@ description = "Allows the bundled LocalView dashboard to inspect runtime state a
 commands.allow = [
   "dashboard_state",
   "live_session_state",
+  "ai_provider_capability",
+  "ask_ai_about_selection",
   "pause_runtime",
   "resume_runtime",
   "open_preview",
