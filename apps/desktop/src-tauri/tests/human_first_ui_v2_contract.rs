@@ -36,10 +36,10 @@ fn default_human_inspector_hides_machine_diagnostics() {
     assert!(!inspector.contains("Project identity"));
     assert!(!inspector.contains("X-Ray pipeline"));
     assert!(!inspector.contains("<EvidenceCard"));
-    assert!(inspector.contains("Open source"));
-    assert!(inspector.contains("Measure"));
-    assert!(inspector.contains("Capture"));
-    assert!(inspector.contains("Ask AI"));
+    assert!(inspector.contains("translate(locale, 'action.openSource')"));
+    assert!(inspector.contains("translate(locale, 'action.measure')"));
+    assert!(inspector.contains("translate(locale, 'action.capture')"));
+    assert!(inspector.contains("translate(locale, 'action.askAi')"));
 
     let advanced = between(source, "function AdvancedPanel(", "function ResponsivePanel(");
     assert!(advanced.contains("Project identity"));
@@ -53,10 +53,16 @@ fn inspector_never_presents_unwired_primary_actions_as_enabled() {
     let inspector = between(source, "function Inspector(", "function AdvancedPanel(");
 
     assert!(inspector.contains("function UnavailableInspectorAction("));
-    for label in ["Open source", "Measure", "Capture", "Ask AI", "Fix"] {
+    for key in [
+        "action.openSource",
+        "action.measure",
+        "action.capture",
+        "action.askAi",
+        "action.fix",
+    ] {
         assert!(
-            inspector.contains(&format!("label=\"{label}\"")),
-            "missing explicit unavailable action for {label}"
+            inspector.contains(&format!("translate(locale, '{key}')")),
+            "missing localized unavailable action for {key}"
         );
     }
     assert!(inspector.contains("disabled"));
@@ -90,6 +96,33 @@ fn settings_and_advanced_are_real_tool_surfaces() {
     assert!(tools.contains("Show tool rail"));
     assert!(shell.contains("<RailButton tool=\"settings\""));
     assert!(shell.contains("<SettingsIcon/>"));
+}
+
+
+#[test]
+fn primary_tool_rail_uses_active_locale() {
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+
+    assert!(shell.contains("locale={preferences.locale}"));
+    assert!(shell.contains("locale={locale}"));
+    for key in [
+        "tool.inspect",
+        "tool.responsive",
+        "tool.console",
+        "tool.network",
+        "tool.ai",
+        "tool.settings",
+        "tool.advanced",
+        "tool.command",
+    ] {
+        assert!(
+            tools.contains(&format!("'{key}'")),
+            "tool rail is missing localization key {key}"
+        );
+    }
+    assert!(tools.contains("translate(locale, meta.messageKey)"));
+    assert!(tools.contains("translate(locale, 'tool.command')"));
 }
 
 #[test]
