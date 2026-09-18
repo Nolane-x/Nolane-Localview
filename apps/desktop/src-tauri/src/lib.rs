@@ -4,14 +4,17 @@ mod native_executor_worker;
 pub mod visual_capture;
 pub mod workspace_surface;
 
-use std::path::PathBuf;
+use std::{
+    path::{Component, Path, PathBuf},
+    process::Command,
+};
 
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
     ActionCancellationSignal, BridgeAction, BridgeActionKind, BridgeActionResult, IngestReport,
     ObserverBatch, ObserverEvent, PrivateBridgeAction,
 };
-use localview_protocol::{Health, Session, SessionId};
+use localview_protocol::{Health, PageSnapshot, SemanticNode, Session, SessionId, SourceLocation};
 use serde::{Deserialize, Serialize};
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
@@ -77,6 +80,213 @@ struct MeasurePayload {
     document_rect: MeasureRect,
     viewport: MeasureViewportPayload,
     route: String,
+}
+
+const MAX_SOURCE_REFERENCE_BYTES: usize = 64;
+const MAX_SOURCE_FILE_BYTES: usize = 512;
+const MAX_SOURCE_LINE: u32 = 10_000_000;
+const MAX_SOURCE_COLUMN: u32 = 100_000;
+
+#[derive(Debug, Clone)]
+struct TrustedSourceTarget {
+    session_id: SessionId,
+    reference: String,
+    project_root: PathBuf,
+    canonical_file: PathBuf,
+    project_relative_file: String,
+    line: u32,
+    column: Option<u32>,
+    snapshot_version: u64,
+    canonical_route: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SourceOpenLauncher {
+    MacOpen,
+    LinuxXdgOpen,
+    WindowsFileProtocolHandler,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HumanSourceOpenReceipt {
+    reference: String,
+    display_file: String,
+    line: u32,
+    column: Option<u32>,
+    launcher: SourceOpenLauncher,
+    snapshot_version: u64,
+}
+
+fn validate_source_reference(reference: &str) -> Result<(), String> {
+    if reference.len() > MAX_SOURCE_REFERENCE_BYTES {
+        return Err("trusted source element reference exceeds the safety bound".into());
+    }
+    let Some(hash) = reference.strip_prefix("@e") else {
+        return Err("trusted source requires a LocalView element reference".into());
+    };
+    if hash.is_empty() || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("trusted source element reference is malformed".into());
+    }
+    Ok(())
+}
+
+fn find_source_for_reference<'a>(
+    node: &'a SemanticNode,
+    reference: &str,
+    found: &mut Option<&'a SourceLocation>,
+    matches: &mut usize,
+) {
+    if node.reference == reference {
+        *matches += 1;
+        if found.is_none() {
+            *found = node.source.as_ref();
+        }
+    }
+    for child in &node.children {
+        find_source_for_reference(child, reference, found, matches);
+    }
+}
+
+fn resolve_snapshot_source<'a>(
+    snapshot: &'a PageSnapshot,
+    reference: &str,
+) -> Result<&'a SourceLocation, String> {
+    let mut found = None;
+    let mut matches = 0usize;
+    find_source_for_reference(&snapshot.root, reference, &mut found, &mut matches);
+    if matches == 0 {
+        return Err("trusted source selection is no longer available".into());
+    }
+    if matches != 1 {
+        return Err("trusted source selection is ambiguous".into());
+    }
+    found.ok_or_else(|| "trusted source mapping is unavailable".to_string())
+}
+
+fn validate_relative_source_path(file: &str) -> Result<&Path, String> {
+    if file.is_empty()
+        || file.len() > MAX_SOURCE_FILE_BYTES
+        || file.contains('\0')
+        || file.contains(':')
+        || file.contains("://")
+    {
+        return Err("trusted source path is invalid".into());
+    }
+    let path = Path::new(file);
+    if path.is_absolute() || path.has_root() {
+        return Err("trusted source path must be project relative".into());
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir => {
+                return Err("trusted source path traversal is not allowed".into());
+            }
+            #[cfg(windows)]
+            Component::Prefix(_) => {
+                return Err("trusted source path prefix is not allowed".into());
+            }
+        }
+    }
+    Ok(path)
+}
+
+fn resolve_trusted_source_target(
+    session_id: SessionId,
+    reference: &str,
+    project_root: &str,
+    source: &SourceLocation,
+    snapshot_version: u64,
+    canonical_route: &str,
+) -> Result<TrustedSourceTarget, String> {
+    validate_source_reference(reference)?;
+    if source.line == 0 || source.line > MAX_SOURCE_LINE {
+        return Err("trusted source line is outside the safety bound".into());
+    }
+    if source
+        .column
+        .is_some_and(|column| column == 0 || column > MAX_SOURCE_COLUMN)
+    {
+        return Err("trusted source column is outside the safety bound".into());
+    }
+    let relative = validate_relative_source_path(&source.file)?;
+    let canonical_project_root = std::fs::canonicalize(project_root)
+        .map_err(|_| "trusted source project root is unavailable".to_string())?;
+    if !canonical_project_root.is_dir() {
+        return Err("trusted source project root is unavailable".into());
+    }
+    let canonical_file = std::fs::canonicalize(canonical_project_root.join(relative))
+        .map_err(|_| "trusted source file is unavailable".to_string())?;
+    if !canonical_file.starts_with(&canonical_project_root) {
+        return Err("trusted source outside project".into());
+    }
+    let metadata = std::fs::metadata(&canonical_file)
+        .map_err(|_| "trusted source file is unavailable".to_string())?;
+    if !metadata.is_file() {
+        return Err("trusted source target is not a regular file".into());
+    }
+    let project_relative_file = canonical_file
+        .strip_prefix(&canonical_project_root)
+        .map_err(|_| "trusted source outside project".to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    if project_relative_file.is_empty() {
+        return Err("trusted source file is unavailable".into());
+    }
+
+    Ok(TrustedSourceTarget {
+        session_id,
+        reference: reference.to_owned(),
+        project_root: canonical_project_root,
+        canonical_file,
+        project_relative_file,
+        line: source.line,
+        column: source.column,
+        snapshot_version,
+        canonical_route: canonical_route.to_owned(),
+    })
+}
+
+fn launch_trusted_source(target: &TrustedSourceTarget) -> Result<SourceOpenLauncher, String> {
+    let _ = (
+        target.session_id,
+        &target.reference,
+        &target.project_root,
+        &target.canonical_route,
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("/usr/bin/open")
+            .arg(&target.canonical_file)
+            .spawn()
+            .map_err(|_| "trusted source launcher unavailable".to_string())?;
+        return Ok(SourceOpenLauncher::MacOpen);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&target.canonical_file)
+            .spawn()
+            .map_err(|_| "trusted source launcher unavailable".to_string())?;
+        return Ok(SourceOpenLauncher::LinuxXdgOpen);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(&target.canonical_file)
+            .spawn()
+            .map_err(|_| "trusted source launcher unavailable".to_string())?;
+        return Ok(SourceOpenLauncher::WindowsFileProtocolHandler);
+    }
+
+    #[allow(unreachable_code)]
+    Err("trusted source launcher unavailable".into())
 }
 
 #[tauri::command]
@@ -178,6 +388,81 @@ async fn live_session_state(session_id: SessionId) -> Result<LiveSessionState, S
     Ok(LiveSessionState {
         observer,
         action_results,
+    })
+}
+
+#[tauri::command]
+async fn open_source_for_selection(
+    app: tauri::AppHandle,
+    session_id: SessionId,
+    reference: String,
+) -> Result<HumanSourceOpenReceipt, String> {
+    validate_source_reference(&reference)?;
+    let pre_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+    let token = read_token().await?;
+    let client = control_client()?;
+
+    let session = client
+        .get(format!("http://127.0.0.1:45454/v1/sessions/{session_id}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "trusted source runtime unavailable".to_string())?
+        .error_for_status()
+        .map_err(|_| "trusted source session is unavailable".to_string())?
+        .json::<Session>()
+        .await
+        .map_err(|_| "trusted source session is unavailable".to_string())?;
+
+    let snapshot = client
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/semantic-snapshot/fresh"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "trusted source runtime unavailable".to_string())?
+        .error_for_status()
+        .map_err(|_| "trusted source mapping is unavailable".to_string())?
+        .json::<PageSnapshot>()
+        .await
+        .map_err(|_| "trusted source mapping is unavailable".to_string())?;
+
+    let snapshot_route = visual_capture::canonical_visual_diff_route(&snapshot.route)?;
+    if snapshot_route != pre_route {
+        return Err("trusted source route changed before resolution".into());
+    }
+
+    let source = resolve_snapshot_source(&snapshot, &reference)?;
+    let project_root = session
+        .project
+        .git_root
+        .as_deref()
+        .or(session.project.cwd.as_deref())
+        .ok_or_else(|| "trusted source project root is unavailable".to_string())?;
+
+    let target = resolve_trusted_source_target(
+        session_id,
+        &reference,
+        project_root,
+        source,
+        snapshot.version,
+        &pre_route,
+    )?;
+
+    let post_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+    if pre_route != post_route {
+        return Err("trusted source route changed while resolution was in flight".into());
+    }
+
+    let launcher = launch_trusted_source(&target)?;
+    Ok(HumanSourceOpenReceipt {
+        reference,
+        display_file: target.project_relative_file,
+        line: target.line,
+        column: target.column,
+        launcher,
+        snapshot_version: target.snapshot_version,
     })
 }
 
@@ -1342,6 +1627,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             dashboard_state,
             live_session_state,
+            open_source_for_selection,
             measure_current_selection,
             pause_runtime,
             resume_runtime,
