@@ -1390,10 +1390,20 @@ await shot(page, '54-source-open-malformed-reference.png', 'source-open-malforme
 await page.close();
 
 for (const attack of [
-  ['55-source-open-path-traversal.png', 'trusted source path traversal is not allowed', 'source-open-path-traversal'],
-  ['56-source-open-symlink-escape.png', 'trusted source symlink escape', 'source-open-symlink-escape'],
+  {
+    filename: '55-source-open-path-traversal.png',
+    backendFailure: 'trusted source path traversal is not allowed',
+    stateName: 'source-open-path-traversal',
+    marker: 'source-open:path-traversal',
+  },
+  {
+    filename: '56-source-open-symlink-escape.png',
+    backendFailure: 'trusted source symlink escape',
+    stateName: 'source-open-symlink-escape',
+    marker: 'source-open:symlink-escape',
+  },
 ]) {
-  const [filename, backendFailure, stateName] = attack;
+  const { filename, backendFailure, stateName, marker } = attack;
   page = await pageFor(
     browser,
     { width: 1440, height: 900 },
@@ -1415,8 +1425,8 @@ for (const attack of [
   await page.waitForTimeout(120);
   await assertVisible(page, '.source-open-status.failure', stateName);
   const attackText = await page.locator('.source-open-status.failure').innerText();
-  invariant(attackText.includes('Source mapping unavailable'), `${stateName}:humanized`, { attackText });
-  invariant(!attackText.includes('trusted source'), `${stateName}:no-raw-error`, { attackText });
+  invariant(attackText.includes('Source mapping unavailable'), `${marker}:humanized`, { attackText });
+  invariant(!attackText.includes('trusted source'), `${marker}:no-raw-error`, { attackText });
   await shot(page, filename, stateName);
   await page.close();
 }
