@@ -767,7 +767,8 @@ async fn complete_action(
     }
 
     if matches!(action.action, BridgeActionKind::Measure) && result.ok {
-        if let Some(payload) = measure_layout_evidence_payload(&result.payload) {
+        if let Some(reference) = action.reference.as_deref() {
+            if let Some(payload) = measure_layout_evidence_payload(&result.payload, reference) {
             state
                 .evidence
                 .insert(EvidenceDraft {
@@ -787,6 +788,7 @@ async fn complete_action(
                     secret_taint: false,
                 })
                 .await;
+            }
         }
     }
 
@@ -921,7 +923,10 @@ fn sanitize_action_result(action: &BridgeAction, result: &BridgeActionResult) ->
     }
 }
 
-fn measure_layout_evidence_payload(payload: &serde_json::Value) -> Option<serde_json::Value> {
+fn measure_layout_evidence_payload(
+    payload: &serde_json::Value,
+    expected_reference: &str,
+) -> Option<serde_json::Value> {
     const MAX_ROUTE_BYTES: usize = 2_048;
     const MAX_REFERENCE_BYTES: usize = 64;
     const MAX_ABS_COORDINATE: f64 = 1_000_000.0;
@@ -962,7 +967,11 @@ fn measure_layout_evidence_payload(payload: &serde_json::Value) -> Option<serde_
 
     let object = payload.as_object()?;
     let reference = object.get("reference")?.as_str()?;
-    if reference.is_empty() || reference.len() > MAX_REFERENCE_BYTES {
+    if reference != expected_reference
+        || reference.is_empty()
+        || reference.len() > MAX_REFERENCE_BYTES
+        || !reference.starts_with("@e")
+    {
         return None;
     }
     let route = object.get("route")?.as_str()?;
@@ -1100,7 +1109,7 @@ mod tests {
             "style": {"color": "red"},
             "name": "must-not-survive"
         });
-        let projected = measure_layout_evidence_payload(&payload).unwrap();
+        let projected = measure_layout_evidence_payload(&payload, "@e1").unwrap();
         let text = projected.to_string();
         assert!(text.contains("@e1"));
         assert!(text.contains("document_rect"));
@@ -1118,7 +1127,19 @@ mod tests {
             "document_rect": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
             "viewport": {"width": 1280.0, "height": 720.0},
             "route": "http://127.0.0.1:5173/"
-        })).is_none());
+        }), "@e1").is_none());
+    }
+
+    #[test]
+    fn measure_evidence_rejects_reference_mismatch() {
+        let payload = serde_json::json!({
+            "reference": "@e2",
+            "rect": {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0},
+            "document_rect": {"x": 10.0, "y": 220.0, "width": 100.0, "height": 40.0},
+            "viewport": {"width": 1280.0, "height": 720.0},
+            "route": "http://127.0.0.1:5173/dashboard"
+        });
+        assert!(measure_layout_evidence_payload(&payload, "@e1").is_none());
     }
 
     #[test]
