@@ -6,6 +6,7 @@ pub mod workspace_surface;
 
 use std::{
     ffi::OsString,
+    io::{BufRead, BufReader},
     path::{Component, Path, PathBuf},
     process::Command,
 };
@@ -87,6 +88,7 @@ const MAX_SOURCE_REFERENCE_BYTES: usize = 64;
 const MAX_SOURCE_FILE_BYTES: usize = 512;
 const MAX_SOURCE_LINE: u32 = 10_000_000;
 const MAX_SOURCE_COLUMN: u32 = 100_000;
+const MAX_SOURCE_VERIFY_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct TrustedSourceTarget {
@@ -201,6 +203,31 @@ fn validate_relative_source_path(file: &str) -> Result<&Path, String> {
     Ok(path)
 }
 
+fn validate_source_line_exists(canonical_file: &Path, line: u32) -> Result<(), String> {
+    let metadata = std::fs::metadata(canonical_file)
+        .map_err(|_| "trusted source file is unavailable".to_string())?;
+    if metadata.len() > MAX_SOURCE_VERIFY_BYTES {
+        return Err("trusted source file exceeds verification bound".into());
+    }
+
+    let file = std::fs::File::open(canonical_file)
+        .map_err(|_| "trusted source file is unavailable".to_string())?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+
+    for _ in 0..line {
+        buffer.clear();
+        let read = reader
+            .read_until(b'\n', &mut buffer)
+            .map_err(|_| "trusted source file is unavailable".to_string())?;
+        if read == 0 {
+            return Err("trusted source line is unavailable".into());
+        }
+    }
+
+    Ok(())
+}
+
 fn resolve_trusted_source_target(
     session_id: SessionId,
     reference: &str,
@@ -235,6 +262,7 @@ fn resolve_trusted_source_target(
     if !metadata.is_file() {
         return Err("trusted source target is not a regular file".into());
     }
+    validate_source_line_exists(&canonical_file, source.line)?;
     let project_relative_file = canonical_file
         .strip_prefix(&canonical_project_root)
         .map_err(|_| "trusted source outside project".to_string())?
@@ -699,7 +727,7 @@ mod trusted_source_validation_tests {
     fn source(file: &str) -> SourceLocation {
         SourceLocation {
             file: file.into(),
-            line: 42,
+            line: 1,
             column: Some(3),
             component: Some(format!("{file}:42")),
         }
@@ -794,7 +822,7 @@ mod trusted_source_validation_tests {
         .expect("trusted target");
         assert_eq!(receipt.project_relative_file, "src/Button.tsx");
         assert!(receipt.canonical_file.starts_with(&receipt.project_root));
-        assert_eq!(receipt.line, 42);
+        assert_eq!(receipt.line, 1);
         assert_eq!(receipt.column, Some(3));
 
         let directory_source = SourceLocation {
@@ -850,6 +878,25 @@ mod trusted_source_validation_tests {
             "http://127.0.0.1:5173/",
         )
         .is_err());
+
+        std::fs::write(root.join("short.tsx"), "export const onlyLine = true;")
+            .expect("write short source");
+        let stale_line = SourceLocation {
+            file: "short.tsx".into(),
+            line: 2,
+            column: Some(1),
+            component: None,
+        };
+        let stale_line_error = resolve_trusted_source_target(
+            uuid::Uuid::new_v4(),
+            "@e1",
+            root.to_str().expect("utf8 root"),
+            &stale_line,
+            1,
+            "http://127.0.0.1:5173/",
+        )
+        .expect_err("stale source line must fail closed");
+        assert_eq!(stale_line_error, "trusted source line is unavailable");
 
         let _ = std::fs::remove_dir_all(root);
     }
