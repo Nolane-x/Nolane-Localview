@@ -725,7 +725,9 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
       case 'snapshot':
         return window.__LOCALVIEW__?.snapshot?.() ?? null;
       case 'freeze_visuals': {
-        const frozen = await window.__LOCALVIEW__?.freezeVisuals?.(queued.id) ?? null;
+        const requestedLeaseMs = Number(queued.private_capture?.visual_freeze_lease_ms);
+        const leaseMs = Number.isFinite(requestedLeaseMs) ? requestedLeaseMs : 8000;
+        const frozen = await window.__LOCALVIEW__?.freezeVisuals?.(queued.id, leaseMs) ?? null;
         if (!frozen) throw new Error('visual_freeze_ack_missing');
         try {
           const geometry = privateMaskGeometry(queued.private_capture?.mask_selectors || []);
@@ -734,6 +736,17 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
           try { window.__LOCALVIEW__?.restoreVisuals?.(queued.id); } catch (_) {}
           throw error;
         }
+      }
+      case 'capture_scroll_to': {
+        const scrolled = await window.__LOCALVIEW__?.captureScrollTo?.(action.token, action.y) ?? null;
+        if (!scrolled) throw new Error('capture_scroll_ack_missing');
+        return scrolled;
+      }
+      case 'capture_tile_probe': {
+        const probe = await window.__LOCALVIEW__?.captureTileProbe?.(action.token) ?? null;
+        if (!probe) throw new Error('capture_tile_probe_ack_missing');
+        const geometry = privateMaskGeometry(queued.private_capture?.mask_selectors || []);
+        return { ...probe, ...geometry };
       }
       case 'restore_visuals':
         return window.__LOCALVIEW__?.restoreVisuals?.(String(action.token || '')) ?? null;

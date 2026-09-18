@@ -1036,7 +1036,7 @@ fn sanitize_capture_tile_probe_result(result: &mut BridgeActionResult) {
     let visible_fixed_or_sticky = result
         .payload
         .get("visible_fixed_or_sticky")
-        .and_then(Value::as_u64);
+        .and_then(Value::as_bool);
 
     let valid = scroll_x.is_some_and(valid_nonnegative_css_coordinate)
         && scroll_y.is_some_and(valid_full_page_y)
@@ -1047,10 +1047,7 @@ fn sanitize_capture_tile_probe_result(result: &mut BridgeActionResult) {
         && masked_elements.is_some_and(|value| value <= MAX_MASKED_ELEMENTS)
         && mask_rects.is_some()
         && positional_elements_scanned.is_some_and(|value| value <= MAX_POSITIONAL_SCAN_ELEMENTS)
-        && visible_fixed_or_sticky.is_some_and(|value| {
-            value <= positional_elements_scanned.unwrap_or_default()
-                && value <= MAX_POSITIONAL_SCAN_ELEMENTS
-        });
+        && visible_fixed_or_sticky.is_some();
 
     if !valid {
         fail_internal_capture_result(result, "capture_tile_probe_metadata_invalid");
