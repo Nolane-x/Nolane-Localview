@@ -769,6 +769,13 @@ fn unique_transaction_path(parent: &Path, suffix: &str) -> PathBuf {
     parent.join(format!(".localview-fix-{}.{suffix}", Uuid::new_v4()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FixTransactionFault {
+    None,
+    AfterBackupRename,
+    AfterTargetReplace,
+}
+
 fn rollback(
     target: &Path,
     backup: &Path,
@@ -789,6 +796,15 @@ pub fn apply_fix_transaction(
     target: &Path,
     preimage: &[u8],
     postimage: &[u8],
+) -> Result<(), String> {
+    apply_fix_transaction_inner(target, preimage, postimage, FixTransactionFault::None)
+}
+
+fn apply_fix_transaction_inner(
+    target: &Path,
+    preimage: &[u8],
+    postimage: &[u8],
+    fault: FixTransactionFault,
 ) -> Result<(), String> {
     let current_bytes = fs::read(target)
         .map_err(|_| "trusted Fix source is unavailable".to_string())?;
@@ -845,10 +861,18 @@ pub fn apply_fix_transaction(
         rollback(target, &backup, &temp)?;
         return Err("trusted Fix source changed during apply".into());
     }
+    if fault == FixTransactionFault::AfterBackupRename {
+        rollback(target, &backup, &temp)?;
+        return Err("trusted Fix injected transaction failure".into());
+    }
 
     if fs::rename(&temp, target).is_err() {
         rollback(target, &backup, &temp)?;
         return Err("trusted Fix could not replace the source file".into());
+    }
+    if fault == FixTransactionFault::AfterTargetReplace {
+        rollback(target, &backup, &temp)?;
+        return Err("trusted Fix injected transaction failure".into());
     }
 
     let verified = fs::read(target)
@@ -1111,6 +1135,58 @@ mod trusted_fix_tests {
             .filter(|entry| {
                 entry.file_name().to_string_lossy().starts_with(".localview-fix-")
             })
+            .count();
+        assert_eq!(debris, 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn trusted_fix_transaction_rolls_back_after_backup_rename_failure() {
+        let dir = test_dir();
+        let file = dir.join("App.tsx");
+        let preimage = b"const value = 1;\n";
+        let postimage = b"const value = 2;\n";
+        fs::write(&file, preimage).unwrap();
+
+        let error = apply_fix_transaction_inner(
+            &file,
+            preimage,
+            postimage,
+            FixTransactionFault::AfterBackupRename,
+        )
+        .unwrap_err();
+        assert!(error.contains("injected transaction failure"));
+        assert_eq!(fs::read(&file).unwrap(), preimage);
+        let debris = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".localview-fix-"))
+            .count();
+        assert_eq!(debris, 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn trusted_fix_transaction_rolls_back_after_target_replace_failure() {
+        let dir = test_dir();
+        let file = dir.join("App.tsx");
+        let preimage = b"const value = 1;\n";
+        let postimage = b"const value = 2;\n";
+        fs::write(&file, preimage).unwrap();
+
+        let error = apply_fix_transaction_inner(
+            &file,
+            preimage,
+            postimage,
+            FixTransactionFault::AfterTargetReplace,
+        )
+        .unwrap_err();
+        assert!(error.contains("injected transaction failure"));
+        assert_eq!(fs::read(&file).unwrap(), preimage);
+        let debris = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".localview-fix-"))
             .count();
         assert_eq!(debris, 0);
         let _ = fs::remove_dir_all(dir);
