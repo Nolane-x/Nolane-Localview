@@ -222,7 +222,7 @@ export default function LocalViewShell() {
             onResetWorkspace={resetWorkspacePreferences}
           />
         )}
-        {error && <RuntimeToast error={error} onRetry={() => void refresh()} />}
+        {error && <RuntimeToast locale={preferences.locale} onRetry={() => void refresh()} />}
       </div>
     </div>
   );
@@ -258,13 +258,13 @@ function TopPill({
       : translate(locale, 'status.offline');
 
   return <header className="top-pill">
-    <button className="logo-button" aria-label="Show sessions" onClick={onSessions}><span className="logo-glyph">L</span></button>
+    <button className="logo-button" aria-label={translate(locale, 'action.showSessions')} onClick={onSessions}><span className="logo-glyph">L</span></button>
     <div className="top-divider"/>
     <div className="target-block">
       <div className="target-row">
         <span className={`health-dot ${state.health.paused ? 'warn' : ''}`}/>
         <select
-          aria-label="Current localhost session"
+          aria-label={translate(locale, 'aria.currentSession')}
           value={current?.id ?? selected ?? ''}
           onChange={(event) => onSelect(event.target.value)}
           disabled={!state.sessions.length}
@@ -288,7 +288,7 @@ function TopPill({
         {state.health.paused ? <PlayIcon/> : <PauseIcon/>}
       </IconButton>
       <IconButton label={translate(locale, 'action.openPreview')} onClick={onOpenNative} disabled={!current}><ExternalIcon/></IconButton>
-      <IconButton label="Immersive" onClick={onImmersive}><ExpandIcon/></IconButton>
+      <IconButton label={translate(locale, 'action.immersive')} onClick={onImmersive}><ExpandIcon/></IconButton>
       <IconButton label={translate(locale, 'action.hideTargetBar')} onClick={onHideTargetBar}><HideIcon/></IconButton>
     </div>
   </header>;
@@ -318,8 +318,8 @@ function FloatingRail({
   </nav>;
 }
 
-function RuntimeToast({ error, onRetry }: { error: string; onRetry: () => void }) {
-  return <div className="runtime-toast" role="status"><span className="health-dot danger"/><div><strong>Runtime unavailable</strong><span>{error}</span></div><button onClick={onRetry}>Retry</button></div>;
+function RuntimeToast({ locale, onRetry }: { locale: LocalViewPreferences['locale']; onRetry: () => void }) {
+  return <div className="runtime-toast" role="status" aria-live="polite"><span className="health-dot danger"/><div><strong>{translate(locale, 'runtime.unavailable')}</strong><span>{translate(locale, 'runtime.unavailableHint')}</span></div><button onClick={onRetry}>{translate(locale, 'action.retry')}</button></div>;
 }
 
 function IconButton({ label, onClick, disabled, children }: { label: string; onClick: () => void; disabled?: boolean; children: ReactNode }) {
