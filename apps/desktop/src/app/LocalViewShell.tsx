@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api } from '../api';
+import { api, type AiProviderCapability } from '../api';
 import { COMMAND_IDS, type CommandId } from '../commands';
 import { applyDocumentLocale, translate } from '../i18n';
 import {
@@ -15,6 +15,7 @@ import {
   FloatingPanel,
   RailButton,
   type HumanCaptureState,
+  type HumanAskAiState,
   type HumanMeasureState,
   type HumanSourceOpenState,
   type ToolId,
@@ -49,6 +50,53 @@ const fallback: DashboardState = {
 
 const emptyLive: LiveSessionState = { observer: [], action_results: [] };
 const TOGGLE_TARGET_BAR_SHORTCUT = 'Ctrl+Shift+T';
+
+const unavailableAiProvider: AiProviderCapability = {
+  available: false,
+  label: null,
+  reason: 'not_configured',
+};
+
+function classifyAskAiFailure(
+  cause: unknown,
+): 'provider_unavailable' | 'context_unavailable' | 'invalid_question' | 'failed' {
+  const detail = String(cause).toLowerCase();
+
+  const invalidQuestionPhrases = [
+    'trusted ai question is empty',
+    'trusted ai question is invalid',
+    'trusted ai question exceeds the safety bound',
+  ];
+  if (invalidQuestionPhrases.some((phrase) => detail.includes(phrase))) {
+    return 'invalid_question';
+  }
+
+  const providerUnavailablePhrases = [
+    'trusted ai provider unavailable',
+    'trusted ai provider is not configured',
+    'trusted ai provider configuration is unsupported',
+    'trusted ai provider bridge must be loopback',
+  ];
+  if (providerUnavailablePhrases.some((phrase) => detail.includes(phrase))) {
+    return 'provider_unavailable';
+  }
+
+  const contextUnavailablePhrases = [
+    'trusted ai runtime unavailable',
+    'trusted ai session is unavailable',
+    'trusted ai context is unavailable',
+    'trusted ai selection is no longer available',
+    'trusted ai selection is ambiguous',
+    'trusted ai selection is unavailable',
+    'trusted ai route changed before context resolution',
+    'trusted ai route changed while context was being prepared',
+    'managed surface',
+    'surface is unavailable',
+  ];
+  return contextUnavailablePhrases.some((phrase) => detail.includes(phrase))
+    ? 'context_unavailable'
+    : 'failed';
+}
 
 function classifySourceOpenFailure(cause: unknown): 'launcher_unavailable' | 'unavailable' | 'failed' {
   const detail = String(cause).toLowerCase();
@@ -90,13 +138,18 @@ export default function LocalViewShell() {
   const [captureState, setCaptureState] = useState<HumanCaptureState>({ status: 'idle' });
   const [measureState, setMeasureState] = useState<HumanMeasureState>({ status: 'idle' });
   const [sourceOpenState, setSourceOpenState] = useState<HumanSourceOpenState>({ status: 'idle' });
+  const [aiProviderCapability, setAiProviderCapability] = useState<AiProviderCapability>(unavailableAiProvider);
+  const [askAiState, setAskAiState] = useState<HumanAskAiState>({ status: 'idle' });
   const captureInFlight = useRef(false);
   const captureGeneration = useRef(0);
   const measureInFlight = useRef(false);
   const measureGeneration = useRef(0);
   const sourceOpenInFlight = useRef(false);
   const sourceOpenGeneration = useRef(0);
+  const askAiInFlight = useRef(false);
+  const askAiGeneration = useRef(0);
   const selectedReferenceRef = useRef<string | undefined>(undefined);
+  const currentSessionIdRef = useRef<string | undefined>(undefined);
 
   const patchPreferences = useCallback((patch: Partial<LocalViewPreferences>) => {
     setPreferences((current) => persistPreferences(current, patch));
@@ -130,6 +183,25 @@ export default function LocalViewShell() {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  const refreshAiProviderCapability = useCallback(async () => {
+    try {
+      const capability = await api.aiProviderCapability();
+      setAiProviderCapability(capability);
+    } catch {
+      setAiProviderCapability({
+        available: false,
+        label: null,
+        reason: 'unsupported',
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAiProviderCapability();
+    const timer = window.setInterval(() => void refreshAiProviderCapability(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [refreshAiProviderCapability]);
+
   const current = useMemo(
     () => state.sessions.find((session) => session.id === selected) ?? state.sessions[0],
     [state.sessions, selected],
@@ -156,9 +228,13 @@ export default function LocalViewShell() {
     sourceOpenGeneration.current += 1;
     sourceOpenInFlight.current = false;
     setSourceOpenState({ status: 'idle' });
+    askAiGeneration.current += 1;
+    askAiInFlight.current = false;
+    setAskAiState({ status: 'idle' });
   }, [selectedReference]);
 
   useEffect(() => {
+    currentSessionIdRef.current = current?.id;
     captureGeneration.current += 1;
     captureInFlight.current = false;
     setCaptureState({ status: 'idle' });
@@ -169,6 +245,9 @@ export default function LocalViewShell() {
     sourceOpenGeneration.current += 1;
     sourceOpenInFlight.current = false;
     setSourceOpenState({ status: 'idle' });
+    askAiGeneration.current += 1;
+    askAiInFlight.current = false;
+    setAskAiState({ status: 'idle' });
   }, [current?.id]);
 
   useEffect(() => {
@@ -346,6 +425,84 @@ export default function LocalViewShell() {
     }
   }, [current]);
 
+  const askAiAboutSelection = useCallback(async (question: string) => {
+    const session = current;
+    const reference = selectedReference;
+    if (
+      !session
+      || !reference
+      || !aiProviderCapability.available
+      || askAiInFlight.current
+    ) {
+      return;
+    }
+
+    const normalizedQuestion = question.trim();
+    const questionBytes = new TextEncoder().encode(normalizedQuestion).length;
+    if (!normalizedQuestion || questionBytes > 8 * 1024) {
+      setActiveTool('ai');
+      setAskAiState({
+        status: 'failure',
+        reference,
+        reason: 'invalid_question',
+      });
+      return;
+    }
+
+    const requestSessionId = session.id;
+    const requestReference = reference;
+    const generation = ++askAiGeneration.current;
+    askAiInFlight.current = true;
+    selectedReferenceRef.current = requestReference;
+    currentSessionIdRef.current = requestSessionId;
+    setActiveTool('ai');
+    setAskAiState({
+      status: 'asking',
+      reference: requestReference,
+      question: normalizedQuestion,
+    });
+
+    try {
+      const receipt = await api.askAiAboutSelection({
+        sessionId: requestSessionId,
+        reference: requestReference,
+        question: normalizedQuestion,
+      });
+      if (
+        generation !== askAiGeneration.current
+        || requestReference !== selectedReferenceRef.current
+        || requestSessionId !== currentSessionIdRef.current
+      ) {
+        return;
+      }
+      setAskAiState({
+        status: 'success',
+        reference: requestReference,
+        question: normalizedQuestion,
+        answer: receipt.answer,
+        providerLabel: receipt.providerLabel,
+        snapshotVersion: receipt.snapshotVersion,
+      });
+    } catch (cause) {
+      if (
+        generation !== askAiGeneration.current
+        || requestReference !== selectedReferenceRef.current
+        || requestSessionId !== currentSessionIdRef.current
+      ) {
+        return;
+      }
+      setAskAiState({
+        status: 'failure',
+        reference: requestReference,
+        reason: classifyAskAiFailure(cause),
+      });
+    } finally {
+      if (generation === askAiGeneration.current) {
+        askAiInFlight.current = false;
+      }
+    }
+  }, [aiProviderCapability.available, current, selectedReference]);
+
   const executeCommand = useCallback((command: CommandId) => {
     switch (command) {
       case COMMAND_IDS.inspectActivate:
@@ -366,6 +523,12 @@ export default function LocalViewShell() {
         return;
       case COMMAND_IDS.aiOpen:
         setActiveTool('ai');
+        return;
+      case COMMAND_IDS.aiAskSelection:
+        setActiveTool('ai');
+        if (selectedReference && aiProviderCapability.available) {
+          void askAiAboutSelection(translate(preferences.locale, 'ai.defaultQuestion'));
+        }
         return;
       case COMMAND_IDS.advancedOpen:
         setActiveTool('advanced');
@@ -397,9 +560,12 @@ export default function LocalViewShell() {
         return;
     }
   }, [
+    aiProviderCapability.available,
+    askAiAboutSelection,
     openNative,
     openSourceForSelection,
     patchPreferences,
+    preferences.locale,
     preferences.showTargetBar,
     preferences.showToolRail,
     resetWorkspacePreferences,
@@ -492,6 +658,10 @@ export default function LocalViewShell() {
             onOpenSource={(reference) => void openSourceForSelection(reference)}
             measureState={measureState}
             onMeasure={(reference) => void measureCurrentSelection(reference)}
+            aiProviderCapability={aiProviderCapability}
+            askAiState={askAiState}
+            onAskAi={(question) => void askAiAboutSelection(question)}
+            onRefreshAiProvider={() => void refreshAiProviderCapability()}
             onCommand={executeCommand}
             onPreferencesChange={patchPreferences}
             onResetWorkspace={resetWorkspacePreferences}
