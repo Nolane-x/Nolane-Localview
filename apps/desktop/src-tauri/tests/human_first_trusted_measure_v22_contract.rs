@@ -180,6 +180,9 @@ fn measure_runtime_audit_proves_authority_failure_and_races() {
         "40-trusted-measure-in-progress.png",
         "41-vi-trusted-measure-success.png",
         "42-trusted-measure-stale-selection.png",
+        "43-narrow-trusted-measure-success.png",
+        "44-no-session-measure-disabled.png",
+        "45-vi-trusted-measure-failure.png",
     ] {
         assert!(
             capture.contains(artifact),
@@ -193,6 +196,9 @@ fn measure_runtime_audit_proves_authority_failure_and_races() {
         "measure-single-request",
         "measure-no-raw-error",
         "stale-measure-result-discarded",
+        "no-session-measure-disabled",
+        "narrow-trusted-measure-success:panel-in-viewport",
+        "vi-trusted-measure-failure:localized",
     ] {
         assert!(
             capture.contains(marker),
