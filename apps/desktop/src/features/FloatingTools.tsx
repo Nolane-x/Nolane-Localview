@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { COMMAND_IDS, type CommandId } from '../commands';
-import type { AiProviderCapability } from '../api';
+import type { AiFixCapability, AiProviderCapability } from '../api';
 import type { DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
@@ -94,6 +94,50 @@ export type HumanAskAiState =
       reason: 'provider_unavailable' | 'context_unavailable' | 'invalid_question' | 'question_too_long' | 'failed';
     };
 
+export type HumanFixState =
+  | { status: 'idle' }
+  | { status: 'disclosure'; reference: string }
+  | { status: 'proposing'; reference: string; instruction: string }
+  | {
+      status: 'proposal';
+      proposalId: string;
+      reference: string;
+      instruction: string;
+      displayFile: string;
+      summary: string;
+      diff: string;
+      providerLabel: string;
+      expiresAtUnixMs: number;
+    }
+  | {
+      status: 'applying';
+      proposalId: string;
+      reference: string;
+      displayFile: string;
+    }
+  | {
+      status: 'success';
+      displayFile: string;
+      changedStartLine: number;
+      changedEndLine: number;
+    }
+  | {
+      status: 'failure';
+      reference?: string;
+      reason:
+        | 'provider_unavailable'
+        | 'source_unavailable'
+        | 'invalid_instruction'
+        | 'instruction_too_long'
+        | 'sensitive_source'
+        | 'unsupported_source'
+        | 'proposal_invalid'
+        | 'proposal_expired'
+        | 'source_changed'
+        | 'apply_failed'
+        | 'failed';
+    };
+
 export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { messageKey: MessageKey; shortcut: string }> = {
   inspect: { messageKey: 'tool.inspect', shortcut: 'I' },
   responsive: { messageKey: 'tool.responsive', shortcut: 'R' },
@@ -126,6 +170,13 @@ interface FloatingPanelProps {
   askAiState: HumanAskAiState;
   onAskAi: (question: string) => void;
   onRefreshAiProvider: () => void;
+  fixCapability: AiFixCapability;
+  fixState: HumanFixState;
+  onBeginFix: () => void;
+  onPrepareFix: (instruction: string) => void;
+  onApplyFix: () => void;
+  onDiscardFix: () => void;
+  onRefreshFixCapability: () => void;
   onCommand: (command: CommandId) => void;
   onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
   onResetWorkspace: () => void;
@@ -153,6 +204,13 @@ export function FloatingPanel({
   askAiState,
   onAskAi,
   onRefreshAiProvider,
+  fixCapability,
+  fixState,
+  onBeginFix,
+  onPrepareFix,
+  onApplyFix,
+  onDiscardFix,
+  onRefreshFixCapability,
   onCommand,
   onPreferencesChange,
   onResetWorkspace,
@@ -179,6 +237,9 @@ export function FloatingPanel({
             aiProviderCapability={aiProviderCapability}
             askAiState={askAiState}
             onAskAi={onAskAi}
+            fixCapability={fixCapability}
+            fixState={fixState}
+            onBeginFix={onBeginFix}
           />
         )}
         {tool === 'advanced' && <AdvancedPanel current={current} live={live} locale={locale} onOpenNative={onOpenNative} />}
@@ -202,6 +263,13 @@ export function FloatingPanel({
             askAiState={askAiState}
             onAskAi={onAskAi}
             onRefreshProvider={onRefreshAiProvider}
+            fixCapability={fixCapability}
+            fixState={fixState}
+            onBeginFix={onBeginFix}
+            onPrepareFix={onPrepareFix}
+            onApplyFix={onApplyFix}
+            onDiscardFix={onDiscardFix}
+            onRefreshFixCapability={onRefreshFixCapability}
           />
         )}
         {tool === 'sessions' && <SessionsPanel state={state} current={current} locale={locale} onSelect={onSelect} />}
@@ -214,6 +282,7 @@ export function FloatingPanel({
             preferences={preferences}
             selectedReference={selectedReference}
             providerCapability={aiProviderCapability}
+            fixCapability={fixCapability}
             onCommand={onCommand}
           />
         )}
@@ -260,6 +329,37 @@ function askAiFailureMessage(
   }
 }
 
+function fixFailureMessage(
+  locale: SupportedLocale,
+  reason: Extract<HumanFixState, { status: 'failure' }>['reason'],
+): string {
+  switch (reason) {
+    case 'provider_unavailable':
+      return translate(locale, 'fix.unavailable');
+    case 'source_unavailable':
+      return translate(locale, 'fix.sourceUnavailable');
+    case 'invalid_instruction':
+      return translate(locale, 'fix.enterInstruction');
+    case 'instruction_too_long':
+      return translate(locale, 'fix.instructionTooLong');
+    case 'sensitive_source':
+      return translate(locale, 'fix.sensitiveSource');
+    case 'unsupported_source':
+      return translate(locale, 'fix.unsupportedSource');
+    case 'proposal_invalid':
+      return translate(locale, 'fix.proposalInvalid');
+    case 'proposal_expired':
+      return translate(locale, 'fix.expired');
+    case 'source_changed':
+      return translate(locale, 'fix.sourceChanged');
+    case 'apply_failed':
+      return translate(locale, 'fix.applyFailed');
+    case 'failed':
+    default:
+      return translate(locale, 'fix.failed');
+  }
+}
+
 function Inspector({
   current,
   live,
@@ -275,6 +375,9 @@ function Inspector({
   aiProviderCapability,
   askAiState,
   onAskAi,
+  fixCapability,
+  fixState,
+  onBeginFix,
 }: {
   current?: Session;
   live: LiveSessionState;
@@ -290,6 +393,9 @@ function Inspector({
   aiProviderCapability: AiProviderCapability;
   askAiState: HumanAskAiState;
   onAskAi: (question: string) => void;
+  fixCapability: AiFixCapability;
+  fixState: HumanFixState;
+  onBeginFix: () => void;
 }) {
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
   const measureReference = selectedReference;
@@ -297,6 +403,7 @@ function Inspector({
   const sourceOpenBusy = sourceOpenState.status === 'opening';
   const measureBusy = measureState.status === 'measuring';
   const askAiBusy = askAiState.status === 'asking';
+  const fixBusy = fixState.status === 'proposing' || fixState.status === 'applying';
 
   return (
     <div className="inspector-stack human-inspector">
@@ -374,11 +481,24 @@ function Inspector({
           <SparkIcon />
           <span>{askAiBusy ? translate(locale, 'ai.asking') : translate(locale, 'action.askAi')}</span>
         </button>
-        <UnavailableInspectorAction
-          icon={<ActivityIcon />}
-          label={translate(locale, 'action.fix')}
-          reason={focused ? translate(locale, 'ai.unavailable') : translate(locale, 'inspector.noSelection')}
-        />
+        <button
+          className="fix-action"
+          onClick={onBeginFix}
+          disabled={!current || !measureReference || !fixCapability.available || fixBusy}
+          aria-busy={fixBusy}
+          title={
+            !current
+              ? translate(locale, 'empty.noTarget')
+              : !measureReference
+                ? translate(locale, 'inspector.noSelection')
+                : !fixCapability.available
+                  ? translate(locale, 'fix.unavailable')
+                  : translate(locale, 'action.fix')
+          }
+        >
+          <ActivityIcon />
+          <span>{fixBusy ? translate(locale, 'fix.generating') : translate(locale, 'action.fix')}</span>
+        </button>
       </div>
 
       {sourceOpenState.status === 'success' && (
@@ -581,6 +701,13 @@ function AiPanel({
   askAiState,
   onAskAi,
   onRefreshProvider,
+  fixCapability,
+  fixState,
+  onBeginFix,
+  onPrepareFix,
+  onApplyFix,
+  onDiscardFix,
+  onRefreshFixCapability,
 }: {
   current?: Session;
   locale: SupportedLocale;
@@ -589,9 +716,18 @@ function AiPanel({
   askAiState: HumanAskAiState;
   onAskAi: (question: string) => void;
   onRefreshProvider: () => void;
+  fixCapability: AiFixCapability;
+  fixState: HumanFixState;
+  onBeginFix: () => void;
+  onPrepareFix: (instruction: string) => void;
+  onApplyFix: () => void;
+  onDiscardFix: () => void;
+  onRefreshFixCapability: () => void;
 }) {
   const [question, setQuestion] = useState(() => translate(locale, 'ai.defaultQuestion'));
+  const [fixInstruction, setFixInstruction] = useState(() => translate(locale, 'fix.defaultInstruction'));
   const busy = askAiState.status === 'asking';
+  const fixBusy = fixState.status === 'proposing' || fixState.status === 'applying';
   const canAsk = !!current && !!selectedReference && providerCapability.available && !busy;
   const unavailableReason = !current
     ? translate(locale, 'empty.noTarget')
@@ -664,7 +800,16 @@ function AiPanel({
       <button disabled aria-disabled="true" title={translate(locale, 'ai.notImplementedYet')}>
         {translate(locale, 'ai.explainIssue')}
       </button>
-      <button disabled aria-disabled="true" title={translate(locale, 'ai.fixUnavailable')}>
+      <button
+        onClick={onBeginFix}
+        disabled={!current || !selectedReference || !fixCapability.available || fixBusy}
+        aria-disabled={!current || !selectedReference || !fixCapability.available || fixBusy}
+        title={
+          fixCapability.available
+            ? translate(locale, 'ai.fixSelection')
+            : translate(locale, 'fix.unavailable')
+        }
+      >
         {translate(locale, 'ai.fixSelection')}
       </button>
       <button disabled aria-disabled="true" title={translate(locale, 'ai.notImplementedYet')}>
@@ -689,6 +834,102 @@ function AiPanel({
       </div>
     )}
 
+    <section className="fix-review" aria-label={translate(locale, 'fix.review')}>
+      <div className="fix-review-heading">
+        <div>
+          <span>{translate(locale, 'fix.title')}</span>
+          <strong>{translate(locale, 'fix.review')}</strong>
+        </div>
+        <span className={`compact-status ${fixCapability.available ? 'success' : ''}`}>
+          {fixCapability.available
+            ? `${translate(locale, 'fix.available')}${fixCapability.providerLabel ? ` · ${fixCapability.providerLabel}` : ''}`
+            : translate(locale, 'fix.unavailable')}
+        </span>
+      </div>
+
+      {!fixCapability.available && (
+        <div className="fix-unavailable">
+          <p>{translate(locale, 'fix.unavailableHint')}</p>
+          <button className="fix-refresh-action" onClick={onRefreshFixCapability}>
+            {translate(locale, 'action.retry')}
+          </button>
+        </div>
+      )}
+
+      {fixCapability.available && fixState.status === 'idle' && (
+        <button className="fix-start-action" onClick={onBeginFix} disabled={!current || !selectedReference}>
+          {translate(locale, 'fix.startReview')}
+        </button>
+      )}
+
+      {fixCapability.available && (fixState.status === 'disclosure' || fixState.status === 'proposing') && (
+        <div className="fix-disclosure">
+          <p>{translate(locale, 'fix.disclosure')}</p>
+          <p className="fix-no-write">{translate(locale, 'fix.noWriteBeforeApply')}</p>
+          <label className="fix-instruction-label">
+            <span>{translate(locale, 'fix.instruction')}</span>
+            <textarea
+              value={fixInstruction}
+              onChange={(event) => setFixInstruction(event.target.value)}
+              disabled={fixState.status === 'proposing'}
+              rows={4}
+              placeholder={translate(locale, 'fix.enterInstruction')}
+            />
+          </label>
+          <button
+            className="fix-generate-action"
+            onClick={() => onPrepareFix(fixInstruction)}
+            disabled={fixState.status === 'proposing'}
+            aria-busy={fixState.status === 'proposing'}
+          >
+            {fixState.status === 'proposing'
+              ? translate(locale, 'fix.generating')
+              : translate(locale, 'fix.generate')}
+          </button>
+        </div>
+      )}
+
+      {fixState.status === 'proposal' && (
+        <div className="fix-proposal">
+          <div className="fix-proposal-meta">
+            <strong>{fixState.summary}</strong>
+            <code title={fixState.displayFile}>{fixState.displayFile}</code>
+            <span>{fixState.providerLabel}</span>
+          </div>
+          <pre className="fix-diff" tabIndex={0}>{fixState.diff}</pre>
+          <p className="fix-advisory">{translate(locale, 'fix.advisory')}</p>
+          <div className="fix-proposal-actions">
+            <button className="fix-apply-action" onClick={onApplyFix}>
+              {translate(locale, 'fix.apply')}
+            </button>
+            <button className="fix-discard-action" onClick={onDiscardFix}>
+              {translate(locale, 'fix.discard')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {fixState.status === 'applying' && (
+        <div className="fix-status busy" role="status" aria-live="polite">
+          <strong>{translate(locale, 'fix.applying')}</strong>
+          <span>{fixState.displayFile}</span>
+        </div>
+      )}
+
+      {fixState.status === 'success' && (
+        <div className="fix-status success" role="status" aria-live="polite">
+          <strong>{translate(locale, 'fix.applied')}</strong>
+          <span>{fixState.displayFile}</span>
+        </div>
+      )}
+
+      {fixState.status === 'failure' && (
+        <div className="fix-status failure" role="status" aria-live="polite">
+          <strong>{fixFailureMessage(locale, fixState.reason)}</strong>
+        </div>
+      )}
+    </section>
+
     <p className="ai-privacy-note">{translate(locale, 'ai.privacyNote')}</p>
   </div>;
 }
@@ -710,6 +951,7 @@ function CommandPanel({
   preferences,
   selectedReference,
   providerCapability,
+  fixCapability,
   onCommand,
 }: {
   state: DashboardState;
@@ -719,6 +961,7 @@ function CommandPanel({
   preferences: LocalViewPreferences;
   selectedReference?: string;
   providerCapability: AiProviderCapability;
+  fixCapability: AiFixCapability;
   onCommand: (command: CommandId) => void;
 }) {
   const [query, setQuery] = useState('');
@@ -749,6 +992,20 @@ function CommandPanel({
             : selectedReference,
       keys: '',
       disabled: !current || !selectedReference || !providerCapability.available,
+    },
+    {
+      id: COMMAND_IDS.aiFixSelection,
+      icon: <ActivityIcon />,
+      title: translate(locale, 'ai.fixSelection'),
+      detail: !current
+        ? translate(locale, 'empty.noTarget')
+        : !selectedReference
+          ? translate(locale, 'inspector.noSelection')
+          : !fixCapability.available
+            ? translate(locale, 'fix.unavailable')
+            : translate(locale, 'fix.review'),
+      keys: '',
+      disabled: !current || !selectedReference || !fixCapability.available,
     },
     { id: COMMAND_IDS.previewOpenNative, icon: <ExternalIcon />, title: translate(locale, 'action.openPreview'), detail: url ?? '', keys: '↵', disabled: !current },
     { id: COMMAND_IDS.settingsOpen, icon: <SettingsIcon />, title: translate(locale, 'tool.settings'), detail: '', keys: '⌘,', disabled: false },
