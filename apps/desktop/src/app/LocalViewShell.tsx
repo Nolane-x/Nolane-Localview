@@ -59,13 +59,15 @@ const unavailableAiProvider: AiProviderCapability = {
 
 function classifyAskAiFailure(
   cause: unknown,
-): 'provider_unavailable' | 'context_unavailable' | 'invalid_question' | 'failed' {
+): 'provider_unavailable' | 'context_unavailable' | 'invalid_question' | 'question_too_long' | 'failed' {
   const detail = String(cause).toLowerCase();
 
+  if (detail.includes('trusted ai question exceeds the safety bound')) {
+    return 'question_too_long';
+  }
   const invalidQuestionPhrases = [
     'trusted ai question is empty',
     'trusted ai question is invalid',
-    'trusted ai question exceeds the safety bound',
   ];
   if (invalidQuestionPhrases.some((phrase) => detail.includes(phrase))) {
     return 'invalid_question';
@@ -444,7 +446,7 @@ export default function LocalViewShell() {
       setAskAiState({
         status: 'failure',
         reference,
-        reason: 'invalid_question',
+        reason: questionBytes > 8 * 1024 ? 'question_too_long' : 'invalid_question',
       });
       return;
     }
