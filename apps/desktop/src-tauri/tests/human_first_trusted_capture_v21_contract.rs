@@ -63,10 +63,12 @@ fn frontend_capture_api_never_sends_viewport_geometry() {
         .next()
         .expect("capture API line must exist");
 
-    assert!(method.contains("sessionId"));
+    assert!(method.contains("(sessionId: string)"));
+    assert!(method.contains("{ sessionId, revision: null }"));
     assert!(
-        !method.contains("viewport"),
-        "human Capture API must not accept caller viewport metadata"
+        !method.contains("(sessionId: string, viewport")
+            && !method.contains("{ sessionId, viewport"),
+        "human Capture API must not accept or send caller viewport metadata"
     );
 }
 
