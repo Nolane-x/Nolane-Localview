@@ -345,6 +345,45 @@ fn command_palette_routes_through_canonical_command_ids() {
 }
 
 
+
+#[test]
+fn explicit_reduced_motion_preference_is_respected() {
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+    let styles = include_str!("../../src/styles.css");
+
+    assert!(shell.contains("preferences.reducedMotion === 'reduce'"));
+    assert!(shell.contains("is-reduced-motion"));
+    assert!(styles.contains(".is-reduced-motion *"));
+    assert!(styles.contains("animation-duration:.001ms!important"));
+    assert!(styles.contains("transition-duration:.001ms!important"));
+}
+
+#[test]
+fn render_audit_exercises_preference_corruption_and_legacy_recovery() {
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    for marker in [
+        "invalid-preferences-normalized",
+        "partial-preferences-recovered",
+        "explicit-reduced-motion",
+        "readStoredPreferences",
+        "targetBarPosition",
+        "toolRailPosition",
+        "1e309",
+        "annotationPersistence",
+        "notifications",
+        "autoOpen",
+        "density",
+        "accent",
+    ] {
+        assert!(
+            capture.contains(marker),
+            "render audit is missing preference recovery marker {marker}"
+        );
+    }
+}
+
+
 #[test]
 fn visual_system_uses_muted_moss_instead_of_ai_blue() {
     let styles = include_str!("../../src/styles.css");
