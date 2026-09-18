@@ -102,6 +102,20 @@ fn settings_and_advanced_are_real_tool_surfaces() {
 
 
 
+
+#[test]
+fn command_palette_search_is_functional_not_decorative() {
+    let source = include_str!("../../src/features/FloatingTools.tsx");
+    let command = between(source, "function CommandPanel(", "function ConsoleRow(");
+
+    assert!(source.contains("useState"));
+    assert!(command.contains("const [query, setQuery] = useState('')"));
+    assert!(command.contains("const visibleCommands = commands.filter"));
+    assert!(command.contains("value={query}"));
+    assert!(command.contains("onChange={(event) => setQuery(event.target.value)}"));
+    assert!(command.contains("visibleCommands.map"));
+}
+
 #[test]
 fn human_first_panels_do_not_enable_unwired_responsive_or_ai_actions() {
     let source = include_str!("../../src/features/FloatingTools.tsx");
