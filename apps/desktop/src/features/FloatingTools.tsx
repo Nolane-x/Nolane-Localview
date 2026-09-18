@@ -83,7 +83,7 @@ export function FloatingPanel({
       <PanelHeader title={panelTitle(tool, locale)} eyebrow={panelEyebrow(tool, locale)} locale={locale} onClose={onClose} />
       <div className="panel-body">
         {tool === 'inspect' && <Inspector current={current} live={live} onOpenNative={onOpenNative} locale={locale} />}
-        {tool === 'advanced' && <AdvancedPanel current={current} live={live} onOpenNative={onOpenNative} />}
+        {tool === 'advanced' && <AdvancedPanel current={current} live={live} locale={locale} onOpenNative={onOpenNative} />}
         {tool === 'settings' && (
           <SettingsPanel
             locale={locale}
@@ -93,8 +93,8 @@ export function FloatingPanel({
           />
         )}
         {tool === 'responsive' && <ResponsivePanel current={current} locale={locale} />}
-        {tool === 'console' && <ConsolePanel live={live} onOpenNative={onOpenNative} />}
-        {tool === 'network' && <NetworkPanel current={current} live={live} onOpenNative={onOpenNative} />}
+        {tool === 'console' && <ConsolePanel live={live} locale={locale} onOpenNative={onOpenNative} />}
+        {tool === 'network' && <NetworkPanel current={current} live={live} locale={locale} onOpenNative={onOpenNative} />}
         {tool === 'ai' && <AiPanel current={current} locale={locale} />}
         {tool === 'sessions' && <SessionsPanel state={state} current={current} locale={locale} onSelect={onSelect} />}
         {tool === 'command' && (
@@ -174,7 +174,7 @@ function Inspector({
         />
       </div>
 
-      {!live.observer.length && <AttachNotice onOpenNative={onOpenNative} />}
+      {!live.observer.length && <AttachNotice locale={locale} onOpenNative={onOpenNative} />}
     </div>
   );
 }
@@ -196,7 +196,7 @@ function UnavailableInspectorAction({
   );
 }
 
-function AdvancedPanel({ current, live, onOpenNative }: { current?: Session; live: LiveSessionState; onOpenNative: () => void }) {
+function AdvancedPanel({ current, live, locale, onOpenNative }: { current?: Session; live: LiveSessionState; locale: SupportedLocale; onOpenNative: () => void }) {
   if (!current) return <PanelEmpty title="No active target" text="Run a dev server to view diagnostics." />;
   const snapshot = [...live.observer].reverse().find((event) => event.kind === 'semantic_snapshot');
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
@@ -209,7 +209,7 @@ function AdvancedPanel({ current, live, onOpenNative }: { current?: Session; liv
         ['Latest', latest?.kind ?? '—'],
         ['Focused ref', focused?.reference ?? '—'],
       ]} />
-      {!live.observer.length && <AttachNotice onOpenNative={onOpenNative} />}
+      {!live.observer.length && <AttachNotice locale={locale} onOpenNative={onOpenNative} />}
       {snapshot && <EvidenceCard event={snapshot} />}
       <div className="panel-section">
         <SectionLabel title="Project identity" aside="diagnostic" />
@@ -300,24 +300,25 @@ function ResponsivePanel({ current, locale }: { current?: Session; locale: Suppo
     <div className="panel-note">{translate(locale, 'responsive.note')}</div>
   </div>;
 }
-function ConsolePanel({ live, onOpenNative }: { live: LiveSessionState; onOpenNative: () => void }) {
+function ConsolePanel({ live, locale, onOpenNative }: { live: LiveSessionState; locale: SupportedLocale; onOpenNative: () => void }) {
   const events = live.observer.filter((event) => event.kind === 'console' || event.kind === 'runtime_error').slice(-80);
+  const eventLabel = translate(locale, events.length === 1 ? 'console.eventOne' : 'console.eventMany');
   return <div className="stream-panel">
-    <div className="stream-toolbar"><span className="filter-chip active">Live</span><span className="stream-status"><i className={events.length ? '' : 'muted'} /> {events.length} event{events.length === 1 ? '' : 's'}</span></div>
-    {events.length ? <div className="evidence-stream">{events.map((event) => <ConsoleRow key={`${event.seq}-${event.captured_at}`} event={event} />)}</div> : <EmptyEvidence icon={<ConsoleIcon />} title="No console events" text="Open the preview to collect console events." action="Open preview" onAction={onOpenNative} />}
+    <div className="stream-toolbar"><span className="filter-chip active">{translate(locale, 'console.live')}</span><span className="stream-status"><i className={events.length ? '' : 'muted'} /> {events.length} {eventLabel}</span></div>
+    {events.length ? <div className="evidence-stream">{events.map((event) => <ConsoleRow key={`${event.seq}-${event.captured_at}`} event={event} />)}</div> : <EmptyEvidence icon={<ConsoleIcon />} title={translate(locale, 'console.emptyTitle')} text={translate(locale, 'console.emptyText')} action={translate(locale, 'action.openPreview')} onAction={onOpenNative} />}
   </div>;
 }
 
-function NetworkPanel({ current, live, onOpenNative }: { current?: Session; live: LiveSessionState; onOpenNative: () => void }) {
+function NetworkPanel({ current, live, locale, onOpenNative }: { current?: Session; live: LiveSessionState; locale: SupportedLocale; onOpenNative: () => void }) {
   const events = live.observer.filter((event) => event.kind === 'network').slice(-100);
   const failures = events.filter((event) => Number(event.payload.status ?? 0) >= 400 || event.payload.ok === false).length;
   return <div className="stream-panel">
     <div className="network-summary">
-      <div><span>Target</span><strong>{current ? `:${current.endpoint.port}` : '—'}</strong></div>
-      <div><span>Requests</span><strong>{events.length}</strong></div>
-      <div><span>Failures</span><strong>{failures}</strong></div>
+      <div><span>{translate(locale, 'network.target')}</span><strong>{current ? `:${current.endpoint.port}` : '—'}</strong></div>
+      <div><span>{translate(locale, 'network.requests')}</span><strong>{events.length}</strong></div>
+      <div><span>{translate(locale, 'network.failures')}</span><strong>{failures}</strong></div>
     </div>
-    {events.length ? <div className="evidence-stream network-stream">{events.map((event) => <NetworkRow key={`${event.seq}-${event.captured_at}`} event={event} />)}</div> : <EmptyEvidence icon={<NetworkIcon />} title="No network events" text="Open the preview to collect request metadata." action="Open preview" onAction={onOpenNative} />}
+    {events.length ? <div className="evidence-stream network-stream">{events.map((event) => <NetworkRow key={`${event.seq}-${event.captured_at}`} event={event} />)}</div> : <EmptyEvidence icon={<NetworkIcon />} title={translate(locale, 'network.emptyTitle')} text={translate(locale, 'network.emptyText')} action={translate(locale, 'action.openPreview')} onAction={onOpenNative} />}
   </div>;
 }
 
@@ -432,8 +433,8 @@ function EvidenceCard({ event }: { event: ObserverEvent }) {
   return <div className="live-card"><div><ActivityIcon /><strong>{event.kind.replaceAll('_', ' ')}</strong><span>{time(event.captured_at)}</span></div><pre>{JSON.stringify(event.payload, null, 2)}</pre></div>;
 }
 
-function AttachNotice({ onOpenNative }: { onOpenNative: () => void }) {
-  return <button className="attach-notice" onClick={onOpenNative}><WarningIcon /><div><strong>Native observer is not attached</strong><span>Open the isolated preview to stream semantic, console, network and interaction evidence.</span></div><ExternalIcon /></button>;
+function AttachNotice({ locale, onOpenNative }: { locale: SupportedLocale; onOpenNative: () => void }) {
+  return <button className="attach-notice" onClick={onOpenNative}><WarningIcon /><div><strong>{translate(locale, 'observer.connectTitle')}</strong><span>{translate(locale, 'observer.connectText')}</span></div><ExternalIcon /></button>;
 }
 
 function EmptyEvidence({ icon, title, text, action, onAction }: { icon: ReactNode; title: string; text: string; action: string; onAction: () => void }) {

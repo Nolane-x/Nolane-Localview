@@ -184,6 +184,9 @@ fn render_audit_covers_minimum_human_first_states() {
         "22-vi-no-target.png",
         "23-vi-disconnected.png",
         "24-vi-inspector-accessibility.png",
+        "25-vi-console.png",
+        "26-vi-network.png",
+        "27-vi-live-inspection-unavailable.png",
         "15-ai-unavailable.png",
     ] {
         assert!(
@@ -405,6 +408,54 @@ fn workspace_empty_state_uses_active_locale() {
 }
 
 
+
+
+#[test]
+fn console_network_and_live_inspection_notice_use_active_locale() {
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let i18n = include_str!("../../src/i18n.ts");
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    for key in [
+        "console.live",
+        "console.eventOne",
+        "console.eventMany",
+        "console.emptyTitle",
+        "console.emptyText",
+        "network.target",
+        "network.requests",
+        "network.failures",
+        "network.emptyTitle",
+        "network.emptyText",
+        "observer.connectTitle",
+        "observer.connectText",
+    ] {
+        assert!(i18n.contains(&format!("'{key}'")), "missing localized primary-panel key {key}");
+    }
+
+    let console = between(tools, "function ConsolePanel(", "function NetworkPanel(");
+    assert!(console.contains("translate(locale, 'console.live')"));
+    assert!(console.contains("console.eventOne"));
+    assert!(console.contains("console.eventMany"));
+    assert!(!console.contains(">Live<"));
+    assert!(!console.contains("No console events"));
+
+    let network = between(tools, "function NetworkPanel(", "function AiPanel(");
+    assert!(network.contains("translate(locale, 'network.target')"));
+    assert!(network.contains("translate(locale, 'network.requests')"));
+    assert!(network.contains("translate(locale, 'network.failures')"));
+    assert!(!network.contains("<span>Target</span>"));
+    assert!(!network.contains("No network events"));
+
+    let attach = between(tools, "function AttachNotice(", "function EmptyEvidence(");
+    assert!(attach.contains("translate(locale, 'observer.connectTitle')"));
+    assert!(attach.contains("translate(locale, 'observer.connectText')"));
+    assert!(!attach.contains("Native observer is not attached"));
+
+    assert!(capture.contains("25-vi-console.png"));
+    assert!(capture.contains("26-vi-network.png"));
+    assert!(capture.contains("27-vi-live-inspection-unavailable.png"));
+}
 
 #[test]
 fn primary_chrome_accessible_names_and_panel_eyebrows_use_active_locale() {

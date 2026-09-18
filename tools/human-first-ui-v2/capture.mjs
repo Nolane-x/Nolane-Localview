@@ -273,6 +273,21 @@ invariant(viInspectorActionsLabel === 'Thao tác kiểm tra', 'vi-accessibility:
 const viInspectorEyebrow = await page.locator('.panel-inspect .panel-header > div > span').innerText();
 invariant(viInspectorEyebrow === 'Công cụ', 'vi-accessibility:inspector-eyebrow', { viInspectorEyebrow });
 await shot(page, '24-vi-inspector-accessibility.png', 'vi-inspector-accessibility');
+await page.keyboard.press('Escape');
+await page.keyboard.press('c');
+await page.waitForTimeout(150);
+const viConsoleText = await page.locator('.panel-console').innerText();
+invariant(viConsoleText.includes('Trực tiếp'), 'vi-console:localized-live', { viConsoleText });
+invariant(viConsoleText.includes('1 sự kiện'), 'vi-console:localized-event-count', { viConsoleText });
+await shot(page, '25-vi-console.png', 'vi-console');
+await page.keyboard.press('Escape');
+await page.keyboard.press('n');
+await page.waitForTimeout(150);
+const viNetworkText = await page.locator('.panel-network').innerText();
+invariant(viNetworkText.includes('Mục tiêu'), 'vi-network:localized-target', { viNetworkText });
+invariant(viNetworkText.includes('Yêu cầu'), 'vi-network:localized-requests', { viNetworkText });
+invariant(viNetworkText.includes('Lỗi'), 'vi-network:localized-failures', { viNetworkText });
+await shot(page, '26-vi-network.png', 'vi-network');
 await page.close();
 
 page = await pageFor(browser, { width: 1440, height: 900 }, 'zh-CN');
@@ -314,6 +329,23 @@ await page.keyboard.press('Escape');
 await page.waitForTimeout(150);
 await assertVisible(page, '.floating-rail', 'tool-rail-restored');
 await shot(page, '13-tool-rail-restored.png');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'vi',
+  {},
+  liveEmpty,
+  dashboard
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(150);
+await assertVisible(page, '.attach-notice', 'vi-live-inspection-unavailable');
+const viAttachText = await page.locator('.attach-notice').innerText();
+invariant(viAttachText.includes('Kiểm tra trực tiếp chưa được kết nối'), 'vi-live-inspection-unavailable:localized-title', { viAttachText });
+invariant(viAttachText.includes('Mở bản xem trước cô lập'), 'vi-live-inspection-unavailable:localized-guidance', { viAttachText });
+await shot(page, '27-vi-live-inspection-unavailable.png', 'vi-live-inspection-unavailable');
 await page.close();
 
 page = await pageFor(
