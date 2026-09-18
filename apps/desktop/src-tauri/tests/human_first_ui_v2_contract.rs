@@ -251,6 +251,55 @@ fn primary_target_bar_and_runtime_error_copy_are_localized_and_humanized() {
 }
 
 
+
+#[test]
+fn top_level_human_panels_do_not_split_language() {
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let i18n = include_str!("../../src/i18n.ts");
+
+    for key in [
+        "sessions.title",
+        "sessions.detectedOne",
+        "sessions.detectedMany",
+        "responsive.viewports",
+        "responsive.unavailable",
+        "responsive.note",
+        "command.searchPlaceholder",
+        "command.searchAria",
+    ] {
+        assert!(
+            i18n.contains(&format!("'{key}'")),
+            "missing top-level human-panel localization key {key}"
+        );
+    }
+
+    let responsive = between(tools, "function ResponsivePanel(", "function ConsolePanel(");
+    assert!(responsive.contains("locale: SupportedLocale"));
+    assert!(responsive.contains("translate(locale, 'responsive.viewports')"));
+    assert!(responsive.contains("translate(locale, 'responsive.unavailable')"));
+    assert!(responsive.contains("translate(locale, 'responsive.note')"));
+    assert!(responsive.contains("translate(locale, 'empty.noTarget')"));
+    assert!(!responsive.contains(">VIEWPORTS<"));
+    assert!(!responsive.contains("Viewport tools open only when needed."));
+
+    let sessions = between(tools, "function SessionsPanel(", "function CommandPanel(");
+    assert!(sessions.contains("locale: SupportedLocale"));
+    assert!(sessions.contains("translate(locale, 'sessions.detectedOne')"));
+    assert!(sessions.contains("translate(locale, 'sessions.detectedMany')"));
+    assert!(sessions.contains("translate(locale, 'empty.noTarget')"));
+    assert!(sessions.contains("translate(locale, 'empty.runDevServer')"));
+
+    let command = between(tools, "function CommandPanel(", "function ConsoleRow(");
+    assert!(command.contains("translate(locale, 'command.searchPlaceholder')"));
+    assert!(command.contains("translate(locale, 'command.searchAria')"));
+    assert!(!command.contains("placeholder=\"Type a command…\""));
+    assert!(!command.contains("aria-label=\"Search commands\""));
+
+    assert!(tools.contains("sessions: translate(locale, 'sessions.title')"));
+    assert!(tools.contains("translate(locale, 'action.close')"));
+}
+
+
 #[test]
 fn visual_system_uses_muted_moss_instead_of_ai_blue() {
     let styles = include_str!("../../src/styles.css");
