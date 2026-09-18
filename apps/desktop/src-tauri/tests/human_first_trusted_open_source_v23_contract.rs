@@ -71,6 +71,8 @@ fn desktop_resolves_source_from_fresh_session_authority() {
         "canonical_project_root",
         "canonical_file",
         "project_relative_file",
+        "validate_source_line_exists",
+        "MAX_SOURCE_VERIFY_BYTES",
     ] {
         assert!(
             desktop.contains(required),
