@@ -329,9 +329,10 @@ fn decode_vlq_segment(segment: &str) -> Result<Vec<i64>, SourceMapError> {
             cursor += 1;
             let digit = base64_value(byte).ok_or(SourceMapError::InvalidBase64)?;
             let payload = u64::from(digit & 0b1_1111);
-            let shifted = payload
-                .checked_shl(shift)
-                .ok_or(SourceMapError::IntegerOverflow)?;
+            if shift >= 64 || payload > (u64::MAX >> shift) {
+                return Err(SourceMapError::IntegerOverflow);
+            }
+            let shifted = payload << shift;
             accumulated = accumulated
                 .checked_add(shifted)
                 .ok_or(SourceMapError::IntegerOverflow)?;
@@ -429,7 +430,7 @@ fn collapse_dot_components(value: &str) -> String {
         ("", value)
     };
 
-    let leading_slash = prefix.is_empty() && rest.starts_with('/');
+    let leading_slash = rest.starts_with('/');
     let trailing_slash = rest.ends_with('/') && rest.len() > 1;
     let mut components = Vec::new();
 
@@ -484,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn vlq_rejects_invalid_and_truncated_input() {
+    fn vlq_rejects_invalid_truncated_and_overflowing_input() {
         assert_eq!(
             decode_vlq_segment("!").unwrap_err(),
             SourceMapError::InvalidBase64
@@ -492,6 +493,10 @@ mod tests {
         assert_eq!(
             decode_vlq_segment("g").unwrap_err(),
             SourceMapError::TruncatedVlq
+        );
+        assert_eq!(
+            decode_vlq_segment("////////////f").unwrap_err(),
+            SourceMapError::IntegerOverflow
         );
     }
 
@@ -600,6 +605,24 @@ mod tests {
         assert_eq!(
             map.resolve(1, 0).unwrap().source,
             "webpack://app/src/../components/Button.tsx"
+        );
+    }
+
+    #[test]
+    fn normalization_preserves_empty_authority_file_url_slash() {
+        let json = serde_json::json!({
+            "version": 3,
+            "sourceRoot": "file:///workspace/./src",
+            "sources": ["Button.tsx"],
+            "names": [],
+            "mappings": "AAAA"
+        })
+        .to_string();
+
+        let map = SourceMap::parse(&json).unwrap();
+        assert_eq!(
+            map.resolve(1, 0).unwrap().source,
+            "file:///workspace/src/Button.tsx"
         );
     }
 
