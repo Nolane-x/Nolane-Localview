@@ -1081,15 +1081,26 @@ const SCRIPT: &str = r#"
       return [];
     };
 
-    const hmrFrameworkForSocket = (rawUrl, protocols) => {
-      if (hmrProtocols(protocols).includes('vite-hmr')) return 'vite';
+    const isLoopbackHmrHost = (hostname) => {
+      const host = String(hostname || '').toLowerCase();
+      return host === 'localhost'
+        || host === '::1'
+        || host === '[::1]'
+        || /^127(?:\\.\\d{1,3}){3}$/.test(host);
+    };
 
-      let path = '';
+    const hmrFrameworkForSocket = (rawUrl, protocols) => {
+      let parsed;
       try {
-        path = new URL(String(rawUrl || ''), location.href).pathname.toLowerCase();
+        parsed = new URL(String(rawUrl || ''), location.href);
       } catch (_) {
         return null;
       }
+      if (!isLoopbackHmrHost(parsed.hostname)) return null;
+
+      if (hmrProtocols(protocols).includes('vite-hmr')) return 'vite';
+
+      const path = parsed.pathname.toLowerCase();
 
       if (
         path === '/_next/hmr'
@@ -1452,6 +1463,10 @@ mod tests {
         assert!(script.contains("'/sockjs-node'"));
         assert!(script.contains("MAX_HMR_MESSAGE_BYTES = 256 * 1024"));
         assert!(script.contains("MAX_HMR_UPDATE_COUNT = 256"));
+        assert!(script.contains("isLoopbackHmrHost"));
+        assert!(script.contains("!isLoopbackHmrHost(parsed.hostname)"));
+        assert!(script.contains("host === 'localhost'"));
+        assert!(script.contains("/^127(?:\\\\.\\\\d{1,3}){3}$/"));
         assert!(script.contains("push('hmr', { framework, ...signal })"));
         assert!(script.contains("Array.isArray(value.updates) ? value.updates.length : 0"));
         assert!(!script.contains("push('hmr', { data: event.data"));
