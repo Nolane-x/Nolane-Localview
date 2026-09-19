@@ -14,6 +14,7 @@ pub struct InstrumentationConfig {
     pub include_console: bool,
     pub include_network: bool,
     pub include_performance: bool,
+    pub include_hmr: bool,
     pub include_scroll: bool,
 }
 
@@ -30,6 +31,7 @@ impl Default for InstrumentationConfig {
             include_console: true,
             include_network: true,
             include_performance: true,
+            include_hmr: true,
             include_scroll: true,
         }
     }
@@ -1063,6 +1065,139 @@ const SCRIPT: &str = r#"
     }, { passive: true, capture: true });
   }
 
+  if (config.include_hmr && 'WebSocket' in window) {
+    const NativeWebSocket = window.WebSocket;
+    const MAX_HMR_MESSAGE_BYTES = 256 * 1024;
+    const MAX_HMR_UPDATE_COUNT = 256;
+
+    const hmrProtocols = (value) => {
+      if (typeof value === 'string') return [value.toLowerCase()];
+      if (Array.isArray(value)) {
+        return value
+          .filter((item) => typeof item === 'string')
+          .map((item) => item.toLowerCase())
+          .slice(0, 16);
+      }
+      return [];
+    };
+
+    const hmrFrameworkForSocket = (rawUrl, protocols) => {
+      if (hmrProtocols(protocols).includes('vite-hmr')) return 'vite';
+
+      let path = '';
+      try {
+        path = new URL(String(rawUrl || ''), location.href).pathname.toLowerCase();
+      } catch (_) {
+        return null;
+      }
+
+      if (
+        path === '/_next/hmr'
+        || path === '/_next/webpack-hmr'
+        || path.endsWith('/_next/hmr')
+        || path.endsWith('/_next/webpack-hmr')
+      ) return 'next';
+
+      if (path.includes('/sockjs-node') || path.includes('webpack-hmr')) return 'webpack';
+      return null;
+    };
+
+    const canonicalHmrPhase = (value) => String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
+    const classifyHmrMessage = (framework, data) => {
+      if (typeof data !== 'string' || data.length > MAX_HMR_MESSAGE_BYTES) return null;
+
+      let value;
+      try {
+        value = JSON.parse(data);
+      } catch (_) {
+        return null;
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+      if (framework === 'vite') {
+        const type = String(value.type || '').toLowerCase();
+        if (type === 'update') {
+          return {
+            phase: 'update',
+            updateCount: Math.min(
+              Array.isArray(value.updates) ? value.updates.length : 0,
+              MAX_HMR_UPDATE_COUNT,
+            ),
+          };
+        }
+        if (type === 'full-reload') return { phase: 'full_reload' };
+        if (type === 'prune') return { phase: 'prune' };
+        if (type === 'error') return { phase: 'error' };
+        return null;
+      }
+
+      const rawPhase = canonicalHmrPhase(value.action || value.type || value.event);
+      if (!rawPhase) return null;
+
+      if (framework === 'next') {
+        const nextPhases = {
+          building: 'building',
+          built: 'built',
+          sync: 'sync',
+          reload: 'reload',
+          reload_page: 'reload',
+          reloadpage: 'reload',
+          server_component_change: 'server_component_change',
+          server_component_changes: 'server_component_change',
+          servercomponentchange: 'server_component_change',
+          servercomponentchanges: 'server_component_change',
+          error: 'error',
+          errors: 'error',
+        };
+        const phase = nextPhases[rawPhase];
+        return phase ? { phase } : null;
+      }
+
+      if (framework === 'webpack') {
+        const webpackPhases = {
+          invalid: 'invalid',
+          hash: 'hash',
+          ok: 'ok',
+          still_ok: 'still_ok',
+          warnings: 'warnings',
+          errors: 'errors',
+          static_changed: 'static_changed',
+        };
+        const phase = webpackPhases[rawPhase];
+        return phase ? { phase } : null;
+      }
+
+      return null;
+    };
+
+    const observeHmrSocket = (socket, args) => {
+      const framework = hmrFrameworkForSocket(args?.[0], args?.[1]);
+      if (!framework) return;
+
+      socket.addEventListener('message', (event) => {
+        try {
+          const signal = classifyHmrMessage(framework, event.data);
+          if (signal) push('hmr', { framework, ...signal });
+        } catch (_) {}
+      });
+    };
+
+    const ObservedWebSocket = new Proxy(NativeWebSocket, {
+      construct(target, args, newTarget) {
+        const socket = Reflect.construct(target, args, newTarget);
+        try { observeHmrSocket(socket, args); } catch (_) {}
+        return socket;
+      },
+    });
+
+    try { window.WebSocket = ObservedWebSocket; } catch (_) {}
+  }
+
   if (config.include_console) {
     for (const level of ['warn', 'error']) {
       const original = console[level].bind(console);
@@ -1304,6 +1439,23 @@ mod tests {
         assert!(script.contains("route_changed"));
         assert!(script.contains("push('network'"));
         assert!(!script.contains("__LOCALVIEW_CONFIG__"));
+    }
+
+    #[test]
+    fn defaults_enable_bounded_privacy_safe_hmr_transport_observation() {
+        let script = bootstrap_script(&InstrumentationConfig::default());
+        assert!(script.contains("\"include_hmr\":true"));
+        assert!(script.contains("new Proxy(NativeWebSocket"));
+        assert!(script.contains("'vite-hmr'"));
+        assert!(script.contains("'/_next/hmr'"));
+        assert!(script.contains("'/_next/webpack-hmr'"));
+        assert!(script.contains("'/sockjs-node'"));
+        assert!(script.contains("MAX_HMR_MESSAGE_BYTES = 256 * 1024"));
+        assert!(script.contains("MAX_HMR_UPDATE_COUNT = 256"));
+        assert!(script.contains("push('hmr', { framework, ...signal })"));
+        assert!(script.contains("Array.isArray(value.updates) ? value.updates.length : 0"));
+        assert!(!script.contains("push('hmr', { data: event.data"));
+        assert!(!script.contains("path === '/ws'"));
     }
 
     #[test]
