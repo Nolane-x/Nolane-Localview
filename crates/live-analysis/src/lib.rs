@@ -3,7 +3,9 @@
 use localview_console::{ConsoleEntry, ConsoleGroup, ConsoleLevel};
 use localview_live_bridge::{ObserverEvent, ObserverEventKind};
 use localview_network::{NetworkFinding, NetworkIssueKind, NetworkPolicy, RequestRecord};
-use localview_performance::{PerformanceFinding, PerformanceSample};
+use localview_performance::{
+    PerformanceFinding, PerformanceLiteBudget, PerformanceLitePacket, PerformanceSample,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -11,6 +13,7 @@ pub struct LiveAnalysis {
     pub network: Vec<NetworkFinding>,
     pub console: Vec<ConsoleGroup>,
     pub performance: Vec<PerformanceFinding>,
+    pub performance_lite: PerformanceLitePacket,
     pub counts: LiveEventCounts,
 }
 
@@ -22,6 +25,7 @@ pub struct LiveEventCounts {
     pub network: usize,
     pub runtime_errors: usize,
     pub performance: usize,
+    pub hmr: usize,
     pub semantic_snapshots: usize,
 }
 
@@ -97,17 +101,32 @@ pub fn analyze_live(events: &[ObserverEvent]) -> LiveAnalysis {
                 counts.performance += 1;
                 apply_performance(event, &mut performance);
             }
+            ObserverEventKind::Hmr => counts.hmr += 1,
             ObserverEventKind::SemanticSnapshot => counts.semantic_snapshots += 1,
             _ => {}
         }
     }
 
+    let performance_lite =
+        localview_performance::lite_packet(&performance, PerformanceLiteBudget::default());
+
     LiveAnalysis {
         network: localview_network::analyze(&network_records, &NetworkPolicy::default()),
         console: localview_console::group(&console_entries),
         performance: localview_performance::analyze(&performance),
+        performance_lite,
         counts,
     }
+}
+
+pub fn performance_lite(events: &[ObserverEvent]) -> PerformanceLitePacket {
+    let mut performance = PerformanceSample::default();
+    for event in events {
+        if event.kind == ObserverEventKind::Performance {
+            apply_performance(event, &mut performance);
+        }
+    }
+    localview_performance::lite_packet(&performance, PerformanceLiteBudget::default())
 }
 
 pub fn diagnose_live(events: &[ObserverEvent]) -> LiveDiagnosis {
@@ -384,6 +403,52 @@ mod tests {
         assert_eq!(report.network.len(), 1);
         assert_eq!(report.console.len(), 1);
         assert_eq!(report.performance.len(), 1);
+        assert_eq!(report.performance_lite.long_task_count, 1);
+        assert_eq!(report.performance_lite.sampled_long_tasks_ms, vec![88]);
+    }
+
+    #[test]
+    fn performance_lite_is_bounded_and_hmr_is_not_misclassified() {
+        let mut events = (0_u64..12)
+            .map(|offset| {
+                event(
+                    offset + 1,
+                    ObserverEventKind::Performance,
+                    json!({"type":"long_task","duration":50.0 + offset as f64}),
+                )
+            })
+            .collect::<Vec<_>>();
+        events.push(event(
+            20,
+            ObserverEventKind::Hmr,
+            json!({"type":"hmr","framework":"vite","phase":"update"}),
+        ));
+        events.push(event(
+            21,
+            ObserverEventKind::Performance,
+            json!({"type":"layout_shift","value":0.1}),
+        ));
+        events.push(event(
+            22,
+            ObserverEventKind::Performance,
+            json!({"type":"layout_shift","value":0.2}),
+        ));
+
+        let report = analyze_live(&events);
+        assert_eq!(report.counts.hmr, 1);
+        assert_eq!(report.counts.performance, 14);
+        assert_eq!(report.performance_lite.long_task_count, 12);
+        assert_eq!(report.performance_lite.sampled_long_tasks_ms.len(), 8);
+        assert_eq!(report.performance_lite.sampled_long_tasks_ms[0], 61);
+        assert_eq!(report.performance_lite.sampled_long_tasks_ms[7], 54);
+        assert_eq!(report.performance_lite.omitted_long_task_samples, 4);
+        assert!(report
+            .performance_lite
+            .cumulative_layout_shift
+            .is_some_and(|value| (value - 0.3).abs() < 1e-9));
+
+        let direct = performance_lite(&events);
+        assert_eq!(direct, report.performance_lite);
     }
 
     #[test]
