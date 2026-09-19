@@ -99,8 +99,8 @@ fn settings_and_advanced_are_real_tool_surfaces() {
     assert!(settings.contains("translate(locale, 'settings.language')"));
     assert!(settings.contains("translate(locale, 'settings.showTargetBar')"));
     assert!(settings.contains("translate(locale, 'settings.showToolRail')"));
-    assert!(!settings.contains("settings.rememberChrome"));
-    assert!(!settings.contains("rememberChromePositions"));
+    assert!(settings.contains("translate(locale, 'settings.rememberChrome')"));
+    assert!(settings.contains("rememberChromePositions"));
     assert!(shell.contains("<RailButton tool=\"settings\""));
     assert!(shell.contains("<SettingsIcon/>"));
 }
