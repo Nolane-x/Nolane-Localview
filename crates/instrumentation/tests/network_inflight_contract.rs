@@ -34,14 +34,45 @@ fn rejected_second_xhr_send_cannot_release_the_first_request() {
 #[test]
 fn rejected_xhr_send_does_not_mutate_or_leak_completion_metadata() {
     let script = bootstrap_script(&InstrumentationConfig::default());
+    let send = script
+        .split("XMLHttpRequest.prototype.send = function(...args) {")
+        .nth(1)
+        .expect("XHR send wrapper must exist");
 
-    assert!(script.contains("let onLoadEnd = null;"));
-    assert!(script.contains(
-        "if (startedHere) {\n        meta.started = performance.now();\n        meta.active = true;\n        beginNetworkRequest();\n        xhrMeta.set(this, meta);"
-    ));
-    assert!(script.contains("onLoadEnd = () => {"));
-    assert!(script.contains("this.addEventListener('loadend', onLoadEnd, { once: true });"));
-    assert!(script.contains(
+    let guard = send
+        .find("if (meta.active || meta.faultPending) {")
+        .expect("active/pending send guard must exist");
+    let select_rule = send
+        .find("const rule = selectNetworkFaultRule")
+        .expect("fault selection must exist");
+    let started_block = send
+        .find("if (startedHere) {")
+        .expect("first-send accounting block must exist");
+    let started_at = send
+        .find("meta.started = performance.now();")
+        .expect("first send must own its start timestamp");
+    let active_at = send
+        .find("meta.active = true;")
+        .expect("first send must become active");
+    let begin = send
+        .find("beginNetworkRequest();")
+        .expect("first send must increment network accounting");
+    let store = send
+        .find("xhrMeta.set(this, meta);")
+        .expect("owned metadata must be retained");
+
+    assert!(
+        guard < select_rule && select_rule < started_block,
+        "a rejected second send must fail before fault selection or first-send mutation"
+    );
+    assert!(
+        started_block < started_at && started_at < active_at && active_at < begin && begin < store,
+        "first-send metadata/accounting ordering must remain explicit"
+    );
+    assert!(send.contains("let onLoadEnd = null;"));
+    assert!(send.contains("onLoadEnd = () => {"));
+    assert!(send.contains("this.addEventListener('loadend', onLoadEnd, { once: true });"));
+    assert!(send.contains(
         "if (startedHere && onLoadEnd) {\n          this.removeEventListener('loadend', onLoadEnd);\n        }"
     ));
 }

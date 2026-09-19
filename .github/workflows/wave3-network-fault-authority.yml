@@ -1,0 +1,67 @@
+name: Wave 3 live network fault authority
+
+on:
+  pull_request:
+    paths:
+      - "crates/network/**"
+      - "crates/instrumentation/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/**"
+      - "tools/human-first-ui-v2/**"
+      - ".github/workflows/wave3-network-fault-authority.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-live-network-fault-authority-design.md"
+  push:
+    branches:
+      - "feat/wave3-network-fault-authority"
+    paths:
+      - "crates/network/**"
+      - "crates/instrumentation/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/**"
+      - "tools/human-first-ui-v2/**"
+      - ".github/workflows/wave3-network-fault-authority.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-live-network-fault-authority-design.md"
+
+concurrency:
+  group: wave3-network-fault-authority-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify live network fault pure policy
+        run: cargo test -p localview-network --test live_fault_policy -- --nocapture
+
+      - name: Verify existing network analyzer
+        run: cargo test -p localview-network --lib -- --nocapture
+
+      - name: Check network crate
+        run: cargo check -p localview-network --all-targets
+
+  instrumentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify instrumentation network fault contract
+        run: cargo test -p localview-instrumentation --test network_fault_contract -- --nocapture
+
+      - name: Preserve instrumentation network in-flight contract
+        run: cargo test -p localview-instrumentation --test network_inflight_contract -- --nocapture
+
+      - name: Check instrumentation crate
+        run: cargo check -p localview-instrumentation --all-targets
