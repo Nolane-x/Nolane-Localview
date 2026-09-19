@@ -1,0 +1,49 @@
+name: Wave 5 project source-map runtime authority
+
+on:
+  push:
+    branches:
+      - "feat/wave5-project-source-map-runtime"
+    paths:
+      - "crates/source-map/**"
+      - "crates/control/**"
+      - ".github/workflows/wave5-project-source-map-runtime.yml"
+      - "docs/superpowers/specs/2026-09-19-wave5-project-owned-source-map-runtime-design.md"
+  pull_request:
+    paths:
+      - "crates/source-map/**"
+      - "crates/control/**"
+      - ".github/workflows/wave5-project-source-map-runtime.yml"
+      - "docs/superpowers/specs/2026-09-19-wave5-project-owned-source-map-runtime-design.md"
+
+concurrency:
+  group: wave5-project-source-map-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  project-source-map:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Normalize source-map runtime formatting
+        run: cargo fmt --all
+
+      - name: Preserve bounded Source Map v3 consumer
+        run: cargo test -p localview-source-map -- --nocapture
+
+      - name: Prove project-owned source-map runtime authority
+        run: cargo test -p localview-control --test project_source_map_runtime -- --nocapture
+
+      - name: Clippy source-map runtime control
+        run: cargo clippy -p localview-control --all-targets --no-deps -- -D warnings
+
+      - name: Check source-map runtime control
+        run: cargo check -p localview-control --all-targets
