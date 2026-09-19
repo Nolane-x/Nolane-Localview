@@ -9,3 +9,4 @@ license.workspace = true
 localview-protocol = { path = "../protocol" }
 regex.workspace = true
 serde.workspace = true
+serde_json.workspace = true
