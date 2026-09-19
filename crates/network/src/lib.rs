@@ -46,7 +46,7 @@ pub enum FaultMethod {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NetworkFaultEffect {
     Fail,
     Delay { milliseconds: u64 },
@@ -54,6 +54,7 @@ pub enum NetworkFaultEffect {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkFaultRule {
     pub id: String,
     pub transport: FaultTransport,
@@ -64,6 +65,7 @@ pub struct NetworkFaultRule {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkFaultPlan {
     pub rules: Vec<NetworkFaultRule>,
     pub lease_ms: u64,
