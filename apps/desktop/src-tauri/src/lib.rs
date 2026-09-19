@@ -648,6 +648,7 @@ async fn prepare_fix_proposal(
         preimage,
         postimage,
         &edit,
+        instruction.clone(),
         summary,
         diff,
         provider_label,
