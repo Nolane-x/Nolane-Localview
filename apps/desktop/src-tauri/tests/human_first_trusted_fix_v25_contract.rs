@@ -354,9 +354,32 @@ fn fix_is_localized_and_verify_remains_separate() {
         );
     }
 
+    let apply = between(
+        shell,
+        "const applyFixProposal = useCallback",
+        "const discardFixProposal = useCallback",
+    );
+    let verify = between(
+        shell,
+        "const verifyFixChange = useCallback",
+        "const executeCommand = useCallback",
+    );
+
     assert!(
-        !shell.contains("case COMMAND_IDS.aiVerifyChange:"),
-        "V2.5 must not silently wire Verify Change"
+        apply.contains("api.applyFixProposal({ proposalId: proposal.proposalId })"),
+        "V2.5 Apply must remain an explicit proposalId-only action"
+    );
+    assert!(
+        !apply.contains("api.verifyFixChange("),
+        "Apply must not silently auto-run Verify Change"
+    );
+    assert!(
+        apply.contains("verificationId: receipt.verificationId"),
+        "a later V2.6 wave may hand off only the backend-minted opaque verification identity"
+    );
+    assert!(
+        verify.contains("api.verifyFixChange({ verificationId })"),
+        "Verify Change must remain a separate explicit handler"
     );
     assert!(tools.contains("ai.verifyChange"));
 }
