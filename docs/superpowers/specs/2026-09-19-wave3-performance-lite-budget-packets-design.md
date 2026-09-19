@@ -111,10 +111,12 @@ An integration test must prove:
 
 ### Gate 4 — repository regression
 
+The repository's canonical CI normalizes current-toolchain Rust formatting before compile/test rather than requiring a clean formatting diff from the historical source tree. This focused gate follows that same policy and must not introduce a repository-wide formatting-only commit.
+
 Minimum exact-head closure:
 
 ```text
-cargo fmt --check
+cargo fmt --all
 cargo test -p localview-performance
 cargo test -p localview-live-analysis
 cargo test -p localview-control --test performance_lite
