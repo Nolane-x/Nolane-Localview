@@ -152,6 +152,7 @@ try {
 
   vite.ws.send('{broken-json');
   vite.ws.send('x'.repeat(256 * 1024 + 1));
+  vite.ws.send('€'.repeat(100_000));
   await page.waitForTimeout(80);
   hmrEvents = await page.evaluate(() =>
     window.__LOCALVIEW__.peek(128).filter((event) => event.type === 'hmr')
