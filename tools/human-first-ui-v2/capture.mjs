@@ -242,6 +242,7 @@ function init(
   sourceOpenFailure = null,
   aiOptions = {},
   fixOptions = {},
+  verifyOptions = {},
 ) {
   const aiProviderAvailable = aiOptions.providerAvailable ?? false;
   const aiProviderLabel = aiOptions.providerLabel ?? 'Audit AI Bridge';
@@ -257,7 +258,17 @@ function init(
   const fixDisplayFile = fixOptions.displayFile ?? 'src/components/DeployButton.tsx';
   const fixSummary = fixOptions.summary ?? 'Make the Deploy button state clearer.';
   const fixDiff = fixOptions.diff ?? '--- a/src/components/DeployButton.tsx\n+++ b/src/components/DeployButton.tsx\n@@ -42,1 +42,1 @@\n-<button>Deploy</button>\n+<button aria-live="polite">Deploy</button>\n';
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff }) => {
+  const fixVerificationScope = fixOptions.verificationScope ?? 'semantic_visual';
+  const verifyDelayMs = verifyOptions.delayMs ?? 0;
+  const verifyFailure = verifyOptions.failure ?? null;
+  const verifyStatus = verifyOptions.status ?? 'change_observed';
+  const verifySemanticChanges = verifyOptions.semanticChanges ?? ['attributes_changed'];
+  const verifyRegressionSignals = verifyOptions.regressionSignals ?? [];
+  const verifyViewportChangedRatio = verifyOptions.viewportChangedRatio ?? 0.04;
+  const verifyTargetChangedRatio = verifyOptions.targetChangedRatio ?? 0.18;
+  const verifyProviderLabel = verifyOptions.providerLabel ?? null;
+  const verifyAdvisorySummary = verifyOptions.advisorySummary ?? null;
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -292,6 +303,8 @@ function init(
     window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__ = {};
     window.__LOCALVIEW_AUDIT_FIX_DISCARDS__ = [];
     window.__LOCALVIEW_AUDIT_FIX_WRITES__ = 0;
+    window.__LOCALVIEW_AUDIT_VERIFY_REQUESTS__ = [];
+    window.__LOCALVIEW_AUDIT_ROLLBACKS__ = 0;
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
@@ -401,6 +414,8 @@ function init(
               applied: true,
               changedStartLine: 42,
               changedEndLine: 42,
+              verificationId: 'verify-' + args.proposalId,
+              verificationScope: fixVerificationScope,
               appliedAtUnixMs: Date.now(),
             };
           }
@@ -408,6 +423,31 @@ function init(
             window.__LOCALVIEW_AUDIT_FIX_DISCARDS__.push(args.proposalId);
             delete window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[args.proposalId];
             return null;
+          }
+          if (cmd === 'verify_fix_change') {
+            window.__LOCALVIEW_AUDIT_VERIFY_REQUESTS__.push(structuredClone(args ?? {}));
+            if (verifyDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, verifyDelayMs));
+            }
+            if (verifyFailure) {
+              throw new Error(verifyFailure);
+            }
+            return {
+              verificationId: args.verificationId,
+              reference: '@e1a2b3c4',
+              displayFile: fixDisplayFile,
+              scope: fixVerificationScope,
+              status: verifyStatus,
+              semanticChanges: structuredClone(verifySemanticChanges),
+              regressionSignals: structuredClone(verifyRegressionSignals),
+              viewportChangedRatio: fixVerificationScope === 'semantic_visual' ? verifyViewportChangedRatio : null,
+              targetChangedRatio: fixVerificationScope === 'semantic_visual' ? verifyTargetChangedRatio : null,
+              visualDiffEvidenceId: fixVerificationScope === 'semantic_visual' ? 'evidence-verify-audit' : null,
+              snapshotVersion: 23,
+              providerLabel: verifyProviderLabel,
+              advisorySummary: verifyAdvisorySummary,
+              verifiedAtUnixMs: Date.now(),
+            };
           }
           if (cmd === 'open_source_for_selection') {
             if (sourceOpenDelayMs > 0) {
@@ -469,7 +509,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary });
 }
 
 async function pageFor(
@@ -487,13 +527,14 @@ async function pageFor(
   sourceOpenDelayMs = 0,
   sourceOpenFailure = null,
   aiOptions = {},
-  fixOptions = {}
+  fixOptions = {},
+  verifyOptions = {}
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions, verifyOptions);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -507,6 +548,7 @@ async function fixPageFor(
   dashboardState = dashboard,
   fixOptions = {},
   aiOptions = { providerAvailable: true, providerLabel: 'Audit AI Bridge' },
+  verifyOptions = {},
 ) {
   return pageFor(
     browser,
@@ -524,7 +566,41 @@ async function fixPageFor(
     null,
     aiOptions,
     { providerAvailable: true, providerLabel: 'Audit Fix Bridge', ...fixOptions },
+    verifyOptions,
   );
+}
+
+async function appliedFixPageFor(
+  browser,
+  viewport = { width: 1440, height: 900 },
+  locale = 'en',
+  liveState = liveMeasure,
+  dashboardState = dashboard,
+  fixOptions = {},
+  verifyOptions = {},
+) {
+  const page = await fixPageFor(
+    browser,
+    viewport,
+    locale,
+    liveState,
+    dashboardState,
+    fixOptions,
+    { providerAvailable: true, providerLabel: 'Audit AI Bridge' },
+    verifyOptions,
+  );
+  await page.keyboard.press('i');
+  await page.waitForTimeout(90);
+  await page.locator('.fix-action').click();
+  await page.waitForTimeout(90);
+  await page.locator('.fix-generate-action').click();
+  await page.waitForTimeout(110);
+  await page.locator('.fix-apply-action').click();
+  await page.waitForTimeout((fixOptions.applyDelayMs ?? 0) + 130);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('a');
+  await page.waitForTimeout(100);
+  return page;
 }
 
 await fs.mkdir('human-first-ui-v2-render', { recursive: true });
