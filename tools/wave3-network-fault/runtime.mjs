@@ -19,6 +19,20 @@ const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage();
 await page.addInitScript({ content: bootstrap });
 
+let externalRouteHits = 0;
+await page.route('http://nonloopback.test/**', async (route) => {
+  externalRouteHits += 1;
+  await route.fulfill({
+    status: 200,
+    contentType: 'text/plain',
+    headers: {
+      'access-control-allow-origin': '*',
+      'cache-control': 'no-store',
+    },
+    body: 'external-http-pass-through',
+  });
+});
+
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message);
 };
@@ -117,10 +131,14 @@ try {
   invariant((hits.get('/api/exhaust') || 0) === 1, 'only post-exhaustion request must reach origin');
 
   const externalBypass = await page.evaluate(async () => {
-    const response = await fetch('data:text/plain,external-bypass');
+    const response = await fetch('http://nonloopback.test/api/external');
     return { status: response.status, text: await response.text() };
   });
-  invariant(externalBypass.status === 200 && externalBypass.text === 'external-bypass', 'non-loopback URL must bypass fault selection');
+  invariant(
+    externalBypass.status === 200 && externalBypass.text === 'external-http-pass-through',
+    'HTTP non-loopback request must bypass fault selection',
+  );
+  invariant(externalRouteHits === 1, 'HTTP non-loopback request must reach the underlying browser request path');
 
   const proof = await page.evaluate(() => ({
     events: window.__LOCALVIEW__.peek(128).filter((event) => event.type === 'network'),
@@ -161,9 +179,10 @@ try {
 
   process.stdout.write(JSON.stringify({
     ok: true,
-    checks: 24,
+    checks: 25,
     networkEvents: proof.events.length,
     finalInflight: restored.inflight,
+    externalHttpPassThrough: externalRouteHits,
   }) + '\n');
 } finally {
   await browser.close();
