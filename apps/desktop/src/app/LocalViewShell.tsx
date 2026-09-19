@@ -1,11 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { api, type AiFixCapability, type AiProviderCapability } from '../api';
 import { COMMAND_IDS, type CommandId } from '../commands';
 import { applyDocumentLocale, translate } from '../i18n';
 import {
+  clampChromePoint,
   loadPreferences,
   resetWorkspace,
   updatePreferences as persistPreferences,
+  type ChromePoint,
   type LocalViewPreferences,
 } from '../preferences';
 import type { DashboardState, LiveSessionState, Session } from '../types';
@@ -64,6 +77,131 @@ const unavailableFixCapability: AiFixCapability = {
   providerLabel: null,
   reason: 'not_enabled',
 };
+
+type ChromePositionKey = 'targetBarPosition' | 'toolRailPosition';
+
+interface ChromeMover {
+  ref: RefObject<HTMLElement | null>;
+  style?: CSSProperties;
+  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
+}
+
+function sameChromePoint(left: ChromePoint | null, right: ChromePoint | null): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return Math.abs(left.x - right.x) < 0.5 && Math.abs(left.y - right.y) < 0.5;
+}
+
+function useMovableChrome(
+  position: ChromePoint | null,
+  onPreview: (point: ChromePoint) => void,
+  onCommit: (point: ChromePoint | null) => void,
+): ChromeMover {
+  const ref = useRef<HTMLElement | null>(null);
+
+  const clampForNode = useCallback((point: ChromePoint): ChromePoint => {
+    const node = ref.current;
+    if (!node) return point;
+    const rect = node.getBoundingClientRect();
+    return clampChromePoint(
+      point,
+      { width: rect.width, height: rect.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!position) return;
+    const reclamp = () => {
+      const next = clampForNode(position);
+      if (!sameChromePoint(position, next)) onCommit(next);
+    };
+    reclamp();
+    window.addEventListener('resize', reclamp);
+    return () => window.removeEventListener('resize', reclamp);
+  }, [clampForNode, onCommit, position]);
+
+  const onPointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const node = ref.current;
+    if (!node) return;
+
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const pointerId = event.pointerId;
+    const startPointer = { x: event.clientX, y: event.clientY };
+    const startRect = node.getBoundingClientRect();
+    let latest = clampForNode({ x: startRect.left, y: startRect.top });
+    let finished = false;
+
+    handle.setPointerCapture(pointerId);
+
+    const move = (nextEvent: PointerEvent) => {
+      if (nextEvent.pointerId !== pointerId) return;
+      latest = clampForNode({
+        x: startRect.left + nextEvent.clientX - startPointer.x,
+        y: startRect.top + nextEvent.clientY - startPointer.y,
+      });
+      onPreview(latest);
+    };
+
+    const finish = (nextEvent: PointerEvent) => {
+      if (finished || nextEvent.pointerId !== pointerId) return;
+      finished = true;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+      onCommit(latest);
+    };
+
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+  }, [clampForNode, onCommit, onPreview]);
+
+  const onKeyDown = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Home') {
+      event.preventDefault();
+      onCommit(null);
+      return;
+    }
+
+    const directions: Record<string, [number, number]> = {
+      ArrowLeft: [-1, 0],
+      ArrowRight: [1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    };
+    const direction = directions[event.key];
+    if (!direction) return;
+
+    const node = ref.current;
+    if (!node) return;
+    event.preventDefault();
+    const rect = node.getBoundingClientRect();
+    const step = event.shiftKey ? 1 : 12;
+    onCommit(clampForNode({
+      x: rect.left + direction[0] * step,
+      y: rect.top + direction[1] * step,
+    }));
+  }, [clampForNode, onCommit]);
+
+  const style = useMemo<CSSProperties | undefined>(
+    () => position
+      ? {
+          left: position.x,
+          top: position.y,
+          right: 'auto',
+          transform: 'none',
+        }
+      : undefined,
+    [position],
+  );
+
+  return { ref, style, onPointerDown, onKeyDown };
+}
 
 function classifyFixFailure(
   cause: unknown,
@@ -234,6 +372,12 @@ export default function LocalViewShell() {
   const [live, setLive] = useState<LiveSessionState>(emptyLive);
   const [immersive, setImmersive] = useState(false);
   const [preferences, setPreferences] = useState<LocalViewPreferences>(() => loadPreferences());
+  const [targetBarPosition, setTargetBarPosition] = useState<ChromePoint | null>(
+    () => preferences.rememberChromePositions ? preferences.targetBarPosition : null,
+  );
+  const [toolRailPosition, setToolRailPosition] = useState<ChromePoint | null>(
+    () => preferences.rememberChromePositions ? preferences.toolRailPosition : null,
+  );
   const [captureState, setCaptureState] = useState<HumanCaptureState>({ status: 'idle' });
   const [measureState, setMeasureState] = useState<HumanMeasureState>({ status: 'idle' });
   const [sourceOpenState, setSourceOpenState] = useState<HumanSourceOpenState>({ status: 'idle' });
@@ -263,9 +407,55 @@ export default function LocalViewShell() {
     setPreferences((current) => persistPreferences(current, patch));
   }, []);
 
+  const previewChromePosition = useCallback((key: ChromePositionKey, point: ChromePoint) => {
+    if (key === 'targetBarPosition') {
+      setTargetBarPosition(point);
+    } else {
+      setToolRailPosition(point);
+    }
+  }, []);
+
+  const commitChromePosition = useCallback((key: ChromePositionKey, point: ChromePoint | null) => {
+    if (key === 'targetBarPosition') {
+      setTargetBarPosition(point);
+    } else {
+      setToolRailPosition(point);
+    }
+    if (preferences.rememberChromePositions) {
+      patchPreferences({ [key]: point } as Partial<LocalViewPreferences>);
+    }
+  }, [patchPreferences, preferences.rememberChromePositions]);
+
+  const targetBarMover = useMovableChrome(
+    targetBarPosition,
+    (point) => previewChromePosition('targetBarPosition', point),
+    (point) => commitChromePosition('targetBarPosition', point),
+  );
+  const toolRailMover = useMovableChrome(
+    toolRailPosition,
+    (point) => previewChromePosition('toolRailPosition', point),
+    (point) => commitChromePosition('toolRailPosition', point),
+  );
+
   const resetWorkspacePreferences = useCallback(() => {
+    setTargetBarPosition(null);
+    setToolRailPosition(null);
     setPreferences((current) => resetWorkspace(current));
   }, []);
+
+  useEffect(() => {
+    if (preferences.rememberChromePositions) {
+      setTargetBarPosition(preferences.targetBarPosition);
+      setToolRailPosition(preferences.toolRailPosition);
+    } else {
+      setTargetBarPosition(null);
+      setToolRailPosition(null);
+    }
+  }, [
+    preferences.rememberChromePositions,
+    preferences.targetBarPosition,
+    preferences.toolRailPosition,
+  ]);
 
   useEffect(() => {
     applyDocumentLocale(preferences.locale);
@@ -1016,6 +1206,7 @@ export default function LocalViewShell() {
             onOpenNative={() => void openNative()}
             onImmersive={() => setImmersive((value) => !value)}
             onHideTargetBar={() => patchPreferences({ showTargetBar: false })}
+            mover={targetBarMover}
           />
         )}
         {preferences.showToolRail && (
@@ -1024,6 +1215,7 @@ export default function LocalViewShell() {
             locale={preferences.locale}
             onTool={toggleTool}
             onCommand={() => toggleTool('command')}
+            mover={toolRailMover}
           />
         )}
         {activeTool && (
@@ -1080,6 +1272,7 @@ function TopPill({
   onOpenNative,
   onImmersive,
   onHideTargetBar,
+  mover,
 }: {
   state: DashboardState;
   current?: Session;
@@ -1091,6 +1284,7 @@ function TopPill({
   onOpenNative: () => void;
   onImmersive: () => void;
   onHideTargetBar: () => void;
+  mover: ChromeMover;
 }) {
   const statusLabel = state.health.paused
     ? translate(locale, 'status.paused')
@@ -1098,7 +1292,15 @@ function TopPill({
       ? translate(locale, 'status.ready')
       : translate(locale, 'status.offline');
 
-  return <header className="top-pill">
+  return <header ref={mover.ref} style={mover.style} className="top-pill">
+    <button
+      type="button"
+      className="chrome-drag-handle top-pill-drag-handle"
+      aria-label={translate(locale, 'aria.moveTargetBar')}
+      title={translate(locale, 'aria.moveTargetBar')}
+      onPointerDown={mover.onPointerDown}
+      onKeyDown={mover.onKeyDown}
+    ><span aria-hidden="true"/></button>
     <button className="logo-button" aria-label={translate(locale, 'action.showSessions')} onClick={onSessions}><span className="logo-glyph">L</span></button>
     <div className="top-divider"/>
     <div className="target-block">
@@ -1140,13 +1342,23 @@ function FloatingRail({
   locale,
   onTool,
   onCommand,
+  mover,
 }: {
   activeTool?: ToolId;
   locale: LocalViewPreferences['locale'];
   onTool: (tool: ToolId) => void;
   onCommand: () => void;
+  mover: ChromeMover;
 }) {
-  return <nav className="floating-rail" aria-label={translate(locale, 'aria.localViewTools')}>
+  return <nav ref={mover.ref} style={mover.style} className="floating-rail" aria-label={translate(locale, 'aria.localViewTools')}>
+    <button
+      type="button"
+      className="chrome-drag-handle tool-rail-drag-handle"
+      aria-label={translate(locale, 'aria.moveToolRail')}
+      title={translate(locale, 'aria.moveToolRail')}
+      onPointerDown={mover.onPointerDown}
+      onKeyDown={mover.onKeyDown}
+    ><span aria-hidden="true"/></button>
     <RailButton tool="inspect" locale={locale} active={activeTool === 'inspect'} onClick={() => onTool('inspect')}><InspectIcon/></RailButton>
     <RailButton tool="responsive" locale={locale} active={activeTool === 'responsive'} onClick={() => onTool('responsive')}><ResponsiveIcon/></RailButton>
     <RailButton tool="console" locale={locale} active={activeTool === 'console'} onClick={() => onTool('console')}><ConsoleIcon/></RailButton>
