@@ -1,0 +1,44 @@
+name: Wave 5 bounded source-map consumer
+
+on:
+  push:
+    branches:
+      - "feat/wave5-source-map-consumer"
+    paths:
+      - "crates/source-map/**"
+      - ".github/workflows/wave5-source-map-consumer.yml"
+      - "docs/superpowers/specs/2026-09-19-wave5-bounded-source-map-v3-consumer-design.md"
+  pull_request:
+    paths:
+      - "crates/source-map/**"
+      - ".github/workflows/wave5-source-map-consumer.yml"
+      - "docs/superpowers/specs/2026-09-19-wave5-bounded-source-map-v3-consumer-design.md"
+
+concurrency:
+  group: wave5-source-map-consumer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  source-map:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Normalize source-map formatting
+        run: cargo fmt -p localview-source-map
+
+      - name: Source-map unit tests
+        run: cargo test -p localview-source-map -- --nocapture
+
+      - name: Source-map clippy
+        run: cargo clippy -p localview-source-map --all-targets -- -D warnings
+
+      - name: Source-map compile
+        run: cargo check -p localview-source-map --all-targets
