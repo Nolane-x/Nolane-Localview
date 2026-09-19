@@ -1,0 +1,70 @@
+name: V4.3 W10 Hosted Registration and Topology Probe
+
+on:
+  push:
+    branches:
+      - feat/v43-l7-windows-w10-mixed-dpi-authority
+    paths:
+      - .github/workflows/v43-w10-real-provider-red-proof.yml
+      - tools/provider-seeds/windows-uia-edge-seed/**
+      - tools/validation-lab/windows-l7-real-provider-harness/**
+      - crates/windows-uia-provider/**
+
+permissions:
+  contents: read
+
+jobs:
+  w10-hosted-registration:
+    name: W10 hosted registration + non-authoritative topology probe
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      LOCALVIEW_UIA_SMOKE: "1"
+      LOCALVIEW_UIA_EDGE_SEED_BIN: ${{ github.workspace }}\tools\provider-seeds\windows-uia-edge-seed\bin\Release\net8.0-windows\LocalView.WindowsUiaEdgeSeed.exe
+      LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/windows-l7-real-provider-harness/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build WPF edge seed
+        run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
+      - name: Compile and register exact W01-W12 physical campaign
+        shell: pwsh
+        run: |
+          $testName = "windows_l7_real_provider_campaign_w10_w12::prospective_l7_campaign_binds_w01_w12_to_exact_candidate"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_campaign_w10_w12 -- --list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required exact W01-W12 physical campaign is not registered: $testName"
+          }
+      - name: Probe hosted topology without minting W10 closure
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w10::w10_mixed_dpi_move_refreshes_live_physical_geometry_without_stale_coordinates"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w10 -- --list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W10 real-provider test is not registered: $testName"
+          }
+
+          $logPath = Join-Path $env:RUNNER_TEMP "w10-hosted-topology-probe.log"
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w10 $testName -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath $logPath
+          $probeExit = $LASTEXITCODE
+          $probe = Get-Content $logPath -Raw
+
+          if ($probeExit -eq 0) {
+            Write-Host "::notice::Hosted runner executed the W10 oracle, but this hosted probe is not the physical-lab closure authority."
+            exit 0
+          }
+
+          if ($probe.Contains("W10 requires at least two real displays with distinct effective DPI") -and $probe.Contains('"mixed_dpi_capable":false')) {
+            Write-Host "::notice::W10 remains UNMEASURED on hosted Windows because the independent oracle proved the required mixed-DPI topology is absent. Physical closure must run v43-w10-mixed-dpi-physical-lab.yml on a labeled self-hosted runner."
+            exit 0
+          }
+
+          Write-Host "Hosted W10 probe failed for a reason other than the explicit mixed-DPI precondition."
+          exit $probeExit

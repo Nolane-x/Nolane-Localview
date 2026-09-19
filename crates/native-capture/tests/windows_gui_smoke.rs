@@ -84,6 +84,9 @@ html, body { margin: 0; width: 100%; height: 100%; background: rgb(18, 52, 86); 
                     .set_nonblocking(false)
                     .expect("make accepted WebView2 fixture socket blocking");
                 stream
+                    .set_nonblocking(false)
+                    .expect("make accepted WebView2 fixture request socket blocking");
+                stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .expect("bound WebView2 fixture request read");
 

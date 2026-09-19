@@ -97,6 +97,14 @@ impl WindowsUiaWorker {
         self.inner.bind_element_lease(attachment, request)
     }
 
+    pub fn observe_geometry(
+        &self,
+        attachment: &WindowsUiaAttachment,
+        request: crate::WindowsUiaGeometryRequest,
+    ) -> Result<crate::WindowsUiaGeometryReceipt, WindowsUiaWorkerError> {
+        self.inner.observe_geometry(attachment, request)
+    }
+
     pub fn revalidate_dispatch_context(
         &self,
         attachment: &WindowsUiaAttachment,
