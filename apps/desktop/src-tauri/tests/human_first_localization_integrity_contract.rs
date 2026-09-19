@@ -51,6 +51,7 @@ fn locale_module_exposes_programmatic_primary_flow_integrity() {
         "session.status.active",
         "session.status.disconnected",
         "session.status.hidden",
+        "session.status.closed",
         "session.framework.web",
     ] {
         assert!(
@@ -99,6 +100,7 @@ fn sessions_primary_flow_localizes_status_and_default_framework_label() {
         "session.status.active",
         "session.status.disconnected",
         "session.status.hidden",
+        "session.status.closed",
         "session.framework.web",
         "translate(locale",
     ] {
