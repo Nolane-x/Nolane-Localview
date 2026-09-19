@@ -2063,11 +2063,37 @@ fn install_preview_surface_destroyed_reconciler(
         }
         let identity = identity.clone();
         tauri::async_runtime::spawn(async move {
+            if let Err(error) =
+                invalidate_network_fault_preview(identity.session_id, identity.incarnation).await
+            {
+                eprintln!("LocalView preview network-fault invalidation failed: {error}");
+            }
             if let Err(error) = workspace_surface::surface_resource::release_surface(&identity).await {
                 eprintln!("LocalView preview surface release failed: {error}");
             }
         });
     });
+}
+
+async fn invalidate_network_fault_preview(
+    session_id: SessionId,
+    surface_incarnation: u64,
+) -> Result<(), String> {
+    let token = read_token().await?;
+    control_client()?
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/network-faults/invalidate-preview"
+        ))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "surface_incarnation": surface_incarnation,
+        }))
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?;
+    Ok(())
 }
 
 fn preview_registry_error(
