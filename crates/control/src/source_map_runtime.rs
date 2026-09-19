@@ -32,7 +32,7 @@ struct ProjectSourceMapRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct ProjectSourceMapResponse {
+pub(crate) struct ProjectSourceMapResponse {
     generated_file: String,
     map_file: String,
     generated_line: u32,
@@ -50,7 +50,7 @@ struct ProjectResolvedSource {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ProjectSourceMapError {
+pub(crate) enum ProjectSourceMapError {
     Unauthorized,
     SessionNotFound,
     ProjectRootUnavailable,
@@ -103,7 +103,7 @@ impl ProjectSourceMapError {
         }
     }
 
-    fn into_response(self) -> axum::response::Response {
+    pub(crate) fn into_response(self) -> axum::response::Response {
         (
             self.status(),
             Json(serde_json::json!({ "error": self.code() })),
@@ -135,6 +135,25 @@ async fn resolve_project_source_map(
         Ok(response) => Json(response).into_response(),
         Err(error) => error.into_response(),
     }
+}
+
+pub(crate) async fn resolve_project_source_position(
+    state: &ControlState,
+    id: SessionId,
+    generated_file: String,
+    generated_line: u32,
+    generated_column: u32,
+) -> Result<ProjectSourceMapResponse, ProjectSourceMapError> {
+    resolve_project_source_map_inner(
+        state,
+        id,
+        ProjectSourceMapRequest {
+            generated_file,
+            generated_line,
+            generated_column,
+        },
+    )
+    .await
 }
 
 async fn resolve_project_source_map_inner(
