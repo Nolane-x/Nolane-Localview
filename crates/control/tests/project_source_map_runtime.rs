@@ -289,10 +289,28 @@ async fn rejects_missing_oversized_invalid_and_unmapped_maps() {
 }
 
 #[tokio::test]
-async fn rejects_remote_and_outside_project_original_sources() {
+async fn accepts_contained_file_url_and_rejects_remote_protocol_relative_and_missing_sources() {
     let project = TempProject::new();
     project.write("dist/app.js", "generated");
+    project.write("src/App.tsx", "source");
     let (state, session_id) = test_state(Some(&project.root)).await;
+
+    let file_url = url::Url::from_file_path(project.path("src/App.tsx"))
+        .expect("project source file URL")
+        .to_string();
+    project.write(
+        "dist/app.js.map",
+        project.map_json(&file_url, "AAAA"),
+    );
+    let (status, value) = post(
+        state.clone(),
+        session_id,
+        true,
+        request("dist/app.js", 1, 0),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["source"]["file"], "src/App.tsx");
 
     project.write(
         "dist/app.js.map",
@@ -307,6 +325,34 @@ async fn rejects_remote_and_outside_project_original_sources() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_error(&value, "source_reference_unsupported");
+
+    project.write(
+        "dist/app.js.map",
+        project.map_json("//evil.example/App.tsx", "AAAA"),
+    );
+    let (status, value) = post(
+        state.clone(),
+        session_id,
+        true,
+        request("dist/app.js", 1, 0),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_error(&value, "source_reference_unsupported");
+
+    project.write(
+        "dist/app.js.map",
+        project.map_json("../src/Missing.tsx", "AAAA"),
+    );
+    let (status, value) = post(
+        state.clone(),
+        session_id,
+        true,
+        request("dist/app.js", 1, 0),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error(&value, "source_unavailable");
 
     let outside = project
         .root
