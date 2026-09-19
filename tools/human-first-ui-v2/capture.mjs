@@ -3833,7 +3833,10 @@ invariant(
   'responsive:preview-unavailable-guidance',
   { previewRequiredText },
 );
-await page.getByRole('button', { name: 'Open preview' }).click();
+await page
+  .locator('.responsive-failure')
+  .getByRole('button', { name: 'Open preview' })
+  .click();
 const previewOpenInvokes = await page.evaluate(() =>
   window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'open_preview')
 );
