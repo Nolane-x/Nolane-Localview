@@ -121,10 +121,15 @@ Default foundation policy:
 
 - tail: 1.5 seconds;
 - max candidate signals: 256;
-- max UI responses per request: 16;
-- hard maximum accepted tail: 10 seconds.
+- max UI responses per request: 16.
 
-A zero-capacity or oversized policy fails closed.
+Hard policy ceilings:
+
+- accepted tail: 10 seconds;
+- candidate signals: 4,096;
+- UI responses per request: 64.
+
+A zero-capacity or oversized policy fails closed. The hard ceilings exist even though the defaults are much smaller, so an internal misconfiguration cannot silently turn the pure policy into an unbounded scan or output fan-out.
 
 If candidate count exceeds the cap, the trace is marked `truncated`.
 

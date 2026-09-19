@@ -214,3 +214,35 @@ fn empty_action_identity_fails_closed() {
         Err(ActionCorrelationError::InvalidWindow)
     );
 }
+
+
+#[test]
+fn oversized_cardinality_policy_fails_closed() {
+    let window = ActionCorrelationWindow {
+        action_id: "action-cardinality".into(),
+        started_ms: 10,
+        completed_ms: 20,
+        route: None,
+    };
+
+    let too_many_signals = ActionRequestUiPolicy {
+        tail_ms: 100,
+        max_signals: localview_causal::MAX_ACTION_CORRELATION_SIGNALS + 1,
+        max_responses_per_request: 16,
+    };
+    assert_eq!(
+        correlate_action_request_ui(&window, &[], &too_many_signals),
+        Err(ActionCorrelationError::InvalidPolicy)
+    );
+
+    let too_many_responses = ActionRequestUiPolicy {
+        tail_ms: 100,
+        max_signals: 256,
+        max_responses_per_request:
+            localview_causal::MAX_ACTION_CORRELATION_RESPONSES_PER_REQUEST + 1,
+    };
+    assert_eq!(
+        correlate_action_request_ui(&window, &[], &too_many_responses),
+        Err(ActionCorrelationError::InvalidPolicy)
+    );
+}
