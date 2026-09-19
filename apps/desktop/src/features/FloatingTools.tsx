@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { COMMAND_IDS, type CommandId } from '../commands';
-import type { AiFixCapability, AiProviderCapability, VerifyScope, VerifyStatus } from '../api';
+import type { AiFixCapability, AiProviderCapability, ResponsivePresetId, VerifyScope, VerifyStatus } from '../api';
 import type { DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
@@ -35,6 +35,32 @@ export type ToolId =
   | 'settings'
   | 'sessions'
   | 'command';
+
+export type HumanResponsiveState =
+  | { status: 'idle' }
+  | { status: 'running'; presets: ResponsivePresetId[] }
+  | {
+      status: 'success';
+      presets: ResponsivePresetId[];
+      evidenceId: string;
+      contactSheetPixelWidth: number;
+      contactSheetPixelHeight: number;
+      viewports: Array<{
+        preset: ResponsivePresetId;
+        cssWidth: number;
+        cssHeight: number;
+      }>;
+    }
+  | {
+      status: 'failure';
+      presets: ResponsivePresetId[];
+      reason:
+        | 'preview_unavailable'
+        | 'invalid_presets'
+        | 'route_changed'
+        | 'restore_failed'
+        | 'failed';
+    };
 
 export type HumanCaptureState =
   | { status: 'idle' }
@@ -207,6 +233,8 @@ interface FloatingPanelProps {
   onClose: () => void;
   onSelect: (id: string) => void;
   onOpenNative: () => void;
+  responsiveState: HumanResponsiveState;
+  onRunResponsiveSweep: (presets: ResponsivePresetId[]) => void;
   captureState: HumanCaptureState;
   onCapture: () => void;
   sourceOpenState: HumanSourceOpenState;
@@ -243,6 +271,8 @@ export function FloatingPanel({
   onClose,
   onSelect,
   onOpenNative,
+  responsiveState,
+  onRunResponsiveSweep,
   captureState,
   onCapture,
   sourceOpenState,
@@ -305,7 +335,15 @@ export function FloatingPanel({
             onResetWorkspace={onResetWorkspace}
           />
         )}
-        {tool === 'responsive' && <ResponsivePanel current={current} locale={locale} />}
+        {tool === 'responsive' && (
+          <ResponsivePanel
+            current={current}
+            locale={locale}
+            responsiveState={responsiveState}
+            onRunResponsiveSweep={onRunResponsiveSweep}
+            onOpenNative={onOpenNative}
+          />
+        )}
         {tool === 'console' && <ConsolePanel live={live} locale={locale} onOpenNative={onOpenNative} />}
         {tool === 'network' && <NetworkPanel current={current} live={live} locale={locale} onOpenNative={onOpenNative} />}
         {tool === 'ai' && (
@@ -735,14 +773,130 @@ function SettingsPanel({
   );
 }
 
-function ResponsivePanel({ current, locale }: { current?: Session; locale: SupportedLocale }) {
-  const presets = [['Mobile S', '320', '568'], ['Mobile', '390', '844'], ['Tablet', '768', '1024'], ['Desktop', '1440', '900']];
-  const unavailableReason = current
-    ? translate(locale, 'responsive.unavailable')
-    : translate(locale, 'empty.noTarget');
-  return <div>
-    <div className="responsive-summary"><span>{translate(locale, 'responsive.viewports')}</span><strong>{current ? current.project.display_name : translate(locale, 'empty.noTarget')}</strong></div>
-    <div className="viewport-list">{presets.map(([name, width, height]) => <button key={name} disabled aria-disabled="true" title={unavailableReason}><span className="viewport-icon"/><div><strong>{name}</strong><span>{width} × {height}</span></div><kbd>{width}</kbd></button>)}</div>
+function ResponsivePanel({
+  current,
+  locale,
+  responsiveState,
+  onRunResponsiveSweep,
+  onOpenNative,
+}: {
+  current?: Session;
+  locale: SupportedLocale;
+  responsiveState: HumanResponsiveState;
+  onRunResponsiveSweep: (presets: ResponsivePresetId[]) => void;
+  onOpenNative: () => void;
+}) {
+  const presetOptions: Array<{
+    id: ResponsivePresetId;
+    label: MessageKey;
+    width: number;
+    height: number;
+  }> = [
+    { id: 'mobile_s', label: 'responsive.mobileS', width: 320, height: 568 },
+    { id: 'mobile', label: 'responsive.mobile', width: 390, height: 844 },
+    { id: 'tablet', label: 'responsive.tablet', width: 768, height: 1024 },
+    { id: 'desktop', label: 'responsive.desktop', width: 1440, height: 900 },
+  ];
+  const [selectedPresets, setSelectedPresets] = useState<ResponsivePresetId[]>(() =>
+    presetOptions.map((preset) => preset.id)
+  );
+  const busy = responsiveState.status === 'running';
+
+  const togglePreset = (preset: ResponsivePresetId) => {
+    if (busy) return;
+    setSelectedPresets((currentPresets) =>
+      currentPresets.includes(preset)
+        ? currentPresets.filter((candidate) => candidate !== preset)
+        : presetOptions
+            .map((candidate) => candidate.id)
+            .filter((candidate) => currentPresets.includes(candidate) || candidate === preset)
+    );
+  };
+
+  const run = () => {
+    if (!current || busy || selectedPresets.length === 0) return;
+    onRunResponsiveSweep(selectedPresets);
+  };
+
+  const previewRequired =
+    responsiveState.status === 'failure'
+    && responsiveState.reason === 'preview_unavailable';
+  const failureText = responsiveState.status === 'failure'
+    ? previewRequired
+      ? translate(locale, 'responsive.previewRequired')
+      : translate(locale, 'responsive.failed')
+    : undefined;
+
+  return <div className="responsive-panel-content">
+    <div className="responsive-summary">
+      <span>{translate(locale, 'responsive.viewports')}</span>
+      <strong>{current ? current.project.display_name : translate(locale, 'empty.noTarget')}</strong>
+    </div>
+
+    <div className="responsive-preset-grid" aria-label={translate(locale, 'responsive.viewports')}>
+      {presetOptions.map((preset) => {
+        const checked = selectedPresets.includes(preset.id);
+        return <label
+          key={preset.id}
+          className={`responsive-preset ${checked ? 'selected' : ''}`}
+        >
+          <input
+            type="checkbox"
+            checked={checked}
+            disabled={busy}
+            onChange={() => togglePreset(preset.id)}
+          />
+          <span className="viewport-icon" aria-hidden="true"/>
+          <span className="responsive-preset-copy">
+            <strong>{translate(locale, preset.label)}</strong>
+            <small>{preset.width} × {preset.height}</small>
+          </span>
+        </label>;
+      })}
+    </div>
+
+    {responsiveState.status === 'success' && (
+      <div className="responsive-result" role="status">
+        <strong>{translate(locale, 'responsive.success')}</strong>
+        <span>
+          {responsiveState.contactSheetPixelWidth} × {responsiveState.contactSheetPixelHeight}
+          {' · '}
+          {responsiveState.viewports.length} {translate(locale, 'responsive.viewports')}
+        </span>
+        <code>{translate(locale, 'responsive.evidence')}: {responsiveState.evidenceId}</code>
+      </div>
+    )}
+
+    {responsiveState.status === 'failure' && (
+      <div className="responsive-failure" role="alert">
+        <WarningIcon />
+        <span>{failureText}</span>
+        {previewRequired && (
+          <button type="button" onClick={onOpenNative}>
+            {translate(locale, 'action.openPreview')}
+          </button>
+        )}
+      </div>
+    )}
+
+    <button
+      type="button"
+      className="responsive-run-action"
+      onClick={run}
+      disabled={!current || busy || selectedPresets.length === 0}
+      aria-busy={busy}
+    >
+      <ResponsiveIcon />
+      <span>
+        {busy
+          ? translate(locale, 'responsive.inProgress')
+          : responsiveState.status === 'failure'
+            ? translate(locale, 'responsive.retry')
+            : translate(locale, 'responsive.run')}
+      </span>
+    </button>
+
+    {!current && <div className="panel-note">{translate(locale, 'responsive.previewRequired')}</div>}
     <div className="panel-note">{translate(locale, 'responsive.note')}</div>
   </div>;
 }
