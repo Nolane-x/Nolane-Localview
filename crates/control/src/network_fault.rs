@@ -136,6 +136,43 @@ async fn current_live_lease(
     }
 }
 
+async fn queue_failed_install_cleanup(
+    state: &ControlState,
+    session_id: SessionId,
+    lease_token: Uuid,
+    previous_lease: Option<NetworkFaultLeaseAuthority>,
+    clear_previous_runtime: bool,
+) {
+    state
+        .live
+        .enqueue_network_fault_control(
+            session_id,
+            NetworkFaultControlCommand::Clear { lease_token },
+        )
+        .await;
+
+    if clear_previous_runtime {
+        if let Some(previous) = previous_lease.as_ref() {
+            state
+                .live
+                .enqueue_network_fault_control(
+                    session_id,
+                    NetworkFaultControlCommand::Clear {
+                        lease_token: previous.lease_token,
+                    },
+                )
+                .await;
+        }
+    }
+
+    if let Some(previous) = previous_lease {
+        let _ = state
+            .live
+            .clear_network_fault_lease(session_id, previous.lease_id)
+            .await;
+    }
+}
+
 async fn install_network_faults(
     State(state): State<ControlState>,
     headers: HeaderMap,
@@ -181,6 +218,7 @@ async fn install_network_faults(
     };
 
     let _gate = mutation_gate().lock().await;
+    let previous_lease = current_live_lease(&state, id).await;
     let lease_id = Uuid::new_v4();
     let lease_token = Uuid::new_v4();
     let request = state
@@ -195,6 +233,14 @@ async fn install_network_faults(
         .await;
 
     let Some(result) = wait_for_result(&state, id, request.id).await else {
+        queue_failed_install_cleanup(
+            &state,
+            id,
+            lease_token,
+            previous_lease,
+            true,
+        )
+        .await;
         return bounded_error(
             StatusCode::GATEWAY_TIMEOUT,
             "network_fault_preview_ack_timeout",
@@ -221,6 +267,14 @@ async fn install_network_faults(
         || !remaining_ms.is_some_and(|value| value > 0 && value <= canonical.lease_ms)
         || !surface_incarnation.is_some_and(|value| value > 0)
     {
+        queue_failed_install_cleanup(
+            &state,
+            id,
+            lease_token,
+            previous_lease,
+            false,
+        )
+        .await;
         return bounded_error(
             StatusCode::BAD_GATEWAY,
             "network_fault_preview_ack_mismatch",
