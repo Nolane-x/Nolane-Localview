@@ -813,7 +813,8 @@ export default function LocalViewShell() {
 
     const retryableFailure = verifyState.status === 'failure'
       && (verifyState.reason === 'settle_failed' || verifyState.reason === 'failed');
-    if (verifyState.status !== 'ready' && !retryableFailure) return;
+    if (verifyState.status !== 'ready' && verifyState.status !== 'failure') return;
+    if (verifyState.status === 'failure' && !retryableFailure) return;
 
     const verificationId = verifyState.verificationId;
     const reference = verifyState.reference;
