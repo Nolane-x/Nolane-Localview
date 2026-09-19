@@ -1161,21 +1161,32 @@ mod trusted_fix_tests {
     #[test]
     fn trusted_fix_transaction_verifies_backup_preimage_before_commit() {
         let source = include_str!("trusted_fix.rs");
-        let rename = source
+        let transaction = source
+            .split("fn apply_fix_transaction_inner(")
+            .nth(1)
+            .expect("transaction inner function must exist")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("transaction body must end before tests");
+
+        let rename = transaction
             .find("fs::rename(target, &backup)")
             .expect("backup rename must exist");
-        let verify = source[rename..]
-            .find("let backup_preimage = fs::read(&backup)")
+        let verify = transaction[rename..]
+            .find("let backup_preimage = match fs::read(&backup)")
             .map(|offset| rename + offset)
             .expect("renamed backup must be verified");
-        let commit = source[verify..]
-            .find("fs::rename(&temp, target)")
+        let compare = transaction[verify..]
+            .find("if backup_preimage != preimage")
             .map(|offset| verify + offset)
+            .expect("backup bytes must be compared with proposal preimage");
+        let commit = transaction[compare..]
+            .find("fs::rename(&temp, target)")
+            .map(|offset| compare + offset)
             .expect("temp commit must exist after backup verification");
 
-        assert!(rename < verify && verify < commit);
-        assert!(source[verify..commit].contains("backup_preimage != preimage"));
-        assert!(source[verify..commit].contains("rollback(target, &backup, &temp)"));
+        assert!(rename < verify && verify < compare && compare < commit);
+        assert!(transaction[verify..commit].contains("rollback(target, &backup, &temp)"));
     }
 
     #[test]
