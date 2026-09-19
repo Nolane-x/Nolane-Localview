@@ -513,7 +513,9 @@ fn crop_rgba(image: &RgbaImage, left: u32, top: u32, right: u32, bottom: u32) ->
         let end = ((y * image.width + right) * 4) as usize;
         data.extend_from_slice(&image.data[start..end]);
     }
-    RgbaImage::new(width, height, data).ok()
+    let cropped = RgbaImage { width, height, data };
+    cropped.validate().ok()?;
+    Some(cropped)
 }
 
 fn target_union_pixels(
