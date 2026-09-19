@@ -272,7 +272,6 @@ fn render_audit_covers_minimum_human_first_states() {
 
 
 #[test]
-#[test]
 fn render_audit_covers_storage_denial_and_narrow_long_target_stress() {
     let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
 
@@ -320,6 +319,7 @@ fn render_audit_proves_runtime_action_failures_are_isolated() {
 }
 
 
+#[test]
 fn render_audit_is_executable_not_screenshot_only() {
     let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
 
