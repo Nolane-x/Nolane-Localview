@@ -3,6 +3,7 @@
 mod native_executor_worker;
 mod trusted_ai;
 mod trusted_fix;
+mod trusted_verify;
 pub mod visual_capture;
 pub mod workspace_surface;
 
@@ -660,6 +661,8 @@ async fn prepare_fix_proposal(
 async fn apply_fix_proposal(
     app: tauri::AppHandle,
     store: tauri::State<'_, trusted_fix::FixProposalStore>,
+    visual_state: tauri::State<'_, visual_capture::VisualCaptureState>,
+    verification_store: tauri::State<'_, trusted_verify::VerificationStore>,
     proposal_id: String,
 ) -> Result<trusted_fix::HumanApplyFixReceipt, String> {
     let proposal = store.begin_apply(&proposal_id)?;
@@ -745,11 +748,63 @@ async fn apply_fix_proposal(
             return Err("trusted Fix route changed since proposal".into());
         }
 
-        trusted_fix::apply_fix_transaction(
+        let semantic_before =
+            trusted_verify::build_semantic_baseline(&session, &snapshot, &proposal.reference)?;
+        let visual_before = match visual_capture::capture_verification_baseline(
+            app.clone(),
+            &visual_state,
+            proposal.session_id,
+        )
+        .await
+        {
+            Ok(frame) => {
+                let frame_route = visual_capture::canonical_visual_diff_route(&frame.route)?;
+                if frame_route == proposal.canonical_route {
+                    Some(trusted_verify::VerifyVisualBaseline {
+                        png: std::sync::Arc::new(frame.png),
+                        viewport: frame.viewport,
+                        pixel_width: frame.pixel_width,
+                        pixel_height: frame.pixel_height,
+                        target_rect: semantic_before.selected.rect.clone(),
+                        captured_at_unix_ms: frame.captured_at_unix_ms,
+                    })
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        };
+
+        let pre_write_route =
+            visual_capture::managed_surface_canonical_route(&app, proposal.session_id)?;
+        if pre_write_route != proposal.canonical_route {
+            return Err("trusted Fix route changed before apply".into());
+        }
+
+        let (verification_id, verification_scope) = trusted_verify::mint_verification_baseline(
+            &verification_store,
+            &proposal.proposal_id,
+            &session,
+            &snapshot,
+            &proposal.reference,
+            &proposal.canonical_route,
+            proposal.canonical_file.clone(),
+            proposal.project_root.clone(),
+            proposal.display_file.clone(),
+            proposal.source_line,
+            proposal.postimage.clone(),
+            proposal.instruction.clone(),
+            visual_before,
+        )?;
+
+        if let Err(error) = trusted_fix::apply_fix_transaction(
             &current_target.canonical_file,
             &proposal.preimage,
             &proposal.postimage,
-        )?;
+        ) {
+            let _ = verification_store.discard_verification(&verification_id);
+            return Err(error);
+        }
 
         Ok::<trusted_fix::HumanApplyFixReceipt, String>(
             trusted_fix::HumanApplyFixReceipt {
@@ -759,6 +814,8 @@ async fn apply_fix_proposal(
                 applied: true,
                 changed_start_line: proposal.changed_start_line,
                 changed_end_line: proposal.changed_end_line,
+                verification_id,
+                verification_scope,
                 applied_at_unix_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
             },
         )
@@ -783,6 +840,188 @@ fn discard_fix_proposal(
     proposal_id: String,
 ) -> Result<(), String> {
     store.discard(&proposal_id)
+}
+
+#[tauri::command]
+async fn verify_fix_change(
+    app: tauri::AppHandle,
+    visual_state: tauri::State<'_, visual_capture::VisualCaptureState>,
+    verification_store: tauri::State<'_, trusted_verify::VerificationStore>,
+    verification_id: String,
+) -> Result<trusted_verify::HumanVerifyChangeReceipt, String> {
+    let record = verification_store.begin_verify(&verification_id)?;
+    let result = async {
+        let pre_route =
+            visual_capture::managed_surface_canonical_route(&app, record.session_id)?;
+        if pre_route != record.canonical_route {
+            return Err("trusted Verify route changed since Apply".to_string());
+        }
+
+        let token = read_token().await?;
+        let client = control_client()?;
+        let session = client
+            .get(format!(
+                "http://127.0.0.1:45454/v1/sessions/{}",
+                record.session_id
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|_| "trusted Verify runtime unavailable".to_string())?
+            .error_for_status()
+            .map_err(|_| "trusted Verify session is unavailable".to_string())?
+            .json::<Session>()
+            .await
+            .map_err(|_| "trusted Verify session is unavailable".to_string())?;
+
+        let snapshot = client
+            .get(format!(
+                "http://127.0.0.1:45454/v1/sessions/{}/semantic-snapshot/fresh",
+                record.session_id
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|_| "trusted Verify runtime unavailable".to_string())?
+            .error_for_status()
+            .map_err(|_| "trusted Verify target is unavailable".to_string())?
+            .json::<PageSnapshot>()
+            .await
+            .map_err(|_| "trusted Verify target is unavailable".to_string())?;
+
+        let snapshot_route = visual_capture::canonical_visual_diff_route(&snapshot.route)?;
+        if snapshot_route != record.canonical_route {
+            return Err("trusted Verify route changed since Apply".into());
+        }
+
+        let source = resolve_snapshot_source(&snapshot, &record.reference)?;
+        let project_root = session
+            .project
+            .git_root
+            .as_deref()
+            .or(session.project.cwd.as_deref())
+            .ok_or_else(|| "trusted Verify project root is unavailable".to_string())?;
+        let target = resolve_trusted_source_target(
+            record.session_id,
+            &record.reference,
+            project_root,
+            source,
+            snapshot.version,
+            &pre_route,
+        )?;
+        if target.canonical_file != record.canonical_file
+            || target.project_root != record.project_root
+            || target.project_relative_file != record.display_file
+            || target.line != record.source_line
+        {
+            return Err("trusted Verify source mapping changed after Apply".into());
+        }
+        let postimage = trusted_fix::validate_fix_source_policy(&target)?;
+        if postimage != record.postimage {
+            return Err("trusted Verify source changed after Apply".into());
+        }
+
+        let semantic_after =
+            trusted_verify::build_semantic_baseline(&session, &snapshot, &record.reference)?;
+        let semantic_changes = trusted_verify::compare_semantic_projection(
+            &record.semantic_before.selected,
+            &semantic_after.selected,
+        );
+        let regression_signals = trusted_verify::compare_issue_fingerprints(
+            &record.semantic_before.console_issues,
+            &semantic_after.console_issues,
+            &record.semantic_before.network_issues,
+            &semantic_after.network_issues,
+        );
+
+        let visual_facts = if let Some(before) = record.visual_before.as_ref() {
+            match visual_capture::capture_verification_current(
+                app.clone(),
+                &visual_state,
+                record.session_id,
+            )
+            .await
+            {
+                Ok(frame) => {
+                    let frame_route = visual_capture::canonical_visual_diff_route(&frame.route)?;
+                    if frame_route != record.canonical_route {
+                        return Err("trusted Verify route changed during verification".into());
+                    }
+                    trusted_verify::compare_visual_facts(
+                        before,
+                        &frame.png,
+                        &frame.viewport,
+                        semantic_after.selected.rect.as_ref(),
+                    )?
+                }
+                Err(_) => trusted_verify::VisualVerificationFacts {
+                    viewport_changed_ratio: None,
+                    target_changed_ratio: None,
+                },
+            }
+        } else {
+            trusted_verify::VisualVerificationFacts {
+                viewport_changed_ratio: None,
+                target_changed_ratio: None,
+            }
+        };
+
+        let comparison = trusted_verify::classify_verification_status(
+            semantic_changes,
+            regression_signals,
+            &visual_facts,
+            record.scope,
+            record.semantic_before.selected.interactive,
+            semantic_after.selected.interactive,
+        );
+
+        let post_route =
+            visual_capture::managed_surface_canonical_route(&app, record.session_id)?;
+        if post_route != record.canonical_route {
+            return Err("trusted Verify route changed during verification".into());
+        }
+
+        Ok::<trusted_verify::HumanVerifyChangeReceipt, String>(
+            trusted_verify::HumanVerifyChangeReceipt {
+                verification_id: record.verification_id.clone(),
+                reference: record.reference.clone(),
+                display_file: record.display_file.clone(),
+                scope: record.scope,
+                status: comparison.deterministic_status,
+                semantic_changes: comparison.semantic_changes,
+                regression_signals: comparison.regression_signals,
+                viewport_changed_ratio: comparison.viewport_changed_ratio,
+                target_changed_ratio: comparison.target_changed_ratio,
+                visual_diff_evidence_id: None,
+                snapshot_version: snapshot.version,
+                provider_label: None,
+                advisory_summary: None,
+                verified_at_unix_ms: trusted_verify::now_unix_ms(),
+            },
+        )
+    }
+    .await;
+
+    match result {
+        Ok(receipt) => {
+            verification_store.complete(&verification_id)?;
+            Ok(receipt)
+        }
+        Err(error) => {
+            let lower = error.to_ascii_lowercase();
+            if lower.contains("route changed")
+                || lower.contains("source changed")
+                || lower.contains("source mapping changed")
+                || lower.contains("target is unavailable")
+                || lower.contains("element reference")
+            {
+                let _ = verification_store.invalidate(&verification_id);
+            } else {
+                let _ = verification_store.release_retryable(&verification_id);
+            }
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command]
@@ -2403,6 +2642,7 @@ pub fn run() {
         .setup(|app| {
             let _ = app.manage(visual_capture::VisualCaptureState::default());
             let _ = app.manage(trusted_fix::FixProposalStore::default());
+            let _ = app.manage(trusted_verify::VerificationStore::default());
             let _ = app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
             native_executor_worker::spawn(app.handle().clone());
             let menu = MenuBuilder::new(app)
@@ -2445,6 +2685,7 @@ pub fn run() {
             prepare_fix_proposal,
             apply_fix_proposal,
             discard_fix_proposal,
+            verify_fix_change,
             open_source_for_selection,
             measure_current_selection,
             pause_runtime,
