@@ -5,7 +5,8 @@ mod base;
 
 pub use base::{
     ActionExecutionBoundary, BridgeAction, BridgeActionKind, BridgeActionResult, CompletionOrigin, IngestReport,
-    NativeExecutorAction, NativeExecutorRequest, NativeExecutorResult, ObserverBatch, ObserverEvent,
+    NativeExecutorAction, NativeExecutorRequest, NativeExecutorResult, NetworkFaultControlCommand,
+    NetworkFaultControlRequest, NetworkFaultControlResult, ObserverBatch, ObserverEvent,
     ObserverEventKind, PrivateBridgeAction, PrivateCaptureActionData,
 };
 
