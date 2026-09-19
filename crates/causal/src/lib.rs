@@ -378,6 +378,10 @@ pub enum ActionCorrelationError {
     InvalidPolicy,
 }
 
+pub const MAX_ACTION_CORRELATION_TAIL_MS: u64 = 10_000;
+pub const MAX_ACTION_CORRELATION_SIGNALS: usize = 4_096;
+pub const MAX_ACTION_CORRELATION_RESPONSES_PER_REQUEST: usize = 64;
+
 pub fn correlate_action_request_ui(
     window: &ActionCorrelationWindow,
     signals: &[RuntimeSignal],
@@ -387,8 +391,10 @@ pub fn correlate_action_request_ui(
         return Err(ActionCorrelationError::InvalidWindow);
     }
     if policy.max_signals == 0
+        || policy.max_signals > MAX_ACTION_CORRELATION_SIGNALS
         || policy.max_responses_per_request == 0
-        || policy.tail_ms > 10_000
+        || policy.max_responses_per_request > MAX_ACTION_CORRELATION_RESPONSES_PER_REQUEST
+        || policy.tail_ms > MAX_ACTION_CORRELATION_TAIL_MS
     {
         return Err(ActionCorrelationError::InvalidPolicy);
     }
