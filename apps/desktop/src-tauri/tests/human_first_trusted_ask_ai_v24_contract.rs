@@ -187,7 +187,7 @@ fn ask_ai_v24_remains_read_only_when_fix_v25_is_present() {
     let shell_ask = between(
         shell,
         "const askAiAboutSelection = useCallback",
-        "const prepareFixProposal = useCallback",
+        "const beginFixReview = useCallback",
     );
     for forbidden in [
         "prepareFixProposal",
@@ -219,7 +219,7 @@ fn ask_ai_v24_remains_read_only_when_fix_v25_is_present() {
         );
     }
 
-    let api_ask = between(api, "askAiAboutSelection", "openSourceForSelection");
+    let api_ask = between(api, "askAiAboutSelection", "prepareFixProposal");
     for forbidden in [
         "prepare_fix_proposal",
         "apply_fix_proposal",
