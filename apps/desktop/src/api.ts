@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { DashboardState, LiveSessionState, WorkspaceBounds } from './types';
+import type { ActionCorrelationReceipt, DashboardState, LiveSessionState, WorkspaceBounds } from './types';
 
 export interface MeasureRect {
   x: number;
@@ -170,6 +170,8 @@ export interface VisualCaptureReceipt {
 export const api = {
   dashboard: () => invoke<DashboardState>('dashboard_state'),
   liveSession: (sessionId: string) => invoke<LiveSessionState>('live_session_state', { sessionId }),
+  actionCorrelation: (sessionId: string, actionId: string) =>
+    invoke<ActionCorrelationReceipt | null>('action_correlation', { sessionId, actionId }),
   pause: () => invoke<void>('pause_runtime'),
   resume: () => invoke<void>('resume_runtime'),
   openPreview: (sessionId: string, url: string, title: string) => invoke<void>('open_preview', { sessionId, url, title }),
