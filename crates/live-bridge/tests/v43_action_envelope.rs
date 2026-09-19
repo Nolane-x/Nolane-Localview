@@ -1,6 +1,6 @@
 use localview_live_bridge::{
     ActionEnvelopeBindingError, ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass,
-    BridgeActionKind, LiveBridge, ProviderObserverBatch,
+    BridgeActionKind, BridgeActionResult, LiveBridge, ProviderObserverBatch,
 };
 use localview_protocol::{PrincipalRef, ProviderIncarnationRef, TargetIncarnationRef};
 use uuid::Uuid;
@@ -77,6 +77,57 @@ async fn canonical_action_envelope_binds_principals_authority_cut_and_incarnatio
         bridge.action_envelope(queued.action.id).await.unwrap(),
         queued.envelope
     );
+}
+
+#[tokio::test]
+async fn canonical_transport_action_uses_same_daemon_execution_boundary() {
+    let bridge = LiveBridge::new(32, 8);
+    let session_id = Uuid::new_v4();
+    let provider = ProviderIncarnationRef::from("provider:webview:1");
+    let target = TargetIncarnationRef::from("target:webview:1");
+    bind_provider(&bridge, session_id, provider.clone(), target.clone()).await;
+
+    let queued = bridge
+        .enqueue_canonical_action(
+            session_id,
+            Some("@send".into()),
+            BridgeActionKind::Click,
+            metadata(provider, target),
+        )
+        .await
+        .expect("canonical action");
+
+    let taken = bridge.take_public_actions(session_id, 1).await;
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].id, queued.envelope.transport_action_id);
+
+    let claimed = bridge
+        .claim_action(session_id, queued.envelope.transport_action_id)
+        .await
+        .expect("canonical transport action remains claimable");
+    let caller_completed_at =
+        chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).expect("timestamp");
+    bridge
+        .complete_action(
+            &claimed,
+            BridgeActionResult {
+                action_id: claimed.id,
+                ok: true,
+                error: None,
+                payload: serde_json::Value::Null,
+                completed_at: caller_completed_at,
+            },
+        )
+        .await;
+
+    let boundary = bridge
+        .action_execution_boundary(session_id, queued.envelope.transport_action_id)
+        .await
+        .expect("daemon boundary for canonical transport action");
+    assert_eq!(boundary.action_id, queued.envelope.transport_action_id);
+    assert_eq!(boundary.session_id, queued.envelope.session_id);
+    assert!(boundary.started_at <= boundary.completed_at);
+    assert_ne!(boundary.completed_at, caller_completed_at);
 }
 
 #[tokio::test]

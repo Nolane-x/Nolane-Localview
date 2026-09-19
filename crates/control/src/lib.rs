@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod action_cancellation;
+mod action_correlation;
 mod capture_settle;
 mod chromium_runtime;
 mod fresh_snapshot;
@@ -61,6 +62,7 @@ pub use windows_observe::{
 pub fn router(state: ControlState) -> Router {
     runtime::router(state.clone())
         .merge(action_cancellation::router(state.clone()))
+        .merge(action_correlation::router(state.clone()))
         .merge(capture_settle::router(state.clone()))
         .merge(fresh_snapshot::router(state.clone()))
         .merge(native_cancellation::router(state.clone()))

@@ -225,6 +225,18 @@ const dashboardSessionB = {
   })),
 };
 
+const correlationActionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const liveCorrelation = {
+  ...live,
+  action_results: [{
+    action_id: correlationActionId,
+    ok: true,
+    error: null,
+    payload: null,
+    completed_at: now,
+  }],
+};
+
 const liveEmpty = { observer: [], action_results: [] };
 
 function init(
@@ -244,6 +256,7 @@ function init(
   fixOptions = {},
   verifyOptions = {},
   responsiveOptions = {},
+  correlationOptions = {},
 ) {
   const aiProviderAvailable = aiOptions.providerAvailable ?? false;
   const aiProviderLabel = aiOptions.providerLabel ?? 'Audit AI Bridge';
@@ -271,7 +284,10 @@ function init(
   const verifyAdvisorySummary = verifyOptions.advisorySummary ?? null;
   const responsiveDelayMs = responsiveOptions.delayMs ?? 0;
   const responsiveFailure = responsiveOptions.failure ?? null;
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary, responsiveDelayMs, responsiveFailure }) => {
+  const correlationDelayMs = correlationOptions.delayMs ?? 0;
+  const correlationUnavailable = correlationOptions.unavailable ?? false;
+  const correlationSessionId = correlationOptions.sessionId ?? dashboardState.sessions?.[0]?.id ?? null;
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary, responsiveDelayMs, responsiveFailure, correlationDelayMs, correlationUnavailable, correlationSessionId }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -322,6 +338,34 @@ function init(
           }
           if (cmd === 'live_session_state') {
             return structuredClone(window.__LOCALVIEW_AUDIT_LIVE_STATE__);
+          }
+          if (cmd === 'action_correlation') {
+            if (correlationDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, correlationDelayMs));
+            }
+            if (correlationUnavailable || args.sessionId !== correlationSessionId) {
+              return null;
+            }
+            return {
+              trace: {
+                action_id: args.actionId,
+                links: [{
+                  request_id: 'ev_network_request',
+                  response_ids: ['ev_dom_response'],
+                  confidence: 0.55,
+                  basis: 'temporal_window',
+                }],
+                observed_signal_count: 2,
+                truncated: false,
+              },
+              evidence_id: 'ev_causal_trace',
+              deduplicated: false,
+              window: {
+                started_at: new Date(Date.now() - 100).toISOString(),
+                completed_at: new Date(Date.now() - 80).toISOString(),
+                basis: 'daemon_execution_boundary',
+              },
+            };
           }
           if (cmd === 'ai_provider_capability') {
             return {
@@ -558,7 +602,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary, responsiveDelayMs, responsiveFailure });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary, responsiveDelayMs, responsiveFailure, correlationDelayMs, correlationUnavailable, correlationSessionId });
 }
 
 async function pageFor(
@@ -578,13 +622,14 @@ async function pageFor(
   aiOptions = {},
   fixOptions = {},
   verifyOptions = {},
-  responsiveOptions = {}
+  responsiveOptions = {},
+  correlationOptions = {}
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions, verifyOptions, responsiveOptions);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions, verifyOptions, responsiveOptions, correlationOptions);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -3931,6 +3976,103 @@ await page.keyboard.press('r');
 await page.waitForTimeout(100);
 const noSessionRunDisabled = await page.locator('.responsive-run-action').isDisabled();
 invariant(noSessionRunDisabled, 'responsive:no-session-run-disabled', { noSessionRunDisabled });
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveCorrelation,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  null,
+  {},
+  {},
+  {},
+  {},
+  { sessionId: dashboard.sessions[0].id },
+);
+await page.keyboard.press('n');
+await page.waitForTimeout(180);
+const correlationText = await page.locator('.panel-network').innerText();
+invariant(correlationText.includes('Associated with action'), 'wave3-correlation:temporal-wording', { correlationText });
+invariant(correlationText.includes('Temporal association only'), 'wave3-correlation:uncertainty-visible', { correlationText });
+invariant(!/caused by/i.test(correlationText), 'wave3-correlation:no-causal-overclaim', { correlationText });
+const correlationBasis = await page.locator('.network-correlation').getAttribute('data-correlation-basis');
+invariant(correlationBasis === 'temporal_window', 'wave3-correlation:basis-visible-in-dom', { correlationBasis });
+await shot(page, '156-wave3-network-correlation.png', 'wave3-network-correlation');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'vi',
+  {},
+  liveCorrelation,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  null,
+  {},
+  {},
+  {},
+  {},
+  { sessionId: dashboard.sessions[0].id },
+);
+await page.keyboard.press('n');
+await page.waitForTimeout(180);
+const viCorrelationText = await page.locator('.panel-network').innerText();
+invariant(viCorrelationText.includes('Liên quan đến thao tác'), 'wave3-correlation:vi-associated-action', { viCorrelationText });
+invariant(viCorrelationText.includes('chưa chứng minh quan hệ nhân quả'), 'wave3-correlation:vi-uncertainty', { viCorrelationText });
+await shot(page, '157-vi-wave3-network-correlation.png', 'vi-wave3-network-correlation');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveCorrelation,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  null,
+  {},
+  {},
+  {},
+  {},
+  { sessionId: dashboard.sessions[0].id, delayMs: 1800 },
+);
+await page.keyboard.press('n');
+await page.waitForTimeout(120);
+await page.evaluate((nextDashboard) => {
+  window.__LOCALVIEW_AUDIT_DASHBOARD_STATE__ = structuredClone(nextDashboard);
+}, dashboardSessionB);
+await page.waitForTimeout(1550);
+const correlationSwitchedSession = await page.locator('.top-pill select').inputValue();
+invariant(
+  correlationSwitchedSession === dashboardSessionB.sessions[0].id,
+  'wave3-correlation:stale-session-switched',
+  { correlationSwitchedSession },
+);
+await page.waitForTimeout(500);
+const staleCorrelationVisible = await page.locator('.network-correlation').isVisible().catch(() => false);
+invariant(!staleCorrelationVisible, 'wave3-correlation:stale-result-isolated', { staleCorrelationVisible });
+await shot(page, '158-wave3-correlation-stale-session-isolated.png', 'wave3-correlation-stale-session-isolated');
 await page.close();
 
 await fs.writeFile(

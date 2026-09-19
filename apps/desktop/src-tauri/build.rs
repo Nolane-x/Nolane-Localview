@@ -4,6 +4,7 @@ fn main() {
             tauri_build::AppManifest::new().commands(&[
                 "dashboard_state",
                 "live_session_state",
+                "action_correlation",
                 "pause_runtime",
                 "resume_runtime",
                 "open_preview",

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { COMMAND_IDS, type CommandId } from '../commands';
 import type { AiFixCapability, AiProviderCapability, ResponsivePresetId, VerifyScope, VerifyStatus } from '../api';
-import type { DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
+import type { ActionCorrelationReceipt, DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
 import {
@@ -226,6 +226,7 @@ interface FloatingPanelProps {
   tool: ToolId;
   state: DashboardState;
   live: LiveSessionState;
+  actionCorrelation?: ActionCorrelationReceipt;
   current?: Session;
   url?: string;
   locale: SupportedLocale;
@@ -264,6 +265,7 @@ export function FloatingPanel({
   tool,
   state,
   live,
+  actionCorrelation,
   current,
   url,
   locale,
@@ -345,7 +347,7 @@ export function FloatingPanel({
           />
         )}
         {tool === 'console' && <ConsolePanel live={live} locale={locale} onOpenNative={onOpenNative} />}
-        {tool === 'network' && <NetworkPanel current={current} live={live} locale={locale} onOpenNative={onOpenNative} />}
+        {tool === 'network' && <NetworkPanel current={current} live={live} correlation={actionCorrelation} locale={locale} onOpenNative={onOpenNative} />}
         {tool === 'ai' && (
           <AiPanel
             current={current}
@@ -957,15 +959,38 @@ function ConsolePanel({ live, locale, onOpenNative }: { live: LiveSessionState; 
   </div>;
 }
 
-function NetworkPanel({ current, live, locale, onOpenNative }: { current?: Session; live: LiveSessionState; locale: SupportedLocale; onOpenNative: () => void }) {
+function NetworkPanel({
+  current,
+  live,
+  correlation,
+  locale,
+  onOpenNative,
+}: {
+  current?: Session;
+  live: LiveSessionState;
+  correlation?: ActionCorrelationReceipt;
+  locale: SupportedLocale;
+  onOpenNative: () => void;
+}) {
   const events = live.observer.filter((event) => event.kind === 'network').slice(-100);
   const failures = events.filter((event) => Number(event.payload.status ?? 0) >= 400 || event.payload.ok === false).length;
+  const associatedRequests = correlation?.trace.links.length ?? 0;
+  const confidence = correlation?.trace.links.reduce((best, link) => Math.max(best, link.confidence), 0) ?? 0;
   return <div className="stream-panel">
     <div className="network-summary">
       <div><span>{translate(locale, 'network.target')}</span><strong>{current ? `:${current.endpoint.port}` : '—'}</strong></div>
       <div><span>{translate(locale, 'network.requests')}</span><strong>{events.length}</strong></div>
       <div><span>{translate(locale, 'network.failures')}</span><strong>{failures}</strong></div>
     </div>
+    {correlation && associatedRequests > 0 && (
+      <div className="network-correlation" data-correlation-basis="temporal_window">
+        <div>
+          <span>{translate(locale, 'network.associatedAction')}</span>
+          <strong>{associatedRequests} · {Math.round(confidence * 100)}%</strong>
+        </div>
+        <small>{translate(locale, 'network.temporalAssociation')}</small>
+      </div>
+    )}
     {events.length ? <div className="evidence-stream network-stream">{events.map((event) => <NetworkRow key={`${event.seq}-${event.captured_at}`} event={event} />)}</div> : <EmptyEvidence icon={<NetworkIcon />} title={translate(locale, 'network.emptyTitle')} text={translate(locale, 'network.emptyText')} action={translate(locale, 'action.openPreview')} onAction={onOpenNative} />}
   </div>;
 }

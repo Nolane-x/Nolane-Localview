@@ -1,0 +1,120 @@
+name: Wave 3 live action correlation
+
+on:
+  pull_request:
+    paths:
+      - "crates/causal/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/build.rs"
+      - "apps/desktop/src-tauri/permissions/localview.toml"
+      - "apps/desktop/package.json"
+      - "apps/desktop/package-lock.json"
+      - "tools/human-first-ui-v2/**"
+      - ".github/workflows/wave3-live-correlation.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-action-request-ui-correlation-design.md"
+  push:
+    branches:
+      - "feat/wave3-live-correlation-authority"
+    paths:
+      - "crates/causal/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/build.rs"
+      - "apps/desktop/src-tauri/permissions/localview.toml"
+      - "apps/desktop/package.json"
+      - "apps/desktop/package-lock.json"
+      - "tools/human-first-ui-v2/**"
+      - ".github/workflows/wave3-live-correlation.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-action-request-ui-correlation-design.md"
+
+concurrency:
+  group: wave3-live-correlation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  live-correlation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify pure correlation policy
+        run: cargo test -p localview-causal --test action_request_ui_correlation -- --nocapture
+
+      - name: Verify daemon action execution boundaries
+        run: cargo test -p localview-live-bridge action_execution_boundary -- --nocapture
+
+      - name: Verify live control correlation authority
+        run: cargo test -p localview-control --test action_request_ui_correlation -- --nocapture
+
+      - name: Check touched crates
+        run: |
+          cargo check -p localview-live-bridge --all-targets
+          cargo check -p localview-control --all-targets
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+  runtime:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build frontend
+        run: npm run build
+      - name: Install Playwright Chromium
+        run: npm install --no-save --no-audit --no-fund playwright@1.55.0 && npx playwright install --with-deps chromium
+      - name: Start neutral localhost target
+        run: |
+          python3 -m http.server 5173 --directory ../../tools/human-first-ui-v2/demo > /tmp/localview-wave3-demo.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5173/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/localview-wave3-demo.log
+          exit 1
+      - name: Start LocalView frontend
+        run: |
+          npm run dev -- --host 127.0.0.1 > /tmp/localview-wave3-vite.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:1420/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/localview-wave3-vite.log
+          exit 1
+      - name: Run Human-First browser audit
+        run: |
+          cp ../../tools/human-first-ui-v2/capture.mjs ./capture-wave3-correlation.mjs
+          node ./capture-wave3-correlation.mjs
+          rm ./capture-wave3-correlation.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localview-wave3-live-correlation
+          path: apps/desktop/human-first-ui-v2-render/
+          if-no-files-found: error
+          retention-days: 7

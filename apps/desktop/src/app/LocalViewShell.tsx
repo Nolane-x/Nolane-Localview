@@ -21,7 +21,7 @@ import {
   type ChromePoint,
   type LocalViewPreferences,
 } from '../preferences';
-import type { DashboardState, LiveSessionState, Session } from '../types';
+import type { ActionCorrelationReceipt, DashboardState, LiveSessionState, Session } from '../types';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import {
   CommandRailButton,
@@ -389,6 +389,7 @@ export default function LocalViewShell() {
   const [activeTool, setActiveTool] = useState<ToolId>();
   const [error, setError] = useState<string>();
   const [live, setLive] = useState<LiveSessionState>(emptyLive);
+  const [actionCorrelation, setActionCorrelation] = useState<ActionCorrelationReceipt>();
   const [immersive, setImmersive] = useState(false);
   const [preferences, setPreferences] = useState<LocalViewPreferences>(() => loadPreferences());
   const [targetBarPosition, setTargetBarPosition] = useState<ChromePoint | null>(
@@ -421,6 +422,7 @@ export default function LocalViewShell() {
   const fixGeneration = useRef(0);
   const verifyInFlight = useRef(false);
   const verifyGeneration = useRef(0);
+  const correlationGeneration = useRef(0);
   const fixProposalIdRef = useRef<string | undefined>(undefined);
   const selectedReferenceRef = useRef<string | undefined>(undefined);
   const currentSessionIdRef = useRef<string | undefined>(undefined);
@@ -606,6 +608,8 @@ export default function LocalViewShell() {
     verifyGeneration.current += 1;
     verifyInFlight.current = false;
     setVerifyState({ status: 'idle' });
+    correlationGeneration.current += 1;
+    setActionCorrelation(undefined);
   }, [current?.id]);
 
   useEffect(() => {
@@ -629,6 +633,46 @@ export default function LocalViewShell() {
       window.clearInterval(timer);
     };
   }, [current?.id]);
+
+  const latestActionId = live.action_results.at(-1)?.action_id;
+
+  useEffect(() => {
+    if (activeTool !== 'network' || !current || !latestActionId) return;
+
+    let cancelled = false;
+    const generation = ++correlationGeneration.current;
+    const requestSessionId = current.id;
+    const requestActionId = latestActionId;
+    setActionCorrelation(undefined);
+
+    const read = async () => {
+      for (let attempt = 0; attempt < 4 && !cancelled; attempt += 1) {
+        try {
+          const receipt = await api.actionCorrelation(requestSessionId, requestActionId);
+          if (
+            cancelled
+            || generation !== correlationGeneration.current
+            || requestSessionId !== currentSessionIdRef.current
+          ) {
+            return;
+          }
+          if (receipt && receipt.trace.action_id === requestActionId) {
+            setActionCorrelation(receipt);
+            return;
+          }
+        } catch {
+          return;
+        }
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 550));
+      }
+    };
+
+    void read();
+    return () => {
+      cancelled = true;
+      correlationGeneration.current += 1;
+    };
+  }, [activeTool, current?.id, latestActionId]);
 
   const currentUrl = current
     ? `${current.endpoint.scheme}://${current.endpoint.host}:${current.endpoint.port}/`
@@ -1301,6 +1345,7 @@ export default function LocalViewShell() {
             tool={activeTool}
             state={state}
             live={live}
+            actionCorrelation={actionCorrelation?.trace.action_id === latestActionId ? actionCorrelation : undefined}
             current={current}
             url={currentUrl}
             locale={preferences.locale}
