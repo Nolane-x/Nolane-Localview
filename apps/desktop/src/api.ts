@@ -120,6 +120,34 @@ export interface ElementMeasureReceipt {
   measured_at_unix_ms: number;
 }
 
+export type ResponsivePresetId = 'mobile_s' | 'mobile' | 'tablet' | 'desktop';
+
+export interface ResponsiveSweepRequest {
+  sessionId: string;
+  presets: ResponsivePresetId[];
+}
+
+export interface ResponsiveSweepReceipt {
+  artifact_id: string;
+  evidence_id: string;
+  deduplicated: boolean;
+  route: string;
+  contact_sheet_pixel_width: number;
+  contact_sheet_pixel_height: number;
+  viewports: ResponsiveViewportReceipt[];
+}
+
+export interface ResponsiveViewportReceipt {
+  preset: ResponsivePresetId;
+  css_width: number;
+  css_height: number;
+  device_scale_factor: number;
+  pixel_width: number;
+  pixel_height: number;
+  sheet_x: number;
+  sheet_y: number;
+}
+
 export interface VisualCaptureReceipt {
   artifact_id: string;
   evidence_id: string;
@@ -160,6 +188,8 @@ export const api = {
   verifyFixChange: ({ verificationId }: HumanVerifyChangeRequest) =>
     invoke<HumanVerifyChangeReceipt>('verify_fix_change', { verificationId }),
   captureCurrentViewport: (sessionId: string) => invoke<VisualCaptureReceipt>('capture_current_viewport', { sessionId, revision: null }),
+  captureResponsiveSweep: ({ sessionId, presets }: ResponsiveSweepRequest) =>
+    invoke<ResponsiveSweepReceipt>('capture_responsive_sweep', { sessionId, presets }),
   openSourceForSelection: ({ sessionId, reference }: HumanSourceOpenRequest) =>
     invoke<HumanSourceOpenReceipt>('open_source_for_selection', { sessionId, reference }),
   measureElement: (sessionId: string, reference: string) => invoke<ElementMeasureReceipt>('measure_current_selection', { sessionId, reference }),

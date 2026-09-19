@@ -18,6 +18,7 @@ mod surface_recovery;
 mod visual_diff;
 mod visual_full_page;
 mod visual_region;
+mod visual_responsive;
 mod visual_verify;
 mod windows_consequential;
 mod windows_observe;
@@ -74,6 +75,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(visual_verify::router(state.clone()))
         .merge(windows_observe::router(state.clone()))
         .merge(windows_consequential::router(state.clone()))
+        .merge(visual_responsive::router(state.clone()))
         .merge(visual_region::router(state))
 }
 

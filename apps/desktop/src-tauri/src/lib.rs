@@ -2726,6 +2726,7 @@ pub fn run() {
             preview_action_cancellation,
             preview_ack_action_cancellation,
             preview_complete_action,
+            visual_capture::capture_responsive_sweep,
             visual_capture::capture_full_page,
             visual_capture::capture_viewport,
             visual_capture::capture_current_viewport,

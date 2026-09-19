@@ -10,7 +10,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import { api, type AiFixCapability, type AiProviderCapability } from '../api';
+import { api, type AiFixCapability, type AiProviderCapability, type ResponsivePresetId } from '../api';
 import { COMMAND_IDS, type CommandId } from '../commands';
 import { applyDocumentLocale, translate } from '../i18n';
 import {
@@ -28,6 +28,7 @@ import {
   FloatingPanel,
   RailButton,
   type HumanCaptureState,
+  type HumanResponsiveState,
   type HumanAskAiState,
   type HumanFixState,
   type HumanVerifyState,
@@ -335,6 +336,24 @@ function classifyVerifyFailure(
   return 'failed';
 }
 
+function classifyResponsiveFailure(
+  cause: unknown,
+): Extract<HumanResponsiveState, { status: 'failure' }>['reason'] {
+  const detail = String(cause).toLowerCase();
+  if (
+    detail.includes('responsive_preview_unavailable')
+    || detail.includes('responsive_preview_owner_mismatch')
+    || detail.includes('responsive_preview_maximized')
+    || detail.includes('responsive_preview_fullscreen')
+  ) {
+    return 'preview_unavailable';
+  }
+  if (detail.includes('responsive_invalid_presets')) return 'invalid_presets';
+  if (detail.includes('responsive_route_drift')) return 'route_changed';
+  if (detail.includes('responsive_restore_failed')) return 'restore_failed';
+  return 'failed';
+}
+
 function classifySourceOpenFailure(cause: unknown): 'launcher_unavailable' | 'unavailable' | 'failed' {
   const detail = String(cause).toLowerCase();
 
@@ -378,6 +397,7 @@ export default function LocalViewShell() {
   const [toolRailPosition, setToolRailPosition] = useState<ChromePoint | null>(
     () => preferences.rememberChromePositions ? preferences.toolRailPosition : null,
   );
+  const [responsiveState, setResponsiveState] = useState<HumanResponsiveState>({ status: 'idle' });
   const [captureState, setCaptureState] = useState<HumanCaptureState>({ status: 'idle' });
   const [measureState, setMeasureState] = useState<HumanMeasureState>({ status: 'idle' });
   const [sourceOpenState, setSourceOpenState] = useState<HumanSourceOpenState>({ status: 'idle' });
@@ -386,6 +406,8 @@ export default function LocalViewShell() {
   const [fixCapability, setFixCapability] = useState<AiFixCapability>(unavailableFixCapability);
   const [fixState, setFixState] = useState<HumanFixState>({ status: 'idle' });
   const [verifyState, setVerifyState] = useState<HumanVerifyState>({ status: 'idle' });
+  const responsiveInFlight = useRef(false);
+  const responsiveGeneration = useRef(0);
   const captureInFlight = useRef(false);
   const captureGeneration = useRef(0);
   const measureInFlight = useRef(false);
@@ -558,6 +580,9 @@ export default function LocalViewShell() {
 
   useEffect(() => {
     currentSessionIdRef.current = current?.id;
+    responsiveGeneration.current += 1;
+    responsiveInFlight.current = false;
+    setResponsiveState({ status: 'idle' });
     captureGeneration.current += 1;
     captureInFlight.current = false;
     setCaptureState({ status: 'idle' });
@@ -632,6 +657,59 @@ export default function LocalViewShell() {
       );
     } catch (cause) {
       setError(String(cause));
+    }
+  }, [current]);
+
+  const captureResponsiveSweep = useCallback(async (presets: ResponsivePresetId[]) => {
+    const session = current;
+    if (!session || responsiveInFlight.current || presets.length === 0) return;
+
+    const requestSessionId = session.id;
+    const requestedPresets = [...presets];
+    responsiveInFlight.current = true;
+    const generation = ++responsiveGeneration.current;
+    currentSessionIdRef.current = requestSessionId;
+    setResponsiveState({ status: 'running', presets: requestedPresets });
+
+    try {
+      const receipt = await api.captureResponsiveSweep({
+        sessionId: requestSessionId,
+        presets: requestedPresets,
+      });
+      if (
+        generation !== responsiveGeneration.current
+        || requestSessionId !== currentSessionIdRef.current
+      ) {
+        return;
+      }
+      setResponsiveState({
+        status: 'success',
+        presets: requestedPresets,
+        evidenceId: receipt.evidence_id,
+        contactSheetPixelWidth: receipt.contact_sheet_pixel_width,
+        contactSheetPixelHeight: receipt.contact_sheet_pixel_height,
+        viewports: receipt.viewports.map((viewport) => ({
+          preset: viewport.preset,
+          cssWidth: viewport.css_width,
+          cssHeight: viewport.css_height,
+        })),
+      });
+    } catch (cause) {
+      if (
+        generation !== responsiveGeneration.current
+        || requestSessionId !== currentSessionIdRef.current
+      ) {
+        return;
+      }
+      setResponsiveState({
+        status: 'failure',
+        presets: requestedPresets,
+        reason: classifyResponsiveFailure(cause),
+      });
+    } finally {
+      if (generation === responsiveGeneration.current) {
+        responsiveInFlight.current = false;
+      }
     }
   }, [current]);
 
@@ -1230,6 +1308,8 @@ export default function LocalViewShell() {
             onClose={() => setActiveTool(undefined)}
             onSelect={setSelected}
             onOpenNative={() => void openNative()}
+            responsiveState={responsiveState}
+            onRunResponsiveSweep={(presets) => void captureResponsiveSweep(presets)}
             captureState={captureState}
             onCapture={() => void captureCurrentViewport()}
             sourceOpenState={sourceOpenState}

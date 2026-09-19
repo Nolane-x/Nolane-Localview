@@ -1,0 +1,70 @@
+name: Trusted Responsive Sweep Contact Sheet
+
+on:
+  push:
+    branches:
+      - feat/trusted-responsive-sweep-contact-sheet
+    paths:
+      - .github/workflows/trusted-responsive-sweep.yml
+      - docs/superpowers/specs/2026-09-19-trusted-responsive-sweep-contact-sheet-design.md
+      - docs/SPEC_COVERAGE.md
+      - docs/ROADMAP.md
+      - crates/responsive/**
+      - crates/visual/**
+      - crates/control/src/visual_responsive.rs
+      - crates/control/src/lib.rs
+      - crates/control/tests/responsive_visual_evidence.rs
+      - apps/desktop/src/**
+      - apps/desktop/src-tauri/src/**
+      - apps/desktop/src-tauri/permissions/**
+      - apps/desktop/src-tauri/tests/responsive_sweep_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_ui_v2_contract.rs
+      - tools/human-first-ui-v2/**
+      - Cargo.toml
+      - Cargo.lock
+      - apps/desktop/package.json
+      - apps/desktop/package-lock.json
+  workflow_dispatch:
+
+concurrency:
+  group: trusted-responsive-sweep-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Responsive pure policy contract
+        run: cargo test -p localview-responsive --test responsive_sweep_contract -- --nocapture
+
+  desktop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Responsive contact-sheet evidence contract
+        run: cargo test -p localview-control --test responsive_visual_evidence -- --nocapture
+      - name: Responsive desktop authority contract
+        run: cargo test -p localview-desktop --test responsive_sweep_contract -- --nocapture
+      - name: Human-First master contract remains green
+        run: cargo test -p localview-desktop --test human_first_ui_v2_contract -- --nocapture
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm install --no-audit --no-fund
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build

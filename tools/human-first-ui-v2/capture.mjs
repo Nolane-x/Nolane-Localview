@@ -243,6 +243,7 @@ function init(
   aiOptions = {},
   fixOptions = {},
   verifyOptions = {},
+  responsiveOptions = {},
 ) {
   const aiProviderAvailable = aiOptions.providerAvailable ?? false;
   const aiProviderLabel = aiOptions.providerLabel ?? 'Audit AI Bridge';
@@ -268,7 +269,9 @@ function init(
   const verifyTargetChangedRatio = verifyOptions.targetChangedRatio ?? 0.18;
   const verifyProviderLabel = verifyOptions.providerLabel ?? null;
   const verifyAdvisorySummary = verifyOptions.advisorySummary ?? null;
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary }) => {
+  const responsiveDelayMs = responsiveOptions.delayMs ?? 0;
+  const responsiveFailure = responsiveOptions.failure ?? null;
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary, responsiveDelayMs, responsiveFailure }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -304,6 +307,7 @@ function init(
     window.__LOCALVIEW_AUDIT_FIX_DISCARDS__ = [];
     window.__LOCALVIEW_AUDIT_FIX_WRITES__ = 0;
     window.__LOCALVIEW_AUDIT_VERIFY_REQUESTS__ = [];
+    window.__LOCALVIEW_AUDIT_RESPONSIVE_REQUESTS__ = [];
     window.__LOCALVIEW_AUDIT_ROLLBACKS__ = 0;
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
@@ -479,6 +483,51 @@ function init(
               measured_at_unix_ms: Date.now(),
             };
           }
+          if (cmd === 'capture_responsive_sweep') {
+            window.__LOCALVIEW_AUDIT_RESPONSIVE_REQUESTS__.push(structuredClone(args ?? {}));
+            if (responsiveDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, responsiveDelayMs));
+            }
+            if (responsiveFailure) {
+              throw new Error(responsiveFailure);
+            }
+            const canonical = {
+              mobile_s: [320, 568],
+              mobile: [390, 844],
+              tablet: [768, 1024],
+              desktop: [1440, 900],
+            };
+            const requested = Array.isArray(args.presets) ? args.presets : [];
+            const viewports = requested.map((preset, index) => {
+              const [css_width, css_height] = canonical[preset] ?? [0, 0];
+              return {
+                preset,
+                css_width,
+                css_height,
+                device_scale_factor: 1,
+                pixel_width: css_width,
+                pixel_height: css_height,
+                sheet_x: 0,
+                sheet_y: requested
+                  .slice(0, index)
+                  .reduce((offset, prior) => offset + canonical[prior][1] + 16, 0),
+              };
+            });
+            const contact_sheet_pixel_width = Math.max(...viewports.map((entry) => entry.pixel_width), 1);
+            const contact_sheet_pixel_height = viewports.reduce(
+              (height, entry, index) => height + entry.pixel_height + (index ? 16 : 0),
+              0,
+            );
+            return {
+              artifact_id: 'lv-responsive-audit',
+              evidence_id: 'evidence-responsive-0123456789abcdef',
+              deduplicated: false,
+              route: 'http://127.0.0.1:5173/',
+              contact_sheet_pixel_width,
+              contact_sheet_pixel_height,
+              viewports,
+            };
+          }
           if (cmd === 'capture_current_viewport') {
             if (captureDelayMs > 0) {
               await new Promise((resolve) => setTimeout(resolve, captureDelayMs));
@@ -509,7 +558,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary, responsiveDelayMs, responsiveFailure });
 }
 
 async function pageFor(
@@ -528,13 +577,14 @@ async function pageFor(
   sourceOpenFailure = null,
   aiOptions = {},
   fixOptions = {},
-  verifyOptions = {}
+  verifyOptions = {},
+  responsiveOptions = {}
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions, verifyOptions);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions, verifyOptions, responsiveOptions);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -3659,6 +3709,190 @@ invariant(
 await page.keyboard.press('Escape');
 await assertPrimaryControlsInViewport(page, 'chrome-reset-recovered');
 await shot(page, '149-chrome-resize-reset-recovered.png', 'chrome-resize-reset-recovered');
+await page.close();
+
+
+page = await pageFor(browser, { width: 1440, height: 900 });
+await page.keyboard.press('r');
+await page.waitForTimeout(100);
+await assertVisible(page, '.panel-responsive', 'responsive-ready');
+const readyPresetLabels = await page.locator('.responsive-preset').count();
+invariant(readyPresetLabels === 4, 'responsive:four-canonical-presets', { readyPresetLabels });
+const responsiveNumberInputs = await page.locator('.panel-responsive input[type="number"]').count();
+invariant(responsiveNumberInputs === 0, 'responsive:no-arbitrary-dimension-inputs', { responsiveNumberInputs });
+await shot(page, '150-responsive-ready.png', 'responsive-ready');
+await page.getByRole('button', { name: 'Run responsive sweep' }).click();
+await page.waitForTimeout(120);
+const responsiveRequests = await page.evaluate(() => window.__LOCALVIEW_AUDIT_RESPONSIVE_REQUESTS__);
+invariant(responsiveRequests.length === 1, 'responsive:single-request', { responsiveRequests });
+const responsiveArgs = responsiveRequests[0] ?? {};
+invariant(
+  Object.keys(responsiveArgs).sort().join(',') === 'presets,sessionId',
+  'responsive:request-authority-session-and-presets-only',
+  { responsiveArgs },
+);
+invariant(
+  JSON.stringify(responsiveArgs.presets) === JSON.stringify(['mobile_s','mobile','tablet','desktop']),
+  'responsive:canonical-preset-request',
+  { responsiveArgs },
+);
+await assertVisible(page, '.responsive-result', 'responsive-success');
+await shot(page, '152-responsive-success.png', 'responsive-success');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  live,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  null,
+  {},
+  {},
+  {},
+  { delayMs: 450 },
+);
+await page.keyboard.press('r');
+await page.waitForTimeout(80);
+const responsiveRun = page.getByRole('button', { name: 'Run responsive sweep' });
+await responsiveRun.click();
+await page.waitForTimeout(70);
+await assertVisible(page, '.responsive-run-action[aria-busy="true"]', 'responsive-in-progress');
+await page.locator('.responsive-run-action').evaluate((button) => button.click());
+await page.waitForTimeout(60);
+const inFlightRequests = await page.evaluate(() => window.__LOCALVIEW_AUDIT_RESPONSIVE_REQUESTS__);
+invariant(inFlightRequests.length === 1, 'responsive:duplicate-trigger-suppressed', { inFlightRequests });
+await shot(page, '151-responsive-in-progress.png', 'responsive-in-progress');
+await page.waitForTimeout(420);
+await assertVisible(page, '.responsive-result', 'responsive-delayed-success');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  live,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  null,
+  {},
+  {},
+  {},
+  { failure: 'responsive_restore_failed' },
+);
+await page.keyboard.press('r');
+await page.waitForTimeout(80);
+await page.getByRole('button', { name: 'Run responsive sweep' }).click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.responsive-failure', 'responsive-failure-retry');
+await assertVisible(page, '.responsive-run-action', 'responsive-failure-retry');
+const retryText = await page.locator('.responsive-run-action').innerText();
+invariant(retryText.includes('Retry responsive sweep'), 'responsive:failure-has-retry', { retryText });
+await shot(page, '153-responsive-failure-retry.png', 'responsive-failure-retry');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  live,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  null,
+  {},
+  {},
+  {},
+  { failure: 'responsive_preview_unavailable' },
+);
+await page.keyboard.press('r');
+await page.waitForTimeout(80);
+await page.getByRole('button', { name: 'Run responsive sweep' }).click();
+await page.waitForTimeout(120);
+const previewRequiredText = await page.locator('.responsive-failure').innerText();
+invariant(
+  previewRequiredText.includes('Open the preview before running a responsive sweep.'),
+  'responsive:preview-unavailable-guidance',
+  { previewRequiredText },
+);
+await page
+  .locator('.responsive-failure')
+  .getByRole('button', { name: 'Open preview' })
+  .click();
+const previewOpenInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'open_preview')
+);
+invariant(previewOpenInvokes.length === 1, 'responsive:preview-unavailable-open-action', { previewOpenInvokes });
+await shot(page, '154-responsive-preview-required.png', 'responsive-preview-required');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  live,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  null,
+  {},
+  {},
+  {},
+  { delayMs: 1800 },
+);
+await page.keyboard.press('r');
+await page.waitForTimeout(80);
+await page.getByRole('button', { name: 'Run responsive sweep' }).click();
+await page.evaluate((nextDashboard) => {
+  window.__LOCALVIEW_AUDIT_DASHBOARD_STATE__ = nextDashboard;
+}, dashboardSessionB);
+await page.waitForTimeout(1450);
+const switchedSession = await page.locator('.top-pill select').inputValue();
+invariant(
+  switchedSession === dashboardSessionB.sessions[0].id,
+  'responsive:stale-session-switched-before-response',
+  { switchedSession },
+);
+await page.waitForTimeout(550);
+const staleSuccessVisible = await page.locator('.responsive-result').isVisible().catch(() => false);
+invariant(!staleSuccessVisible, 'responsive:stale-session-result-isolated', { staleSuccessVisible });
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveEmpty,
+  dashboardNoTarget,
+);
+await page.keyboard.press('r');
+await page.waitForTimeout(100);
+const noSessionRunDisabled = await page.locator('.responsive-run-action').isDisabled();
+invariant(noSessionRunDisabled, 'responsive:no-session-run-disabled', { noSessionRunDisabled });
 await page.close();
 
 await fs.writeFile(

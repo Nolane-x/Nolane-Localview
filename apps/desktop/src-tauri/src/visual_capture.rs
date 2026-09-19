@@ -16,6 +16,10 @@ use localview_resource_governor::{
     RetainedResourceBudget, RetainedResourceKind, RetainedResourceLedger,
     RetainedResourceViolation,
 };
+use localview_responsive::{
+    build_responsive_contact_sheet, plan_canonical_sweep, ContactSheetPolicy, ResponsiveFrame,
+    ResponsivePresetId, ResponsiveSweepPlan,
+};
 use localview_visual::{
     decode_png_rgba, encode_png_rgba, plan_changed_css_regions, plan_full_page,
     project_full_page_output, stitch_full_page_tile, ChangedRegionPlan, ChangedRegionPolicy,
@@ -37,6 +41,12 @@ const VISUAL_FREEZE_LEASE_MS: u64 = 8_000;
 const FULL_PAGE_VISUAL_FREEZE_LEASE_MS: u64 = 30_000;
 const FULL_PAGE_TRANSACTION_TIMEOUT_MS: u64 = 30_000;
 const FULL_PAGE_CLEANUP_RESERVE_MS: u64 = 2_000;
+const RESPONSIVE_TRANSACTION_TIMEOUT_MS: u64 = 30_000;
+const RESPONSIVE_CLEANUP_RESERVE_MS: u64 = 5_000;
+const RESPONSIVE_RESIZE_TIMEOUT_MS: u64 = 2_000;
+const RESPONSIVE_RESIZE_POLL_MS: u64 = 25;
+const RESPONSIVE_PREVIEW_MIN_WIDTH: f64 = 640.0;
+const RESPONSIVE_PREVIEW_MIN_HEIGHT: f64 = 480.0;
 const MAX_PAUSED_ANIMATIONS: u64 = 2_048;
 const MAX_POSITIONAL_SCAN_ELEMENTS: u64 = 4_096;
 const MAX_VISUAL_MASK_RECTS: usize = 256;
@@ -182,6 +192,68 @@ struct FreezeVisualStateReceipt {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ResponsiveSweepReceipt {
+    pub artifact_id: String,
+    pub evidence_id: String,
+    pub deduplicated: bool,
+    pub route: String,
+    pub contact_sheet_pixel_width: u32,
+    pub contact_sheet_pixel_height: u32,
+    pub viewports: Vec<ResponsiveViewportReceipt>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponsiveViewportReceipt {
+    pub preset: ResponsivePresetId,
+    pub css_width: u32,
+    pub css_height: u32,
+    pub device_scale_factor: f64,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub sheet_x: u32,
+    pub sheet_y: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct ResponsiveVisualEvidenceRequest {
+    artifact_id: String,
+    route: String,
+    revision: Option<String>,
+    captured_at_unix_ms: i64,
+    contact_sheet_pixel_width: u32,
+    contact_sheet_pixel_height: u32,
+    viewports: Vec<ResponsiveViewportEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ResponsiveViewportEvidence {
+    preset: ResponsivePresetId,
+    css_width: u32,
+    css_height: u32,
+    device_scale_factor: f64,
+    pixel_width: u32,
+    pixel_height: u32,
+    sheet_x: u32,
+    sheet_y: u32,
+}
+
+#[derive(Debug)]
+struct ResponsiveCapturedViewport {
+    responsive_frame: ResponsiveFrame,
+    device_scale_factor: f64,
+    route: String,
+    revision: Option<String>,
+    captured_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ResponsivePreviewState {
+    original_physical_width: u32,
+    original_physical_height: u32,
+    canonical_route: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct FullPageCaptureReceipt {
     pub artifact_id: String,
     pub evidence_id: String,
@@ -267,6 +339,496 @@ struct FullPageStitchedFrame {
 struct FullPageTransactionOutput {
     frame: FullPageStitchedFrame,
     plan: FullPagePlan,
+}
+
+#[tauri::command]
+pub async fn capture_responsive_sweep(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, VisualCaptureState>,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    session_id: SessionId,
+    presets: Vec<ResponsivePresetId>,
+) -> Result<ResponsiveSweepReceipt, String> {
+    use workspace_surface::surface_registry::DesktopSurfaceKind;
+
+    let plan = plan_canonical_sweep(&presets)
+        .map_err(|_| "responsive_invalid_presets".to_string())?;
+    let preview_label = workspace_surface::preview_surface_label(session_id);
+    let window = app
+        .get_webview_window(&preview_label)
+        .ok_or_else(|| "responsive_preview_unavailable".to_string())?;
+    let current = registry.current(
+        session_id,
+        DesktopSurfaceKind::PreviewWindow,
+        &preview_label,
+    )
+    .ok_or_else(|| "responsive_preview_owner_mismatch".to_string())?;
+    if current.identity.label != preview_label
+        || current.identity.session_id != session_id
+        || current.identity.owner_instance_id != registry.owner_instance_id()
+        || window.label() != preview_label
+        || !bridge_surface_label_allowed(window.label(), session_id)
+    {
+        return Err("responsive_preview_owner_mismatch".into());
+    }
+    if window.is_maximized().map_err(|_| "responsive_preview_unavailable".to_string())? {
+        return Err("responsive_preview_maximized".into());
+    }
+    if window.is_fullscreen().map_err(|_| "responsive_preview_unavailable".to_string())? {
+        return Err("responsive_preview_fullscreen".into());
+    }
+    let route = window
+        .url()
+        .map_err(|_| "responsive_preview_unavailable".to_string())?;
+    if !workspace_navigation_allowed(&route) {
+        return Err("responsive_preview_unavailable".into());
+    }
+    let canonical_route = canonical_visual_diff_route(route.as_str())
+        .map_err(|_| "responsive_preview_unavailable".to_string())?;
+    let original = window
+        .inner_size()
+        .map_err(|_| "responsive_preview_unavailable".to_string())?;
+    if original.width == 0 || original.height == 0 {
+        return Err("responsive_preview_unavailable".into());
+    }
+    let preview_state = ResponsivePreviewState {
+        original_physical_width: original.width,
+        original_physical_height: original.height,
+        canonical_route: canonical_route.clone(),
+    };
+
+    let capture_gate = session_capture_gate(&state, session_id)
+        .await
+        .map_err(|_| "responsive_preview_unavailable".to_string())?;
+    let _capture_guard = capture_gate.lock().await;
+    let deadline = tokio::time::Instant::now()
+        + Duration::from_millis(RESPONSIVE_TRANSACTION_TIMEOUT_MS);
+    let work_deadline = deadline - Duration::from_millis(RESPONSIVE_CLEANUP_RESERVE_MS);
+
+    window
+        .set_min_size(None::<tauri::LogicalSize<f64>>)
+        .map_err(|_| "responsive_resize_failed".to_string())?;
+
+    let work = tokio::time::timeout_at(work_deadline, async {
+        let mut captured = Vec::with_capacity(plan.presets.len());
+        for preset in plan.presets.iter().copied() {
+            let viewport = preset.viewport();
+            window
+                .set_size(tauri::LogicalSize::new(
+                    f64::from(viewport.width),
+                    f64::from(viewport.height),
+                ))
+                .map_err(|_| "responsive_resize_failed".to_string())?;
+            wait_for_responsive_size_convergence(
+                &window,
+                viewport.width,
+                viewport.height,
+                work_deadline,
+            )
+            .await?;
+
+            let current_route = window
+                .url()
+                .map_err(|_| "responsive_preview_unavailable".to_string())?;
+            let current_route = canonical_visual_diff_route(current_route.as_str())
+                .map_err(|_| "responsive_route_drift".to_string())?;
+            if current_route != canonical_route {
+                return Err("responsive_route_drift".to_string());
+            }
+
+            let scale_factor = window
+                .scale_factor()
+                .map_err(|_| "responsive_preview_unavailable".to_string())?;
+            validate_trusted_scale_factor(scale_factor)
+                .map_err(|_| "responsive_viewport_mismatch".to_string())?;
+            let viewport_meta = ViewportMeta {
+                css_width: viewport.width,
+                css_height: viewport.height,
+                device_scale_factor: scale_factor,
+            };
+
+            let frame = capture_responsive_viewport_after_resize(
+                &app,
+                &window,
+                session_id,
+                preset,
+                viewport_meta,
+                &canonical_route,
+            )
+            .await?;
+
+            let image = decode_png_rgba(&frame.png)
+                .map_err(|_| "responsive_redaction_failed".to_string())?;
+            if image.width != frame.pixel_width || image.height != frame.pixel_height {
+                return Err("responsive_viewport_mismatch".to_string());
+            }
+            captured.push(ResponsiveCapturedViewport {
+                responsive_frame: ResponsiveFrame {
+                    preset,
+                    viewport,
+                    pixel_width: image.width,
+                    pixel_height: image.height,
+                    rgba: image.data,
+                },
+                device_scale_factor: scale_factor,
+                route: canonical_route.clone(),
+                revision: frame.revision,
+                captured_at_unix_ms: frame.captured_at_unix_ms,
+            });
+        }
+        Ok::<Vec<ResponsiveCapturedViewport>, String>(captured)
+    })
+    .await
+    .unwrap_or_else(|_| Err("responsive_transaction_timeout".to_string()));
+
+    let restore = restore_responsive_preview(&window, session_id, &preview_state, deadline).await;
+    let captured = match (work, restore) {
+        (Ok(captured), Ok(())) => captured,
+        (Err(primary), Ok(())) => return Err(primary),
+        (Ok(_), Err(_)) => return Err("responsive_restore_failed".into()),
+        (Err(primary), Err(_)) => return Err(format!("{primary};responsive_restore_failed")),
+    };
+
+    let restored_route = window
+        .url()
+        .map_err(|_| "responsive_restore_failed".to_string())?;
+    let restored_route = canonical_visual_diff_route(restored_route.as_str())
+        .map_err(|_| "responsive_route_drift".to_string())?;
+    if restored_route != preview_state.canonical_route {
+        return Err("responsive_route_drift".into());
+    }
+
+    let responsive_frames = captured
+        .iter()
+        .map(|entry| entry.responsive_frame.clone())
+        .collect::<Vec<_>>();
+    let contact_sheet = build_responsive_contact_sheet(
+        &plan,
+        &responsive_frames,
+        ContactSheetPolicy::default(),
+    )
+    .map_err(|error| match error {
+        localview_responsive::ResponsiveError::FrameMemoryBudgetExceeded
+        | localview_responsive::ResponsiveError::ContactSheetMemoryBudgetExceeded => {
+            "responsive_memory_budget_exceeded".to_string()
+        }
+        _ => "responsive_contact_sheet_failed".to_string(),
+    })?;
+    let image = RgbaImage {
+        width: contact_sheet.geometry.pixel_width,
+        height: contact_sheet.geometry.pixel_height,
+        data: contact_sheet.rgba,
+    };
+    image
+        .validate()
+        .map_err(|_| "responsive_contact_sheet_failed".to_string())?;
+    let png = encode_png_rgba(&image)
+        .map_err(|_| "responsive_contact_sheet_failed".to_string())?;
+
+    if tokio::time::Instant::now() >= deadline {
+        return Err("responsive_transaction_timeout".into());
+    }
+    tokio::time::timeout_at(
+        deadline,
+        persist_responsive_contact_sheet_and_register(
+            &state,
+            session_id,
+            &plan,
+            &captured,
+            &contact_sheet.geometry,
+            png,
+            &preview_state.canonical_route,
+        ),
+    )
+    .await
+    .map_err(|_| "responsive_transaction_timeout".to_string())?
+}
+
+async fn wait_for_responsive_size_convergence(
+    window: &tauri::WebviewWindow,
+    css_width: u32,
+    css_height: u32,
+    deadline: tokio::time::Instant,
+) -> Result<(), String> {
+    let local_deadline = std::cmp::min(
+        deadline,
+        tokio::time::Instant::now() + Duration::from_millis(RESPONSIVE_RESIZE_TIMEOUT_MS),
+    );
+    loop {
+        let scale = window
+            .scale_factor()
+            .map_err(|_| "responsive_resize_failed".to_string())?;
+        validate_trusted_scale_factor(scale)
+            .map_err(|_| "responsive_resize_failed".to_string())?;
+        let size = window
+            .inner_size()
+            .map_err(|_| "responsive_resize_failed".to_string())?;
+        let expected_width = (f64::from(css_width) * scale).round();
+        let expected_height = (f64::from(css_height) * scale).round();
+        if (f64::from(size.width) - expected_width).abs() <= 2.0
+            && (f64::from(size.height) - expected_height).abs() <= 2.0
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= local_deadline {
+            return Err("responsive_resize_timeout".into());
+        }
+        tokio::time::sleep(Duration::from_millis(RESPONSIVE_RESIZE_POLL_MS)).await;
+    }
+}
+
+async fn capture_responsive_viewport_after_resize(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    session_id: SessionId,
+    preset: ResponsivePresetId,
+    viewport: ViewportMeta,
+    expected_route: &str,
+) -> Result<CapturedFrame, String> {
+    wait_for_capture_settle(session_id)
+        .await
+        .map_err(|_| "responsive_settle_failed".to_string())?;
+    let freeze = freeze_visual_state(session_id)
+        .await
+        .map_err(|_| "responsive_freeze_failed".to_string())?;
+    if trusted_css_dimension(freeze.viewport_css_width, "width").ok() != Some(viewport.css_width)
+        || trusted_css_dimension(freeze.viewport_css_height, "height").ok() != Some(viewport.css_height)
+    {
+        let _ = restore_visual_state(session_id, &freeze.token).await;
+        return Err("responsive_viewport_mismatch".into());
+    }
+
+    let native_result = capture_managed_surface_preview_only(
+        app,
+        window,
+        session_id,
+        viewport.clone(),
+        None,
+    )
+    .await;
+    let restore_result = restore_visual_state(session_id, &freeze.token).await;
+    let frame = match (native_result, restore_result) {
+        (Ok(frame), Ok(())) => frame,
+        (Err(_), Ok(())) => return Err("responsive_native_capture_failed".into()),
+        (Ok(_), Err(_)) | (Err(_), Err(_)) => return Err("responsive_restore_failed".into()),
+    };
+    let frame = redact_private_pixels(frame, &freeze)
+        .map_err(|_| "responsive_redaction_failed".to_string())?;
+
+    let canonical_route = canonical_visual_diff_route(&frame.route)
+        .map_err(|_| "responsive_route_drift".to_string())?;
+    if canonical_route != expected_route
+        || frame.viewport.css_width != preset.viewport().width
+        || frame.viewport.css_height != preset.viewport().height
+        || (frame.viewport.device_scale_factor - viewport.device_scale_factor).abs() > f64::EPSILON
+    {
+        return Err("responsive_viewport_mismatch".into());
+    }
+    Ok(frame)
+}
+
+async fn capture_managed_surface_preview_only(
+    _app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    session_id: SessionId,
+    viewport: ViewportMeta,
+    revision: Option<String>,
+) -> Result<CapturedFrame, String> {
+    if !bridge_surface_label_allowed(window.label(), session_id) {
+        return Err("responsive_preview_owner_mismatch".into());
+    }
+    let route_url = window
+        .url()
+        .map_err(|_| "responsive_preview_unavailable".to_string())?;
+    if !workspace_navigation_allowed(&route_url) {
+        return Err("responsive_preview_unavailable".into());
+    }
+    let request = CaptureRequest {
+        target: CaptureTarget::Viewport,
+        viewport,
+        route: route_url.to_string(),
+        revision,
+    };
+    let (tx, rx) = oneshot::channel();
+    window
+        .with_webview(move |platform| {
+            capture_webview(platform, request, move |result| {
+                let _ = tx.send(result);
+            });
+        })
+        .map_err(|_| "responsive_native_capture_failed".to_string())?;
+    await_capture(rx)
+        .await
+        .map_err(|_| "responsive_native_capture_failed".to_string())
+}
+
+async fn restore_responsive_preview(
+    window: &tauri::WebviewWindow,
+    session_id: SessionId,
+    preview: &ResponsivePreviewState,
+    deadline: tokio::time::Instant,
+) -> Result<(), String> {
+    window
+        .set_size(tauri::PhysicalSize::new(
+            preview.original_physical_width,
+            preview.original_physical_height,
+        ))
+        .map_err(|_| "responsive_restore_failed".to_string())?;
+    window
+        .set_min_size(Some(tauri::LogicalSize::new(
+            RESPONSIVE_PREVIEW_MIN_WIDTH,
+            RESPONSIVE_PREVIEW_MIN_HEIGHT,
+        )))
+        .map_err(|_| "responsive_restore_failed".to_string())?;
+
+    let local_deadline = std::cmp::min(
+        deadline,
+        tokio::time::Instant::now() + Duration::from_millis(RESPONSIVE_RESIZE_TIMEOUT_MS),
+    );
+    loop {
+        let size = window
+            .inner_size()
+            .map_err(|_| "responsive_restore_failed".to_string())?;
+        if size.width == preview.original_physical_width
+            && size.height == preview.original_physical_height
+        {
+            break;
+        }
+        if tokio::time::Instant::now() >= local_deadline {
+            return Err("responsive_restore_failed".into());
+        }
+        tokio::time::sleep(Duration::from_millis(RESPONSIVE_RESIZE_POLL_MS)).await;
+    }
+
+    tokio::time::timeout_at(deadline, wait_for_capture_settle(session_id))
+        .await
+        .map_err(|_| "responsive_restore_failed".to_string())?
+        .map_err(|_| "responsive_restore_failed".to_string())
+}
+
+async fn persist_responsive_contact_sheet_and_register(
+    state: &VisualCaptureState,
+    session_id: SessionId,
+    plan: &ResponsiveSweepPlan,
+    captured: &[ResponsiveCapturedViewport],
+    geometry: &localview_responsive::ContactSheetGeometry,
+    png: Vec<u8>,
+    route: &str,
+) -> Result<ResponsiveSweepReceipt, String> {
+    let artifact_id = {
+        let mut artifacts = state.artifacts.lock().await;
+        if artifacts.is_none() {
+            let root = state_dir()?.join("artifacts").join("visual");
+            *artifacts = Some(
+                ArtifactStore::open(root, VISUAL_ARTIFACT_BUDGET_BYTES)
+                    .await
+                    .map_err(|_| "responsive_contact_sheet_failed".to_string())?,
+            );
+        }
+        let artifacts = artifacts
+            .as_mut()
+            .expect("visual artifact store initialized above");
+        state
+            .retained_resources
+            .synchronize(RetainedResourceKind::CaptureStorage, artifacts.used_bytes())
+            .map_err(|_| "responsive_memory_budget_exceeded".to_string())?;
+        let projected = artifacts
+            .projected_used_bytes_after_put(&png)
+            .map_err(|_| "responsive_memory_budget_exceeded".to_string())?;
+        state
+            .retained_resources
+            .admit_projected(RetainedResourceKind::CaptureStorage, projected)
+            .map_err(|_| "responsive_memory_budget_exceeded".to_string())?;
+        let put = artifacts.put("visual/png", &png).await;
+        let actual = artifacts.used_bytes();
+        let reconcile = state
+            .retained_resources
+            .synchronize(RetainedResourceKind::CaptureStorage, actual);
+        let artifact = put.map_err(|_| "responsive_contact_sheet_failed".to_string())?;
+        reconcile.map_err(|_| "responsive_memory_budget_exceeded".to_string())?;
+        artifact.id
+    };
+    drop(png);
+
+    if captured.len() != plan.presets.len() || captured.len() != geometry.placements.len() {
+        return Err("responsive_contact_sheet_failed".into());
+    }
+    let revision = captured.first().and_then(|entry| entry.revision.clone());
+    if captured.iter().any(|entry| entry.revision != revision || entry.route != route) {
+        return Err("responsive_route_drift".into());
+    }
+    let captured_at_unix_ms = captured
+        .iter()
+        .map(|entry| entry.captured_at_unix_ms)
+        .max()
+        .ok_or_else(|| "responsive_contact_sheet_failed".to_string())?;
+    let captured_at_unix_ms = i64::try_from(captured_at_unix_ms)
+        .map_err(|_| "responsive_contact_sheet_failed".to_string())?;
+
+    let viewports = captured
+        .iter()
+        .zip(geometry.placements.iter())
+        .map(|(entry, placement)| ResponsiveViewportEvidence {
+            preset: entry.responsive_frame.preset,
+            css_width: entry.responsive_frame.viewport.width,
+            css_height: entry.responsive_frame.viewport.height,
+            device_scale_factor: entry.device_scale_factor,
+            pixel_width: entry.responsive_frame.pixel_width,
+            pixel_height: entry.responsive_frame.pixel_height,
+            sheet_x: placement.x,
+            sheet_y: placement.y,
+        })
+        .collect::<Vec<_>>();
+    let metadata = ResponsiveVisualEvidenceRequest {
+        artifact_id: artifact_id.clone(),
+        route: route.to_owned(),
+        revision,
+        captured_at_unix_ms,
+        contact_sheet_pixel_width: geometry.pixel_width,
+        contact_sheet_pixel_height: geometry.pixel_height,
+        viewports: viewports.clone(),
+    };
+
+    let token = read_token()
+        .await
+        .map_err(|_| "responsive_contact_sheet_failed".to_string())?;
+    let evidence = control_client()
+        .map_err(|_| "responsive_contact_sheet_failed".to_string())?
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/evidence/visual-responsive"
+        ))
+        .bearer_auth(token)
+        .json(&metadata)
+        .send()
+        .await
+        .map_err(|_| "responsive_contact_sheet_failed".to_string())?
+        .error_for_status()
+        .map_err(|_| "responsive_contact_sheet_failed".to_string())?
+        .json::<VisualEvidenceResponse>()
+        .await
+        .map_err(|_| "responsive_contact_sheet_failed".to_string())?;
+
+    Ok(ResponsiveSweepReceipt {
+        artifact_id,
+        evidence_id: evidence.evidence_id,
+        deduplicated: evidence.deduplicated,
+        route: route.to_owned(),
+        contact_sheet_pixel_width: geometry.pixel_width,
+        contact_sheet_pixel_height: geometry.pixel_height,
+        viewports: viewports
+            .into_iter()
+            .map(|viewport| ResponsiveViewportReceipt {
+                preset: viewport.preset,
+                css_width: viewport.css_width,
+                css_height: viewport.css_height,
+                device_scale_factor: viewport.device_scale_factor,
+                pixel_width: viewport.pixel_width,
+                pixel_height: viewport.pixel_height,
+                sheet_x: viewport.sheet_x,
+                sheet_y: viewport.sheet_y,
+            })
+            .collect(),
+    })
 }
 
 #[tauri::command]
