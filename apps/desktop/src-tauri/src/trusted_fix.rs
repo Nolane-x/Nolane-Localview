@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
-use crate::{trusted_ai, TrustedSourceTarget};
+use crate::{trusted_ai, trusted_verify, TrustedSourceTarget};
 
 pub const MAX_FIX_INSTRUCTION_BYTES: usize = 8 * 1024;
 pub const MAX_FIX_FILE_BYTES: usize = 2 * 1024 * 1024;
@@ -127,6 +127,7 @@ pub struct FixProposalRecord {
     pub source_line: u32,
     pub preimage: Vec<u8>,
     pub postimage: Vec<u8>,
+    pub instruction: String,
     pub changed_start_line: u32,
     pub changed_end_line: u32,
     pub summary: String,
@@ -159,6 +160,8 @@ pub struct HumanApplyFixReceipt {
     pub applied: bool,
     pub changed_start_line: u32,
     pub changed_end_line: u32,
+    pub verification_id: String,
+    pub verification_scope: trusted_verify::VerificationScope,
     pub applied_at_unix_ms: u64,
 }
 
@@ -721,6 +724,7 @@ pub fn new_proposal_record(
     preimage: Vec<u8>,
     postimage: Vec<u8>,
     edit: &FixProviderEdit,
+    instruction: String,
     summary: String,
     diff: String,
     provider_label: String,
@@ -743,6 +747,7 @@ pub fn new_proposal_record(
         source_line: target.line,
         preimage,
         postimage,
+        instruction,
         changed_start_line: edit.start_line,
         changed_end_line: edit.end_line,
         summary,
@@ -1293,6 +1298,7 @@ mod trusted_fix_tests {
             b"one\n".to_vec(),
             b"two\n".to_vec(),
             &edit,
+            "make it clearer".into(),
             "change".into(),
             "diff".into(),
             "test".into(),
@@ -1321,6 +1327,7 @@ mod trusted_fix_tests {
             b"one\n".to_vec(),
             b"two\n".to_vec(),
             &edit,
+            "make it clearer".into(),
             "change".into(),
             "diff".into(),
             "test".into(),
@@ -1374,6 +1381,7 @@ mod trusted_fix_tests {
             b"one\n".to_vec(),
             b"two\n".to_vec(),
             &edit,
+            "make it clearer".into(),
             "change".into(),
             "diff".into(),
             "test".into(),
@@ -1391,6 +1399,7 @@ mod trusted_fix_tests {
             b"one\n".to_vec(),
             b"two\n".to_vec(),
             &edit,
+            "make it clearer".into(),
             "change".into(),
             "diff".into(),
             "test".into(),

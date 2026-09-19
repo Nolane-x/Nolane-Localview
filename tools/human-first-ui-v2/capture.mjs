@@ -242,6 +242,7 @@ function init(
   sourceOpenFailure = null,
   aiOptions = {},
   fixOptions = {},
+  verifyOptions = {},
 ) {
   const aiProviderAvailable = aiOptions.providerAvailable ?? false;
   const aiProviderLabel = aiOptions.providerLabel ?? 'Audit AI Bridge';
@@ -257,7 +258,17 @@ function init(
   const fixDisplayFile = fixOptions.displayFile ?? 'src/components/DeployButton.tsx';
   const fixSummary = fixOptions.summary ?? 'Make the Deploy button state clearer.';
   const fixDiff = fixOptions.diff ?? '--- a/src/components/DeployButton.tsx\n+++ b/src/components/DeployButton.tsx\n@@ -42,1 +42,1 @@\n-<button>Deploy</button>\n+<button aria-live="polite">Deploy</button>\n';
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff }) => {
+  const fixVerificationScope = fixOptions.verificationScope ?? 'semantic_visual';
+  const verifyDelayMs = verifyOptions.delayMs ?? 0;
+  const verifyFailure = verifyOptions.failure ?? null;
+  const verifyStatus = verifyOptions.status ?? 'change_observed';
+  const verifySemanticChanges = verifyOptions.semanticChanges ?? ['attributes_changed'];
+  const verifyRegressionSignals = verifyOptions.regressionSignals ?? [];
+  const verifyViewportChangedRatio = verifyOptions.viewportChangedRatio ?? 0.04;
+  const verifyTargetChangedRatio = verifyOptions.targetChangedRatio ?? 0.18;
+  const verifyProviderLabel = verifyOptions.providerLabel ?? null;
+  const verifyAdvisorySummary = verifyOptions.advisorySummary ?? null;
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -292,6 +303,8 @@ function init(
     window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__ = {};
     window.__LOCALVIEW_AUDIT_FIX_DISCARDS__ = [];
     window.__LOCALVIEW_AUDIT_FIX_WRITES__ = 0;
+    window.__LOCALVIEW_AUDIT_VERIFY_REQUESTS__ = [];
+    window.__LOCALVIEW_AUDIT_ROLLBACKS__ = 0;
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
@@ -401,6 +414,8 @@ function init(
               applied: true,
               changedStartLine: 42,
               changedEndLine: 42,
+              verificationId: 'verify-' + args.proposalId,
+              verificationScope: fixVerificationScope,
               appliedAtUnixMs: Date.now(),
             };
           }
@@ -408,6 +423,31 @@ function init(
             window.__LOCALVIEW_AUDIT_FIX_DISCARDS__.push(args.proposalId);
             delete window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[args.proposalId];
             return null;
+          }
+          if (cmd === 'verify_fix_change') {
+            window.__LOCALVIEW_AUDIT_VERIFY_REQUESTS__.push(structuredClone(args ?? {}));
+            if (verifyDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, verifyDelayMs));
+            }
+            if (verifyFailure) {
+              throw new Error(verifyFailure);
+            }
+            return {
+              verificationId: args.verificationId,
+              reference: '@e1a2b3c4',
+              displayFile: fixDisplayFile,
+              scope: fixVerificationScope,
+              status: verifyStatus,
+              semanticChanges: structuredClone(verifySemanticChanges),
+              regressionSignals: structuredClone(verifyRegressionSignals),
+              viewportChangedRatio: fixVerificationScope === 'semantic_visual' ? verifyViewportChangedRatio : null,
+              targetChangedRatio: fixVerificationScope === 'semantic_visual' ? verifyTargetChangedRatio : null,
+              visualDiffEvidenceId: fixVerificationScope === 'semantic_visual' ? 'evidence-verify-audit' : null,
+              snapshotVersion: 23,
+              providerLabel: verifyProviderLabel,
+              advisorySummary: verifyAdvisorySummary,
+              verifiedAtUnixMs: Date.now(),
+            };
           }
           if (cmd === 'open_source_for_selection') {
             if (sourceOpenDelayMs > 0) {
@@ -469,7 +509,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff, fixVerificationScope, verifyDelayMs, verifyFailure, verifyStatus, verifySemanticChanges, verifyRegressionSignals, verifyViewportChangedRatio, verifyTargetChangedRatio, verifyProviderLabel, verifyAdvisorySummary });
 }
 
 async function pageFor(
@@ -487,13 +527,14 @@ async function pageFor(
   sourceOpenDelayMs = 0,
   sourceOpenFailure = null,
   aiOptions = {},
-  fixOptions = {}
+  fixOptions = {},
+  verifyOptions = {}
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions, verifyOptions);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -507,6 +548,7 @@ async function fixPageFor(
   dashboardState = dashboard,
   fixOptions = {},
   aiOptions = { providerAvailable: true, providerLabel: 'Audit AI Bridge' },
+  verifyOptions = {},
 ) {
   return pageFor(
     browser,
@@ -524,7 +566,41 @@ async function fixPageFor(
     null,
     aiOptions,
     { providerAvailable: true, providerLabel: 'Audit Fix Bridge', ...fixOptions },
+    verifyOptions,
   );
+}
+
+async function appliedFixPageFor(
+  browser,
+  viewport = { width: 1440, height: 900 },
+  locale = 'en',
+  liveState = liveMeasure,
+  dashboardState = dashboard,
+  fixOptions = {},
+  verifyOptions = {},
+) {
+  const page = await fixPageFor(
+    browser,
+    viewport,
+    locale,
+    liveState,
+    dashboardState,
+    fixOptions,
+    { providerAvailable: true, providerLabel: 'Audit AI Bridge' },
+    verifyOptions,
+  );
+  await page.keyboard.press('i');
+  await page.waitForTimeout(90);
+  await page.locator('.fix-action').click();
+  await page.waitForTimeout(90);
+  await page.locator('.fix-generate-action').click();
+  await page.waitForTimeout(110);
+  await page.locator('.fix-apply-action').click();
+  await page.waitForTimeout((fixOptions.applyDelayMs ?? 0) + 130);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('a');
+  await page.waitForTimeout(100);
+  return page;
 }
 
 await fs.mkdir('human-first-ui-v2-render', { recursive: true });
@@ -3015,6 +3091,385 @@ invariant(commandPrepareCalls.length === 0, 'fix:command-no-auto-proposal', { co
 const commandWrites = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
 invariant(commandWrites === 0, 'fix:command-shared-review-flow', { commandWrites });
 await shot(page, '115-fix-command-review-flow.png', 'fix-command-review-flow');
+await page.close();
+
+async function runVerifyAndWait(page, state) {
+  const button = page.locator('.verify-ready .fix-start-action');
+  invariant(await button.isVisible(), `${state}:verify-button-visible`);
+  await button.click();
+  await page.waitForTimeout(140);
+}
+
+page = await appliedFixPageFor(browser);
+await assertVisible(page, '.verify-ready', 'verify-ready');
+const verifyReadyText = await page.locator('.verify-review').innerText();
+invariant(verifyReadyText.includes('Verify change'), 'verify:ready-humanized', { verifyReadyText });
+await shot(page, '116-verify-ready.png', 'verify-ready');
+await page.close();
+
+page = await appliedFixPageFor(browser);
+const semanticVisualText = await page.locator('.verify-review').innerText();
+invariant(semanticVisualText.includes('Semantic + visual'), 'verify:semantic-visual-scope', { semanticVisualText });
+await shot(page, '117-verify-semantic-visual-scope.png', 'verify-semantic-visual-scope');
+await page.close();
+
+page = await appliedFixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { verificationScope: 'semantic_only' },
+  {}
+);
+const semanticOnlyText = await page.locator('.verify-review').innerText();
+invariant(semanticOnlyText.includes('Semantic-only verification'), 'verify:semantic-only-scope', { semanticOnlyText });
+await shot(page, '118-verify-semantic-only-scope.png', 'verify-semantic-only-scope');
+await page.close();
+
+page = await appliedFixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  {},
+  { delayMs: 700 }
+);
+const verifyBusyButton = page.locator('.verify-ready .fix-start-action');
+await verifyBusyButton.click();
+await page.waitForTimeout(80);
+await assertVisible(page, '.verify-review .fix-status.busy', 'verify-in-flight');
+await shot(page, '119-verify-in-flight.png', 'verify-in-flight');
+await page.waitForTimeout(700);
+await page.close();
+
+page = await appliedFixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  {},
+  { delayMs: 700 }
+);
+const verifyDuplicateButton = page.locator('.verify-ready .fix-start-action');
+await verifyDuplicateButton.evaluate((button) => {
+  button.click();
+  button.click();
+  button.click();
+});
+await page.waitForTimeout(90);
+const verifyDuplicateCalls = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'verify_fix_change')
+);
+invariant(verifyDuplicateCalls.length === 1, 'verify:duplicate-suppressed', { verifyDuplicateCalls });
+await shot(page, '120-verify-duplicate-suppressed.png', 'verify-duplicate-suppressed');
+await page.close();
+
+for (const verifyCase of [
+  {
+    file: '121-verify-change-observed.png',
+    state: 'verify-change-observed',
+    options: { status: 'change_observed', semanticChanges: ['attributes_changed'], targetChangedRatio: 0.2 },
+    expected: 'Observable change found',
+    marker: 'verify:change-observed',
+  },
+  {
+    file: '122-verify-no-observable-change.png',
+    state: 'verify-no-observable-change',
+    options: { status: 'no_observable_change', semanticChanges: [], viewportChangedRatio: 0, targetChangedRatio: 0 },
+    expected: 'No observable change',
+    marker: 'verify:no-observable-change',
+  },
+  {
+    file: '123-verify-regression-signal.png',
+    state: 'verify-regression-signal',
+    options: { status: 'regression_signal', semanticChanges: [], regressionSignals: ['new_console_error'] },
+    expected: 'Regression signal detected',
+    marker: 'verify:regression-signal',
+  },
+  {
+    file: '124-verify-inconclusive.png',
+    state: 'verify-inconclusive',
+    options: { status: 'inconclusive', semanticChanges: [], viewportChangedRatio: 0.2, targetChangedRatio: 0 },
+    expected: 'Verification inconclusive',
+    marker: 'verify:inconclusive',
+  },
+]) {
+  page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'en', liveMeasure, dashboard, {}, verifyCase.options);
+  await runVerifyAndWait(page, verifyCase.state);
+  await assertVisible(page, '.verify-result', verifyCase.state);
+  const resultText = await page.locator('.verify-result').innerText();
+  invariant(resultText.includes(verifyCase.expected), verifyCase.marker, { resultText });
+  await shot(page, verifyCase.file, verifyCase.state);
+  await page.close();
+}
+
+for (const failureCase of [
+  {
+    file: '125-verify-expired.png',
+    state: 'verify-expired',
+    failure: 'trusted Verify verification expired',
+    expected: 'Verification expired',
+  },
+  {
+    file: '126-verify-source-changed.png',
+    state: 'verify-source-changed',
+    failure: 'trusted Verify source changed after Apply',
+    expected: 'Source changed after Apply',
+  },
+  {
+    file: '127-verify-route-changed.png',
+    state: 'verify-route-changed',
+    failure: 'trusted Verify route changed since Apply',
+    expected: 'Route changed after Apply',
+  },
+  {
+    file: '128-verify-target-unavailable.png',
+    state: 'verify-target-unavailable',
+    failure: 'trusted Verify target is unavailable',
+    expected: 'Selected target is unavailable',
+  },
+]) {
+  page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'en', liveMeasure, dashboard, {}, { failure: failureCase.failure });
+  await runVerifyAndWait(page, failureCase.state);
+  await assertVisible(page, '.verify-review .fix-status.failure', failureCase.state);
+  const failureText = await page.locator('.verify-review .fix-status.failure').innerText();
+  invariant(failureText.includes(failureCase.expected), `${failureCase.state}:humanized`, { failureText });
+  await shot(page, failureCase.file, failureCase.state);
+  await page.close();
+}
+
+page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'en', liveMeasure, dashboard, {}, {
+  status: 'regression_signal',
+  regressionSignals: ['new_console_error'],
+});
+await runVerifyAndWait(page, 'verify-console-regression');
+const consoleRegression = await page.locator('.verify-result').innerText();
+invariant(consoleRegression.includes('new_console_error'), 'verify:console-regression-fact', { consoleRegression });
+await shot(page, '129-verify-console-regression.png', 'verify-console-regression');
+await page.close();
+
+page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'en', liveMeasure, dashboard, {}, {
+  status: 'regression_signal',
+  regressionSignals: ['new_network_failure'],
+});
+await runVerifyAndWait(page, 'verify-network-regression');
+const networkRegression = await page.locator('.verify-result').innerText();
+invariant(networkRegression.includes('new_network_failure'), 'verify:network-regression-fact', { networkRegression });
+await shot(page, '130-verify-network-regression.png', 'verify-network-regression');
+await page.close();
+
+page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'en', liveMeasure, dashboard, {}, {
+  status: 'change_observed',
+  providerLabel: 'Audit AI Bridge',
+  advisorySummary: 'The objective facts are consistent with the requested UI change.',
+});
+await runVerifyAndWait(page, 'verify-provider-advisory');
+const providerAdvisoryText = await page.locator('.verify-result').innerText();
+invariant(
+  providerAdvisoryText.includes('AI assessment (advisory)')
+    && providerAdvisoryText.includes('objective facts are consistent'),
+  'verify:provider-advisory-separate',
+  { providerAdvisoryText }
+);
+await shot(page, '131-verify-provider-advisory.png', 'verify-provider-advisory');
+await page.close();
+
+page = await appliedFixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  {},
+  { status: 'change_observed', providerLabel: null, advisorySummary: null }
+);
+await runVerifyAndWait(page, 'verify-provider-unavailable-deterministic');
+await assertVisible(page, '.verify-result', 'verify-provider-unavailable-deterministic');
+await shot(page, '132-verify-provider-unavailable-deterministic.png', 'verify-provider-unavailable-deterministic');
+await page.close();
+
+page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'en', liveMeasure, dashboard, {}, {
+  failure: 'trusted Verify provider assessment failed: RAW_VERIFY_SECRET',
+});
+await runVerifyAndWait(page, 'verify-provider-error-hidden');
+const verifyProviderFailureText = await page.locator('.verify-review .fix-status.failure').innerText();
+invariant(!verifyProviderFailureText.includes('RAW_VERIFY_SECRET'), 'verify:no-raw-error', { verifyProviderFailureText });
+await shot(page, '133-verify-provider-error-hidden.png', 'verify-provider-error-hidden');
+await page.close();
+
+page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'en', liveMeasure, dashboard, {}, { delayMs: 1000 });
+await page.locator('.verify-ready .fix-start-action').click();
+await page.waitForTimeout(80);
+await page.evaluate((nextLive) => {
+  window.__LOCALVIEW_AUDIT_LIVE_STATE__ = structuredClone(nextLive);
+}, liveMeasureB);
+await page.waitForTimeout(760);
+await page.waitForFunction(
+  () => document.querySelector('.ai-selection-summary strong')?.textContent?.includes('@e5d6e7f8'),
+  null,
+  { timeout: 1800 }
+);
+await page.waitForTimeout(450);
+const staleVerifySelection = await page.locator('.panel-ai').innerText();
+invariant(
+  staleVerifySelection.includes('@e5d6e7f8') && !staleVerifySelection.includes('Observable change found'),
+  'verify:stale-selection-isolated',
+  { staleVerifySelection }
+);
+await shot(page, '134-verify-stale-selection.png', 'verify-stale-selection');
+await page.close();
+
+page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'en', liveMeasure, dashboard, {}, { delayMs: 1800 });
+await page.locator('.verify-ready .fix-start-action').click();
+await page.waitForTimeout(80);
+await page.evaluate((nextDashboard) => {
+  window.__LOCALVIEW_AUDIT_DASHBOARD_STATE__ = structuredClone(nextDashboard);
+}, dashboardSessionB);
+await page.waitForTimeout(1550);
+await page.waitForFunction(
+  () => document.querySelector('.ai-selection-summary small')?.textContent?.includes('Nolane Studio B'),
+  null,
+  { timeout: 2200 }
+);
+await page.waitForTimeout(450);
+const staleVerifySession = await page.locator('.panel-ai').innerText();
+invariant(
+  staleVerifySession.includes('Nolane Studio B') && !staleVerifySession.includes('Observable change found'),
+  'verify:stale-session-isolated',
+  { staleVerifySession }
+);
+await shot(page, '135-verify-stale-session.png', 'verify-stale-session');
+await page.close();
+
+page = await appliedFixPageFor(browser, { width: 390, height: 844 });
+await runVerifyAndWait(page, 'verify-narrow-result');
+await assertVisible(page, '.verify-result', 'verify-narrow-result');
+await assertNoHorizontalOverflow(page, 'verify-narrow-result');
+await assertPrimaryControlsInViewport(page, 'verify-narrow-result');
+await shot(page, '136-verify-narrow-result.png', 'verify-narrow-result');
+await page.close();
+
+page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'vi');
+const viVerifyReadyText = await page.locator('.verify-review').innerText();
+invariant(viVerifyReadyText.includes('Xác minh thay đổi'), 'verify:vi-ready-localized', { viVerifyReadyText });
+await shot(page, '137-vi-verify-ready.png', 'vi-verify-ready');
+await page.close();
+
+page = await appliedFixPageFor(browser, { width: 1440, height: 900 }, 'vi');
+await runVerifyAndWait(page, 'vi-verify-change-observed');
+const viVerifyResult = await page.locator('.verify-result').innerText();
+invariant(viVerifyResult.includes('Đã quan sát thấy thay đổi'), 'verify:vi-change-observed-localized', { viVerifyResult });
+await shot(page, '138-vi-verify-change-observed.png', 'vi-verify-change-observed');
+await page.close();
+
+page = await appliedFixPageFor(browser, { width: 390, height: 844 }, 'en', liveMeasure, dashboard, {}, {
+  failure: 'trusted Verify settle failed',
+});
+await runVerifyAndWait(page, 'verify-failure-isolation');
+await assertVisible(page, '.verify-review .fix-status.failure', 'verify-failure-isolation');
+const verifyRetry = page.locator('.verify-retry-action');
+invariant(await verifyRetry.isVisible(), 'verify:retryable-failure-action-visible');
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(100);
+const verifyRetryCommand = page.getByRole('button', { name: /Verify change/ });
+invariant(!(await verifyRetryCommand.isDisabled()), 'verify:command-retry-enabled');
+await verifyRetryCommand.click();
+await page.waitForTimeout(150);
+await assertVisible(page, '.verify-review .fix-status.failure', 'verify-retryable-failure-second-result');
+const verifyRetryCalls = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'verify_fix_change')
+);
+invariant(
+  verifyRetryCalls.length === 2
+    && verifyRetryCalls.every((entry) => Object.keys(entry.args ?? {}).length === 1 && typeof entry.args?.verificationId === 'string')
+    && verifyRetryCalls[0]?.args?.verificationId === verifyRetryCalls[1]?.args?.verificationId,
+  'verify:retryable-failure-retry',
+  { verifyRetryCalls }
+);
+await page.keyboard.press('Escape');
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.measure-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.measure-status.success', 'verify-failure-isolation-measure');
+await page.locator('.capture-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.capture-status.success', 'verify-failure-isolation-capture');
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.success', 'verify-failure-isolation-source');
+await shot(page, '139-verify-failure-isolation.png', 'verify-failure-isolation');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(120);
+const verifyCommandUnavailable = page.getByRole('button', { name: /Verify change/ });
+invariant(await verifyCommandUnavailable.isDisabled(), 'verify:command-unavailable-disabled');
+await shot(page, '140-verify-command-unavailable.png', 'verify-command-unavailable');
+await page.close();
+
+page = await appliedFixPageFor(browser);
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(120);
+const verifyCommandReady = page.getByRole('button', { name: /Verify change/ });
+invariant(!(await verifyCommandReady.isDisabled()), 'verify:command-ready-enabled');
+await verifyCommandReady.click();
+await page.waitForTimeout(150);
+const verifyCommandCalls = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'verify_fix_change')
+);
+invariant(verifyCommandCalls.length === 1, 'verify:command-shared-request', { verifyCommandCalls });
+await shot(page, '141-verify-command-shared-request.png', 'verify-command-shared-request');
+await page.close();
+
+page = await appliedFixPageFor(browser);
+await runVerifyAndWait(page, 'verify-request-id-only');
+const verifyRequests = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'verify_fix_change')
+);
+const verifyArgs = verifyRequests[0]?.args ?? {};
+invariant(
+  typeof verifyArgs.verificationId === 'string' && Object.keys(verifyArgs).length === 1,
+  'verify:request-id-only',
+  { verifyArgs }
+);
+await shot(page, '142-verify-request-id-only.png', 'verify-request-id-only');
+
+const forbiddenVerifyPath = ['path','file','root','projectRoot'].filter((field) => field in verifyArgs);
+invariant(forbiddenVerifyPath.length === 0, 'verify:no-caller-path-authority', { verifyArgs });
+const forbiddenVerifyReference = ['reference','sessionId','route'].filter((field) => field in verifyArgs);
+invariant(forbiddenVerifyReference.length === 0, 'verify:no-caller-reference-authority', { verifyArgs });
+const forbiddenVerifyViewport = ['viewport','rect','x','y','width','height'].filter((field) => field in verifyArgs);
+invariant(forbiddenVerifyViewport.length === 0, 'verify:no-caller-viewport-authority', { verifyArgs });
+const forbiddenVerifyEvidence = ['evidenceId','artifactId','baseline','snapshotVersion'].filter((field) => field in verifyArgs);
+invariant(forbiddenVerifyEvidence.length === 0, 'verify:no-caller-evidence-authority', { verifyArgs });
+await shot(page, '143-verify-no-caller-authority.png', 'verify-no-caller-authority');
+await page.close();
+
+page = await appliedFixPageFor(browser);
+await runVerifyAndWait(page, 'verify-no-auto-rollback');
+const rollbackInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => /rollback/i.test(entry.cmd))
+);
+const rollbackCount = await page.evaluate(() => window.__LOCALVIEW_AUDIT_ROLLBACKS__);
+invariant(rollbackInvokes.length === 0 && rollbackCount === 0, 'verify:no-auto-rollback', { rollbackInvokes, rollbackCount });
+await shot(page, '144-verify-no-auto-rollback.png', 'verify-no-auto-rollback');
+await page.close();
+
+page = await appliedFixPageFor(browser);
+await runVerifyAndWait(page, 'fix-after-verify');
+const fixAgain = page.locator('.fix-again-action');
+invariant(await fixAgain.isVisible(), 'verify:fix-after-verify-available');
+await fixAgain.click();
+await page.waitForTimeout(100);
+await assertVisible(page, '.fix-disclosure', 'fix-after-verify');
+const writesBeforeSecondFix = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
+invariant(writesBeforeSecondFix === 1, 'verify:fix-after-verify-no-hidden-write', { writesBeforeSecondFix });
+await shot(page, '145-fix-after-verify.png', 'fix-after-verify');
 await page.close();
 
 await fs.writeFile(

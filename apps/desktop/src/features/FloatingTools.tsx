@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { COMMAND_IDS, type CommandId } from '../commands';
-import type { AiFixCapability, AiProviderCapability } from '../api';
+import type { AiFixCapability, AiProviderCapability, VerifyScope, VerifyStatus } from '../api';
 import type { DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
@@ -138,6 +138,54 @@ export type HumanFixState =
         | 'failed';
     };
 
+export type HumanVerifyState =
+  | { status: 'idle' }
+  | {
+      status: 'ready';
+      verificationId: string;
+      reference: string;
+      displayFile: string;
+      scope: VerifyScope;
+    }
+  | {
+      status: 'verifying';
+      verificationId: string;
+      reference: string;
+      displayFile: string;
+      scope: VerifyScope;
+    }
+  | {
+      status: 'success';
+      verificationId: string;
+      reference: string;
+      displayFile: string;
+      scope: VerifyScope;
+      result: VerifyStatus;
+      semanticChanges: string[];
+      regressionSignals: string[];
+      viewportChangedRatio?: number | null;
+      targetChangedRatio?: number | null;
+      providerLabel?: string | null;
+      advisorySummary?: string | null;
+    }
+  | {
+      status: 'failure';
+      verificationId?: string;
+      reference?: string;
+      displayFile?: string;
+      scope?: VerifyScope;
+      reason: 'expired' | 'source_changed' | 'route_changed' | 'target_unavailable' | 'settle_failed' | 'failed';
+    };
+
+function verifyCanRetry(state: HumanVerifyState): boolean {
+  return state.status === 'failure'
+    && (state.reason === 'settle_failed' || state.reason === 'failed')
+    && !!state.verificationId
+    && !!state.reference
+    && !!state.displayFile
+    && !!state.scope;
+}
+
 export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { messageKey: MessageKey; shortcut: string }> = {
   inspect: { messageKey: 'tool.inspect', shortcut: 'I' },
   responsive: { messageKey: 'tool.responsive', shortcut: 'R' },
@@ -172,6 +220,8 @@ interface FloatingPanelProps {
   onRefreshAiProvider: () => void;
   fixCapability: AiFixCapability;
   fixState: HumanFixState;
+  verifyState: HumanVerifyState;
+  onVerifyChange: () => void;
   onBeginFix: () => void;
   onPrepareFix: (instruction: string) => void;
   onApplyFix: () => void;
@@ -206,6 +256,8 @@ export function FloatingPanel({
   onRefreshAiProvider,
   fixCapability,
   fixState,
+  verifyState,
+  onVerifyChange,
   onBeginFix,
   onPrepareFix,
   onApplyFix,
@@ -239,6 +291,8 @@ export function FloatingPanel({
             onAskAi={onAskAi}
             fixCapability={fixCapability}
             fixState={fixState}
+            verifyState={verifyState}
+            onVerifyChange={onVerifyChange}
             onBeginFix={onBeginFix}
           />
         )}
@@ -265,6 +319,8 @@ export function FloatingPanel({
             onRefreshProvider={onRefreshAiProvider}
             fixCapability={fixCapability}
             fixState={fixState}
+            verifyState={verifyState}
+            onVerifyChange={onVerifyChange}
             onBeginFix={onBeginFix}
             onPrepareFix={onPrepareFix}
             onApplyFix={onApplyFix}
@@ -283,6 +339,7 @@ export function FloatingPanel({
             selectedReference={selectedReference}
             providerCapability={aiProviderCapability}
             fixCapability={fixCapability}
+            verifyState={verifyState}
             onCommand={onCommand}
           />
         )}
@@ -395,6 +452,8 @@ function Inspector({
   onAskAi: (question: string) => void;
   fixCapability: AiFixCapability;
   fixState: HumanFixState;
+  verifyState: HumanVerifyState;
+  onVerifyChange: () => void;
   onBeginFix: () => void;
 }) {
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
@@ -703,6 +762,8 @@ function AiPanel({
   onRefreshProvider,
   fixCapability,
   fixState,
+  verifyState,
+  onVerifyChange,
   onBeginFix,
   onPrepareFix,
   onApplyFix,
@@ -718,6 +779,8 @@ function AiPanel({
   onRefreshProvider: () => void;
   fixCapability: AiFixCapability;
   fixState: HumanFixState;
+  verifyState: HumanVerifyState;
+  onVerifyChange: () => void;
   onBeginFix: () => void;
   onPrepareFix: (instruction: string) => void;
   onApplyFix: () => void;
@@ -728,6 +791,14 @@ function AiPanel({
   const [fixInstruction, setFixInstruction] = useState(() => translate(locale, 'fix.defaultInstruction'));
   const busy = askAiState.status === 'asking';
   const fixBusy = fixState.status === 'proposing' || fixState.status === 'applying';
+  const verifyRetryable = verifyCanRetry(verifyState);
+  const verifyScope = verifyState.status === 'ready'
+    || verifyState.status === 'verifying'
+    || verifyState.status === 'success'
+    ? verifyState.scope
+    : verifyState.status === 'failure' && verifyRetryable
+      ? verifyState.scope
+      : undefined;
   const canAsk = !!current && !!selectedReference && providerCapability.available && !busy;
   const unavailableReason = !current
     ? translate(locale, 'empty.noTarget')
@@ -812,8 +883,26 @@ function AiPanel({
       >
         {translate(locale, 'ai.fixSelection')}
       </button>
-      <button disabled aria-disabled="true" title={translate(locale, 'ai.notImplementedYet')}>
-        {translate(locale, 'ai.verifyChange')}
+      <button
+        onClick={onVerifyChange}
+        disabled={verifyState.status !== 'ready' && !verifyRetryable}
+        aria-disabled={verifyState.status !== 'ready' && !verifyRetryable}
+        aria-busy={verifyState.status === 'verifying'}
+        title={
+          verifyRetryable
+            ? translate(locale, 'action.retry')
+            : verifyState.status === 'ready'
+              ? translate(locale, 'verify.action')
+              : verifyState.status === 'verifying'
+                ? translate(locale, 'verify.inProgress')
+                : translate(locale, 'verify.ready')
+        }
+      >
+        {verifyRetryable
+          ? translate(locale, 'action.retry')
+          : verifyState.status === 'verifying'
+            ? translate(locale, 'verify.inProgress')
+            : translate(locale, 'ai.verifyChange')}
       </button>
     </div>
 
@@ -920,12 +1009,100 @@ function AiPanel({
         <div className="fix-status success" role="status" aria-live="polite">
           <strong>{translate(locale, 'fix.applied')}</strong>
           <span>{fixState.displayFile}</span>
+          <button className="fix-again-action" onClick={onBeginFix}>
+            {translate(locale, 'fix.startReview')}
+          </button>
         </div>
       )}
 
       {fixState.status === 'failure' && (
         <div className="fix-status failure" role="status" aria-live="polite">
           <strong>{fixFailureMessage(locale, fixState.reason)}</strong>
+        </div>
+      )}
+    </section>
+
+    <section className="verify-review" aria-label={translate(locale, 'verify.title')}>
+      <div className="fix-review-heading">
+        <div>
+          <span>{translate(locale, 'verify.title')}</span>
+          <strong>{translate(locale, 'verify.readOnlyDisclosure')}</strong>
+        </div>
+        {verifyScope && (
+          <span className="compact-status success">
+            {verifyScope === 'semantic_visual'
+              ? translate(locale, 'verify.semanticVisual')
+              : translate(locale, 'verify.semanticOnly')}
+          </span>
+        )}
+      </div>
+
+      {verifyState.status === 'idle' && (
+        <p className="fix-unavailable">{translate(locale, 'verify.ready')}</p>
+      )}
+
+      {verifyState.status === 'ready' && (
+        <div className="verify-ready">
+          <code title={verifyState.displayFile}>{verifyState.displayFile}</code>
+          <button className="fix-start-action" onClick={onVerifyChange}>
+            {translate(locale, 'verify.action')}
+          </button>
+        </div>
+      )}
+
+      {verifyState.status === 'verifying' && (
+        <div className="fix-status busy" role="status" aria-live="polite">
+          <strong>{translate(locale, 'verify.inProgress')}</strong>
+          <span>{verifyState.displayFile}</span>
+        </div>
+      )}
+
+      {verifyState.status === 'success' && (
+        <div className={`verify-result ${verifyState.result}`} role="status" aria-live="polite">
+          <strong>
+            {verifyState.result === 'change_observed'
+              ? translate(locale, 'verify.changeObserved')
+              : verifyState.result === 'no_observable_change'
+                ? translate(locale, 'verify.noObservableChange')
+                : verifyState.result === 'regression_signal'
+                  ? translate(locale, 'verify.regressionSignal')
+                  : translate(locale, 'verify.inconclusive')}
+          </strong>
+          <span>{verifyState.displayFile}</span>
+          <small>{translate(locale, 'verify.objectiveFacts')}</small>
+          {verifyState.semanticChanges.length > 0 && (
+            <ul>{verifyState.semanticChanges.map((item: string) => <li key={item}>{item}</li>)}</ul>
+          )}
+          {verifyState.regressionSignals.length > 0 && (
+            <ul>{verifyState.regressionSignals.map((item: string) => <li key={item}>{item}</li>)}</ul>
+          )}
+          {verifyState.advisorySummary && (
+            <div className="verify-advisory">
+              <span>{translate(locale, 'verify.aiAssessment')}</span>
+              <p>{verifyState.advisorySummary}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {verifyState.status === 'failure' && (
+        <div className="fix-status failure" role="status" aria-live="polite">
+          <strong>
+            {verifyState.reason === 'expired'
+              ? translate(locale, 'verify.expired')
+              : verifyState.reason === 'source_changed'
+                ? translate(locale, 'verify.sourceChanged')
+                : verifyState.reason === 'route_changed'
+                  ? translate(locale, 'verify.routeChanged')
+                  : verifyState.reason === 'target_unavailable'
+                    ? translate(locale, 'verify.targetUnavailable')
+                    : translate(locale, 'verify.failed')}
+          </strong>
+          {verifyRetryable && (
+            <button className="fix-again-action verify-retry-action" onClick={onVerifyChange}>
+              {translate(locale, 'action.retry')}
+            </button>
+          )}
         </div>
       )}
     </section>
@@ -952,6 +1129,7 @@ function CommandPanel({
   selectedReference,
   providerCapability,
   fixCapability,
+  verifyState,
   onCommand,
 }: {
   state: DashboardState;
@@ -962,9 +1140,11 @@ function CommandPanel({
   selectedReference?: string;
   providerCapability: AiProviderCapability;
   fixCapability: AiFixCapability;
+  verifyState: HumanVerifyState;
   onCommand: (command: CommandId) => void;
 }) {
   const [query, setQuery] = useState('');
+  const verifyRetryable = verifyCanRetry(verifyState);
   const commands = [
     { id: COMMAND_IDS.inspectActivate, icon: <InspectIcon />, title: translate(locale, 'tool.inspect'), detail: current?.project.display_name ?? '', keys: 'I', disabled: !current },
     {
@@ -1006,6 +1186,18 @@ function CommandPanel({
             : translate(locale, 'fix.review'),
       keys: '',
       disabled: !current || !selectedReference || !fixCapability.available,
+    },
+    {
+      id: COMMAND_IDS.aiVerifyChange,
+      icon: <ActivityIcon />,
+      title: translate(locale, 'ai.verifyChange'),
+      detail: verifyState.status === 'ready'
+        ? verifyState.displayFile
+        : verifyRetryable
+          ? translate(locale, 'action.retry')
+          : translate(locale, 'verify.ready'),
+      keys: '',
+      disabled: verifyState.status !== 'ready' && !verifyRetryable,
     },
     { id: COMMAND_IDS.previewOpenNative, icon: <ExternalIcon />, title: translate(locale, 'action.openPreview'), detail: url ?? '', keys: '↵', disabled: !current },
     { id: COMMAND_IDS.settingsOpen, icon: <SettingsIcon />, title: translate(locale, 'tool.settings'), detail: '', keys: '⌘,', disabled: false },

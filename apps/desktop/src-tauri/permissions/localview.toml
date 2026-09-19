@@ -10,6 +10,7 @@ commands.allow = [
   "prepare_fix_proposal",
   "apply_fix_proposal",
   "discard_fix_proposal",
+  "verify_fix_change",
   "pause_runtime",
   "resume_runtime",
   "open_preview",

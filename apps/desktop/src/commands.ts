@@ -14,6 +14,7 @@ export const COMMAND_IDS = {
   aiOpen: 'ai.open',
   aiAskSelection: 'ai.askSelection',
   aiFixSelection: 'ai.fixSelection',
+  aiVerifyChange: 'ai.verifyChange',
   advancedOpen: 'advanced.open',
   settingsOpen: 'settings.open',
   languageChange: 'language.change',
