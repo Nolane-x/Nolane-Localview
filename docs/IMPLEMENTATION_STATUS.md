@@ -6,6 +6,7 @@ LocalView is being implemented as a sequence of independently verifiable vertica
 
 - Rust workspace with protocol, discovery, sessions, observation, security and authenticated loopback control plane.
 - Semantic/state diff, layout, visual, responsive, source and token-budget layers.
+- `localview-source-map` now provides a bounded Source Map v3 consumer with checked VLQ arithmetic, deterministic generated-position resolution, hard JSON/mapping/source/name/segment/coordinate caps, normalized `sourceRoot` handling and no `sourcesContent` retention. It is intentionally still a pure consumer: project-owned map loading/containment and live runtime-position correlation remain separate authority.
 - Capture planning, engine escalation, network, console, accessibility, performance, flow, design grammar and artifacts.
 - CLI and MCP bridge.
 - Tauri 2 desktop dashboard, system tray, standalone localhost preview windows and a feature-gated native child-WebView workspace.
@@ -130,7 +131,7 @@ This does **not** make the entire V3 Active Perception/diagnose-fix system compl
 
 The strongest remaining capture/perception gates are:
 
-1. deeper source/runtime ownership correlation (bounded Source Map v3 consumption followed by project-owned live map resolution, then React/Vue/Svelte ownership adapters) and interactive point-and-select inspector wiring;
+1. deeper source/runtime ownership correlation (project-owned source-map loading/containment and live runtime-position resolution over the now-landed bounded Source Map v3 consumer, then React/Vue/Svelte ownership adapters) and interactive point-and-select inspector wiring;
 2. adaptive/binary responsive breakpoint execution, content/locale stress and deeper responsive issue intelligence over the now-landed canonical preset/contact-sheet authority;
 3. native workspace composition/focus/DPI/crash safety gates before promoting the child WebView surface from feature-gated to default;
 4. add analysis-concurrency authority only when a concrete concurrent analysis owner exists rather than introducing a synthetic counter.
