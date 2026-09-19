@@ -481,7 +481,7 @@ pub async fn capture_responsive_sweep(
     .await
     .unwrap_or_else(|_| Err("responsive_transaction_timeout".to_string()));
 
-    let restore = restore_responsive_preview(&window, &preview_state, deadline).await;
+    let restore = restore_responsive_preview(&window, session_id, &preview_state, deadline).await;
     let captured = match (work, restore) {
         (Ok(captured), Ok(())) => captured,
         (Err(primary), Ok(())) => return Err(primary),
@@ -664,6 +664,7 @@ async fn capture_managed_surface_preview_only(
 
 async fn restore_responsive_preview(
     window: &tauri::WebviewWindow,
+    session_id: SessionId,
     preview: &ResponsivePreviewState,
     deadline: tokio::time::Instant,
 ) -> Result<(), String> {
@@ -691,13 +692,18 @@ async fn restore_responsive_preview(
         if size.width == preview.original_physical_width
             && size.height == preview.original_physical_height
         {
-            return Ok(());
+            break;
         }
         if tokio::time::Instant::now() >= local_deadline {
             return Err("responsive_restore_failed".into());
         }
         tokio::time::sleep(Duration::from_millis(RESPONSIVE_RESIZE_POLL_MS)).await;
     }
+
+    tokio::time::timeout_at(deadline, wait_for_capture_settle(session_id))
+        .await
+        .map_err(|_| "responsive_restore_failed".to_string())?
+        .map_err(|_| "responsive_restore_failed".to_string())
 }
 
 async fn persist_responsive_contact_sheet_and_register(
