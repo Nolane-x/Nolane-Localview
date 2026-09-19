@@ -67,6 +67,8 @@ The decoder must enforce before or during parse:
 
 All integer accumulation uses checked arithmetic. Overflow is an error, never wraparound.
 
+The parsed mapping table must also remain bounded in retained memory: normalized source strings and optional names are stored once in bounded tables, while decoded segments retain numeric indices plus coordinates rather than cloning source/name strings into every segment.
+
 ## VLQ semantics
 
 Implement standard Base64 VLQ decoding.
@@ -153,7 +155,8 @@ Tests cover:
 - continuation digits;
 - invalid base64 characters;
 - truncated continuation sequences;
-- checked overflow.
+- checked overflow, including a final VLQ payload whose left shift would lose high bits;
+- index-based mapping retention reuses bounded source/name tables instead of cloning strings per segment.
 
 ### Gate 2 — Source Map v3 decoding
 
