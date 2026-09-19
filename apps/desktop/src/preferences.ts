@@ -5,6 +5,35 @@ export interface ChromePoint {
   y: number;
 }
 
+export interface ChromeBounds {
+  width: number;
+  height: number;
+}
+
+export const CHROME_EDGE_MARGIN = 12;
+
+export function clampChromePoint(
+  point: ChromePoint,
+  chrome: ChromeBounds,
+  viewport: ChromeBounds,
+  margin = CHROME_EDGE_MARGIN,
+): ChromePoint {
+  const safeMargin = Number.isFinite(margin) ? Math.max(0, margin) : CHROME_EDGE_MARGIN;
+  const chromeWidth = Number.isFinite(chrome.width) ? Math.max(0, chrome.width) : 0;
+  const chromeHeight = Number.isFinite(chrome.height) ? Math.max(0, chrome.height) : 0;
+  const viewportWidth = Number.isFinite(viewport.width) ? Math.max(0, viewport.width) : 0;
+  const viewportHeight = Number.isFinite(viewport.height) ? Math.max(0, viewport.height) : 0;
+  const maxX = Math.max(safeMargin, viewportWidth - chromeWidth - safeMargin);
+  const maxY = Math.max(safeMargin, viewportHeight - chromeHeight - safeMargin);
+  const x = Number.isFinite(point.x) ? point.x : safeMargin;
+  const y = Number.isFinite(point.y) ? point.y : safeMargin;
+
+  return {
+    x: Math.min(Math.max(x, safeMargin), maxX),
+    y: Math.min(Math.max(y, safeMargin), maxY),
+  };
+}
+
 export type AnnotationPersistence = 'never' | 'session' | 'project';
 export type NotificationPreference = 'off' | 'important' | 'all';
 export type AutoOpenPreference = 'never' | 'first_session' | 'frontend_only' | 'always';
