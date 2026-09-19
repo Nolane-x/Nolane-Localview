@@ -70,7 +70,7 @@ pub struct ResponsiveSweepPlan {
 pub struct ContactSheetPolicy {
     pub gutter_px: u32,
     pub max_rgba_bytes: usize,
-    pub max_frame_rgba_bytes: usize,
+    pub max_frames_rgba_bytes: usize,
     pub gutter_rgba: [u8; 4],
 }
 
@@ -79,7 +79,7 @@ impl Default for ContactSheetPolicy {
         Self {
             gutter_px: DEFAULT_CONTACT_SHEET_GUTTER_PX,
             max_rgba_bytes: DEFAULT_MAX_CONTACT_SHEET_RGBA_BYTES,
-            max_frame_rgba_bytes: DEFAULT_MAX_RESPONSIVE_FRAME_RGBA_BYTES,
+            max_frames_rgba_bytes: DEFAULT_MAX_RESPONSIVE_FRAME_RGBA_BYTES,
             gutter_rgba: [10, 13, 18, 255],
         }
     }
@@ -194,6 +194,7 @@ pub fn project_contact_sheet(
 
     let mut pixel_width = 0u32;
     let mut pixel_height = 0u32;
+    let mut aggregate_frame_bytes = 0usize;
     let mut placements = Vec::with_capacity(pixel_dimensions.len());
 
     for (index, ((pixel_w, pixel_h), (&preset, &viewport))) in pixel_dimensions
@@ -202,7 +203,10 @@ pub fn project_contact_sheet(
         .enumerate()
     {
         let frame_bytes = checked_rgba_bytes(*pixel_w, *pixel_h)?;
-        if frame_bytes > policy.max_frame_rgba_bytes {
+        aggregate_frame_bytes = aggregate_frame_bytes
+            .checked_add(frame_bytes)
+            .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
+        if aggregate_frame_bytes > policy.max_frames_rgba_bytes {
             return Err(ResponsiveError::FrameMemoryBudgetExceeded);
         }
 
@@ -260,9 +264,6 @@ pub fn build_responsive_contact_sheet(
             let expected = checked_rgba_bytes(frame.pixel_width, frame.pixel_height)?;
             if expected != frame.rgba.len() {
                 return Err(ResponsiveError::FrameBufferLengthMismatch);
-            }
-            if expected > policy.max_frame_rgba_bytes {
-                return Err(ResponsiveError::FrameMemoryBudgetExceeded);
             }
             Ok((frame.pixel_width, frame.pixel_height))
         })
@@ -396,7 +397,7 @@ mod tests {
         let policy = ContactSheetPolicy {
             gutter_px: 1,
             max_rgba_bytes: 1024,
-            max_frame_rgba_bytes: 512,
+            max_frames_rgba_bytes: 512,
             gutter_rgba: [9, 8, 7, 255],
         };
         let frames = vec![
