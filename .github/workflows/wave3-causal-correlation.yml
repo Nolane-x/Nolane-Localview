@@ -1,0 +1,31 @@
+name: Wave 3 causal correlation foundation
+
+on:
+  push:
+    paths:
+      - 'crates/causal/**'
+      - 'docs/superpowers/specs/2026-09-19-wave3-action-request-ui-correlation-design.md'
+      - '.github/workflows/wave3-causal-correlation.yml'
+  pull_request:
+    paths:
+      - 'crates/causal/**'
+      - 'docs/superpowers/specs/2026-09-19-wave3-action-request-ui-correlation-design.md'
+      - '.github/workflows/wave3-causal-correlation.yml'
+
+concurrency:
+  group: wave3-causal-correlation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Action request UI correlation contract
+        run: cargo test -p localview-causal --test action_request_ui_correlation -- --nocapture
+      - name: Causal crate regressions
+        run: cargo test -p localview-causal
+      - name: Workspace check
+        run: cargo check --workspace --all-targets
