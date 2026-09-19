@@ -3472,6 +3472,195 @@ invariant(writesBeforeSecondFix === 1, 'verify:fix-after-verify-no-hidden-write'
 await shot(page, '145-fix-after-verify.png', 'fix-after-verify');
 await page.close();
 
+
+async function readChromePlacement(page) {
+  return page.locator('.top-pill, .floating-rail').evaluateAll((nodes) => ({
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    nodes: nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        className: node.className,
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      };
+    }),
+  }));
+}
+
+function chromePlacementIsClamped(placement, margin = 12) {
+  return placement.nodes.every((node) =>
+    node.left >= margin - 1
+    && node.top >= margin - 1
+    && node.right <= placement.viewport.width - margin + 1
+    && node.bottom <= placement.viewport.height - margin + 1
+  );
+}
+
+page = await pageFor(
+  browser,
+  { width: 640, height: 420 },
+  'en',
+  {
+    targetBarPosition: { x: 9000, y: 9000 },
+    toolRailPosition: { x: -9000, y: 9000 },
+  },
+);
+await page.waitForTimeout(180);
+const restoredChromePlacement = await readChromePlacement(page);
+invariant(
+  chromePlacementIsClamped(restoredChromePlacement),
+  'chrome:restored-clamped',
+  restoredChromePlacement,
+);
+const restoredChromePreferences = await readStoredPreferences(page);
+invariant(
+  restoredChromePreferences?.targetBarPosition?.x < 9000
+    && restoredChromePreferences?.targetBarPosition?.y < 9000
+    && restoredChromePreferences?.toolRailPosition?.x >= 0
+    && restoredChromePreferences?.toolRailPosition?.y < 9000,
+  'chrome:restored-clamped:persisted',
+  { restoredChromePreferences },
+);
+await shot(page, '146-stale-chrome-clamped.png', 'chrome-restored-clamped');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 });
+const targetDragHandle = page.getByRole('button', { name: 'Move target bar' });
+const targetDragBox = await targetDragHandle.boundingBox();
+invariant(Boolean(targetDragBox), 'chrome:drag-handle-target-bounds', { targetDragBox });
+await page.mouse.move(
+  targetDragBox.x + targetDragBox.width / 2,
+  targetDragBox.y + targetDragBox.height / 2,
+);
+await page.mouse.down();
+await page.mouse.move(
+  targetDragBox.x + targetDragBox.width / 2 + 220,
+  targetDragBox.y + targetDragBox.height / 2 + 120,
+  { steps: 8 },
+);
+await page.mouse.up();
+await page.waitForTimeout(120);
+const draggedTargetRect = await page.locator('.top-pill').boundingBox();
+const draggedTargetPreferences = await readStoredPreferences(page);
+invariant(
+  Boolean(draggedTargetRect)
+    && Number.isFinite(draggedTargetPreferences?.targetBarPosition?.x)
+    && Number.isFinite(draggedTargetPreferences?.targetBarPosition?.y)
+    && Math.abs(draggedTargetRect.x - draggedTargetPreferences.targetBarPosition.x) <= 1.5
+    && Math.abs(draggedTargetRect.y - draggedTargetPreferences.targetBarPosition.y) <= 1.5,
+  'chrome:drag-persisted',
+  { draggedTargetRect, draggedTargetPreferences },
+);
+await shot(page, '147-chrome-drag-persisted.png', 'chrome-drag-persisted');
+
+await page.keyboard.press('Control+,');
+await page.waitForTimeout(100);
+await page.getByLabel('Remember tool positions').setChecked(false);
+await page.waitForTimeout(100);
+const disabledRememberPreferences = await readStoredPreferences(page);
+invariant(
+  disabledRememberPreferences?.rememberChromePositions === false
+    && disabledRememberPreferences?.targetBarPosition === null
+    && disabledRememberPreferences?.toolRailPosition === null,
+  'chrome:remember-disabled-clears-persisted',
+  { disabledRememberPreferences },
+);
+await page.keyboard.press('Escape');
+const ephemeralHandle = page.getByRole('button', { name: 'Move target bar' });
+const ephemeralBox = await ephemeralHandle.boundingBox();
+invariant(Boolean(ephemeralBox), 'chrome:ephemeral-drag-handle-bounds', { ephemeralBox });
+await page.mouse.move(ephemeralBox.x + 8, ephemeralBox.y + 8);
+await page.mouse.down();
+await page.mouse.move(ephemeralBox.x + 168, ephemeralBox.y + 88, { steps: 6 });
+await page.mouse.up();
+await page.waitForTimeout(100);
+const ephemeralRect = await page.locator('.top-pill').boundingBox();
+const ephemeralPreferences = await readStoredPreferences(page);
+invariant(
+  Boolean(ephemeralRect)
+    && ephemeralPreferences?.rememberChromePositions === false
+    && ephemeralPreferences?.targetBarPosition === null
+    && ephemeralRect.x > 100,
+  'chrome:remember-disabled-ephemeral',
+  { ephemeralRect, ephemeralPreferences },
+);
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 });
+const railMoveHandle = page.getByRole('button', { name: 'Move tool rail' });
+const railBefore = await page.locator('.floating-rail').boundingBox();
+await railMoveHandle.focus();
+await railMoveHandle.press('ArrowRight');
+await railMoveHandle.press('ArrowRight');
+await railMoveHandle.press('ArrowRight');
+await railMoveHandle.press('ArrowDown');
+await railMoveHandle.press('ArrowDown');
+await page.waitForTimeout(100);
+const railAfter = await page.locator('.floating-rail').boundingBox();
+const keyboardPreferences = await readStoredPreferences(page);
+invariant(
+  Boolean(railBefore)
+    && Boolean(railAfter)
+    && railAfter.x > railBefore.x + 20
+    && railAfter.y > railBefore.y + 10
+    && Number.isFinite(keyboardPreferences?.toolRailPosition?.x)
+    && Number.isFinite(keyboardPreferences?.toolRailPosition?.y)
+    && Math.abs(railAfter.x - keyboardPreferences.toolRailPosition.x) <= 1.5
+    && Math.abs(railAfter.y - keyboardPreferences.toolRailPosition.y) <= 1.5,
+  'chrome:keyboard-move-persisted',
+  { railBefore, railAfter, keyboardPreferences },
+);
+await shot(page, '148-chrome-keyboard-move.png', 'chrome-keyboard-move');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {
+    targetBarPosition: { x: 900, y: 760 },
+    toolRailPosition: { x: 1320, y: 420 },
+  },
+);
+await page.waitForTimeout(100);
+await page.setViewportSize({ width: 620, height: 420 });
+await page.waitForTimeout(180);
+const resizedChromePlacement = await readChromePlacement(page);
+const resizedPreferences = await readStoredPreferences(page);
+invariant(
+  chromePlacementIsClamped(resizedChromePlacement),
+  'chrome:resize-clamped',
+  { resizedChromePlacement, resizedPreferences },
+);
+invariant(
+  resizedPreferences?.targetBarPosition?.x < 900
+    && resizedPreferences?.targetBarPosition?.y < 760
+    && resizedPreferences?.toolRailPosition?.x < 1320,
+  'chrome:resize-clamped:persisted',
+  { resizedPreferences },
+);
+await page.keyboard.press('Control+,');
+await page.waitForTimeout(100);
+await page.getByRole('button', { name: 'Reset workspace' }).click();
+await page.waitForTimeout(120);
+const resetChromePreferences = await readStoredPreferences(page);
+invariant(
+  resetChromePreferences?.targetBarPosition === null
+    && resetChromePreferences?.toolRailPosition === null
+    && resetChromePreferences?.showTargetBar === true
+    && resetChromePreferences?.showToolRail === true,
+  'chrome:reset-clears-positions',
+  { resetChromePreferences },
+);
+await page.keyboard.press('Escape');
+await assertPrimaryControlsInViewport(page, 'chrome-reset-recovered');
+await shot(page, '149-chrome-resize-reset-recovered.png', 'chrome-resize-reset-recovered');
+await page.close();
+
 await fs.writeFile(
   'human-first-ui-v2-render/audit.json',
   JSON.stringify(audit, null, 2) + '\\n',
