@@ -168,7 +168,13 @@ function classifyVerifyFailure(
   cause: unknown,
 ): Extract<HumanVerifyState, { status: 'failure' }>['reason'] {
   const detail = String(cause).toLowerCase();
-  if (detail.includes('verification expired') || detail.includes('verification is unavailable')) {
+  if (
+    detail.includes('verification expired')
+    || detail.includes('record expired')
+    || detail.includes('verification is unavailable')
+    || detail.includes('record is unavailable')
+    || detail.includes('record is not pending')
+  ) {
     return 'expired';
   }
   if (detail.includes('source changed') || detail.includes('source mapping changed')) {
