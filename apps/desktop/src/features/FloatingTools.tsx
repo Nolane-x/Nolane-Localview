@@ -770,6 +770,8 @@ function AiPanel({
   onRefreshProvider: () => void;
   fixCapability: AiFixCapability;
   fixState: HumanFixState;
+  verifyState: HumanVerifyState;
+  onVerifyChange: () => void;
   onBeginFix: () => void;
   onPrepareFix: (instruction: string) => void;
   onApplyFix: () => void;
@@ -1048,10 +1050,10 @@ function AiPanel({
           <span>{verifyState.displayFile}</span>
           <small>{translate(locale, 'verify.objectiveFacts')}</small>
           {verifyState.semanticChanges.length > 0 && (
-            <ul>{verifyState.semanticChanges.map((item) => <li key={item}>{item}</li>)}</ul>
+            <ul>{verifyState.semanticChanges.map((item: string) => <li key={item}>{item}</li>)}</ul>
           )}
           {verifyState.regressionSignals.length > 0 && (
-            <ul>{verifyState.regressionSignals.map((item) => <li key={item}>{item}</li>)}</ul>
+            <ul>{verifyState.regressionSignals.map((item: string) => <li key={item}>{item}</li>)}</ul>
           )}
           {verifyState.advisorySummary && (
             <div className="verify-advisory">
