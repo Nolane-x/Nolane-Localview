@@ -99,9 +99,9 @@ Coordinates exposed by the API are 1-based lines and 0-based columns.
 Resolution is deterministic:
 
 1. locate the exact generated line;
-2. choose the last mapped segment whose generated column is <= requested column;
-3. ignore unmapped segments as ownership evidence;
-4. return original source + 1-based original line + 0-based column + optional bounded name.
+2. choose the last segment whose generated column is <= requested column;
+3. if that segment is unmapped, return `None` rather than carrying an earlier mapping across an explicitly unmapped region;
+4. otherwise return original source + 1-based original line + 0-based column + optional bounded name.
 
 No nearest-line fallback is allowed. A line with no mapped source segment returns `None`.
 
