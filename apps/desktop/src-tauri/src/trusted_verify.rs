@@ -637,6 +637,10 @@ pub fn classify_verification_status(
     } else if semantic_changed || target_visual_changed {
         DeterministicVerificationStatus::ChangeObserved
     } else if scope == VerificationScope::SemanticVisual
+        && visual.viewport_changed_ratio.is_none()
+    {
+        DeterministicVerificationStatus::Inconclusive
+    } else if scope == VerificationScope::SemanticVisual
         && viewport_visual_changed
         && !target_visual_changed
     {
@@ -903,6 +907,25 @@ mod trusted_verify_tests {
             &after.network_issues,
         );
         assert_eq!(regressions, vec!["new_console_error", "new_network_failure"]);
+    }
+
+    #[test]
+    fn semantic_visual_scope_without_current_visual_facts_is_inconclusive() {
+        let comparison = classify_verification_status(
+            Vec::new(),
+            Vec::new(),
+            &VisualVerificationFacts {
+                viewport_changed_ratio: None,
+                target_changed_ratio: None,
+            },
+            VerificationScope::SemanticVisual,
+            true,
+            true,
+        );
+        assert_eq!(
+            comparison.deterministic_status,
+            DeterministicVerificationStatus::Inconclusive
+        );
     }
 
     #[test]
