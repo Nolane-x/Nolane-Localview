@@ -1220,7 +1220,7 @@ mod trusted_verify_tests {
         assert_eq!(dimension_mismatch.viewport_changed_ratio, None);
         assert_eq!(dimension_mismatch.target_changed_ratio, None);
 
-        let invalid_target = Rect { x: 8.0, y: 8.0, width: 1.0, height: 1.0 };
+        let invalid_target = Rect { x: f64::NAN, y: 0.0, width: 1.0, height: 1.0 };
         let invalid_target_facts =
             compare_visual_facts(&before, &identical_png, &viewport, Some(&invalid_target)).unwrap();
         assert_eq!(invalid_target_facts.viewport_changed_ratio, Some(0.0));
