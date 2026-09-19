@@ -9,8 +9,23 @@ on:
       - .github/workflows/human-first-ui-v2-tdd.yml
       - .github/workflows/human-first-ui-v2-render.yml
       - apps/desktop/src/**
+      - apps/desktop/src-tauri/src/**
+      - apps/desktop/src-tauri/permissions/**
       - apps/desktop/src-tauri/tests/human_first_ui_v2_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_chrome_position_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_capture_v21_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_measure_v22_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_open_source_v23_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_ask_ai_v24_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_fix_v25_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_verify_v26_contract.rs
       - docs/superpowers/specs/2026-09-18-human-first-localview-ui-ux-v2.md
+      - docs/superpowers/specs/2026-09-18-human-first-trusted-capture-v21.md
+      - docs/superpowers/specs/2026-09-18-human-first-trusted-measure-v22.md
+      - docs/superpowers/specs/2026-09-18-human-first-trusted-open-source-v23.md
+      - docs/superpowers/specs/2026-09-18-human-first-trusted-ask-ai-v24.md
+      - docs/superpowers/specs/2026-09-19-human-first-trusted-fix-v25.md
+      - docs/superpowers/specs/2026-09-19-human-first-trusted-verify-v26.md
       - tools/human-first-ui-v2/**
   push:
     branches:
@@ -47,6 +62,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Verify GREEN source contract
         run: cargo test -p localview-desktop --test human_first_ui_v2_contract -- --nocapture
+
+      - name: Verify Chrome Position Persistence closure
+        run: cargo test -p localview-desktop --test human_first_chrome_position_contract -- --nocapture
+
+      - name: Verify Trusted Capture V2.1 regression
+        run: cargo test -p localview-desktop --test human_first_trusted_capture_v21_contract -- --nocapture
+
+      - name: Verify Trusted Measure V2.2 regression
+        run: cargo test -p localview-desktop --test human_first_trusted_measure_v22_contract -- --nocapture
+
+      - name: Verify Trusted Open Source V2.3 regression
+        run: cargo test -p localview-desktop --test human_first_trusted_open_source_v23_contract -- --nocapture
+
+      - name: Verify Trusted Ask AI V2.4 regression
+        run: cargo test -p localview-desktop --test human_first_trusted_ask_ai_v24_contract -- --nocapture
+
+      - name: Verify Trusted Fix V2.5 regression
+        run: cargo test -p localview-desktop --test human_first_trusted_fix_v25_contract -- --nocapture
+
+      - name: Verify Trusted Verify Change V2.6 regression
+        run: cargo test -p localview-desktop --test human_first_trusted_verify_v26_contract -- --nocapture
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
