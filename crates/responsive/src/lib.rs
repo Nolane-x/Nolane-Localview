@@ -2,6 +2,8 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::fmt;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Viewport {
@@ -22,6 +24,11 @@ pub const DEFAULT_VIEWPORTS: &[Viewport] = &[
     Viewport { width: 1920, height: 1080 },
 ];
 
+pub const MAX_CANONICAL_SWEEP_PRESETS: usize = 4;
+pub const DEFAULT_CONTACT_SHEET_GUTTER_PX: u32 = 16;
+pub const DEFAULT_MAX_CONTACT_SHEET_RGBA_BYTES: usize = 96 * 1024 * 1024;
+pub const DEFAULT_MAX_RESPONSIVE_FRAME_RGBA_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord,
 )]
@@ -34,8 +41,6 @@ pub enum ResponsivePresetId {
 }
 
 impl ResponsivePresetId {
-    pub const ALL: [Self; 4] = [Self::MobileS, Self::Mobile, Self::Tablet, Self::Desktop];
-
     pub const fn viewport(self) -> Viewport {
         match self {
             Self::MobileS => Viewport { width: 320, height: 568 },
@@ -45,7 +50,7 @@ impl ResponsivePresetId {
         }
     }
 
-    const fn canonical_index(self) -> usize {
+    const fn canonical_rank(self) -> u8 {
         match self {
             Self::MobileS => 0,
             Self::Mobile => 1,
@@ -55,7 +60,7 @@ impl ResponsivePresetId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResponsiveSweepPlan {
     pub presets: Vec<ResponsivePresetId>,
     pub viewports: Vec<Viewport>,
@@ -65,18 +70,22 @@ pub struct ResponsiveSweepPlan {
 pub struct ContactSheetPolicy {
     pub gutter_px: u32,
     pub max_rgba_bytes: usize,
+    pub max_frames_rgba_bytes: usize,
+    pub gutter_rgba: [u8; 4],
 }
 
 impl Default for ContactSheetPolicy {
     fn default() -> Self {
         Self {
-            gutter_px: 24,
-            max_rgba_bytes: 96 * 1024 * 1024,
+            gutter_px: DEFAULT_CONTACT_SHEET_GUTTER_PX,
+            max_rgba_bytes: DEFAULT_MAX_CONTACT_SHEET_RGBA_BYTES,
+            max_frames_rgba_bytes: DEFAULT_MAX_RESPONSIVE_FRAME_RGBA_BYTES,
+            gutter_rgba: [10, 13, 18, 255],
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContactSheetPlacement {
     pub preset: ResponsivePresetId,
     pub viewport: Viewport,
@@ -86,7 +95,7 @@ pub struct ContactSheetPlacement {
     pub pixel_height: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContactSheetGeometry {
     pub pixel_width: u32,
     pub pixel_height: u32,
@@ -95,31 +104,49 @@ pub struct ContactSheetGeometry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResponsiveFrame {
+    pub preset: ResponsivePresetId,
+    pub viewport: Viewport,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub rgba: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResponsiveContactSheet {
+    pub geometry: ContactSheetGeometry,
+    pub rgba: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponsiveError {
     InvalidPresetCount,
     DuplicatePreset,
     FrameCountMismatch,
+    FrameOrderMismatch,
     InvalidPixelGeometry,
-    FrameViewportMismatch,
-    InvalidRgbaBuffer,
-    ArithmeticOverflow,
+    PixelArithmeticOverflow,
+    FrameBufferLengthMismatch,
+    FrameMemoryBudgetExceeded,
     ContactSheetMemoryBudgetExceeded,
 }
 
-impl std::fmt::Display for ResponsiveError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::InvalidPresetCount => "responsive preset count must be between one and four",
-            Self::DuplicatePreset => "responsive preset selection contains duplicates",
-            Self::FrameCountMismatch => "responsive frame count differs from the planned sweep",
-            Self::InvalidPixelGeometry => "responsive frame pixel geometry must be positive",
-            Self::FrameViewportMismatch => "responsive frame viewport differs from the planned sweep",
-            Self::InvalidRgbaBuffer => "responsive RGBA buffer does not match its pixel geometry",
-            Self::ArithmeticOverflow => "responsive contact-sheet geometry overflowed",
+impl fmt::Display for ResponsiveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let code = match self {
+            Self::InvalidPresetCount => "responsive_invalid_preset_count",
+            Self::DuplicatePreset => "responsive_duplicate_preset",
+            Self::FrameCountMismatch => "responsive_frame_count_mismatch",
+            Self::FrameOrderMismatch => "responsive_frame_order_mismatch",
+            Self::InvalidPixelGeometry => "responsive_invalid_pixel_geometry",
+            Self::PixelArithmeticOverflow => "responsive_pixel_arithmetic_overflow",
+            Self::FrameBufferLengthMismatch => "responsive_frame_buffer_length_mismatch",
+            Self::FrameMemoryBudgetExceeded => "responsive_memory_budget_exceeded",
             Self::ContactSheetMemoryBudgetExceeded => {
-                "responsive contact sheet exceeds the bounded RGBA memory budget"
+                "responsive_contact_sheet_memory_budget_exceeded"
             }
-        })
+        };
+        f.write_str(code)
     }
 }
 
@@ -128,80 +155,84 @@ impl std::error::Error for ResponsiveError {}
 pub fn plan_canonical_sweep(
     requested: &[ResponsivePresetId],
 ) -> Result<ResponsiveSweepPlan, ResponsiveError> {
-    if requested.is_empty() || requested.len() > ResponsivePresetId::ALL.len() {
+    if requested.is_empty() || requested.len() > MAX_CANONICAL_SWEEP_PRESETS {
         return Err(ResponsiveError::InvalidPresetCount);
     }
 
-    let mut present = [false; 4];
-    for preset in requested {
-        let index = preset.canonical_index();
-        if present[index] {
-            return Err(ResponsiveError::DuplicatePreset);
-        }
-        present[index] = true;
+    let mut seen = HashSet::with_capacity(requested.len());
+    if requested.iter().copied().any(|preset| !seen.insert(preset)) {
+        return Err(ResponsiveError::DuplicatePreset);
     }
 
-    let presets = ResponsivePresetId::ALL
-        .into_iter()
-        .filter(|preset| present[preset.canonical_index()])
-        .collect::<Vec<_>>();
-    let viewports = presets.iter().map(|preset| preset.viewport()).collect();
+    let mut presets = requested.to_vec();
+    presets.sort_by_key(|preset| preset.canonical_rank());
+    let viewports = presets.iter().copied().map(ResponsivePresetId::viewport).collect();
 
     Ok(ResponsiveSweepPlan { presets, viewports })
 }
 
+fn checked_rgba_bytes(width: u32, height: u32) -> Result<usize, ResponsiveError> {
+    if width == 0 || height == 0 {
+        return Err(ResponsiveError::InvalidPixelGeometry);
+    }
+    let pixels = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
+    pixels
+        .checked_mul(4)
+        .ok_or(ResponsiveError::PixelArithmeticOverflow)
+}
+
 pub fn project_contact_sheet(
     plan: &ResponsiveSweepPlan,
-    frame_pixels: &[(u32, u32)],
+    pixel_dimensions: &[(u32, u32)],
     policy: ContactSheetPolicy,
 ) -> Result<ContactSheetGeometry, ResponsiveError> {
-    if frame_pixels.len() != plan.presets.len() || plan.viewports.len() != plan.presets.len() {
+    if pixel_dimensions.len() != plan.presets.len() || plan.viewports.len() != plan.presets.len() {
         return Err(ResponsiveError::FrameCountMismatch);
     }
 
-    let mut pixel_width = 0_u32;
-    let mut pixel_height = 0_u32;
-    let mut placements = Vec::with_capacity(frame_pixels.len());
+    let mut pixel_width = 0u32;
+    let mut pixel_height = 0u32;
+    let mut aggregate_frame_bytes = 0usize;
+    let mut placements = Vec::with_capacity(pixel_dimensions.len());
 
-    for (index, ((pixel_frame_width, pixel_frame_height), preset)) in frame_pixels
+    for (index, ((pixel_w, pixel_h), (&preset, &viewport))) in pixel_dimensions
         .iter()
-        .copied()
-        .zip(plan.presets.iter().copied())
+        .zip(plan.presets.iter().zip(plan.viewports.iter()))
         .enumerate()
     {
-        if pixel_frame_width == 0 || pixel_frame_height == 0 {
-            return Err(ResponsiveError::InvalidPixelGeometry);
+        let frame_bytes = checked_rgba_bytes(*pixel_w, *pixel_h)?;
+        aggregate_frame_bytes = aggregate_frame_bytes
+            .checked_add(frame_bytes)
+            .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
+        if aggregate_frame_bytes > policy.max_frames_rgba_bytes {
+            return Err(ResponsiveError::FrameMemoryBudgetExceeded);
         }
 
+        pixel_width = pixel_width.max(*pixel_w);
         if index > 0 {
             pixel_height = pixel_height
                 .checked_add(policy.gutter_px)
-                .ok_or(ResponsiveError::ArithmeticOverflow)?;
+                .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
         }
 
         let y = pixel_height;
         pixel_height = pixel_height
-            .checked_add(pixel_frame_height)
-            .ok_or(ResponsiveError::ArithmeticOverflow)?;
-        pixel_width = pixel_width.max(pixel_frame_width);
+            .checked_add(*pixel_h)
+            .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
 
         placements.push(ContactSheetPlacement {
             preset,
-            viewport: preset.viewport(),
+            viewport,
             x: 0,
             y,
-            pixel_width: pixel_frame_width,
-            pixel_height: pixel_frame_height,
+            pixel_width: *pixel_w,
+            pixel_height: *pixel_h,
         });
     }
 
-    let rgba_bytes_u64 = u64::from(pixel_width)
-        .checked_mul(u64::from(pixel_height))
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or(ResponsiveError::ArithmeticOverflow)?;
-    let rgba_bytes =
-        usize::try_from(rgba_bytes_u64).map_err(|_| ResponsiveError::ArithmeticOverflow)?;
-
+    let rgba_bytes = checked_rgba_bytes(pixel_width, pixel_height)?;
     if rgba_bytes > policy.max_rgba_bytes {
         return Err(ResponsiveError::ContactSheetMemoryBudgetExceeded);
     }
@@ -214,117 +245,70 @@ pub fn project_contact_sheet(
     })
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ResponsiveRgbaFrame<'a> {
-    pub preset: ResponsivePresetId,
-    pub viewport: Viewport,
-    pub pixel_width: u32,
-    pub pixel_height: u32,
-    pub rgba: &'a [u8],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponsiveContactSheet {
-    pub geometry: ContactSheetGeometry,
-    pub rgba: Vec<u8>,
-}
-
 pub fn build_responsive_contact_sheet(
     plan: &ResponsiveSweepPlan,
-    frames: &[ResponsiveRgbaFrame<'_>],
+    frames: &[ResponsiveFrame],
     policy: ContactSheetPolicy,
 ) -> Result<ResponsiveContactSheet, ResponsiveError> {
-    if frames.len() != plan.presets.len() || plan.viewports.len() != plan.presets.len() {
+    if frames.len() != plan.presets.len() {
         return Err(ResponsiveError::FrameCountMismatch);
     }
 
-    for (index, frame) in frames.iter().enumerate() {
-        if frame.preset != plan.presets[index] || frame.viewport != plan.viewports[index] {
-            return Err(ResponsiveError::FrameViewportMismatch);
-        }
-
-        if frame.pixel_width == 0 || frame.pixel_height == 0 {
-            return Err(ResponsiveError::InvalidPixelGeometry);
-        }
-
-        let expected_len = rgba_len(frame.pixel_width, frame.pixel_height)?;
-        if frame.rgba.len() != expected_len {
-            return Err(ResponsiveError::InvalidRgbaBuffer);
-        }
-    }
-
-    let frame_pixels = frames
+    let dimensions = frames
         .iter()
-        .map(|frame| (frame.pixel_width, frame.pixel_height))
-        .collect::<Vec<_>>();
-    let geometry = project_contact_sheet(plan, &frame_pixels, policy)?;
+        .enumerate()
+        .map(|(index, frame)| {
+            if frame.preset != plan.presets[index] || frame.viewport != plan.viewports[index] {
+                return Err(ResponsiveError::FrameOrderMismatch);
+            }
+            let expected = checked_rgba_bytes(frame.pixel_width, frame.pixel_height)?;
+            if expected != frame.rgba.len() {
+                return Err(ResponsiveError::FrameBufferLengthMismatch);
+            }
+            Ok((frame.pixel_width, frame.pixel_height))
+        })
+        .collect::<Result<Vec<_>, ResponsiveError>>()?;
 
-    // Opaque neutral background. Source frames are already private-redacted;
-    // contact-sheet construction never rescales or crops them.
-    let mut rgba = vec![0_u8; geometry.rgba_bytes];
+    let geometry = project_contact_sheet(plan, &dimensions, policy)?;
+    let mut rgba = vec![0u8; geometry.rgba_bytes];
+
     for pixel in rgba.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&[32, 33, 36, 255]);
+        pixel.copy_from_slice(&policy.gutter_rgba);
     }
 
-    let sheet_row_bytes = usize::try_from(geometry.pixel_width)
-        .map_err(|_| ResponsiveError::ArithmeticOverflow)?
+    let destination_stride = (geometry.pixel_width as usize)
         .checked_mul(4)
-        .ok_or(ResponsiveError::ArithmeticOverflow)?;
+        .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
 
-    for (frame, placement) in frames.iter().zip(&geometry.placements) {
-        let source_row_bytes = usize::try_from(frame.pixel_width)
-            .map_err(|_| ResponsiveError::ArithmeticOverflow)?
+    for (frame, placement) in frames.iter().zip(geometry.placements.iter()) {
+        let source_stride = (frame.pixel_width as usize)
             .checked_mul(4)
-            .ok_or(ResponsiveError::ArithmeticOverflow)?;
-        let placement_y =
-            usize::try_from(placement.y).map_err(|_| ResponsiveError::ArithmeticOverflow)?;
+            .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
 
-        for row in 0..usize::try_from(frame.pixel_height)
-            .map_err(|_| ResponsiveError::ArithmeticOverflow)?
-        {
+        for row in 0..frame.pixel_height as usize {
             let source_start = row
-                .checked_mul(source_row_bytes)
-                .ok_or(ResponsiveError::ArithmeticOverflow)?;
+                .checked_mul(source_stride)
+                .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
             let source_end = source_start
-                .checked_add(source_row_bytes)
-                .ok_or(ResponsiveError::ArithmeticOverflow)?;
-
-            let destination_row = placement_y
+                .checked_add(source_stride)
+                .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
+            let destination_row = (placement.y as usize)
                 .checked_add(row)
-                .ok_or(ResponsiveError::ArithmeticOverflow)?;
+                .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
             let destination_start = destination_row
-                .checked_mul(sheet_row_bytes)
-                .and_then(|offset| {
-                    usize::try_from(placement.x)
-                        .ok()
-                        .and_then(|x| x.checked_mul(4))
-                        .and_then(|x_bytes| offset.checked_add(x_bytes))
-                })
-                .ok_or(ResponsiveError::ArithmeticOverflow)?;
+                .checked_mul(destination_stride)
+                .and_then(|offset| offset.checked_add(placement.x as usize * 4))
+                .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
             let destination_end = destination_start
-                .checked_add(source_row_bytes)
-                .ok_or(ResponsiveError::ArithmeticOverflow)?;
+                .checked_add(source_stride)
+                .ok_or(ResponsiveError::PixelArithmeticOverflow)?;
 
-            rgba.get_mut(destination_start..destination_end)
-                .ok_or(ResponsiveError::ArithmeticOverflow)?
-                .copy_from_slice(
-                    frame
-                        .rgba
-                        .get(source_start..source_end)
-                        .ok_or(ResponsiveError::InvalidRgbaBuffer)?,
-                );
+            rgba[destination_start..destination_end]
+                .copy_from_slice(&frame.rgba[source_start..source_end]);
         }
     }
 
     Ok(ResponsiveContactSheet { geometry, rgba })
-}
-
-fn rgba_len(width: u32, height: u32) -> Result<usize, ResponsiveError> {
-    let bytes = u64::from(width)
-        .checked_mul(u64::from(height))
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or(ResponsiveError::ArithmeticOverflow)?;
-    usize::try_from(bytes).map_err(|_| ResponsiveError::ArithmeticOverflow)
 }
 
 #[async_trait]
@@ -354,9 +338,9 @@ pub async fn discover_breakpoint<P: LayoutProbe>(
     while high - low > tolerance.max(1) {
         let mid = low + (high - low) / 2;
         if probe.fails_at(mid).await == low_fails {
-            low = mid
+            low = mid;
         } else {
-            high = mid
+            high = mid;
         }
     }
     Some(if low_fails { high } else { low })
@@ -371,6 +355,7 @@ pub fn adaptive_sweep(min: u32, max: u32, anchors: &[u32]) -> Vec<u32> {
     widths.extend([min, max]);
     widths.sort_unstable();
     widths.dedup();
+
     let mut extra = Vec::new();
     for pair in widths.windows(2) {
         if pair[1] - pair[0] > 160 {
@@ -400,5 +385,44 @@ mod tests {
     async fn finds_transition() {
         let breakpoint = discover_breakpoint(&P, 768, 700, 2).await.unwrap();
         assert!((727..=730).contains(&breakpoint));
+    }
+
+    #[test]
+    fn contact_sheet_copies_exact_rows_and_keeps_opaque_gutters() {
+        let plan = plan_canonical_sweep(&[
+            ResponsivePresetId::MobileS,
+            ResponsivePresetId::Mobile,
+        ])
+        .unwrap();
+        let policy = ContactSheetPolicy {
+            gutter_px: 1,
+            max_rgba_bytes: 1024,
+            max_frames_rgba_bytes: 512,
+            gutter_rgba: [9, 8, 7, 255],
+        };
+        let frames = vec![
+            ResponsiveFrame {
+                preset: ResponsivePresetId::MobileS,
+                viewport: ResponsivePresetId::MobileS.viewport(),
+                pixel_width: 2,
+                pixel_height: 1,
+                rgba: vec![1, 2, 3, 255, 4, 5, 6, 255],
+            },
+            ResponsiveFrame {
+                preset: ResponsivePresetId::Mobile,
+                viewport: ResponsivePresetId::Mobile.viewport(),
+                pixel_width: 1,
+                pixel_height: 1,
+                rgba: vec![10, 11, 12, 255],
+            },
+        ];
+
+        let sheet = build_responsive_contact_sheet(&plan, &frames, policy).unwrap();
+        assert_eq!(sheet.geometry.pixel_width, 2);
+        assert_eq!(sheet.geometry.pixel_height, 3);
+        assert_eq!(&sheet.rgba[0..8], &[1, 2, 3, 255, 4, 5, 6, 255]);
+        assert_eq!(&sheet.rgba[8..16], &[9, 8, 7, 255, 9, 8, 7, 255]);
+        assert_eq!(&sheet.rgba[16..20], &[10, 11, 12, 255]);
+        assert_eq!(&sheet.rgba[20..24], &[9, 8, 7, 255]);
     }
 }
