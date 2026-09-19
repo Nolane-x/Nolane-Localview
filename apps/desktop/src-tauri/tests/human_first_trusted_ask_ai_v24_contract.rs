@@ -179,18 +179,59 @@ fn ask_ai_is_reference_bound_and_shared_across_human_surfaces() {
 }
 
 #[test]
-fn fix_remains_unavailable_in_v24() {
-    let tools = include_str!("../../src/features/FloatingTools.tsx");
+fn ask_ai_v24_remains_read_only_when_fix_v25_is_present() {
     let shell = include_str!("../../src/app/LocalViewShell.tsx");
+    let desktop = include_str!("../src/lib.rs");
+    let api = include_str!("../../src/api.ts");
 
-    assert!(
-        !shell.contains("case COMMAND_IDS.aiFixSelection:"),
-        "Ask AI V2.4 must not silently wire Fix"
+    let shell_ask = between(
+        shell,
+        "const askAiAboutSelection = useCallback",
+        "const prepareFixProposal = useCallback",
     );
+    for forbidden in [
+        "prepareFixProposal",
+        "applyFixProposal",
+        "discardFixProposal",
+        "COMMAND_IDS.aiFixSelection",
+    ] {
+        assert!(
+            !shell_ask.contains(forbidden),
+            "Ask AI V2.4 lifecycle must remain read-only after V2.5: {forbidden}"
+        );
+    }
 
-    let ai_panel = between(tools, "function AiPanel(", "function SessionsPanel(");
-    assert!(ai_panel.contains("ai.fixSelection"));
-    assert!(ai_panel.contains("disabled"));
+    let desktop_ask = between(
+        desktop,
+        "async fn ask_ai_about_selection(",
+        "async fn prepare_fix_proposal(",
+    );
+    for forbidden in [
+        "trusted_fix::",
+        "prepare_fix_proposal",
+        "apply_fix_proposal",
+        "fs::write",
+        "fs::rename",
+    ] {
+        assert!(
+            !desktop_ask.contains(forbidden),
+            "Ask AI V2.4 backend must not gain Fix/write authority: {forbidden}"
+        );
+    }
+
+    let api_ask = between(api, "askAiAboutSelection", "openSourceForSelection");
+    for forbidden in [
+        "prepare_fix_proposal",
+        "apply_fix_proposal",
+        "proposalId",
+        "replacement",
+        "diff",
+    ] {
+        assert!(
+            !api_ask.contains(forbidden),
+            "Ask AI V2.4 API must remain intent-only after V2.5: {forbidden}"
+        );
+    }
 }
 
 #[test]
