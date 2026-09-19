@@ -91,3 +91,31 @@ jobs:
 
       - name: Check control crate
         run: cargo check -p localview-control --all-targets
+
+  browser-runtime:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize exact LocalView instrumentation bootstrap
+        run: cargo run -p localview-instrumentation --example network_fault_bootstrap > /tmp/localview-network-fault-bootstrap.js
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install browser proof dependencies
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove real Chromium fault semantics
+        working-directory: apps/desktop
+        run: |
+          cp ../../tools/wave3-network-fault/runtime.mjs ./wave3-network-fault-runtime.mjs
+          node ./wave3-network-fault-runtime.mjs
+          rm ./wave3-network-fault-runtime.mjs
