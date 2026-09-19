@@ -158,7 +158,7 @@ impl SourceMap {
                     generated_column = generated_column
                         .checked_add(fields[0])
                         .ok_or(SourceMapError::IntegerOverflow)?;
-                    if generated_column < 0 || generated_column > MAX_COLUMN {
+                    if !(0..=MAX_COLUMN).contains(&generated_column) {
                         return Err(SourceMapError::GeneratedColumnOutOfRange);
                     }
                     if generated_column < previous_generated_column {
