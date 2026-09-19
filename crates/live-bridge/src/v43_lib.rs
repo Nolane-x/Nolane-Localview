@@ -9,7 +9,7 @@ mod postcondition_reconciliation;
 pub use action_envelope::*;
 pub use consequential_journal::*;
 pub use legacy::{
-    ActionCancellationOutcome, ActionCancellationSignal, ActionCancellationState, BridgeAction,
+    ActionCancellationOutcome, ActionCancellationSignal, ActionCancellationState, ActionExecutionBoundary, BridgeAction,
     BridgeActionKind, BridgeActionResult, CompletionOrigin, IngestReport, NativeExecutorAction,
     NativeExecutorCancellationOutcome, NativeExecutorCancellationSignal,
     NativeExecutorCancellationState, NativeExecutorRequest, NativeExecutorResult, ObserverBatch,
