@@ -70,12 +70,13 @@ pub struct SourceMap {
 #[derive(Debug, Deserialize)]
 struct RawSourceMap {
     version: u32,
-    #[serde(default)]
+    #[serde(default, rename = "sourceRoot")]
     source_root: Option<String>,
     #[serde(default)]
     sources: Vec<String>,
     #[serde(default)]
     names: Vec<String>,
+    #[serde(default)]
     mappings: String,
     #[serde(default)]
     sections: Option<serde_json::Value>,
@@ -566,10 +567,7 @@ mod tests {
 
         let indexed = serde_json::json!({
             "version": 3,
-            "sections": [],
-            "sources": [],
-            "names": [],
-            "mappings": ""
+            "sections": []
         })
         .to_string();
         assert_eq!(
