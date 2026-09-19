@@ -3661,6 +3661,97 @@ await assertPrimaryControlsInViewport(page, 'chrome-reset-recovered');
 await shot(page, '149-chrome-resize-reset-recovered.png', 'chrome-resize-reset-recovered');
 await page.close();
 
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'vi');
+await page.keyboard.press('r');
+await page.waitForTimeout(120);
+await assertVisible(page, '.panel-responsive', 'vi-responsive-localized');
+const viResponsiveText = await page.locator('.panel-responsive').innerText();
+for (const expected of ['Điện thoại nhỏ', 'Điện thoại', 'Máy tính bảng', 'Máy tính để bàn']) {
+  invariant(
+    viResponsiveText.includes(expected),
+    'localization:vi-responsive-presets',
+    { expected, viResponsiveText },
+  );
+}
+for (const forbidden of ['Mobile S', 'Tablet', 'Desktop']) {
+  invariant(
+    !viResponsiveText.includes(forbidden),
+    'localization:no-primary-english-leak',
+    { surface: 'responsive', forbidden, viResponsiveText },
+  );
+}
+await shot(page, '150-vi-responsive-localized.png', 'vi-responsive-localized');
+await page.close();
+
+const dashboardLocalizedSessions = {
+  ...dashboard,
+  health: { ...dashboard.health, sessions: 4 },
+  sessions: [
+    {
+      ...dashboard.sessions[0],
+      id: '31111111-1111-4111-8111-111111111111',
+      status: 'active',
+      classification: { ...dashboard.sessions[0].classification, framework: undefined },
+      project: { ...dashboard.sessions[0].project, key: 'session-active', display_name: 'Alpha' },
+    },
+    {
+      ...dashboard.sessions[0],
+      id: '32222222-2222-4222-8222-222222222222',
+      status: 'disconnected',
+      classification: { ...dashboard.sessions[0].classification, framework: undefined },
+      project: { ...dashboard.sessions[0].project, key: 'session-disconnected', display_name: 'Beta' },
+    },
+    {
+      ...dashboard.sessions[0],
+      id: '33333333-3333-4333-8333-333333333333',
+      status: 'hidden',
+      classification: { ...dashboard.sessions[0].classification, framework: undefined },
+      project: { ...dashboard.sessions[0].project, key: 'session-hidden', display_name: 'Gamma' },
+    },
+    {
+      ...dashboard.sessions[0],
+      id: '34444444-4444-4444-8444-444444444444',
+      status: 'closed',
+      classification: { ...dashboard.sessions[0].classification, framework: undefined },
+      project: { ...dashboard.sessions[0].project, key: 'session-closed', display_name: 'Delta' },
+    },
+  ],
+};
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'vi',
+  {},
+  live,
+  dashboardLocalizedSessions,
+);
+await page.locator('.logo-button').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.panel-sessions', 'vi-sessions-localized');
+const viSessionsText = await page.locator('.panel-sessions').innerText();
+for (const expected of ['Đang hoạt động', 'Đã ngắt kết nối', 'Đã ẩn', 'Đã đóng']) {
+  invariant(
+    viSessionsText.includes(expected),
+    'localization:vi-sessions-status',
+    { expected, viSessionsText },
+  );
+}
+invariant(
+  (viSessionsText.match(/Web/g) ?? []).length >= 4,
+  'localization:vi-session-web-fallback',
+  { viSessionsText },
+);
+for (const forbidden of ['Active', 'Disconnected', 'Hidden', 'Closed']) {
+  invariant(
+    !viSessionsText.includes(forbidden),
+    'localization:no-primary-english-leak',
+    { surface: 'sessions', forbidden, viSessionsText },
+  );
+}
+await shot(page, '151-vi-sessions-localized.png', 'vi-sessions-localized');
+await page.close();
+
 await fs.writeFile(
   'human-first-ui-v2-render/audit.json',
   JSON.stringify(audit, null, 2) + '\\n',
