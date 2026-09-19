@@ -50,11 +50,30 @@ fn default_human_inspector_hides_machine_diagnostics() {
 }
 
 #[test]
-fn inspector_never_presents_unwired_primary_actions_as_enabled() {
+fn inspector_primary_actions_are_real_and_capability_gated() {
     let source = include_str!("../../src/features/FloatingTools.tsx");
     let inspector = between(source, "function Inspector(", "function AdvancedPanel(");
 
-    assert!(inspector.contains("function UnavailableInspectorAction("));
+    for required in [
+        "className=\"source-open-action\"",
+        "onOpenSource(measureReference)",
+        "className=\"measure-action\"",
+        "onMeasure(measureReference)",
+        "className=\"capture-action\"",
+        "onClick={onCapture}",
+        "className=\"ask-ai-action\"",
+        "onAskAi(translate(locale, 'ai.defaultQuestion'))",
+        "aiProviderCapability.available",
+        "className=\"fix-action\"",
+        "onClick={onBeginFix}",
+        "fixCapability.available",
+    ] {
+        assert!(
+            inspector.contains(required),
+            "Inspector primary action wiring is missing {required}"
+        );
+    }
+
     for key in [
         "action.openSource",
         "action.measure",
@@ -64,12 +83,9 @@ fn inspector_never_presents_unwired_primary_actions_as_enabled() {
     ] {
         assert!(
             inspector.contains(&format!("translate(locale, '{key}')")),
-            "missing localized unavailable action for {key}"
+            "missing localized primary action for {key}"
         );
     }
-    assert!(inspector.contains("disabled"));
-    assert!(inspector.contains("aria-disabled=\"true\""));
-    assert!(!inspector.contains("<button><CaptureIcon"));
 }
 
 #[test]
@@ -99,8 +115,22 @@ fn settings_and_advanced_are_real_tool_surfaces() {
     assert!(settings.contains("translate(locale, 'settings.language')"));
     assert!(settings.contains("translate(locale, 'settings.showTargetBar')"));
     assert!(settings.contains("translate(locale, 'settings.showToolRail')"));
-    assert!(!settings.contains("settings.rememberChrome"));
-    assert!(!settings.contains("rememberChromePositions"));
+    assert!(settings.contains("translate(locale, 'settings.rememberChrome')"));
+    assert!(settings.contains("rememberChromePositions"));
+
+    for schema_only in [
+        "annotationPersistence",
+        "notifications",
+        "autoOpen",
+        "density",
+        "accent",
+    ] {
+        assert!(
+            !settings.contains(schema_only),
+            "schema-only preference must not become a fake Settings control: {schema_only}"
+        );
+    }
+
     assert!(shell.contains("<RailButton tool=\"settings\""));
     assert!(shell.contains("<SettingsIcon/>"));
 }
@@ -122,16 +152,36 @@ fn command_palette_search_is_functional_not_decorative() {
 }
 
 #[test]
-fn human_first_panels_do_not_enable_unwired_responsive_or_ai_actions() {
+fn human_first_panels_keep_responsive_placeholder_and_gate_real_ai_actions() {
     let source = include_str!("../../src/features/FloatingTools.tsx");
     let responsive = between(source, "function ResponsivePanel(", "function ConsolePanel(");
     let ai = between(source, "function AiPanel(", "function SessionsPanel(");
 
     assert!(!responsive.contains("disabled={!current}"));
     assert!(responsive.contains("disabled aria-disabled=\"true\""));
-    assert!(!ai.contains("disabled={!current}"));
-    assert!(ai.matches("disabled aria-disabled=\"true\"").count() >= 4);
-    assert!(ai.contains("translate(locale, 'ai.unavailable')"));
+
+    for required in [
+        "const canAsk",
+        "providerCapability.available",
+        "disabled={!canAsk}",
+        "onAskAi",
+        "onBeginFix",
+        "fixCapability.available",
+        "onVerifyChange",
+        "verifyCanRetry",
+        "translate(locale, 'ai.unavailable')",
+    ] {
+        assert!(
+            ai.contains(required),
+            "AI surface must capability-gate real actions: missing {required}"
+        );
+    }
+
+    assert!(
+        ai.contains("<button disabled aria-disabled=\"true\" title={translate(locale, 'ai.notImplementedYet')}>"),
+        "the intentionally unavailable Explain Issue action must remain explicit"
+    );
+    assert!(ai.contains("translate(locale, 'ai.explainIssue')"));
 }
 
 #[test]
@@ -358,47 +408,59 @@ fn top_level_human_panels_do_not_split_language() {
 
 
 #[test]
-fn command_palette_routes_through_canonical_command_ids() {
+fn command_palette_routes_every_surfaced_action_through_canonical_command_ids() {
     let shell = include_str!("../../src/app/LocalViewShell.tsx");
     let tools = include_str!("../../src/features/FloatingTools.tsx");
     let commands = include_str!("../../src/commands.ts");
 
-    assert!(commands.contains("aiOpen: 'ai.open'"));
     assert!(tools.contains("import { COMMAND_IDS, type CommandId } from '../commands';"));
     assert!(tools.contains("onCommand: (command: CommandId) => void"));
     assert!(tools.contains("key={command.id}"));
-
-    for id in [
-        "COMMAND_IDS.inspectActivate",
-        "COMMAND_IDS.responsiveOpen",
-        "COMMAND_IDS.consoleOpen",
-        "COMMAND_IDS.networkOpen",
-        "COMMAND_IDS.aiOpen",
-        "COMMAND_IDS.previewOpenNative",
-        "COMMAND_IDS.settingsOpen",
-        "COMMAND_IDS.advancedOpen",
-        "COMMAND_IDS.workspaceToggleTargetBar",
-        "COMMAND_IDS.workspaceToggleToolRail",
-        "COMMAND_IDS.sessionPauseDiscovery",
-    ] {
-        assert!(
-            tools.contains(id),
-            "command palette is missing canonical command id {id}"
-        );
-    }
-
     assert!(shell.contains("type CommandId"));
     assert!(shell.contains("const executeCommand = useCallback("));
     assert!(shell.contains("switch (command)"));
-    assert!(shell.contains("case COMMAND_IDS.inspectActivate:"));
-    assert!(shell.contains("case COMMAND_IDS.workspaceToggleTargetBar:"));
-    assert!(shell.contains("case COMMAND_IDS.workspaceToggleToolRail:"));
-    assert!(shell.contains("case COMMAND_IDS.sessionPauseDiscovery:"));
     assert!(shell.contains("onCommand={executeCommand}"));
+
+    for id in [
+        "inspectActivate",
+        "sourceOpen",
+        "responsiveOpen",
+        "consoleOpen",
+        "networkOpen",
+        "aiOpen",
+        "aiAskSelection",
+        "aiFixSelection",
+        "aiVerifyChange",
+        "previewOpenNative",
+        "settingsOpen",
+        "advancedOpen",
+        "workspaceToggleTargetBar",
+        "workspaceToggleToolRail",
+        "workspaceResetLayout",
+        "sessionPauseDiscovery",
+    ] {
+        let marker = format!("COMMAND_IDS.{id}");
+        assert!(
+            tools.contains(&marker),
+            "command palette is missing surfaced canonical command {marker}"
+        );
+        assert!(
+            shell.contains(&format!("case {marker}:")),
+            "surfaced command has no executeCommand case: {marker}"
+        );
+    }
+
+    for reserved in ["sessionSwitch", "languageChange"] {
+        let marker = format!("COMMAND_IDS.{reserved}");
+        assert!(
+            !tools.contains(&marker),
+            "registry-only command must not be surfaced before it has canonical routing: {marker}"
+        );
+    }
+
+    assert!(shell.contains("case COMMAND_IDS.workspaceToggleChrome:"));
     assert!(!tools.contains("key={command.title}"));
 }
-
-
 
 #[test]
 fn explicit_reduced_motion_preference_is_respected() {

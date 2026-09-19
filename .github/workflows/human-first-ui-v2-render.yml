@@ -1,6 +1,16 @@
 name: Human-first UI V2 render audit
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/human-first-ui-v2-render.yml
+      - .github/workflows/human-first-ui-v2-tdd.yml
+      - tools/human-first-ui-v2/**
+      - apps/desktop/src/**
+      - apps/desktop/src-tauri/tests/human_first_ui_v2_contract.rs
+      - docs/superpowers/specs/2026-09-18-human-first-localview-ui-ux-v2.md
   push:
     branches:
       - feat/human-first-localview-ui-v2

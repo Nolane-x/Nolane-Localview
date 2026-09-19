@@ -2,25 +2,23 @@
 
 ## Status
 
-**Canonical design and execution contract. Implementation active.**
+**Canonical design and execution contract. Foundation and bounded Human-First V2 closures are merged; continuation is evidence-gated.**
 
 This document is the durable source of truth for the Human-First LocalView UI/UX V2 wave. It is intentionally stored in the repository so a later AI can recover the project without depending on chat history.
 
 Repository: `Nolane-x/Nolane-Localview`
 
-Implementation branch at spec creation:
-`feat/human-first-localview-ui-v2`
+Historical foundation:
+- `#142 — feat: human-first LocalView UI/UX V2 foundation` — merged;
+- `#143 — Trusted Capture V2.1` — merged;
+- `#144 — Trusted Measure V2.2` — merged;
+- `#145 — Trusted Open Source V2.3` — merged;
+- `#146 — Trusted Ask AI V2.4` — merged;
+- `#147 — Trusted Fix V2.5` — merged;
+- `#148 — Trusted Verify Change V2.6` — merged;
+- `#149 — Human-First Chrome Position Persistence closure` — merged.
 
-Base:
-`main@05394bbdf44ff02b94b1bf673cfe21fc7671ad7f`
-
-Implementation head observed immediately before this spec:
-`e1074c59dab178aad8a377ab70830f7732b444db`
-
-Pull request:
-`#142 — feat: human-first LocalView UI/UX V2 foundation`
-
-The implementation head may advance after this document is committed. Future work must treat the current branch head and executable tests as implementation truth, while this file defines the intended product and acceptance boundaries.
+The branch/base/head recorded at spec creation are historical provenance, not the continuation frontier. Future work must first read the current `main` head and any current Human-First continuation PR, then use exact-head executable evidence as implementation truth while this file defines the intended product and acceptance boundaries.
 
 ---
 
@@ -859,18 +857,18 @@ Never trade observer/capture/session functionality for prettier chrome.
 
 ## 30. Merge readiness
 
-PR #142 must remain Draft until the V2 slice has one immutable final implementation head satisfying the applicable closure.
+The historical foundation PR #142 and bounded continuations #143–#149 are merged. These rules now apply to every future Human-First continuation PR rather than to one permanent branch.
 
-Minimum merge conditions:
+Minimum merge conditions for a continuation that changes Human-First behavior or its executable contract:
 
-1. canonical spec committed;
-2. dedicated human-first contract GREEN;
-3. frontend build/typecheck GREEN;
-4. applicable Rust/Tauri workspace checks GREEN;
-5. native GUI smoke gates GREEN where required by repository policy;
+1. canonical spec remains compatible with the proposed behavior;
+2. the master Human-First V2 source contract is GREEN;
+3. frontend build/typecheck is GREEN;
+4. applicable Rust/Tauri workspace checks are GREEN;
+5. native GUI smoke gates are GREEN where required by repository policy;
 6. no regression in session/observer/capture behavior;
-7. visual evidence collected for representative V2 states;
-8. accessibility/recovery audit closed;
+7. runtime/browser evidence is collected when the change affects visible or interactive behavior;
+8. accessibility/recovery behavior remains closed;
 9. PR body reflects exact final scope and evidence;
 10. all required checks correspond to the exact final head, not an earlier green commit.
 
@@ -883,23 +881,23 @@ Do not cite earlier green commits as proof after code changes.
 When resuming this project:
 
 1. read this file;
-2. fetch PR #142;
-3. record current PR head;
-4. inspect commits after the implementation lineage listed above;
-5. inspect current changed files;
+2. fetch the current `main` head;
+3. inspect the latest relevant Human-First continuation PR, if one exists;
+4. record the exact current branch/PR head before making a mutation;
+5. inspect commits and changed files after the latest merged Human-First closure;
 6. inspect check runs for the exact current head;
 7. do not assume an in-progress/cancelled older run represents the current head;
-8. run/fix the dedicated Human-First V2 contract;
-9. audit the Known Implementation Risks section;
+8. run/fix the master Human-First V2 source contract and applicable runtime audit;
+9. audit the Known Implementation Risks section against current code rather than historical assumptions;
 10. choose the smallest bounded missing contract;
-11. add a RED executable test/evidence gate;
+11. add RED executable test/evidence when introducing a new behavioral claim;
 12. implement GREEN;
 13. run broader regression gates;
 14. commit with narrow provenance;
-15. update this spec only when the product contract changes, not for routine implementation progress;
-16. keep PR Draft until exact-head closure is real.
+15. update this spec when its durable product/continuation contract becomes stale, not for routine implementation progress;
+16. keep the continuation PR Draft until exact-head closure is real.
 
-If another AI or process advances the branch while working, re-read the PR head before making a mutation. Never overwrite a newer implementation with stale file contents.
+If another AI or process advances `main` or the continuation branch while working, re-read the relevant head before making a mutation. Never overwrite newer implementation with stale file contents.
 
 ---
 
