@@ -3858,7 +3858,7 @@ page = await pageFor(
   {},
   {},
   {},
-  { delayMs: 650 },
+  { delayMs: 1800 },
 );
 await page.keyboard.press('r');
 await page.waitForTimeout(80);
@@ -3866,7 +3866,14 @@ await page.getByRole('button', { name: 'Run responsive sweep' }).click();
 await page.evaluate((nextDashboard) => {
   window.__LOCALVIEW_AUDIT_DASHBOARD_STATE__ = nextDashboard;
 }, dashboardSessionB);
-await page.waitForTimeout(1600);
+await page.waitForTimeout(1450);
+const switchedSession = await page.locator('.top-pill select').inputValue();
+invariant(
+  switchedSession === dashboardSessionB.sessions[0].id,
+  'responsive:stale-session-switched-before-response',
+  { switchedSession },
+);
+await page.waitForTimeout(550);
 const staleSuccessVisible = await page.locator('.responsive-result').isVisible().catch(() => false);
 invariant(!staleSuccessVisible, 'responsive:stale-session-result-isolated', { staleSuccessVisible });
 await page.close();
