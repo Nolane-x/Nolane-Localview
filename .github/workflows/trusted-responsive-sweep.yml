@@ -7,6 +7,8 @@ on:
     paths:
       - .github/workflows/trusted-responsive-sweep.yml
       - docs/superpowers/specs/2026-09-19-trusted-responsive-sweep-contact-sheet-design.md
+      - docs/SPEC_COVERAGE.md
+      - docs/ROADMAP.md
       - crates/responsive/**
       - crates/visual/**
       - crates/control/src/visual_responsive.rs
