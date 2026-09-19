@@ -670,7 +670,7 @@ async fn apply_fix_proposal(
     let gate = store.apply_gate_for(&proposal.canonical_file)?;
     let _guard = gate.lock().await;
 
-    let result = match tokio::time::timeout(std::time::Duration::from_secs(15), async {
+    let result = async {
         let pre_route =
             visual_capture::managed_surface_canonical_route(&app, proposal.session_id)?;
         if pre_route != proposal.canonical_route {
@@ -820,12 +820,8 @@ async fn apply_fix_proposal(
                 applied_at_unix_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
             },
         )
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err("trusted Verify deadline exceeded".to_string()),
-    };
+    }
+    .await;
 
     match result {
         Ok(receipt) => {
@@ -859,7 +855,7 @@ async fn verify_fix_change(
         let _ = verification_store.invalidate(&verification_id);
         return Err("trusted Verify context version is unsupported".into());
     }
-    let result = async {
+    let result = match tokio::time::timeout(std::time::Duration::from_secs(15), async {
         let pre_route =
             visual_capture::managed_surface_canonical_route(&app, record.session_id)?;
         if pre_route != record.canonical_route {
@@ -1026,8 +1022,12 @@ async fn verify_fix_change(
                 verified_at_unix_ms: trusted_verify::now_unix_ms(),
             },
         )
-    }
-    .await;
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err("trusted Verify deadline exceeded".to_string()),
+    };
 
     match result {
         Ok(receipt) => {
