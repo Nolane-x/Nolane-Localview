@@ -50,6 +50,10 @@ const en = {
   'sessions.detectedOne': 'detected localhost session',
   'sessions.detectedMany': 'detected localhost sessions',
   'responsive.viewports': 'Viewports',
+  'responsive.mobileSmall': 'Small mobile',
+  'responsive.mobile': 'Mobile',
+  'responsive.tablet': 'Tablet',
+  'responsive.desktop': 'Desktop',
   'responsive.unavailable': 'Responsive viewport control is not connected yet.',
   'responsive.note': 'Viewport controls become available when a trusted resize path is connected.',
   'command.searchPlaceholder': 'Type a command…',
@@ -102,6 +106,10 @@ const en = {
   'runtime.unavailableHint': 'LocalView could not reach its runtime. Your preview stays available when possible.',
   'session.disconnected': "Development server disconnected",
   'session.reconnectGrace': "LocalView is keeping this session open while it waits for the development server to reconnect.",
+  'session.status.active': 'Active',
+  'session.status.disconnected': 'Disconnected',
+  'session.status.hidden': 'Hidden',
+  'session.framework.web': 'Web',
   'console.live': "Live",
   'console.eventOne': "event",
   'console.eventMany': "events",
@@ -209,7 +217,11 @@ const en = {
 export type MessageKey = keyof typeof en;
 type Dictionary = Record<MessageKey, string>;
 
-const messages: Record<SupportedLocale, Dictionary> = {
+export const PRIMARY_FLOW_MESSAGE_KEYS = Object.freeze(
+  (Object.keys(en) as MessageKey[]).filter((key) => !key.startsWith('advanced.')),
+);
+
+export const messages: Record<SupportedLocale, Dictionary> = {
   en,
   vi: {
     'tool.inspect': 'Kiểm tra',
@@ -224,6 +236,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': 'phiên localhost được phát hiện',
     'sessions.detectedMany': 'phiên localhost được phát hiện',
     'responsive.viewports': 'Khung nhìn',
+    'responsive.mobileSmall': 'Điện thoại nhỏ',
+    'responsive.mobile': 'Điện thoại',
+    'responsive.tablet': 'Máy tính bảng',
+    'responsive.desktop': 'Máy tính để bàn',
     'responsive.unavailable': 'Điều khiển khung nhìn responsive chưa được kết nối.',
     'responsive.note': 'Công cụ khung nhìn sẽ khả dụng khi có đường thay đổi kích thước đáng tin cậy.',
     'command.searchPlaceholder': 'Nhập lệnh…',
@@ -276,6 +292,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'LocalView không thể kết nối tới runtime. Bản xem trước vẫn được giữ khi có thể.',
     'session.disconnected': "Máy chủ phát triển đã ngắt kết nối",
     'session.reconnectGrace': "LocalView đang giữ phiên này trong khi chờ máy chủ phát triển kết nối lại.",
+    'session.status.active': 'Đang hoạt động',
+    'session.status.disconnected': 'Đã ngắt kết nối',
+    'session.status.hidden': 'Đã ẩn',
+    'session.framework.web': 'Web',
     'console.live': "Trực tiếp",
     'console.eventOne': "sự kiện",
     'console.eventMany': "sự kiện",
@@ -392,6 +412,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': '个已检测到的 localhost 会话',
     'sessions.detectedMany': '个已检测到的 localhost 会话',
     'responsive.viewports': '视口',
+    'responsive.mobileSmall': '小屏手机',
+    'responsive.mobile': '手机',
+    'responsive.tablet': '平板',
+    'responsive.desktop': '桌面',
     'responsive.unavailable': '响应式视口控制尚未连接。',
     'responsive.note': '连接可信的尺寸调整路径后即可使用视口控制。',
     'command.searchPlaceholder': '输入命令…',
@@ -444,6 +468,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'LocalView 无法连接运行时。预览会在可能时保持可用。',
     'session.disconnected': "开发服务器已断开连接",
     'session.reconnectGrace': "LocalView 正在保留此会话，并等待开发服务器重新连接。",
+    'session.status.active': '活跃',
+    'session.status.disconnected': '已断开',
+    'session.status.hidden': '已隐藏',
+    'session.framework.web': 'Web',
     'console.live': "实时",
     'console.eventOne': "个事件",
     'console.eventMany': "个事件",
@@ -560,6 +588,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': '個已偵測到的 localhost 工作階段',
     'sessions.detectedMany': '個已偵測到的 localhost 工作階段',
     'responsive.viewports': '檢視區',
+    'responsive.mobileSmall': '小螢幕手機',
+    'responsive.mobile': '手機',
+    'responsive.tablet': '平板',
+    'responsive.desktop': '桌面',
     'responsive.unavailable': '響應式檢視區控制尚未連接。',
     'responsive.note': '連接可信的尺寸調整路徑後即可使用檢視區控制。',
     'command.searchPlaceholder': '輸入命令…',
@@ -624,6 +656,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'LocalView 無法連接執行階段。預覽會在可能時維持可用。',
     'session.disconnected': "開發伺服器已中斷連線",
     'session.reconnectGrace': "LocalView 正在保留此工作階段，並等待開發伺服器重新連線。",
+    'session.status.active': '使用中',
+    'session.status.disconnected': '已中斷連線',
+    'session.status.hidden': '已隱藏',
+    'session.framework.web': 'Web',
     'console.live': "即時",
     'console.eventOne': "個事件",
     'console.eventMany': "個事件",
@@ -728,6 +764,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': '件の localhost セッションを検出',
     'sessions.detectedMany': '件の localhost セッションを検出',
     'responsive.viewports': 'ビューポート',
+    'responsive.mobileSmall': '小型モバイル',
+    'responsive.mobile': 'モバイル',
+    'responsive.tablet': 'タブレット',
+    'responsive.desktop': 'デスクトップ',
     'responsive.unavailable': 'レスポンシブのビューポート制御はまだ接続されていません。',
     'responsive.note': '信頼できるリサイズ経路が接続されるとビューポート制御を利用できます。',
     'command.searchPlaceholder': 'コマンドを入力…',
@@ -792,6 +832,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'LocalView はランタイムに接続できません。可能な場合はプレビューを維持します。',
     'session.disconnected': "開発サーバーが切断されました",
     'session.reconnectGrace': "LocalView は開発サーバーの再接続を待つ間、このセッションを保持します。",
+    'session.status.active': 'アクティブ',
+    'session.status.disconnected': '切断済み',
+    'session.status.hidden': '非表示',
+    'session.framework.web': 'Web',
     'console.live': "ライブ",
     'console.eventOne': "件のイベント",
     'console.eventMany': "件のイベント",
@@ -896,6 +940,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': '개의 localhost 세션 감지됨',
     'sessions.detectedMany': '개의 localhost 세션 감지됨',
     'responsive.viewports': '뷰포트',
+    'responsive.mobileSmall': '소형 모바일',
+    'responsive.mobile': '모바일',
+    'responsive.tablet': '태블릿',
+    'responsive.desktop': '데스크톱',
     'responsive.unavailable': '반응형 뷰포트 제어가 아직 연결되지 않았습니다.',
     'responsive.note': '신뢰할 수 있는 크기 조절 경로가 연결되면 뷰포트 제어를 사용할 수 있습니다.',
     'command.searchPlaceholder': '명령 입력…',
@@ -960,6 +1008,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'LocalView가 런타임에 연결할 수 없습니다. 가능한 경우 미리보기를 유지합니다.',
     'session.disconnected': "개발 서버 연결이 끊어졌습니다",
     'session.reconnectGrace': "LocalView는 개발 서버가 다시 연결될 때까지 이 세션을 유지합니다.",
+    'session.status.active': '활성',
+    'session.status.disconnected': '연결 끊김',
+    'session.status.hidden': '숨김',
+    'session.framework.web': 'Web',
     'console.live': "실시간",
     'console.eventOne': "개 이벤트",
     'console.eventMany': "개 이벤트",
@@ -1064,6 +1116,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': 'sesión localhost detectada',
     'sessions.detectedMany': 'sesiones localhost detectadas',
     'responsive.viewports': 'Vistas',
+    'responsive.mobileSmall': 'Móvil pequeño',
+    'responsive.mobile': 'Móvil',
+    'responsive.tablet': 'Tableta',
+    'responsive.desktop': 'Escritorio',
     'responsive.unavailable': 'El control responsive de la vista aún no está conectado.',
     'responsive.note': 'Los controles de vista estarán disponibles al conectar una ruta de cambio de tamaño confiable.',
     'command.searchPlaceholder': 'Escribe un comando…',
@@ -1128,6 +1184,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'LocalView no pudo conectar con el entorno de ejecución. La vista previa se mantiene cuando es posible.',
     'session.disconnected': "El servidor de desarrollo se desconectó",
     'session.reconnectGrace': "LocalView mantiene esta sesión abierta mientras espera que el servidor de desarrollo se vuelva a conectar.",
+    'session.status.active': 'Activo',
+    'session.status.disconnected': 'Desconectado',
+    'session.status.hidden': 'Oculto',
+    'session.framework.web': 'Web',
     'console.live': "En vivo",
     'console.eventOne': "evento",
     'console.eventMany': "eventos",
@@ -1232,6 +1292,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': 'session localhost détectée',
     'sessions.detectedMany': 'sessions localhost détectées',
     'responsive.viewports': 'Fenêtres d’affichage',
+    'responsive.mobileSmall': 'Petit mobile',
+    'responsive.mobile': 'Mobile',
+    'responsive.tablet': 'Tablette',
+    'responsive.desktop': 'Bureau',
     'responsive.unavailable': 'Le contrôle responsive de la fenêtre n’est pas encore connecté.',
     'responsive.note': 'Les contrôles de fenêtre seront disponibles lorsqu’un chemin de redimensionnement fiable sera connecté.',
     'command.searchPlaceholder': 'Saisir une commande…',
@@ -1296,6 +1360,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': "LocalView ne peut pas joindre l’environnement d’exécution. L’aperçu reste disponible lorsque possible.",
     'session.disconnected': "Le serveur de développement est déconnecté",
     'session.reconnectGrace': "LocalView conserve cette session pendant qu’il attend la reconnexion du serveur de développement.",
+    'session.status.active': 'Actif',
+    'session.status.disconnected': 'Déconnecté',
+    'session.status.hidden': 'Masqué',
+    'session.framework.web': 'Web',
     'console.live': "En direct",
     'console.eventOne': "événement",
     'console.eventMany': "événements",
@@ -1400,6 +1468,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': 'erkannte localhost-Sitzung',
     'sessions.detectedMany': 'erkannte localhost-Sitzungen',
     'responsive.viewports': 'Ansichtsgrößen',
+    'responsive.mobileSmall': 'Kleines Mobilgerät',
+    'responsive.mobile': 'Mobilgerät',
+    'responsive.tablet': 'Tablet',
+    'responsive.desktop': 'Desktop',
     'responsive.unavailable': 'Die responsive Ansichtssteuerung ist noch nicht verbunden.',
     'responsive.note': 'Ansichtssteuerungen werden verfügbar, sobald ein vertrauenswürdiger Größenänderungspfad verbunden ist.',
     'command.searchPlaceholder': 'Befehl eingeben…',
@@ -1464,6 +1536,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'LocalView kann die Laufzeit nicht erreichen. Die Vorschau bleibt nach Möglichkeit verfügbar.',
     'session.disconnected': "Der Entwicklungsserver wurde getrennt",
     'session.reconnectGrace': "LocalView hält diese Sitzung offen, während auf die erneute Verbindung des Entwicklungsservers gewartet wird.",
+    'session.status.active': 'Aktiv',
+    'session.status.disconnected': 'Getrennt',
+    'session.status.hidden': 'Ausgeblendet',
+    'session.framework.web': 'Web',
     'console.live': "Live",
     'console.eventOne': "Ereignis",
     'console.eventMany': "Ereignisse",
@@ -1568,6 +1644,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': 'sessão localhost detectada',
     'sessions.detectedMany': 'sessões localhost detectadas',
     'responsive.viewports': 'Áreas de visualização',
+    'responsive.mobileSmall': 'Celular pequeno',
+    'responsive.mobile': 'Celular',
+    'responsive.tablet': 'Tablet',
+    'responsive.desktop': 'Desktop',
     'responsive.unavailable': 'O controle responsivo da área de visualização ainda não está conectado.',
     'responsive.note': 'Os controles de visualização ficam disponíveis quando um caminho confiável de redimensionamento é conectado.',
     'command.searchPlaceholder': 'Digite um comando…',
@@ -1632,6 +1712,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'O LocalView não conseguiu acessar o ambiente de execução. A visualização permanece disponível quando possível.',
     'session.disconnected': "O servidor de desenvolvimento foi desconectado",
     'session.reconnectGrace': "O LocalView mantém esta sessão aberta enquanto aguarda a reconexão do servidor de desenvolvimento.",
+    'session.status.active': 'Ativa',
+    'session.status.disconnected': 'Desconectada',
+    'session.status.hidden': 'Oculta',
+    'session.framework.web': 'Web',
     'console.live': "Ao vivo",
     'console.eventOne': "evento",
     'console.eventMany': "eventos",
@@ -1736,6 +1820,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': 'sesi localhost terdeteksi',
     'sessions.detectedMany': 'sesi localhost terdeteksi',
     'responsive.viewports': 'Viewport',
+    'responsive.mobileSmall': 'Ponsel kecil',
+    'responsive.mobile': 'Ponsel',
+    'responsive.tablet': 'Tablet',
+    'responsive.desktop': 'Desktop',
     'responsive.unavailable': 'Kontrol viewport responsif belum terhubung.',
     'responsive.note': 'Kontrol viewport tersedia setelah jalur ubah ukuran tepercaya terhubung.',
     'command.searchPlaceholder': 'Ketik perintah…',
@@ -1800,6 +1888,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'LocalView tidak dapat menjangkau runtime. Pratinjau tetap tersedia bila memungkinkan.',
     'session.disconnected': "Server pengembangan terputus",
     'session.reconnectGrace': "LocalView mempertahankan sesi ini sambil menunggu server pengembangan terhubung kembali.",
+    'session.status.active': 'Aktif',
+    'session.status.disconnected': 'Terputus',
+    'session.status.hidden': 'Tersembunyi',
+    'session.framework.web': 'Web',
     'console.live': "Langsung",
     'console.eventOne': "peristiwa",
     'console.eventMany': "peristiwa",
@@ -1904,6 +1996,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'sessions.detectedOne': 'เซสชัน localhost ที่ตรวจพบ',
     'sessions.detectedMany': 'เซสชัน localhost ที่ตรวจพบ',
     'responsive.viewports': 'วิวพอร์ต',
+    'responsive.mobileSmall': 'มือถือขนาดเล็ก',
+    'responsive.mobile': 'มือถือ',
+    'responsive.tablet': 'แท็บเล็ต',
+    'responsive.desktop': 'เดสก์ท็อป',
     'responsive.unavailable': 'ยังไม่ได้เชื่อมต่อการควบคุมวิวพอร์ตแบบ responsive',
     'responsive.note': 'การควบคุมวิวพอร์ตจะพร้อมเมื่อเชื่อมต่อเส้นทางปรับขนาดที่เชื่อถือได้',
     'command.searchPlaceholder': 'พิมพ์คำสั่ง…',
@@ -1968,6 +2064,10 @@ const messages: Record<SupportedLocale, Dictionary> = {
     'runtime.unavailableHint': 'LocalView ไม่สามารถเชื่อมต่อรันไทม์ได้ โดยจะคงตัวอย่างไว้เมื่อเป็นไปได้',
     'session.disconnected': "เซิร์ฟเวอร์สำหรับพัฒนาขาดการเชื่อมต่อ",
     'session.reconnectGrace': "LocalView จะคงเซสชันนี้ไว้ระหว่างรอให้เซิร์ฟเวอร์สำหรับพัฒนาเชื่อมต่ออีกครั้ง",
+    'session.status.active': 'ใช้งานอยู่',
+    'session.status.disconnected': 'ตัดการเชื่อมต่อแล้ว',
+    'session.status.hidden': 'ซ่อนอยู่',
+    'session.framework.web': 'เว็บ',
     'console.live': "สด",
     'console.eventOne': "เหตุการณ์",
     'console.eventMany': "เหตุการณ์",
@@ -2062,6 +2162,38 @@ const messages: Record<SupportedLocale, Dictionary> = {
 };
 
 const fallback = messages.en;
+
+export interface LocaleIntegrityEntry {
+  locale: SupportedLocale;
+  missingPrimaryKeys: MessageKey[];
+  emptyPrimaryKeys: MessageKey[];
+}
+
+export interface LocaleIntegrityReport {
+  missingEnglishFallbackKeys: MessageKey[];
+  locales: LocaleIntegrityEntry[];
+}
+
+export function localeIntegrityReport(): LocaleIntegrityReport {
+  const missingEnglishFallbackKeys = PRIMARY_FLOW_MESSAGE_KEYS.filter((key) => {
+    const value = fallback[key];
+    return typeof value !== 'string' || value.trim().length === 0;
+  });
+
+  const locales = SUPPORTED_LOCALES.map((locale) => {
+    const dictionary = messages[locale] as Partial<Dictionary>;
+    const missingPrimaryKeys = PRIMARY_FLOW_MESSAGE_KEYS.filter(
+      (key) => !Object.prototype.hasOwnProperty.call(dictionary, key),
+    );
+    const emptyPrimaryKeys = PRIMARY_FLOW_MESSAGE_KEYS.filter((key) => {
+      const value = dictionary[key];
+      return typeof value !== 'string' || value.trim().length === 0;
+    });
+    return { locale, missingPrimaryKeys, emptyPrimaryKeys };
+  });
+
+  return { missingEnglishFallbackKeys, locales };
+}
 
 export function isSupportedLocale(value: string): value is SupportedLocale {
   return (SUPPORTED_LOCALES as readonly string[]).includes(value);
