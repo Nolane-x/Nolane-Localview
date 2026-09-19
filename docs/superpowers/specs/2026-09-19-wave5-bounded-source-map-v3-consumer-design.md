@@ -111,11 +111,13 @@ This pure consumer does **not** assert filesystem ownership.
 
 It only canonicalizes the textual source reference enough for deterministic comparison:
 
+- strip query and fragment metadata from `sourceRoot` and source references before retention;
 - combine relative `sourceRoot` + relative source using slash joining;
 - normalize backslashes to `/`;
 - collapse `.` path components;
 - preserve `..` components instead of silently escaping them;
-- preserve absolute URLs/absolute paths as strings;
+- preserve absolute URL/path identity after query/fragment stripping;
+- reject a normalized combined source reference that exceeds the same 1,024-byte hard string bound;
 - never fetch URL content;
 - never open files.
 
@@ -136,7 +138,7 @@ It does not retain:
 - arbitrary source code;
 - source file bytes;
 - network responses;
-- query tokens fetched from URLs.
+- query/fragment metadata or tokens embedded in source-map source URLs.
 
 If `sourcesContent` exists in the JSON, it is ignored and not copied into the parsed structure.
 
