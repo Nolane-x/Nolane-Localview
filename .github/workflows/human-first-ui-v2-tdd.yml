@@ -69,6 +69,11 @@ jobs:
       - name: Verify GREEN source contract
         run: cargo test -p localview-desktop --test human_first_ui_v2_contract -- --nocapture
 
+      - name: Verify executable render-audit invariant is registered
+        shell: bash
+        run: |
+          cargo test -p localview-desktop --test human_first_ui_v2_contract -- --list             | grep -F 'render_audit_is_executable_not_screenshot_only: test'
+
       - name: Verify Chrome Position Persistence closure
         run: cargo test -p localview-desktop --test human_first_chrome_position_contract -- --nocapture
 
