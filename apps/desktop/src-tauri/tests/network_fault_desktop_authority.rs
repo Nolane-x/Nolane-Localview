@@ -14,7 +14,7 @@ fn network_fault_controls_require_exact_live_preview_owner_truth() {
 
     assert!(helper.contains("workspace_surface::preview_surface_label(session_id)"));
     assert!(helper.contains("DesktopSurfaceKind::PreviewWindow"));
-    assert!(helper.contains("registry.current("));
+    assert!(helper.contains(".current(session_id, DesktopSurfaceKind::PreviewWindow, &label)"));
     assert!(helper.contains("current.identity.owner_instance_id != registry.owner_instance_id()"));
     assert!(
         !helper.contains("DesktopSurfaceKind::WorkspaceChild"),
