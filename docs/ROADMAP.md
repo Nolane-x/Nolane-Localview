@@ -55,7 +55,7 @@ Current safety gate before native workspace becomes default:
 Remaining Wave 1 integration:
 
 - native accessibility-tree enrichment where platform APIs materially improve over DOM/ARIA semantics;
-- project-owned source-map loading/containment wired to live runtime positions;
+- live runtime-position extraction/correlation over the project-owned source-map runtime;
 - React component ownership adapter, followed by Vue/Svelte ownership adapters;
 - CSS declaration/specificity tracing and runtime/source correlation beyond explicit dev attributes.
 
@@ -174,10 +174,11 @@ Landed foundation:
 - live explicit `data-source` / `data-component-source` propagation into semantic nodes;
 - progressive component targeting consumes corroborated explicit `source.component` ancestry without fabricating ownership from tag/class/depth heuristics.
 - `localview-source-map` now contains a bounded Source Map v3 consumer with checked Base64 VLQ decoding, exact generated-line lookup, deterministic unmapped-region failure, strict source/name/mapping/coordinate caps, normalized `sourceRoot` references and no `sourcesContent` retention.
+- project-owned Source Map runtime authority is connected through authenticated exact-session resolution. The daemon derives the project root from session authority, accepts only project-relative generated files and bounded generated positions, discovers only deterministic sibling `.map` files, canonicalizes generated/map/original source paths under the exact project root, rejects traversal/symlink/remote-source escapes, caps map input before parse, and returns only project-relative source identity without `sourcesContent` or absolute project paths.
 
 Remaining integration:
 
-- project-owned source-map loading/containment and live runtime-position correlation.
+- live runtime-position extraction/correlation from trusted runtime evidence into the project-owned Source Map resolver.
 - React component ownership adapter.
 - Vue/Svelte adapters.
 - CSS declaration/specificity tracing.
