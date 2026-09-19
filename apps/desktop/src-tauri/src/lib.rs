@@ -760,18 +760,19 @@ async fn apply_fix_proposal(
         {
             Ok(frame) => {
                 let frame_route = visual_capture::canonical_visual_diff_route(&frame.route)?;
-                if frame_route == proposal.canonical_route {
-                    Some(trusted_verify::VerifyVisualBaseline {
-                        png: std::sync::Arc::new(frame.png),
-                        viewport: frame.viewport,
-                        pixel_width: frame.pixel_width,
-                        pixel_height: frame.pixel_height,
-                        target_rect: semantic_before.selected.rect.clone(),
-                        captured_at_unix_ms: frame.captured_at_unix_ms,
-                    })
-                } else {
-                    None
+                if frame_route != proposal.canonical_route {
+                    return Err(
+                        "trusted Fix route changed while verification baseline was captured".into(),
+                    );
                 }
+                Some(trusted_verify::VerifyVisualBaseline {
+                    png: std::sync::Arc::new(frame.png),
+                    viewport: frame.viewport,
+                    pixel_width: frame.pixel_width,
+                    pixel_height: frame.pixel_height,
+                    target_rect: semantic_before.selected.rect.clone(),
+                    captured_at_unix_ms: frame.captured_at_unix_ms,
+                })
             }
             Err(_) => None,
         };
