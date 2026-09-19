@@ -85,10 +85,10 @@ fn runtime_signal(evidence: &EvidenceObject) -> Option<RuntimeSignal> {
     })
 }
 
-fn action_parent<'a>(
-    evidence: &'a [EvidenceObject],
+fn action_parent(
+    evidence: &[EvidenceObject],
     action_id: Uuid,
-) -> Option<&'a EvidenceObject> {
+) -> Option<&EvidenceObject> {
     let expected = action_id.to_string();
     evidence.iter().rev().find(|item| {
         item.kind == EvidenceKind::Interaction
