@@ -159,6 +159,8 @@ pub struct HumanApplyFixReceipt {
     pub applied: bool,
     pub changed_start_line: u32,
     pub changed_end_line: u32,
+    pub verification_id: String,
+    pub verification_scope: trusted_verify::VerificationScope,
     pub applied_at_unix_ms: u64,
 }
 
