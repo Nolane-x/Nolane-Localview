@@ -752,6 +752,44 @@ invariant(viNetworkText.includes('MỤC TIÊU'), 'vi-network:localized-target', 
 invariant(viNetworkText.includes('YÊU CẦU'), 'vi-network:localized-requests', { viNetworkText });
 invariant(viNetworkText.includes('LỖI'), 'vi-network:localized-failures', { viNetworkText });
 await shot(page, '26-vi-network.png', 'vi-network');
+await page.keyboard.press('Escape');
+await page.keyboard.press('m');
+await page.waitForTimeout(150);
+await assertVisible(page, '.panel-advanced', 'vi-advanced-localized');
+const viAdvancedText = await page.locator('.panel-advanced').innerText();
+invariant(
+  viAdvancedText.includes('Định danh dự án')
+    && viAdvancedText.includes('Luồng thời gian chạy')
+    && viAdvancedText.includes('Tham chiếu ngữ nghĩa')
+    && viAdvancedText.includes('Bằng chứng hình học + bố cục')
+    && viAdvancedText.includes('Gợi ý mã nguồn')
+    && viAdvancedText.includes('Thu nhận bộ quan sát an toàn'),
+  'vi-advanced-localized:diagnostics',
+  { viAdvancedText },
+);
+const viAdvancedUiText = await page.locator(
+  '.panel-advanced .info-grid, .panel-advanced .section-label, .panel-advanced .pipeline-step'
+).allInnerTexts();
+const viAdvancedUiJoined = viAdvancedUiText.join('\n');
+invariant(
+  !/Project identity|Runtime pipeline|Semantic refs|Geometry \+ layout evidence|Source hints|Secure observer drain|Focused ref|not attached|diagnostic|\bready\b|\bidle\b/i.test(
+    viAdvancedUiJoined
+  ),
+  'vi-advanced-localized:no-english-leak',
+  { viAdvancedUiJoined },
+);
+invariant(
+  viAdvancedText.toLocaleLowerCase('vi').includes('trạng thái') && viAdvancedText.toLocaleLowerCase('vi').includes('hoạt động'),
+  'vi-advanced-localized:status',
+  { viAdvancedText },
+);
+const viPipelineStates = await page.locator('.panel-advanced .pipeline-step em').allInnerTexts();
+invariant(
+  viPipelineStates.length === 4 && viPipelineStates.every((value) => value === 'Sẵn sàng'),
+  'vi-advanced-localized:pipeline-status',
+  { viPipelineStates },
+);
+await shot(page, '155-vi-advanced-localized.png', 'vi-advanced-localized');
 await page.close();
 
 page = await pageFor(browser, { width: 1440, height: 900 }, 'zh-CN');

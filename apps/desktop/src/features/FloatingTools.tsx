@@ -665,31 +665,61 @@ function UnavailableInspectorAction({
 }
 
 function AdvancedPanel({ current, live, locale, onOpenNative }: { current?: Session; live: LiveSessionState; locale: SupportedLocale; onOpenNative: () => void }) {
-  if (!current) return <PanelEmpty title="No active target" text="Run a dev server to view diagnostics." />;
+  if (!current) {
+    return <PanelEmpty title={translate(locale, 'empty.noTarget')} text={translate(locale, 'empty.runDevServer')} />;
+  }
   const snapshot = [...live.observer].reverse().find((event) => event.kind === 'semantic_snapshot');
   const focused = [...live.observer].reverse().find((event) => event.kind === 'focus');
   const latest = live.observer.at(-1);
+  const sessionStatus =
+    current.status === 'active'
+      ? translate(locale, 'status.active')
+      : current.status === 'disconnected'
+        ? translate(locale, 'status.disconnected')
+        : current.status === 'hidden'
+          ? translate(locale, 'status.hidden')
+          : translate(locale, 'status.closed');
+  const observerStatus = live.observer.length
+    ? `${live.observer.length} ${translate(
+        locale,
+        live.observer.length === 1 ? 'console.eventOne' : 'console.eventMany',
+      )}`
+    : translate(locale, 'advanced.notAttached');
+
   return (
     <div className="inspector-stack diagnostics-stack">
       <InfoGrid rows={[
-        ['Status', current.status],
-        ['Observer', live.observer.length ? `${live.observer.length} events` : 'not attached'],
-        ['Latest', latest?.kind ?? '—'],
-        ['Focused ref', focused?.reference ?? '—'],
+        [translate(locale, 'advanced.status'), sessionStatus],
+        [translate(locale, 'advanced.observer'), observerStatus],
+        [translate(locale, 'advanced.latest'), latest?.kind ?? '—'],
+        [translate(locale, 'advanced.focusedRef'), focused?.reference ?? '—'],
       ]} />
       {!live.observer.length && <AttachNotice locale={locale} onOpenNative={onOpenNative} />}
       {snapshot && <EvidenceCard event={snapshot} />}
       <div className="panel-section">
-        <SectionLabel title="Project identity" aside="diagnostic" />
-        <code className="path-block">{current.project.git_root ?? current.project.cwd ?? 'Process-derived project identity'}</code>
+        <SectionLabel
+          title={translate(locale, 'advanced.projectIdentity')}
+          aside={translate(locale, 'advanced.diagnostic')}
+        />
+        <code className="path-block">
+          {current.project.git_root ?? current.project.cwd ?? translate(locale, 'advanced.processDerivedIdentity')}
+        </code>
       </div>
       <div className="panel-section">
-        <SectionLabel title="Runtime pipeline" aside="observer" />
+        <SectionLabel
+          title={translate(locale, 'advanced.runtimePipeline')}
+          aside={translate(locale, 'advanced.observer')}
+        />
         <div className="pipeline-list">
-          <PipelineStep n="01" title="Semantic refs" state="ready" />
-          <PipelineStep n="02" title="Geometry + layout evidence" state="ready" />
-          <PipelineStep n="03" title="Source hints" state="ready" />
-          <PipelineStep n="04" title="Secure observer drain" state={live.observer.length ? 'ready' : 'idle'} />
+          <PipelineStep n="01" title={translate(locale, 'advanced.semanticRefs')} state="ready" locale={locale} />
+          <PipelineStep n="02" title={translate(locale, 'advanced.geometryEvidence')} state="ready" locale={locale} />
+          <PipelineStep n="03" title={translate(locale, 'advanced.sourceHints')} state="ready" locale={locale} />
+          <PipelineStep
+            n="04"
+            title={translate(locale, 'advanced.secureObserverDrain')}
+            state={live.observer.length ? 'ready' : 'idle'}
+            locale={locale}
+          />
         </div>
       </div>
     </div>
@@ -1461,7 +1491,10 @@ function EmptyEvidence({ icon, title, text, action, onAction }: { icon: ReactNod
 }
 
 function InfoGrid({ rows }: { rows: [string, string][] }) { return <div className="info-grid">{rows.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>; }
-function PipelineStep({ n, title, state }: { n: string; title: string; state: 'ready' | 'idle' }) { return <div className="pipeline-step"><span>{n}</span><strong>{title}</strong><em className={state}>{state}</em></div>; }
+function PipelineStep({ n, title, state, locale }: { n: string; title: string; state: 'ready' | 'idle'; locale: SupportedLocale }) {
+  const label = state === 'ready' ? translate(locale, 'status.ready') : translate(locale, 'status.idle');
+  return <div className="pipeline-step"><span>{n}</span><strong>{title}</strong><em className={state}>{label}</em></div>;
+}
 function SectionLabel({ title, aside }: { title: string; aside: string }) { return <div className="section-label"><strong>{title}</strong><span>{aside}</span></div>; }
 function PanelEmpty({ title, text }: { title: string; text: string }) { return <div className="panel-empty"><span className="empty-pulse" /><strong>{title}</strong><p>{text}</p></div>; }
 function time(value: string) { try { return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); } catch { return '—'; } }

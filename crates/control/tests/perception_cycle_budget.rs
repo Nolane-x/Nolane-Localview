@@ -33,7 +33,10 @@ fn discovered() -> DiscoveredServer {
             pid: Some(42),
             process_name: Some("node".into()),
             command: Some("vite".into()),
-            cwd: Some("/tmp/localview-perception-cycle-test".into()),
+            // Budget-cycle semantics do not depend on project filesystem/Git state.
+            // Keep this fixture endpoint-anchored so the 650 ms fresh-snapshot
+            // authority is not spent spawning an unrelated Git probe on loaded CI.
+            cwd: None,
         },
         classification: Classification {
             kind: ServerKind::FrontendDevServer,
