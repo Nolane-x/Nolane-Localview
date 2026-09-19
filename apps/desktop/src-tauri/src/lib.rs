@@ -850,6 +850,10 @@ async fn verify_fix_change(
     verification_id: String,
 ) -> Result<trusted_verify::HumanVerifyChangeReceipt, String> {
     let record = verification_store.begin_verify(&verification_id)?;
+    if record.semantic_before.context_version != trusted_verify::VERIFY_CONTEXT_VERSION {
+        let _ = verification_store.invalidate(&verification_id);
+        return Err("trusted Verify context version is unsupported".into());
+    }
     let result = async {
         let pre_route =
             visual_capture::managed_surface_canonical_route(&app, record.session_id)?;
