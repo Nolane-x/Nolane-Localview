@@ -3376,8 +3376,7 @@ await page.keyboard.press('Control+k');
 await page.waitForTimeout(100);
 const verifyRetryCommand = page.getByRole('button', { name: /Verify change/ });
 invariant(!(await verifyRetryCommand.isDisabled()), 'verify:command-retry-enabled');
-await page.keyboard.press('Escape');
-await verifyRetry.click();
+await verifyRetryCommand.click();
 await page.waitForTimeout(150);
 await assertVisible(page, '.verify-review .fix-status.failure', 'verify-retryable-failure-second-result');
 const verifyRetryCalls = await page.evaluate(() =>
