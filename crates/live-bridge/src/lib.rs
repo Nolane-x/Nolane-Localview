@@ -190,6 +190,36 @@ pub struct NativeExecutorResult {
     pub completed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NetworkFaultControlCommand {
+    Install {
+        lease_token: Uuid,
+        plan: Value,
+    },
+    Clear {
+        lease_token: Uuid,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NetworkFaultControlRequest {
+    pub id: Uuid,
+    pub session_id: SessionId,
+    pub command: NetworkFaultControlCommand,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NetworkFaultControlResult {
+    pub request_id: Uuid,
+    pub ok: bool,
+    pub error: Option<String>,
+    #[serde(default)]
+    pub payload: Value,
+    pub completed_at: DateTime<Utc>,
+}
+
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub enum CompletionOrigin {
@@ -245,6 +275,10 @@ struct SessionBridgeState {
     native_executor_inflight: VecDeque<NativeExecutorRequest>,
     native_executor_claimed: VecDeque<NativeExecutorRequest>,
     native_executor_results: VecDeque<NativeExecutorResult>,
+    network_fault_requests: VecDeque<NetworkFaultControlRequest>,
+    network_fault_inflight: VecDeque<NetworkFaultControlRequest>,
+    network_fault_claimed: VecDeque<NetworkFaultControlRequest>,
+    network_fault_results: VecDeque<NetworkFaultControlResult>,
 }
 
 #[derive(Clone, Debug)]
@@ -449,6 +483,123 @@ impl LiveBridge {
             self.action_capacity,
         );
         request
+    }
+
+    pub async fn enqueue_network_fault_control(
+        &self,
+        session_id: SessionId,
+        command: NetworkFaultControlCommand,
+    ) -> NetworkFaultControlRequest {
+        let request = NetworkFaultControlRequest {
+            id: Uuid::new_v4(),
+            session_id,
+            command,
+            created_at: Utc::now(),
+        };
+        let mut states = self.inner.write().await;
+        let state = states.entry(session_id).or_default();
+        push_bounded(
+            &mut state.network_fault_requests,
+            request.clone(),
+            self.action_capacity,
+        );
+        request
+    }
+
+    pub async fn take_network_fault_controls(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<NetworkFaultControlRequest> {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return Vec::new();
+        };
+        let active = state
+            .network_fault_inflight
+            .len()
+            .saturating_add(state.network_fault_claimed.len());
+        let available = self.action_capacity.saturating_sub(active);
+        let count = limit
+            .min(state.network_fault_requests.len())
+            .min(available);
+        let requests = state
+            .network_fault_requests
+            .drain(..count)
+            .collect::<Vec<_>>();
+        for request in &requests {
+            push_bounded(
+                &mut state.network_fault_inflight,
+                request.clone(),
+                self.action_capacity,
+            );
+        }
+        requests
+    }
+
+    pub async fn claim_network_fault_control(
+        &self,
+        session_id: SessionId,
+        request_id: Uuid,
+    ) -> Option<NetworkFaultControlRequest> {
+        let mut states = self.inner.write().await;
+        let state = states.get_mut(&session_id)?;
+        let index = state
+            .network_fault_inflight
+            .iter()
+            .position(|request| request.id == request_id && request.session_id == session_id)?;
+        let request = state.network_fault_inflight.remove(index)?;
+        push_bounded(
+            &mut state.network_fault_claimed,
+            request.clone(),
+            self.action_capacity,
+        );
+        Some(request)
+    }
+
+    pub async fn complete_network_fault_control(
+        &self,
+        session_id: SessionId,
+        mut result: NetworkFaultControlResult,
+    ) -> bool {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return false;
+        };
+        let Some(index) = state
+            .network_fault_claimed
+            .iter()
+            .position(|request| {
+                request.id == result.request_id && request.session_id == session_id
+            })
+        else {
+            return false;
+        };
+        let Some(request) = state.network_fault_claimed.remove(index) else {
+            return false;
+        };
+        sanitize_network_fault_control_result(&request, &mut result);
+        push_bounded(
+            &mut state.network_fault_results,
+            result,
+            self.result_capacity,
+        );
+        true
+    }
+
+    pub async fn network_fault_control_result(
+        &self,
+        session_id: SessionId,
+        request_id: Uuid,
+    ) -> Option<NetworkFaultControlResult> {
+        let states = self.inner.read().await;
+        states
+            .get(&session_id)?
+            .network_fault_results
+            .iter()
+            .rev()
+            .find(|result| result.request_id == request_id)
+            .cloned()
     }
 
     pub async fn take_actions(&self, session_id: SessionId, limit: usize) -> Vec<BridgeAction> {
@@ -859,6 +1010,72 @@ fn recent_from<T: Clone>(queue: &VecDeque<T>, limit: usize) -> Vec<T> {
         .into_iter()
         .rev()
         .collect()
+}
+
+fn sanitize_network_fault_control_result(
+    request: &NetworkFaultControlRequest,
+    result: &mut NetworkFaultControlResult,
+) {
+    fn fail(result: &mut NetworkFaultControlResult) {
+        result.ok = false;
+        result.payload = Value::Null;
+        result.error = Some("network fault private control failed".into());
+    }
+
+    if result.request_id != request.id || !result.ok {
+        fail(result);
+        return;
+    }
+
+    let Some(input) = result.payload.as_object() else {
+        fail(result);
+        return;
+    };
+    let Some(active) = input.get("active").and_then(Value::as_bool) else {
+        fail(result);
+        return;
+    };
+
+    let mut output = serde_json::Map::new();
+    output.insert("active".into(), Value::Bool(active));
+
+    for key in ["installed", "cleared"] {
+        if let Some(value) = input.get(key).and_then(Value::as_bool) {
+            output.insert(key.into(), Value::Bool(value));
+        }
+    }
+
+    if let Some(fingerprint) = input.get("fingerprint").and_then(Value::as_str) {
+        if fingerprint.len() != 16
+            || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            fail(result);
+            return;
+        }
+        output.insert("fingerprint".into(), Value::String(fingerprint.to_ascii_lowercase()));
+    }
+
+    for (key, max) in [
+        ("rule_count", 16_u64),
+        ("total_hits", 1_024_u64),
+        ("remaining_ms", 30_000_u64),
+        ("expires_in_ms", 30_000_u64),
+    ] {
+        if let Some(value) = input.get(key) {
+            let Some(value) = value.as_u64() else {
+                fail(result);
+                return;
+            };
+            if value > max {
+                fail(result);
+                return;
+            }
+            output.insert(key.into(), Value::from(value));
+        }
+    }
+
+    result.payload = Value::Object(output);
+    result.error = None;
 }
 
 fn sanitize_native_executor_result(
