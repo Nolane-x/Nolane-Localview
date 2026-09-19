@@ -17,6 +17,7 @@ on:
       - apps/desktop/src-tauri/tests/human_first_trusted_measure_v22_contract.rs
       - apps/desktop/src-tauri/tests/human_first_trusted_capture_v21_contract.rs
       - docs/superpowers/specs/2026-09-19-human-first-trusted-fix-v25.md
+      - crates/native-capture/**
   workflow_dispatch:
 
 concurrency:
