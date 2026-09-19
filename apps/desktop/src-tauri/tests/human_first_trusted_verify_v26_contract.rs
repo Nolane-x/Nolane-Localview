@@ -126,7 +126,7 @@ fn desktop_has_isolated_trusted_verify_module_and_exact_command() {
         );
     }
 
-    assert!(permissions.contains(""verify_fix_change""));
+    assert!(permissions.contains(r#""verify_fix_change""#));
 
     for forbidden in [
         "rollback_fix_change",
