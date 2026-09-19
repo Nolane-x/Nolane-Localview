@@ -12,6 +12,10 @@ on:
       - apps/desktop/src-tauri/src/**
       - apps/desktop/src-tauri/permissions/**
       - apps/desktop/src-tauri/tests/human_first_trusted_fix_v25_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_ask_ai_v24_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_open_source_v23_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_measure_v22_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_capture_v21_contract.rs
       - docs/superpowers/specs/2026-09-19-human-first-trusted-fix-v25.md
   workflow_dispatch:
 
