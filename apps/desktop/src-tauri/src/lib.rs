@@ -939,25 +939,41 @@ async fn verify_fix_change(
             &semantic_after.network_issues,
         );
 
+        let mut visual_diff_evidence_id = None;
         let visual_facts = if let Some(before) = record.visual_before.as_ref() {
-            match visual_capture::capture_verification_current(
+            match visual_capture::capture_registered_verification_current(
                 app.clone(),
                 &visual_state,
                 record.session_id,
             )
             .await
             {
-                Ok(frame) => {
+                Ok(registered) => {
+                    let frame = &registered.frame;
                     let frame_route = visual_capture::canonical_visual_diff_route(&frame.route)?;
                     if frame_route != record.canonical_route {
                         return Err("trusted Verify route changed during verification".into());
                     }
-                    trusted_verify::compare_visual_facts(
+                    let facts = trusted_verify::compare_visual_facts(
                         before,
                         &frame.png,
                         &frame.viewport,
                         semantic_after.selected.rect.as_ref(),
-                    )?
+                    )?;
+                    if let Some(changed_ratio) = facts.viewport_changed_ratio {
+                        visual_diff_evidence_id = Some(
+                            visual_capture::register_verification_visual_diff_evidence(
+                                record.session_id,
+                                frame.route.clone(),
+                                frame.viewport.clone(),
+                                frame.captured_at_unix_ms,
+                                changed_ratio,
+                                registered.evidence_id,
+                            )
+                            .await?,
+                        );
+                    }
+                    facts
                 }
                 Err(_) => trusted_verify::VisualVerificationFacts {
                     viewport_changed_ratio: None,
@@ -997,7 +1013,7 @@ async fn verify_fix_change(
                 regression_signals: comparison.regression_signals,
                 viewport_changed_ratio: comparison.viewport_changed_ratio,
                 target_changed_ratio: comparison.target_changed_ratio,
-                visual_diff_evidence_id: None,
+                visual_diff_evidence_id,
                 snapshot_version: snapshot.version,
                 provider_label: None,
                 advisory_summary: None,
