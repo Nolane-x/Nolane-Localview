@@ -32,3 +32,28 @@ export interface LiveSessionState {
   observer: ObserverEvent[];
   action_results: BridgeActionResult[];
 }
+
+export interface ActionCorrelationLink {
+  request_id: string;
+  response_ids: string[];
+  confidence: number;
+  basis: 'temporal_window';
+}
+
+export interface ActionCorrelationTrace {
+  action_id: string;
+  links: ActionCorrelationLink[];
+  observed_signal_count: number;
+  truncated: boolean;
+}
+
+export interface ActionCorrelationReceipt {
+  trace: ActionCorrelationTrace;
+  evidence_id: string;
+  deduplicated: boolean;
+  window: {
+    started_at: string;
+    completed_at: string;
+    basis: 'daemon_execution_boundary';
+  };
+}
