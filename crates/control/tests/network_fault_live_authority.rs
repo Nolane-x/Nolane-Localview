@@ -115,11 +115,13 @@ async fn execute_one_private_control(live: LiveBridge, session_id: Uuid) {
                         "rule_count": rule_count,
                         "total_hits": 0,
                         "remaining_ms": remaining_ms,
+                        "surface_incarnation": 1,
                     })
                 }
                 NetworkFaultControlCommand::Clear { .. } => serde_json::json!({
                     "cleared": true,
                     "active": false,
+                    "surface_incarnation": 1,
                 }),
             };
             assert!(
@@ -220,6 +222,26 @@ async fn install_status_and_clear_require_exact_private_ack() {
     assert_eq!(status, StatusCode::OK, "{current}");
     assert_eq!(current["active"], true);
     assert_eq!(current["lease_id"], lease_id);
+
+    let (stale_invalidation, stale_body) = send(
+        state.clone(),
+        Method::POST,
+        format!("/v1/sessions/{owner}/network-faults/invalidate-preview"),
+        Some(serde_json::json!({"surface_incarnation": 2})),
+        true,
+    )
+    .await;
+    assert_eq!(stale_invalidation, StatusCode::NO_CONTENT, "{stale_body}");
+    let (still_active_status, still_active) = send(
+        state.clone(),
+        Method::GET,
+        format!("/v1/sessions/{owner}/network-faults"),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(still_active_status, StatusCode::OK);
+    assert_eq!(still_active["active"], true, "stale incarnation must not clear current lease");
 
     let (cross_status, cross_body) = send(
         state.clone(),
