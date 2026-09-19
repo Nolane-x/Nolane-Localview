@@ -247,12 +247,12 @@ async fn correlation_uses_daemon_boundary_and_retains_exact_parent_evidence() {
     assert!(!causal.secret_taint);
     assert!(causal.provenance.parent_ids.len() >= 3);
 
-    let parents = causal
-        .provenance
-        .parent_ids
-        .iter()
-        .filter_map(|id| futures_lite::future::block_on(state.evidence.get(id)))
-        .collect::<Vec<_>>();
+    let mut parents = Vec::new();
+    for parent_id in &causal.provenance.parent_ids {
+        if let Some(parent) = state.evidence.get(parent_id).await {
+            parents.push(parent);
+        }
+    }
     assert!(parents.iter().any(|item| item.kind == EvidenceKind::Interaction));
     assert!(parents.iter().any(|item| item.kind == EvidenceKind::Network));
     assert!(parents.iter().any(|item| item.kind == EvidenceKind::Semantic));
