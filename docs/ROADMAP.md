@@ -144,10 +144,9 @@ Landed live integration:
 - bounded live network fault authority is connected for exact LocalView-managed loopback sessions. Canonical rules support fetch/XHR fail, bounded delay and empty-body status mock effects under finite leases and hit budgets; authenticated control-plane install/get/clear operations are exact-session and exact-managed-surface scoped, private bridge state is sanitized, install acknowledgement failures compensate/clear fail-closed, and real Chromium proof covers fail/delay/mock, hit exhaustion, expiry, explicit clear, observation metadata, zero final in-flight debt, unrelated loopback pass-through and real HTTP non-loopback pass-through.
 - aggregate fetch/XHR in-flight accounting remains exactly-once and privacy-safe and is shared with capture settling; network fault observations expose only bounded rule/effect metadata rather than response bodies or secrets.
 - framework-specific HMR signal production is connected to the live managed-page path for strongly classified loopback Vite, Next.js and webpack transports. Retained HMR packets contain only bounded framework/phase/update-count metadata, the existing observer timeline carries them, and the existing daemon-owned 300 ms HMR quiet evaluator consumes them without retaining raw WebSocket payloads, module paths or query tokens.
+- bounded performance-lite packets are connected to the existing long-task/layout-shift observer path. `localview-performance` computes truthful full-window long-task count/total/max while retaining only the deterministic longest-duration sample under a canonical default budget of 8 and hard cap of 16, rejects malformed/negative measurements, carries finite non-negative cumulative layout shift only, and exposes the packet through authenticated exact-session `GET /v1/sessions/{id}/performance-lite`. The live analysis response uses the same packet authority, and packet schemas contain no route, raw observer payload, source path, token or arbitrary application text.
 
-Remaining integration:
-
-- performance-lite sampling and budget packets.
+The bounded Wave 3 runtime-telemetry scope listed above is now connected end-to-end. This does not claim CPU profiling, JavaScript flamegraphs, heap snapshots/allocation profiling, Core Web Vitals completeness, remote telemetry, or root-cause proof from performance telemetry alone.
 
 The Wave 3 fault layer is intentionally not a general proxy: arbitrary internet interception, TLS MITM, response/body/header fixtures, WebSocket interception and a permanent interception backend remain unclaimed.
 
