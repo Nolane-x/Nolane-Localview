@@ -1092,7 +1092,7 @@ function AiPanel({
                     : translate(locale, 'verify.failed')}
           </strong>
           {verifyRetryable && (
-            <button className="verify-retry-action" onClick={onVerifyChange}>
+            <button className="fix-again-action verify-retry-action" onClick={onVerifyChange}>
               {translate(locale, 'action.retry')}
             </button>
           )}
