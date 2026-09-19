@@ -57,13 +57,23 @@ pub enum SourceMapError {
 }
 
 #[derive(Debug, Clone)]
+struct OriginalMapping {
+    source_index: u32,
+    line: u32,
+    column: u32,
+    name_index: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
 struct MappingSegment {
     generated_column: u32,
-    original: Option<ResolvedSourceLocation>,
+    original: Option<OriginalMapping>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SourceMap {
+    sources: Vec<String>,
+    names: Vec<String>,
     lines: Vec<Vec<MappingSegment>>,
 }
 
@@ -195,7 +205,7 @@ impl SourceMap {
                             return Err(SourceMapError::OriginalColumnOutOfRange);
                         }
 
-                        let name = if fields.len() == 5 {
+                        let name_index = if fields.len() == 5 {
                             previous_name = previous_name
                                 .checked_add(fields[4])
                                 .ok_or(SourceMapError::IntegerOverflow)?;
@@ -206,18 +216,22 @@ impl SourceMap {
                             {
                                 return Err(SourceMapError::NameIndexOutOfRange);
                             }
-                            Some(raw.names[previous_name as usize].clone())
+                            Some(
+                                u32::try_from(previous_name)
+                                    .map_err(|_| SourceMapError::NameIndexOutOfRange)?,
+                            )
                         } else {
                             None
                         };
 
-                        Some(ResolvedSourceLocation {
-                            source: sources[previous_source as usize].clone(),
+                        Some(OriginalMapping {
+                            source_index: u32::try_from(previous_source)
+                                .map_err(|_| SourceMapError::SourceIndexOutOfRange)?,
                             line: u32::try_from(previous_original_line + 1)
                                 .map_err(|_| SourceMapError::OriginalLineOutOfRange)?,
                             column: u32::try_from(previous_original_column)
                                 .map_err(|_| SourceMapError::OriginalColumnOutOfRange)?,
-                            name,
+                            name_index,
                         })
                     };
 
@@ -232,7 +246,11 @@ impl SourceMap {
             lines.push(line_segments);
         }
 
-        Ok(Self { lines })
+        Ok(Self {
+            sources,
+            names: raw.names,
+            lines,
+        })
     }
 
     pub fn resolve(
@@ -247,8 +265,22 @@ impl SourceMap {
             .iter()
             .take_while(|segment| segment.generated_column <= generated_column)
             .last()?;
+        let original = segment.original.as_ref()?;
+        let source = self
+            .sources
+            .get(usize::try_from(original.source_index).ok()?)?
+            .clone();
+        let name = original
+            .name_index
+            .and_then(|index| self.names.get(usize::try_from(index).ok()?))
+            .cloned();
 
-        segment.original.clone()
+        Some(ResolvedSourceLocation {
+            source,
+            line: original.line,
+            column: original.column,
+            name,
+        })
     }
 
     pub fn generated_line_count(&self) -> usize {
@@ -695,5 +727,33 @@ mod tests {
         let map = SourceMap::parse(&map_json("AAAA")).unwrap();
         let debug = format!("{map:?}");
         assert!(!debug.contains("MUST-NOT-BE-RETAINED"));
+    }
+
+    #[test]
+    fn mapping_table_reuses_bounded_source_and_name_tables() {
+        let mappings = std::iter::repeat_n("AAAAA", 10_000)
+            .collect::<Vec<_>>()
+            .join(",");
+        let json = serde_json::json!({
+            "version": 3,
+            "sources": ["src/VeryLongComponentName.tsx"],
+            "names": ["renderVeryLongComponentName"],
+            "mappings": mappings
+        })
+        .to_string();
+
+        let map = SourceMap::parse(&json).unwrap();
+        assert_eq!(map.sources.len(), 1);
+        assert_eq!(map.names.len(), 1);
+        assert_eq!(map.lines[0].len(), 10_000);
+        assert_eq!(
+            map.resolve(1, 0).unwrap(),
+            ResolvedSourceLocation {
+                source: "src/VeryLongComponentName.tsx".into(),
+                line: 1,
+                column: 0,
+                name: Some("renderVeryLongComponentName".into()),
+            }
+        );
     }
 }
