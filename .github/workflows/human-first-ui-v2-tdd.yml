@@ -27,6 +27,12 @@ on:
       - docs/superpowers/specs/2026-09-19-human-first-trusted-fix-v25.md
       - docs/superpowers/specs/2026-09-19-human-first-trusted-verify-v26.md
       - tools/human-first-ui-v2/**
+      - apps/desktop/package.json
+      - apps/desktop/package-lock.json
+      - apps/desktop/tsconfig*.json
+      - apps/desktop/vite.config.ts
+      - Cargo.toml
+      - Cargo.lock
   push:
     branches:
       - feat/human-first-localview-ui-v2
