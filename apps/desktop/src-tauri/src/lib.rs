@@ -463,6 +463,35 @@ async fn live_session_state(session_id: SessionId) -> Result<LiveSessionState, S
 }
 
 #[tauri::command]
+async fn action_correlation(
+    session_id: SessionId,
+    action_id: uuid::Uuid,
+) -> Result<Option<serde_json::Value>, String> {
+    let token = read_token().await?;
+    let response = control_client()?
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/{action_id}/correlation"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(err)?;
+    if matches!(
+        response.status(),
+        reqwest::StatusCode::CONFLICT | reqwest::StatusCode::NOT_FOUND
+    ) {
+        return Ok(None);
+    }
+    let value = response
+        .error_for_status()
+        .map_err(err)?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(err)?;
+    Ok(Some(value))
+}
+
+#[tauri::command]
 fn ai_provider_capability() -> Result<trusted_ai::AiProviderCapability, String> {
     Ok(trusted_ai::provider_capability_from_env())
 }
@@ -2709,6 +2738,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             dashboard_state,
             live_session_state,
+            action_correlation,
             ai_provider_capability,
             ask_ai_about_selection,
             ai_fix_capability,
