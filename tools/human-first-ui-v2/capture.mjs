@@ -772,14 +772,14 @@ const viAdvancedUiText = await page.locator(
 ).allInnerTexts();
 const viAdvancedUiJoined = viAdvancedUiText.join('\n');
 invariant(
-  !/Project identity|Runtime pipeline|Semantic refs|Geometry \+ layout evidence|Source hints|Secure observer drain|Focused ref|not attached|diagnostic|\bready\b|\bidle\b/.test(
+  !/Project identity|Runtime pipeline|Semantic refs|Geometry \+ layout evidence|Source hints|Secure observer drain|Focused ref|not attached|diagnostic|\bready\b|\bidle\b/i.test(
     viAdvancedUiJoined
   ),
   'vi-advanced-localized:no-english-leak',
   { viAdvancedUiJoined },
 );
 invariant(
-  viAdvancedText.includes('Trạng thái') && viAdvancedText.includes('Hoạt động'),
+  viAdvancedText.toLocaleLowerCase('vi').includes('trạng thái') && viAdvancedText.toLocaleLowerCase('vi').includes('hoạt động'),
   'vi-advanced-localized:status',
   { viAdvancedText },
 );
