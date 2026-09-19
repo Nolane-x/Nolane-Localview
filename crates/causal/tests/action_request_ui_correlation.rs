@@ -126,3 +126,91 @@ fn invalid_windows_and_unbounded_policies_fail_closed() {
         Err(ActionCorrelationError::InvalidPolicy)
     );
 }
+
+
+#[test]
+fn requests_after_the_bounded_tail_are_excluded() {
+    let window = ActionCorrelationWindow {
+        action_id: "action-tail".into(),
+        started_ms: 100,
+        completed_ms: 200,
+        route: Some("http://127.0.0.1:5173/".into()),
+    };
+    let policy = ActionRequestUiPolicy {
+        tail_ms: 50,
+        ..ActionRequestUiPolicy::default()
+    };
+    let signals = vec![
+        signal(
+            "inside-request",
+            RuntimeSignalKind::Network,
+            240,
+            Some("http://127.0.0.1:5173/"),
+        ),
+        signal(
+            "inside-layout",
+            RuntimeSignalKind::Layout,
+            245,
+            Some("http://127.0.0.1:5173/"),
+        ),
+        signal(
+            "late-request",
+            RuntimeSignalKind::Network,
+            251,
+            Some("http://127.0.0.1:5173/"),
+        ),
+        signal(
+            "late-layout",
+            RuntimeSignalKind::Layout,
+            252,
+            Some("http://127.0.0.1:5173/"),
+        ),
+    ];
+
+    let trace = correlate_action_request_ui(&window, &signals, &policy).expect("bounded trace");
+
+    assert_eq!(trace.links.len(), 1);
+    assert_eq!(trace.links[0].request_id, "inside-request");
+    assert_eq!(trace.links[0].response_ids, vec!["inside-layout"]);
+}
+
+#[test]
+fn response_count_is_capped_per_request() {
+    let window = ActionCorrelationWindow {
+        action_id: "action-response-cap".into(),
+        started_ms: 0,
+        completed_ms: 10,
+        route: None,
+    };
+    let policy = ActionRequestUiPolicy {
+        tail_ms: 100,
+        max_signals: 16,
+        max_responses_per_request: 2,
+    };
+    let signals = vec![
+        signal("request", RuntimeSignalKind::Network, 1, None),
+        signal("dom-1", RuntimeSignalKind::DomMutation, 2, None),
+        signal("layout-1", RuntimeSignalKind::Layout, 3, None),
+        signal("route-1", RuntimeSignalKind::Route, 4, None),
+    ];
+
+    let trace = correlate_action_request_ui(&window, &signals, &policy).expect("bounded trace");
+
+    assert_eq!(trace.links.len(), 1);
+    assert_eq!(trace.links[0].response_ids, vec!["dom-1", "layout-1"]);
+}
+
+#[test]
+fn empty_action_identity_fails_closed() {
+    let window = ActionCorrelationWindow {
+        action_id: String::new(),
+        started_ms: 10,
+        completed_ms: 20,
+        route: None,
+    };
+
+    assert_eq!(
+        correlate_action_request_ui(&window, &[], &ActionRequestUiPolicy::default()),
+        Err(ActionCorrelationError::InvalidWindow)
+    );
+}
