@@ -59,7 +59,7 @@ async fn network_fault_control_is_private_session_scoped_and_sanitized() {
         .expect("exact session must claim its private control");
 
     assert!(
-        bridge
+        !bridge
             .complete_network_fault_control(
                 other_session,
                 NetworkFaultControlResult {
@@ -70,8 +70,7 @@ async fn network_fault_control_is_private_session_scoped_and_sanitized() {
                     completed_at: Utc::now(),
                 },
             )
-            .await
-            == false,
+            .await,
         "another session must not complete private control"
     );
 
