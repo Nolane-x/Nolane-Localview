@@ -1,0 +1,72 @@
+name: Human-first trusted Fix V2.5 gate
+
+on:
+  push:
+    branches:
+      - feat/human-first-trusted-fix-v25
+    paths:
+      - .github/workflows/human-first-trusted-fix-v25.yml
+      - .github/workflows/human-first-trusted-fix-v25-render.yml
+      - docs/superpowers/specs/2026-09-19-human-first-trusted-fix-v25.md
+      - apps/desktop/src/**
+      - apps/desktop/src-tauri/src/**
+      - apps/desktop/src-tauri/permissions/**
+      - apps/desktop/src-tauri/tests/human_first_trusted_fix_v25_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_ask_ai_v24_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_open_source_v23_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_measure_v22_contract.rs
+      - apps/desktop/src-tauri/tests/human_first_trusted_capture_v21_contract.rs
+      - tools/human-first-ui-v2/**
+      - crates/native-capture/**
+      - Cargo.toml
+      - Cargo.lock
+      - apps/desktop/package.json
+      - apps/desktop/package-lock.json
+  workflow_dispatch:
+
+concurrency:
+  group: human-first-trusted-fix-v25-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify trusted Fix V2.5 contract
+        run: cargo test -p localview-desktop --test human_first_trusted_fix_v25_contract -- --nocapture
+
+      - name: Verify trusted Fix focused unit tests
+        run: cargo test -p localview-desktop trusted_fix --lib -- --nocapture
+
+      - name: Verify trusted Ask AI V2.4 remains green
+        run: cargo test -p localview-desktop --test human_first_trusted_ask_ai_v24_contract -- --nocapture
+
+      - name: Verify trusted Open Source V2.3 remains green
+        run: cargo test -p localview-desktop --test human_first_trusted_open_source_v23_contract -- --nocapture
+
+      - name: Verify trusted Measure V2.2 remains green
+        run: cargo test -p localview-desktop --test human_first_trusted_measure_v22_contract -- --nocapture
+
+      - name: Verify trusted Capture V2.1 remains green
+        run: cargo test -p localview-desktop --test human_first_trusted_capture_v21_contract -- --nocapture
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm install --no-audit --no-fund
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build

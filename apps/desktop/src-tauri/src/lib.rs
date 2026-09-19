@@ -2,6 +2,7 @@
 
 mod native_executor_worker;
 mod trusted_ai;
+mod trusted_fix;
 pub mod visual_capture;
 pub mod workspace_surface;
 
@@ -530,6 +531,258 @@ async fn ask_ai_about_selection(
         snapshot_version: context.snapshot_version,
         completed_at_unix_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
     })
+}
+
+#[tauri::command]
+fn ai_fix_capability() -> Result<trusted_fix::AiFixCapability, String> {
+    Ok(trusted_fix::fix_capability_from_env())
+}
+
+#[tauri::command]
+async fn prepare_fix_proposal(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, trusted_fix::FixProposalStore>,
+    session_id: SessionId,
+    reference: String,
+    instruction: String,
+) -> Result<trusted_fix::HumanFixProposalReceipt, String> {
+    validate_source_reference(&reference)?;
+    let instruction = trusted_fix::validate_fix_instruction(&instruction)?;
+    let capability = trusted_fix::fix_capability_from_env();
+    if !capability.available {
+        return Err("trusted Fix provider unavailable".into());
+    }
+
+    let pre_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+    let token = read_token().await?;
+    let client = control_client()?;
+
+    let session = client
+        .get(format!("http://127.0.0.1:45454/v1/sessions/{session_id}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "trusted Fix runtime unavailable".to_string())?
+        .error_for_status()
+        .map_err(|_| "trusted Fix session is unavailable".to_string())?
+        .json::<Session>()
+        .await
+        .map_err(|_| "trusted Fix session is unavailable".to_string())?;
+
+    let snapshot = client
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/semantic-snapshot/fresh"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "trusted Fix runtime unavailable".to_string())?
+        .error_for_status()
+        .map_err(|_| "trusted Fix source mapping is unavailable".to_string())?
+        .json::<PageSnapshot>()
+        .await
+        .map_err(|_| "trusted Fix source mapping is unavailable".to_string())?;
+
+    let snapshot_route = visual_capture::canonical_visual_diff_route(&snapshot.route)?;
+    if snapshot_route != pre_route {
+        return Err("trusted Fix route changed before proposal resolution".into());
+    }
+
+    let source = resolve_snapshot_source(&snapshot, &reference)?;
+    let project_root = session
+        .project
+        .git_root
+        .as_deref()
+        .or(session.project.cwd.as_deref())
+        .ok_or_else(|| "trusted Fix project root is unavailable".to_string())?;
+    let target = resolve_trusted_source_target(
+        session_id,
+        &reference,
+        project_root,
+        source,
+        snapshot.version,
+        &pre_route,
+    )?;
+
+    let preimage = trusted_fix::validate_fix_source_policy(&target)?;
+    let excerpt = trusted_fix::build_source_excerpt(&target, &preimage)?;
+    let context = trusted_ai::build_trusted_ai_context(&session, &snapshot, &reference)?;
+
+    let route_before_provider =
+        visual_capture::managed_surface_canonical_route(&app, session_id)?;
+    if route_before_provider != pre_route {
+        return Err("trusted Fix route changed while proposal context was prepared".into());
+    }
+
+    let provider = trusted_ai::provider_config_from_env()
+        .map_err(|_| "trusted Fix provider unavailable".to_string())?;
+    let (summary, edit, provider_label) = trusted_fix::request_fix_proposal(
+        &client,
+        &provider,
+        &context,
+        &excerpt,
+        &instruction,
+    )
+    .await?;
+
+    let post_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
+    if post_route != pre_route {
+        return Err("trusted Fix route changed while proposal was generated".into());
+    }
+
+    let current_preimage = trusted_fix::validate_fix_source_policy(&target)?;
+    if current_preimage != preimage {
+        return Err("trusted Fix source changed while proposal was generated".into());
+    }
+
+    let postimage = trusted_fix::build_fix_postimage(&preimage, &excerpt, &edit)?;
+    let diff = trusted_fix::build_fix_diff(
+        &target.project_relative_file,
+        &preimage,
+        &postimage,
+        &edit,
+    )?;
+    let proposal = trusted_fix::new_proposal_record(
+        &target,
+        preimage,
+        postimage,
+        &edit,
+        summary,
+        diff,
+        provider_label,
+    );
+    let receipt = trusted_fix::proposal_receipt(&proposal);
+    store.insert(proposal)?;
+    Ok(receipt)
+}
+
+#[tauri::command]
+async fn apply_fix_proposal(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, trusted_fix::FixProposalStore>,
+    proposal_id: String,
+) -> Result<trusted_fix::HumanApplyFixReceipt, String> {
+    let proposal = store.begin_apply(&proposal_id)?;
+    let gate = store.apply_gate_for(&proposal.canonical_file)?;
+    let _guard = gate.lock().await;
+
+    let result = async {
+        let pre_route =
+            visual_capture::managed_surface_canonical_route(&app, proposal.session_id)?;
+        if pre_route != proposal.canonical_route {
+            return Err("trusted Fix route changed since proposal".to_string());
+        }
+
+        let token = read_token().await?;
+        let client = control_client()?;
+        let session = client
+            .get(format!(
+                "http://127.0.0.1:45454/v1/sessions/{}",
+                proposal.session_id
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|_| "trusted Fix runtime unavailable".to_string())?
+            .error_for_status()
+            .map_err(|_| "trusted Fix session is unavailable".to_string())?
+            .json::<Session>()
+            .await
+            .map_err(|_| "trusted Fix session is unavailable".to_string())?;
+
+        let snapshot = client
+            .get(format!(
+                "http://127.0.0.1:45454/v1/sessions/{}/semantic-snapshot/fresh",
+                proposal.session_id
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|_| "trusted Fix runtime unavailable".to_string())?
+            .error_for_status()
+            .map_err(|_| "trusted Fix source mapping is unavailable".to_string())?
+            .json::<PageSnapshot>()
+            .await
+            .map_err(|_| "trusted Fix source mapping is unavailable".to_string())?;
+
+        let snapshot_route = visual_capture::canonical_visual_diff_route(&snapshot.route)?;
+        if snapshot_route != proposal.canonical_route {
+            return Err("trusted Fix route changed since proposal".to_string());
+        }
+
+        let source = resolve_snapshot_source(&snapshot, &proposal.reference)?;
+        let project_root = session
+            .project
+            .git_root
+            .as_deref()
+            .or(session.project.cwd.as_deref())
+            .ok_or_else(|| "trusted Fix project root is unavailable".to_string())?;
+        let current_target = resolve_trusted_source_target(
+            proposal.session_id,
+            &proposal.reference,
+            project_root,
+            source,
+            snapshot.version,
+            &pre_route,
+        )?;
+
+        if current_target.canonical_file != proposal.canonical_file
+            || current_target.project_root != proposal.project_root
+            || current_target.project_relative_file != proposal.display_file
+            || current_target.line != proposal.source_line
+        {
+            return Err("trusted Fix source mapping changed since proposal".into());
+        }
+
+        let current_bytes = trusted_fix::validate_fix_source_policy(&current_target)?;
+        if current_bytes != proposal.preimage {
+            return Err("trusted Fix source changed since proposal".into());
+        }
+
+        let post_route =
+            visual_capture::managed_surface_canonical_route(&app, proposal.session_id)?;
+        if post_route != proposal.canonical_route {
+            return Err("trusted Fix route changed since proposal".into());
+        }
+
+        trusted_fix::apply_fix_transaction(
+            &current_target.canonical_file,
+            &proposal.preimage,
+            &proposal.postimage,
+        )?;
+
+        Ok::<trusted_fix::HumanApplyFixReceipt, String>(
+            trusted_fix::HumanApplyFixReceipt {
+                proposal_id: proposal.proposal_id.clone(),
+                reference: proposal.reference.clone(),
+                display_file: proposal.display_file.clone(),
+                applied: true,
+                changed_start_line: proposal.changed_start_line,
+                changed_end_line: proposal.changed_end_line,
+                applied_at_unix_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
+            },
+        )
+    }
+    .await;
+
+    match result {
+        Ok(receipt) => {
+            store.complete_apply(&proposal_id)?;
+            Ok(receipt)
+        }
+        Err(error) => {
+            let _ = store.invalidate(&proposal_id);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+fn discard_fix_proposal(
+    store: tauri::State<'_, trusted_fix::FixProposalStore>,
+    proposal_id: String,
+) -> Result<(), String> {
+    store.discard(&proposal_id)
 }
 
 #[tauri::command]
@@ -2149,6 +2402,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let _ = app.manage(visual_capture::VisualCaptureState::default());
+            let _ = app.manage(trusted_fix::FixProposalStore::default());
             let _ = app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
             native_executor_worker::spawn(app.handle().clone());
             let menu = MenuBuilder::new(app)
@@ -2187,6 +2441,10 @@ pub fn run() {
             live_session_state,
             ai_provider_capability,
             ask_ai_about_selection,
+            ai_fix_capability,
+            prepare_fix_proposal,
+            apply_fix_proposal,
+            discard_fix_proposal,
             open_source_for_selection,
             measure_current_selection,
             pause_runtime,

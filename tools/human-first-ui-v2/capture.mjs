@@ -241,13 +241,23 @@ function init(
   sourceOpenDelayMs = 0,
   sourceOpenFailure = null,
   aiOptions = {},
+  fixOptions = {},
 ) {
   const aiProviderAvailable = aiOptions.providerAvailable ?? false;
   const aiProviderLabel = aiOptions.providerLabel ?? 'Audit AI Bridge';
   const aiDelayMs = aiOptions.delayMs ?? 0;
   const aiFailure = aiOptions.failure ?? null;
   const aiAnswer = aiOptions.answer ?? 'The selected Deploy button is interactive and currently has one visible warning.';
-  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer }) => {
+  const fixProviderAvailable = fixOptions.providerAvailable ?? false;
+  const fixProviderLabel = fixOptions.providerLabel ?? 'Audit Fix Bridge';
+  const fixProposalDelayMs = fixOptions.proposalDelayMs ?? 0;
+  const fixApplyDelayMs = fixOptions.applyDelayMs ?? 0;
+  const fixProposalFailure = fixOptions.proposalFailure ?? null;
+  const fixApplyFailure = fixOptions.applyFailure ?? null;
+  const fixDisplayFile = fixOptions.displayFile ?? 'src/components/DeployButton.tsx';
+  const fixSummary = fixOptions.summary ?? 'Make the Deploy button state clearer.';
+  const fixDiff = fixOptions.diff ?? '--- a/src/components/DeployButton.tsx\n+++ b/src/components/DeployButton.tsx\n@@ -42,1 +42,1 @@\n-<button>Deploy</button>\n+<button aria-live="polite">Deploy</button>\n';
+  return page.addInitScript(({ dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff }) => {
     if (storageFault) {
       Storage.prototype.getItem = () => {
         throw new DOMException('storage disabled by render audit', 'SecurityError');
@@ -279,6 +289,9 @@ function init(
     window.__LOCALVIEW_AUDIT_LIVE_STATE__ = structuredClone(liveState);
     window.__LOCALVIEW_AUDIT_DASHBOARD_STATE__ = structuredClone(dashboardState);
     window.__LOCALVIEW_AUDIT_AI_BRIDGE_REQUEST__ = null;
+    window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__ = {};
+    window.__LOCALVIEW_AUDIT_FIX_DISCARDS__ = [];
+    window.__LOCALVIEW_AUDIT_FIX_WRITES__ = 0;
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
       value: {
@@ -341,6 +354,61 @@ function init(
               completedAtUnixMs: Date.now(),
             };
           }
+          if (cmd === 'ai_fix_capability') {
+            return {
+              available: fixProviderAvailable,
+              providerLabel: fixProviderAvailable ? fixProviderLabel : null,
+              reason: fixProviderAvailable ? null : 'not_enabled',
+            };
+          }
+          if (cmd === 'prepare_fix_proposal') {
+            if (fixProposalDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, fixProposalDelayMs));
+            }
+            if (fixProposalFailure) {
+              throw new Error(fixProposalFailure);
+            }
+            const proposalId = 'fix-proposal-' + String(Object.keys(window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__).length + 1);
+            const proposal = {
+              proposalId,
+              reference: args.reference,
+              displayFile: fixDisplayFile,
+              summary: fixSummary,
+              diff: fixDiff,
+              providerLabel: fixProviderLabel,
+              expiresAtUnixMs: Date.now() + 300000,
+            };
+            window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[proposalId] = structuredClone(proposal);
+            return proposal;
+          }
+          if (cmd === 'apply_fix_proposal') {
+            if (fixApplyDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, fixApplyDelayMs));
+            }
+            if (fixApplyFailure) {
+              throw new Error(fixApplyFailure);
+            }
+            const proposal = window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[args.proposalId];
+            if (!proposal) {
+              throw new Error('trusted Fix proposal is unavailable');
+            }
+            window.__LOCALVIEW_AUDIT_FIX_WRITES__ += 1;
+            delete window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[args.proposalId];
+            return {
+              proposalId: args.proposalId,
+              reference: proposal.reference,
+              displayFile: proposal.displayFile,
+              applied: true,
+              changedStartLine: 42,
+              changedEndLine: 42,
+              appliedAtUnixMs: Date.now(),
+            };
+          }
+          if (cmd === 'discard_fix_proposal') {
+            window.__LOCALVIEW_AUDIT_FIX_DISCARDS__.push(args.proposalId);
+            delete window.__LOCALVIEW_AUDIT_FIX_PROPOSALS__[args.proposalId];
+            return null;
+          }
           if (cmd === 'open_source_for_selection') {
             if (sourceOpenDelayMs > 0) {
               await new Promise((resolve) => setTimeout(resolve, sourceOpenDelayMs));
@@ -401,7 +469,7 @@ function init(
         convertFileSrc: (path) => path
       }
     });
-  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer });
+  }, { dashboardState, liveState, locale, overrides, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiProviderAvailable, aiProviderLabel, aiDelayMs, aiFailure, aiAnswer, fixProviderAvailable, fixProviderLabel, fixProposalDelayMs, fixApplyDelayMs, fixProposalFailure, fixApplyFailure, fixDisplayFile, fixSummary, fixDiff });
 }
 
 async function pageFor(
@@ -418,16 +486,45 @@ async function pageFor(
   measureDelayMs = 0,
   sourceOpenDelayMs = 0,
   sourceOpenFailure = null,
-  aiOptions = {}
+  aiOptions = {},
+  fixOptions = {}
 ) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
-  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions);
+  await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
+}
+
+async function fixPageFor(
+  browser,
+  viewport = { width: 1440, height: 900 },
+  locale = 'en',
+  liveState = liveMeasure,
+  dashboardState = dashboard,
+  fixOptions = {},
+  aiOptions = { providerAvailable: true, providerLabel: 'Audit AI Bridge' },
+) {
+  return pageFor(
+    browser,
+    viewport,
+    locale,
+    {},
+    liveState,
+    dashboardState,
+    null,
+    false,
+    [],
+    0,
+    0,
+    0,
+    null,
+    aiOptions,
+    { providerAvailable: true, providerLabel: 'Audit Fix Bridge', ...fixOptions },
+  );
 }
 
 await fs.mkdir('human-first-ui-v2-render', { recursive: true });
@@ -2292,6 +2389,632 @@ const aiFixInvokes = await page.evaluate(() =>
 );
 invariant(aiFixInvokes.length === 0, 'ai:fix-no-hidden-invoke', { aiFixInvokes });
 await shot(page, '83-ai-fix-remains-disabled.png', 'ai-fix-remains-disabled');
+await page.close();
+
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  null,
+  { providerAvailable: true },
+  { providerAvailable: false }
+);
+await page.keyboard.press('a');
+await page.waitForTimeout(150);
+await assertVisible(page, '.fix-review', 'fix-provider-unavailable');
+const fixUnavailableText = await page.locator('.fix-review').innerText();
+invariant(fixUnavailableText.includes('Fix provider not connected'), 'fix:provider-unavailable-humanized', { fixUnavailableText });
+invariant((await page.locator('.fix-start-action').count()) === 0, 'fix:provider-unavailable-no-start');
+await shot(page, '84-fix-provider-unavailable.png', 'fix-provider-unavailable');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('i');
+await page.waitForTimeout(120);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-disclosure', 'fix-disclosure');
+const fixDisclosureText = await page.locator('.fix-disclosure').innerText();
+invariant(
+  fixDisclosureText.includes('bounded excerpt')
+    && fixDisclosureText.includes('No source code changes'),
+  'fix:disclosure-explicit',
+  { fixDisclosureText }
+);
+const disclosureWrites = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
+invariant(disclosureWrites === 0, 'fix:no-auto-apply', { disclosureWrites });
+await shot(page, '85-fix-disclosure.png', 'fix-disclosure');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('a');
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-review', 'fix-ready-selection');
+const fixStart = page.locator('.fix-start-action');
+invariant(!(await fixStart.isDisabled()), 'fix:ready-selection-enabled');
+await shot(page, '86-fix-ready-selection.png', 'fix-ready-selection');
+await page.close();
+
+page = await fixPageFor(browser, { width: 1440, height: 900 }, 'en', liveNoFocus);
+await page.keyboard.press('a');
+await page.waitForTimeout(120);
+const fixNoSelectionStart = page.locator('.fix-start-action');
+invariant(await fixNoSelectionStart.isDisabled(), 'fix:no-selection-disabled');
+await shot(page, '87-fix-no-selection.png', 'fix-no-selection');
+await page.close();
+
+page = await fixPageFor(browser, { width: 1440, height: 900 }, 'en', liveMeasure, dashboardNoTarget);
+await page.keyboard.press('a');
+await page.waitForTimeout(120);
+const fixNoSessionStart = page.locator('.fix-start-action');
+invariant(await fixNoSessionStart.isDisabled(), 'fix:no-session-disabled');
+await shot(page, '88-fix-no-session.png', 'fix-no-session');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-instruction-label textarea').fill('');
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(80);
+await assertVisible(page, '.fix-status.failure', 'fix-empty-instruction');
+const fixEmptyText = await page.locator('.fix-status.failure').innerText();
+invariant(fixEmptyText.includes('Enter a fix instruction'), 'fix:empty-instruction-humanized', { fixEmptyText });
+const fixEmptyInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'prepare_fix_proposal')
+);
+invariant(fixEmptyInvokes.length === 0, 'fix:empty-instruction-not-invoked', { fixEmptyInvokes });
+await shot(page, '89-fix-empty-instruction.png', 'fix-empty-instruction');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-instruction-label textarea').fill('x'.repeat(8193));
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(80);
+await assertVisible(page, '.fix-status.failure', 'fix-oversized-instruction');
+const fixLongText = await page.locator('.fix-status.failure').innerText();
+invariant(fixLongText.includes('Fix instruction is too long'), 'fix:oversized-instruction-humanized', { fixLongText });
+const fixLongInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'prepare_fix_proposal')
+);
+invariant(fixLongInvokes.length === 0, 'fix:oversized-instruction-not-invoked', { fixLongInvokes });
+await shot(page, '90-fix-oversized-instruction.png', 'fix-oversized-instruction');
+await page.close();
+
+page = await fixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { proposalDelayMs: 700 }
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+const fixGenerateBusy = page.locator('.fix-generate-action');
+await fixGenerateBusy.click();
+await page.waitForTimeout(80);
+invariant(await fixGenerateBusy.isDisabled(), 'fix:proposing-disabled');
+invariant((await fixGenerateBusy.getAttribute('aria-busy')) === 'true', 'fix:proposing-aria-busy');
+await fixGenerateBusy.evaluate((button) => {
+  button.click();
+  button.click();
+});
+await page.waitForTimeout(50);
+const fixProposalBusyCalls = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'prepare_fix_proposal')
+);
+invariant(fixProposalBusyCalls.length === 1, 'fix:duplicate-proposal-suppressed', { fixProposalBusyCalls });
+await shot(page, '91-fix-proposing.png', 'fix-proposing');
+await page.waitForTimeout(700);
+await assertVisible(page, '.fix-proposal', 'fix-proposing-completes');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-proposal', 'fix-proposal-success');
+const fixProposalCalls = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'prepare_fix_proposal')
+);
+invariant(fixProposalCalls.length === 1, 'fix:single-proposal-request', { fixProposalCalls });
+const fixPrepareArgs = fixProposalCalls[0]?.args ?? {};
+invariant(
+  typeof fixPrepareArgs.sessionId === 'string'
+    && fixPrepareArgs.reference === '@e1a2b3c4'
+    && typeof fixPrepareArgs.instruction === 'string',
+  'fix:prepare-intent-only',
+  { fixPrepareArgs }
+);
+const forbiddenFixPrepare = [
+  'file','path','root','route','line','column','replacement','diff','model','headers','endpoint','force'
+].filter((field) => field in fixPrepareArgs);
+invariant(forbiddenFixPrepare.length === 0, 'fix:no-caller-path-authority', { fixPrepareArgs, forbiddenFixPrepare });
+invariant(!('replacement' in fixPrepareArgs), 'fix:no-caller-replacement-authority', { fixPrepareArgs });
+const fixWritesBeforeApply = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
+invariant(fixWritesBeforeApply === 0, 'fix:no-write-before-apply', { fixWritesBeforeApply });
+await shot(page, '92-fix-proposal-success.png', 'fix-proposal-success');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-diff', 'fix-diff-visible');
+const fixDiffText = await page.locator('.fix-diff').innerText();
+invariant(
+  fixDiffText.includes('--- a/src/components/DeployButton.tsx')
+    && fixDiffText.includes('-<button>Deploy</button>')
+    && fixDiffText.includes('+<button aria-live="polite">Deploy</button>'),
+  'fix:backend-diff-visible',
+  { fixDiffText }
+);
+await shot(page, '93-fix-diff-visible.png', 'fix-diff-visible');
+await page.close();
+
+page = await fixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { proposalFailure: 'trusted AI provider request failed: RAW_FIX_SECRET' }
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-status.failure', 'fix-provider-failure');
+const fixProviderFailureText = await page.locator('.fix-status.failure').innerText();
+invariant(fixProviderFailureText.includes('Could not generate a trusted fix proposal'), 'fix:provider-failure-humanized', { fixProviderFailureText });
+invariant(!fixProviderFailureText.includes('RAW_FIX_SECRET'), 'fix:no-raw-error', { fixProviderFailureText });
+await shot(page, '94-fix-provider-failure.png', 'fix-provider-failure');
+await page.close();
+
+page = await fixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { proposalFailure: 'trusted Fix source mapping is unavailable' }
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-status.failure', 'fix-source-unavailable');
+const fixSourceUnavailableText = await page.locator('.fix-status.failure').innerText();
+invariant(fixSourceUnavailableText.includes('Trusted source for this selection is unavailable'), 'fix:source-unavailable-humanized', { fixSourceUnavailableText });
+await shot(page, '95-fix-source-unavailable.png', 'fix-source-unavailable');
+await page.close();
+
+page = await fixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { proposalFailure: 'trusted Fix sensitive source is unsupported' }
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+const fixSensitiveText = await page.locator('.fix-status.failure').innerText();
+invariant(fixSensitiveText.includes('sensitive source file'), 'fix:sensitive-source-humanized', { fixSensitiveText });
+await shot(page, '96-fix-sensitive-source-refused.png', 'fix-sensitive-source-refused');
+await page.close();
+
+page = await fixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { proposalFailure: 'trusted Fix source type is unsupported' }
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+const fixUnsupportedText = await page.locator('.fix-status.failure').innerText();
+invariant(fixUnsupportedText.includes('source file type is not supported'), 'fix:unsupported-source-humanized', { fixUnsupportedText });
+await shot(page, '97-fix-unsupported-extension.png', 'fix-unsupported-extension');
+await page.close();
+
+page = await fixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { proposalDelayMs: 1000 }
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(80);
+await page.evaluate((nextLive) => {
+  window.__LOCALVIEW_AUDIT_LIVE_STATE__ = structuredClone(nextLive);
+}, liveMeasureB);
+await page.waitForTimeout(760);
+await page.waitForFunction(
+  () => document.querySelector('.ai-selection-summary strong')?.textContent?.includes('@e5d6e7f8'),
+  null,
+  { timeout: 1800 }
+);
+await page.waitForTimeout(450);
+const staleFixSelectionText = await page.locator('.panel-ai').innerText();
+invariant(
+  staleFixSelectionText.includes('@e5d6e7f8') && !staleFixSelectionText.includes('Make the Deploy button state clearer'),
+  'fix:stale-selection-isolated',
+  { staleFixSelectionText }
+);
+const staleFixSelectionDiscards = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_DISCARDS__);
+invariant(staleFixSelectionDiscards.length >= 1, 'fix:stale-selection-proposal-discarded', { staleFixSelectionDiscards });
+await shot(page, '98-fix-stale-selection.png', 'fix-stale-selection');
+await page.close();
+
+page = await fixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { proposalDelayMs: 1800 }
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(80);
+await page.evaluate((nextDashboard) => {
+  window.__LOCALVIEW_AUDIT_DASHBOARD_STATE__ = structuredClone(nextDashboard);
+}, dashboardSessionB);
+await page.waitForTimeout(1550);
+await page.waitForFunction(
+  () => document.querySelector('.ai-selection-summary small')?.textContent?.includes('Nolane Studio B'),
+  null,
+  { timeout: 2200 }
+);
+await page.waitForTimeout(450);
+const staleFixSessionText = await page.locator('.panel-ai').innerText();
+invariant(
+  staleFixSessionText.includes('Nolane Studio B') && !staleFixSessionText.includes('Make the Deploy button state clearer'),
+  'fix:stale-session-isolated',
+  { staleFixSessionText }
+);
+const staleFixSessionDiscards = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_DISCARDS__);
+invariant(staleFixSessionDiscards.length >= 1, 'fix:stale-session-proposal-discarded', { staleFixSessionDiscards });
+await shot(page, '99-fix-stale-session.png', 'fix-stale-session');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+const fixApplyReady = page.locator('.fix-apply-action');
+const fixDiscardReady = page.locator('.fix-discard-action');
+invariant(!(await fixApplyReady.isDisabled()), 'fix:apply-ready-enabled');
+invariant(!(await fixDiscardReady.isDisabled()), 'fix:discard-ready-enabled');
+const readyWrites = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
+invariant(readyWrites === 0, 'fix:review-does-not-write', { readyWrites });
+await shot(page, '100-fix-apply-ready.png', 'fix-apply-ready');
+await page.close();
+
+page = await fixPageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { applyDelayMs: 700 }
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+const applyingButton = page.locator('.fix-apply-action');
+await applyingButton.evaluate((button) => {
+  button.click();
+  button.click();
+});
+await page.waitForTimeout(80);
+await assertVisible(page, '.fix-status.busy', 'fix-applying');
+const applyingInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'apply_fix_proposal')
+);
+invariant(applyingInvokes.length === 1, 'fix:duplicate-apply-suppressed', { applyingInvokes });
+const applyArgs = applyingInvokes[0]?.args ?? {};
+invariant(
+  typeof applyArgs.proposalId === 'string' && Object.keys(applyArgs).length === 1,
+  'fix:apply-proposal-id-only',
+  { applyArgs }
+);
+await shot(page, '101-fix-applying.png', 'fix-applying');
+await page.waitForTimeout(700);
+await assertVisible(page, '.fix-status.success', 'fix-applying-completes');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await page.locator('.fix-apply-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-status.success', 'fix-apply-success');
+const applySuccessText = await page.locator('.fix-status.success').innerText();
+invariant(applySuccessText.includes('Change applied'), 'fix:apply-success-humanized', { applySuccessText });
+const appliedWrites = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
+invariant(appliedWrites === 1, 'fix:apply-single-write', { appliedWrites });
+await shot(page, '102-fix-apply-success.png', 'fix-apply-success');
+await page.close();
+
+for (const failureCase of [
+  {
+    file: '103-fix-source-changed.png',
+    state: 'fix-source-changed',
+    error: 'trusted Fix source changed since proposal',
+    expected: 'Source changed since this proposal',
+    marker: 'fix:source-changed-humanized',
+  },
+  {
+    file: '104-fix-route-changed.png',
+    state: 'fix-route-changed',
+    error: 'trusted Fix route changed since proposal',
+    expected: 'Source changed since this proposal',
+    marker: 'fix:route-changed-humanized',
+  },
+  {
+    file: '105-fix-expired.png',
+    state: 'fix-expired',
+    error: 'trusted Fix proposal expired',
+    expected: 'Proposal expired',
+    marker: 'fix:expired-humanized',
+  },
+  {
+    file: '106-fix-transaction-failure.png',
+    state: 'fix-transaction-failure',
+    error: 'trusted Fix post-write verification failed: RAW_OS_PATH',
+    expected: 'Could not apply the reviewed change',
+    marker: 'fix:transaction-failure-humanized',
+  },
+]) {
+  page = await fixPageFor(
+    browser,
+    { width: 1440, height: 900 },
+    'en',
+    liveMeasure,
+    dashboard,
+    { applyFailure: failureCase.error }
+  );
+  await page.keyboard.press('i');
+  await page.waitForTimeout(100);
+  await page.locator('.fix-action').click();
+  await page.waitForTimeout(100);
+  await page.locator('.fix-generate-action').click();
+  await page.waitForTimeout(120);
+  await page.locator('.fix-apply-action').click();
+  await page.waitForTimeout(120);
+  await assertVisible(page, '.fix-status.failure', failureCase.state);
+  const failureText = await page.locator('.fix-status.failure').innerText();
+  invariant(failureText.includes(failureCase.expected), failureCase.marker, { failureText });
+  invariant(!failureText.includes('RAW_OS_PATH'), 'fix:apply-no-raw-error', { failureText });
+  const failedWrites = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
+  invariant(failedWrites === 0, 'fix:failed-apply-no-write', { failedWrites, failureCase });
+  await shot(page, failureCase.file, failureCase.state);
+  await page.close();
+}
+
+page = await fixPageFor(browser);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await page.locator('.fix-discard-action').click();
+await page.waitForTimeout(100);
+const discardInvokes = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'discard_fix_proposal')
+);
+invariant(discardInvokes.length === 1, 'fix:discard-single-request', { discardInvokes });
+const discardWrites = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
+invariant(discardWrites === 0, 'fix:discard-no-write', { discardWrites });
+await assertVisible(page, '.fix-review', 'fix-discard');
+await shot(page, '107-fix-discard.png', 'fix-discard');
+await page.close();
+
+page = await fixPageFor(browser, { width: 1440, height: 900 }, 'vi');
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+const viFixDisclosure = await page.locator('.fix-disclosure').innerText();
+invariant(
+  viFixDisclosure.includes('đoạn mã nguồn giới hạn')
+    && viFixDisclosure.includes('Mã nguồn sẽ không thay đổi'),
+  'fix:vi-disclosure-localized',
+  { viFixDisclosure }
+);
+await shot(page, '108-vi-fix-disclosure.png', 'vi-fix-disclosure');
+await page.close();
+
+page = await fixPageFor(browser, { width: 1440, height: 900 }, 'vi');
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+const viFixProposal = await page.locator('.fix-proposal').innerText();
+invariant(
+  viFixProposal.includes('src/components/DeployButton.tsx')
+    && viFixProposal.includes('AI chỉ đề xuất'),
+  'fix:vi-proposal-localized',
+  { viFixProposal }
+);
+await shot(page, '109-vi-fix-proposal.png', 'vi-fix-proposal');
+await page.close();
+
+page = await fixPageFor(browser, { width: 1440, height: 900 }, 'vi');
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await page.locator('.fix-apply-action').click();
+await page.waitForTimeout(120);
+const viFixApplied = await page.locator('.fix-status.success').innerText();
+invariant(viFixApplied.includes('Đã áp dụng thay đổi'), 'fix:vi-apply-localized', { viFixApplied });
+await shot(page, '110-vi-fix-apply-success.png', 'vi-fix-apply-success');
+await page.close();
+
+page = await fixPageFor(browser, { width: 390, height: 844 });
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-diff', 'fix-narrow-review');
+await assertNoHorizontalOverflow(page, 'fix-narrow-review');
+await assertPrimaryControlsInViewport(page, 'fix-narrow-review');
+invariant(await page.locator('.fix-apply-action').isVisible(), 'fix:narrow-apply-visible');
+invariant(await page.locator('.fix-discard-action').isVisible(), 'fix:narrow-discard-visible');
+await shot(page, '111-fix-narrow-review.png', 'fix-narrow-review');
+await page.close();
+
+page = await fixPageFor(
+  browser,
+  { width: 390, height: 844 },
+  'en',
+  liveMeasure,
+  dashboard,
+  { proposalFailure: 'trusted AI provider request failed' },
+  { providerAvailable: true, providerLabel: 'Audit AI Bridge' }
+);
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-status.failure', 'fix-failure-isolation');
+await page.keyboard.press('Escape');
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.measure-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.measure-status.success', 'fix-failure-isolation-measure');
+await page.locator('.capture-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.capture-status.success', 'fix-failure-isolation-capture');
+await page.locator('.source-open-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.source-open-status.success', 'fix-failure-isolation-source');
+await page.keyboard.press('Escape');
+await page.keyboard.press('a');
+await page.waitForTimeout(100);
+await page.locator('.ai-submit-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.ai-answer', 'fix-failure-isolation-ask');
+await shot(page, '112-fix-failure-isolation.png', 'fix-failure-isolation');
+await page.close();
+
+page = await fixPageFor(browser, { width: 1440, height: 900 }, 'en', liveNoFocus);
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(120);
+const fixCommandNoSelection = page.getByRole('button', { name: /Fix this/ });
+invariant(await fixCommandNoSelection.isDisabled(), 'fix:command-no-selection-disabled');
+await shot(page, '113-fix-command-no-selection.png', 'fix-command-no-selection');
+await page.close();
+
+page = await pageFor(
+  browser,
+  { width: 1440, height: 900 },
+  'en',
+  {},
+  liveMeasure,
+  dashboard,
+  null,
+  false,
+  [],
+  0,
+  0,
+  0,
+  null,
+  { providerAvailable: true },
+  { providerAvailable: false }
+);
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(120);
+const fixCommandUnavailable = page.getByRole('button', { name: /Fix this/ });
+invariant(await fixCommandUnavailable.isDisabled(), 'fix:command-unavailable-disabled');
+await shot(page, '114-fix-command-unavailable.png', 'fix-command-unavailable');
+await page.close();
+
+page = await fixPageFor(browser);
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(120);
+const fixCommandReady = page.getByRole('button', { name: /Fix this/ });
+invariant(!(await fixCommandReady.isDisabled()), 'fix:command-ready-enabled');
+await fixCommandReady.click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-disclosure', 'fix-command-review-flow');
+const commandPrepareCalls = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'prepare_fix_proposal')
+);
+invariant(commandPrepareCalls.length === 0, 'fix:command-no-auto-proposal', { commandPrepareCalls });
+const commandWrites = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
+invariant(commandWrites === 0, 'fix:command-shared-review-flow', { commandWrites });
+await shot(page, '115-fix-command-review-flow.png', 'fix-command-review-flow');
 await page.close();
 
 await fs.writeFile(
