@@ -180,6 +180,7 @@ function classifyVerifyFailure(
   if (
     detail.includes('target is unavailable')
     || detail.includes('selection is no longer available')
+    || detail.includes('selection is ambiguous')
     || detail.includes('element reference')
   ) {
     return 'target_unavailable';
