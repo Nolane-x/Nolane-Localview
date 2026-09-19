@@ -1086,7 +1086,7 @@ const SCRIPT: &str = r#"
       return host === 'localhost'
         || host === '::1'
         || host === '[::1]'
-        || /^127(?:\\.\\d{1,3}){3}$/.test(host);
+        || /^127(?:\.\d{1,3}){3}$/.test(host);
     };
 
     const hmrFrameworkForSocket = (rawUrl, protocols) => {
@@ -1466,7 +1466,7 @@ mod tests {
         assert!(script.contains("isLoopbackHmrHost"));
         assert!(script.contains("!isLoopbackHmrHost(parsed.hostname)"));
         assert!(script.contains("host === 'localhost'"));
-        assert!(script.contains("/^127(?:\\\\.\\\\d{1,3}){3}$/"));
+        assert!(script.contains("/^127(?:\\.\\d{1,3}){3}$/"));
         assert!(script.contains("push('hmr', { framework, ...signal })"));
         assert!(script.contains("Array.isArray(value.updates) ? value.updates.length : 0"));
         assert!(!script.contains("push('hmr', { data: event.data"));
