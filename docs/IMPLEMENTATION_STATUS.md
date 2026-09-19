@@ -130,10 +130,11 @@ This does **not** make the entire V3 Active Perception/diagnose-fix system compl
 
 The strongest remaining capture/perception gates are:
 
-1. performance-lite sampling and bounded budget packets over the now-live long-task/layout-shift observer path; framework-specific loopback HMR signal production, observer timeline transport and daemon-owned settle detection are already landed;
-2. deeper source/runtime ownership correlation (sourcemaps plus React/Vue/Svelte adapters) and interactive point-and-select inspector wiring;
-3. adaptive/binary responsive breakpoint execution, content/locale stress and deeper responsive issue intelligence over the now-landed canonical preset/contact-sheet authority;
-4. native workspace composition/focus/DPI/crash safety gates before promoting the child WebView surface from feature-gated to default;
-5. add analysis-concurrency authority only when a concrete concurrent analysis owner exists rather than introducing a synthetic counter.
+1. deeper source/runtime ownership correlation (bounded Source Map v3 consumption followed by project-owned live map resolution, then React/Vue/Svelte ownership adapters) and interactive point-and-select inspector wiring;
+2. adaptive/binary responsive breakpoint execution, content/locale stress and deeper responsive issue intelligence over the now-landed canonical preset/contact-sheet authority;
+3. native workspace composition/focus/DPI/crash safety gates before promoting the child WebView surface from feature-gated to default;
+4. add analysis-concurrency authority only when a concrete concurrent analysis owner exists rather than introducing a synthetic counter.
+
+Wave 3 bounded runtime telemetry is no longer a frontier item: action/request/UI-response correlation, exact-session loopback fault authority, strongly classified loopback HMR signals with daemon-owned settling, and bounded exact-session performance-lite packets are landed.
 
 The repository should not claim the complete V1/V2/V3 specification is implemented until these live adapters and later verification phases are end-to-end, not merely represented by crates or data models.
