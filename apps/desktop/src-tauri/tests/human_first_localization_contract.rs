@@ -89,6 +89,7 @@ fn localization_keys_exist_for_every_supported_locale() {
         "advanced.sourceHints",
         "advanced.secureObserverDrain",
         "status.idle",
+        "status.ready",
         "status.active",
         "status.disconnected",
         "status.hidden",
