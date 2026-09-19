@@ -1116,6 +1116,8 @@ const SCRIPT: &str = r#"
           faultInjected: Boolean(rule),
           faultRuleId: rule?.id || null,
           faultEffect: rule?.effect?.kind || null,
+          faultDelayMs: rule?.effect?.kind === 'delay' ? rule.effect.milliseconds : null,
+          faultStatus: rule?.effect?.kind === 'mock_status' ? rule.effect.status : null,
         });
         return response;
       } catch (error) {
@@ -1130,6 +1132,8 @@ const SCRIPT: &str = r#"
           faultInjected: Boolean(rule),
           faultRuleId: rule?.id || null,
           faultEffect: rule?.effect?.kind || null,
+          faultDelayMs: rule?.effect?.kind === 'delay' ? rule.effect.milliseconds : null,
+          faultStatus: rule?.effect?.kind === 'mock_status' ? rule.effect.status : null,
         });
         throw error;
       } finally {
