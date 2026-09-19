@@ -670,7 +670,7 @@ async fn apply_fix_proposal(
     let gate = store.apply_gate_for(&proposal.canonical_file)?;
     let _guard = gate.lock().await;
 
-    let result = async {
+    let result = match tokio::time::timeout(std::time::Duration::from_secs(15), async {
         let pre_route =
             visual_capture::managed_surface_canonical_route(&app, proposal.session_id)?;
         if pre_route != proposal.canonical_route {
@@ -820,8 +820,12 @@ async fn apply_fix_proposal(
                 applied_at_unix_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
             },
         )
-    }
-    .await;
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err("trusted Verify deadline exceeded".to_string()),
+    };
 
     match result {
         Ok(receipt) => {
@@ -861,6 +865,8 @@ async fn verify_fix_change(
         if pre_route != record.canonical_route {
             return Err("trusted Verify route changed since Apply".to_string());
         }
+
+        visual_capture::wait_for_verification_settle(record.session_id).await?;
 
         let token = read_token().await?;
         let client = control_client()?;
