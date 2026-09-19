@@ -150,6 +150,15 @@ try {
   for (const id of ['fetch-fail', 'fetch-delay', 'fetch-mock', 'xhr-fail', 'xhr-delay', 'xhr-mock', 'exhaust']) {
     invariant(proof.events.some((event) => event.faultInjected === true && event.faultRuleId === id), `missing fault metadata for ${id}`);
   }
+  const injected = Object.fromEntries(
+    proof.events
+      .filter((event) => event.faultInjected === true && event.faultRuleId)
+      .map((event) => [event.faultRuleId, event]),
+  );
+  invariant(injected['fetch-delay']?.faultDelayMs === 120, 'fetch delay metadata must retain configured milliseconds');
+  invariant(injected['xhr-delay']?.faultDelayMs === 100, 'XHR delay metadata must retain configured milliseconds');
+  invariant(injected['fetch-mock']?.faultStatus === 503, 'fetch mock metadata must retain configured status');
+  invariant(injected['xhr-mock']?.faultStatus === 418, 'XHR mock metadata must retain configured status');
 
   await page.waitForTimeout(1250);
   const expired = await page.evaluate(() => window.__LOCALVIEW__.networkFaultState());
@@ -179,7 +188,7 @@ try {
 
   process.stdout.write(JSON.stringify({
     ok: true,
-    checks: 25,
+    checks: 29,
     networkEvents: proof.events.length,
     finalInflight: restored.inflight,
     externalHttpPassThrough: externalRouteHits,
