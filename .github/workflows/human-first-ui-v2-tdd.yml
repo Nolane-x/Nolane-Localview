@@ -2,6 +2,16 @@ name: Human-first UI V2 red-green gate
 # contract paths corrected before RED proof
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/human-first-ui-v2-tdd.yml
+      - .github/workflows/human-first-ui-v2-render.yml
+      - apps/desktop/src/**
+      - apps/desktop/src-tauri/tests/human_first_ui_v2_contract.rs
+      - docs/superpowers/specs/2026-09-18-human-first-localview-ui-ux-v2.md
+      - tools/human-first-ui-v2/**
   push:
     branches:
       - feat/human-first-localview-ui-v2
