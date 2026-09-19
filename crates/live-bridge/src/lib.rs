@@ -226,6 +226,7 @@ pub struct NetworkFaultLeaseAuthority {
     pub lease_token: Uuid,
     pub fingerprint: String,
     pub rule_count: usize,
+    pub surface_incarnation: u64,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -1111,6 +1112,7 @@ fn sanitize_network_fault_control_result(
         ("total_hits", 1_024_u64),
         ("remaining_ms", 30_000_u64),
         ("expires_in_ms", 30_000_u64),
+        ("surface_incarnation", u64::MAX),
     ] {
         if let Some(value) = input.get(key) {
             let Some(value) = value.as_u64() else {
