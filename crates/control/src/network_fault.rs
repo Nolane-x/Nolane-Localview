@@ -26,6 +26,7 @@ use crate::ControlState;
 const CONTROL_ACK_TIMEOUT: Duration = Duration::from_millis(2_500);
 const CONTROL_ACK_POLL: Duration = Duration::from_millis(20);
 const MAX_PRIVATE_CONTROL_DRAIN: usize = 8;
+const MAX_INSTALL_BODY_BYTES: usize = 16 * 1024;
 
 fn mutation_gate() -> &'static Mutex<()> {
     static GATE: OnceLock<Mutex<()>> = OnceLock::new();
@@ -129,7 +130,7 @@ async fn install_network_faults(
     State(state): State<ControlState>,
     headers: HeaderMap,
     Path(id): Path<SessionId>,
-    Json(plan): Json<NetworkFaultPlan>,
+    body: axum::body::Bytes,
 ) -> axum::response::Response {
     if !authorized(&headers, &state) {
         return bounded_error(StatusCode::UNAUTHORIZED, "unauthorized");
@@ -137,6 +138,18 @@ async fn install_network_faults(
     if !ensure_session(&state, id).await {
         return bounded_error(StatusCode::NOT_FOUND, "session_not_found");
     }
+    if body.len() > MAX_INSTALL_BODY_BYTES {
+        return bounded_error(StatusCode::PAYLOAD_TOO_LARGE, "network_fault_plan_too_large");
+    }
+    let plan: NetworkFaultPlan = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => {
+            return bounded_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "network_fault_invalid_schema",
+            )
+        }
+    };
 
     let canonical = match canonicalize_fault_plan(&plan) {
         Ok(value) => value,
