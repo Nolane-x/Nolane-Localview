@@ -60,6 +60,12 @@ fn fetch_faults_use_one_accounting_lifecycle_and_bounded_effects() {
     assert!(script.contains("faultInjected: Boolean(rule)"));
     assert!(script.contains("faultRuleId: rule?.id || null"));
     assert!(script.contains("faultEffect: rule?.effect?.kind || null"));
+    assert!(script.contains(
+        "faultDelayMs: rule?.effect?.kind === 'delay' ? rule.effect.milliseconds : null"
+    ));
+    assert!(script.contains(
+        "faultStatus: rule?.effect?.kind === 'mock_status' ? rule.effect.status : null"
+    ));
 
     let fetch_block = script
         .split("window.fetch = async (...args) => {")
@@ -90,6 +96,8 @@ fn xhr_faults_complete_exactly_once_without_native_double_completion() {
 
     assert!(script.contains("transport: 'xhr'"));
     assert!(script.contains("faultInjected: Boolean(rule)"));
+    assert!(script.contains("faultDelayMs:"));
+    assert!(script.contains("faultStatus:"));
 }
 
 #[test]
