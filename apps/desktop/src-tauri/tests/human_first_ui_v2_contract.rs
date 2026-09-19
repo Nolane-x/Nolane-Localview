@@ -117,6 +117,20 @@ fn settings_and_advanced_are_real_tool_surfaces() {
     assert!(settings.contains("translate(locale, 'settings.showToolRail')"));
     assert!(settings.contains("translate(locale, 'settings.rememberChrome')"));
     assert!(settings.contains("rememberChromePositions"));
+
+    for schema_only in [
+        "annotationPersistence",
+        "notifications",
+        "autoOpen",
+        "density",
+        "accent",
+    ] {
+        assert!(
+            !settings.contains(schema_only),
+            "schema-only preference must not become a fake Settings control: {schema_only}"
+        );
+    }
+
     assert!(shell.contains("<RailButton tool=\"settings\""));
     assert!(shell.contains("<SettingsIcon/>"));
 }
