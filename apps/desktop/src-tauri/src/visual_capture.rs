@@ -983,6 +983,12 @@ pub(crate) struct VerificationVisualFrame {
     pub captured_at_unix_ms: u64,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RegisteredVerificationVisualFrame {
+    pub frame: VerificationVisualFrame,
+    pub evidence_id: String,
+}
+
 async fn capture_current_redacted_frame(
     app: tauri::AppHandle,
     state: &VisualCaptureState,
@@ -1059,6 +1065,55 @@ pub(crate) async fn capture_verification_current(
     capture_current_redacted_frame(app, state, session_id, None)
         .await
         .map(verification_visual_frame)
+}
+
+pub(crate) async fn capture_registered_verification_current(
+    app: tauri::AppHandle,
+    state: &VisualCaptureState,
+    session_id: SessionId,
+) -> Result<RegisteredVerificationVisualFrame, String> {
+    let frame = capture_current_redacted_frame(app, state, session_id, None).await?;
+    let verification = VerificationVisualFrame {
+        png: frame.png.clone(),
+        viewport: frame.viewport.clone(),
+        pixel_width: frame.pixel_width,
+        pixel_height: frame.pixel_height,
+        route: frame.route.clone(),
+        captured_at_unix_ms: frame.captured_at_unix_ms,
+    };
+    let receipt =
+        persist_and_register(state, session_id, frame, &RequestedCaptureTarget::Viewport).await?;
+    Ok(RegisteredVerificationVisualFrame {
+        frame: verification,
+        evidence_id: receipt.evidence_id,
+    })
+}
+
+pub(crate) async fn register_verification_visual_diff_evidence(
+    session_id: SessionId,
+    route: String,
+    viewport: ViewportMeta,
+    captured_at_unix_ms: u64,
+    changed_ratio: f64,
+    current_visual_evidence_id: String,
+) -> Result<String, String> {
+    let (mode, parents) = if changed_ratio == 0.0 {
+        ("unchanged", Vec::new())
+    } else {
+        ("viewport", vec![current_visual_evidence_id])
+    };
+    register_visual_diff_evidence(
+        session_id,
+        route,
+        viewport,
+        None,
+        captured_at_unix_ms,
+        mode,
+        changed_ratio,
+        parents,
+    )
+    .await
+    .map(|receipt| receipt.evidence_id)
 }
 
 #[tauri::command]
