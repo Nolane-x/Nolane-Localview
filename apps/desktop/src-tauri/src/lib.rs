@@ -1018,6 +1018,8 @@ async fn verify_fix_change(
                 || lower.contains("source changed")
                 || lower.contains("source mapping changed")
                 || lower.contains("target is unavailable")
+                || lower.contains("selection is no longer available")
+                || lower.contains("selection is ambiguous")
                 || lower.contains("element reference")
             {
                 let _ = verification_store.invalidate(&verification_id);
