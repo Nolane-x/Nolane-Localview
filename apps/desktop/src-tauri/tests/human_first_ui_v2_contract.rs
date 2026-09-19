@@ -50,11 +50,30 @@ fn default_human_inspector_hides_machine_diagnostics() {
 }
 
 #[test]
-fn inspector_never_presents_unwired_primary_actions_as_enabled() {
+fn inspector_primary_actions_are_real_and_capability_gated() {
     let source = include_str!("../../src/features/FloatingTools.tsx");
     let inspector = between(source, "function Inspector(", "function AdvancedPanel(");
 
-    assert!(inspector.contains("function UnavailableInspectorAction("));
+    for required in [
+        "className=\"source-open-action\"",
+        "onOpenSource(measureReference)",
+        "className=\"measure-action\"",
+        "onMeasure(measureReference)",
+        "className=\"capture-action\"",
+        "onClick={onCapture}",
+        "className=\"ask-ai-action\"",
+        "onAskAi(translate(locale, 'ai.defaultQuestion'))",
+        "aiProviderCapability.available",
+        "className=\"fix-action\"",
+        "onClick={onBeginFix}",
+        "fixCapability.available",
+    ] {
+        assert!(
+            inspector.contains(required),
+            "Inspector primary action wiring is missing {required}"
+        );
+    }
+
     for key in [
         "action.openSource",
         "action.measure",
@@ -64,12 +83,9 @@ fn inspector_never_presents_unwired_primary_actions_as_enabled() {
     ] {
         assert!(
             inspector.contains(&format!("translate(locale, '{key}')")),
-            "missing localized unavailable action for {key}"
+            "missing localized primary action for {key}"
         );
     }
-    assert!(inspector.contains("disabled"));
-    assert!(inspector.contains("aria-disabled=\"true\""));
-    assert!(!inspector.contains("<button><CaptureIcon"));
 }
 
 #[test]
@@ -122,16 +138,36 @@ fn command_palette_search_is_functional_not_decorative() {
 }
 
 #[test]
-fn human_first_panels_do_not_enable_unwired_responsive_or_ai_actions() {
+fn human_first_panels_keep_responsive_placeholder_and_gate_real_ai_actions() {
     let source = include_str!("../../src/features/FloatingTools.tsx");
     let responsive = between(source, "function ResponsivePanel(", "function ConsolePanel(");
     let ai = between(source, "function AiPanel(", "function SessionsPanel(");
 
     assert!(!responsive.contains("disabled={!current}"));
     assert!(responsive.contains("disabled aria-disabled=\"true\""));
-    assert!(!ai.contains("disabled={!current}"));
-    assert!(ai.matches("disabled aria-disabled=\"true\"").count() >= 4);
-    assert!(ai.contains("translate(locale, 'ai.unavailable')"));
+
+    for required in [
+        "const canAsk",
+        "providerCapability.available",
+        "disabled={!canAsk}",
+        "onAskAi",
+        "onBeginFix",
+        "fixCapability.available",
+        "onVerifyChange",
+        "verifyCanRetry",
+        "translate(locale, 'ai.unavailable')",
+    ] {
+        assert!(
+            ai.contains(required),
+            "AI surface must capability-gate real actions: missing {required}"
+        );
+    }
+
+    assert!(
+        ai.contains("<button disabled aria-disabled=\"true\" title={translate(locale, 'ai.notImplementedYet')}>"),
+        "the intentionally unavailable Explain Issue action must remain explicit"
+    );
+    assert!(ai.contains("translate(locale, 'ai.explainIssue')"));
 }
 
 #[test]
