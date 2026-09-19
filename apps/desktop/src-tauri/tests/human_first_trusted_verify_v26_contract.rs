@@ -431,6 +431,7 @@ fn render_audit_proves_trusted_verify_runtime_matrix() {
         "verify:provider-advisory-separate",
         "verify:no-raw-error",
         "verify:retryable-failure-action-visible",
+        "verify:command-retry-enabled",
         "verify:retryable-failure-retry",
         "verify:stale-selection-isolated",
         "verify:stale-session-isolated",
