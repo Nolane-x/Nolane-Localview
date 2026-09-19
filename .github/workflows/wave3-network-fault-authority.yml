@@ -78,3 +78,16 @@ jobs:
 
       - name: Check live bridge
         run: cargo check -p localview-live-bridge --all-targets
+
+  control:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify authenticated live network fault authority
+        run: cargo test -p localview-control --test network_fault_live_authority -- --nocapture
+
+      - name: Check control crate
+        run: cargo check -p localview-control --all-targets
