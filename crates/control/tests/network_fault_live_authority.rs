@@ -11,7 +11,7 @@ use chrono::Utc;
 use localview_control::{router, ControlState};
 use localview_evidence::EvidenceStore;
 use localview_live_bridge::{
-    LiveBridge, NetworkFaultControlCommand, NetworkFaultControlResult,
+    LiveBridge, NetworkFaultControlCommand, NetworkFaultControlResult, NetworkFaultLeaseAuthority,
 };
 use localview_observation::ObservationBus;
 use localview_protocol::{Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind};
@@ -142,6 +142,48 @@ async fn execute_one_private_control(live: LiveBridge, session_id: Uuid) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("private network fault control was not delivered");
+}
+
+async fn execute_install_with_mismatched_ack(live: LiveBridge, session_id: Uuid) -> Uuid {
+    for _ in 0..150 {
+        let controls = live.take_network_fault_controls(session_id, 8).await;
+        if let Some(control) = controls.into_iter().next() {
+            let request_id = control.id;
+            let claimed = live
+                .claim_network_fault_control(session_id, request_id)
+                .await
+                .expect("exact private control claim");
+            let lease_token = match claimed.command {
+                NetworkFaultControlCommand::Install { lease_token, .. } => lease_token,
+                NetworkFaultControlCommand::Clear { .. } => {
+                    panic!("expected install before cleanup")
+                }
+            };
+            assert!(
+                live.complete_network_fault_control(
+                    session_id,
+                    NetworkFaultControlResult {
+                        request_id,
+                        ok: true,
+                        error: None,
+                        payload: serde_json::json!({
+                            "installed": true,
+                            "active": true,
+                            "fingerprint": "ffffffffffffffff",
+                            "rule_count": 2,
+                            "remaining_ms": 1000,
+                            "surface_incarnation": 1,
+                        }),
+                        completed_at: Utc::now(),
+                    },
+                )
+                .await
+            );
+            return lease_token;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("private network fault install was not delivered");
 }
 
 fn plan() -> Value {
@@ -275,6 +317,57 @@ async fn install_status_and_clear_require_exact_private_ack() {
     .await;
     assert_eq!(status, StatusCode::OK, "{inactive}");
     assert_eq!(inactive["active"], false);
+}
+
+
+#[tokio::test]
+async fn mismatched_install_ack_fails_closed_and_queues_exact_cleanup() {
+    let (state, owner, _) = test_state().await;
+    let previous_lease_id = Uuid::new_v4();
+    let previous_token = Uuid::new_v4();
+    state
+        .live
+        .set_network_fault_lease(
+            owner,
+            NetworkFaultLeaseAuthority {
+                lease_id: previous_lease_id,
+                lease_token: previous_token,
+                fingerprint: "aaaaaaaaaaaaaaaa".into(),
+                rule_count: 1,
+                surface_incarnation: 1,
+                expires_at: Utc::now() + chrono::Duration::seconds(30),
+            },
+        )
+        .await;
+
+    let worker = tokio::spawn(execute_install_with_mismatched_ack(
+        state.live.clone(),
+        owner,
+    ));
+    let (status, body) = send(
+        state.clone(),
+        Method::POST,
+        format!("/v1/sessions/{owner}/network-faults"),
+        Some(plan()),
+        true,
+    )
+    .await;
+    let new_token = worker.await.expect("mismatched install executor");
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["error"], "network_fault_preview_ack_mismatch");
+    assert!(
+        state.live.network_fault_lease(owner).await.is_none(),
+        "daemon must not retain the superseded previous lease after a committed-but-invalid install ack"
+    );
+
+    let cleanup = state.live.take_network_fault_controls(owner, 8).await;
+    assert_eq!(cleanup.len(), 1, "committed mismatch needs one exact cleanup");
+    assert!(matches!(
+        cleanup[0].command,
+        NetworkFaultControlCommand::Clear { lease_token } if lease_token == new_token
+    ));
+    assert_ne!(new_token, previous_token);
 }
 
 #[tokio::test]
