@@ -247,6 +247,14 @@ async fn install_network_faults(
         );
     };
     if !result.ok {
+        queue_failed_install_cleanup(
+            &state,
+            id,
+            lease_token,
+            previous_lease,
+            true,
+        )
+        .await;
         return bounded_error(StatusCode::BAD_GATEWAY, "network_fault_preview_rejected");
     }
 
