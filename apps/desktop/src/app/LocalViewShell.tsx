@@ -177,6 +177,9 @@ function classifyVerifyFailure(
   ) {
     return 'expired';
   }
+  if (detail.includes('settle failed')) {
+    return 'settle_failed';
+  }
   if (detail.includes('source changed') || detail.includes('source mapping changed')) {
     return 'source_changed';
   }
@@ -806,10 +809,18 @@ export default function LocalViewShell() {
   }, []);
 
   const verifyFixChange = useCallback(async () => {
-    if (verifyState.status !== 'ready' || verifyInFlight.current) return;
-    const ready = verifyState;
+    if (verifyInFlight.current) return;
+
+    const retryableFailure = verifyState.status === 'failure'
+      && (verifyState.reason === 'settle_failed' || verifyState.reason === 'failed');
+    if (verifyState.status !== 'ready' && !retryableFailure) return;
+
+    const verificationId = verifyState.verificationId;
+    const reference = verifyState.reference;
+    const displayFile = verifyState.displayFile;
+    const scope = verifyState.scope;
     const requestSessionId = current?.id;
-    if (!requestSessionId) return;
+    if (!verificationId || !reference || !displayFile || !scope || !requestSessionId) return;
 
     const generation = ++verifyGeneration.current;
     verifyInFlight.current = true;
@@ -817,18 +828,18 @@ export default function LocalViewShell() {
     setActiveTool('ai');
     setVerifyState({
       status: 'verifying',
-      verificationId: ready.verificationId,
-      reference: ready.reference,
-      displayFile: ready.displayFile,
-      scope: ready.scope,
+      verificationId,
+      reference,
+      displayFile,
+      scope,
     });
 
     try {
-      const receipt = await api.verifyFixChange({ verificationId: ready.verificationId });
+      const receipt = await api.verifyFixChange({ verificationId });
       if (
         generation !== verifyGeneration.current
         || requestSessionId !== currentSessionIdRef.current
-        || ready.reference !== selectedReferenceRef.current
+        || reference !== selectedReferenceRef.current
       ) {
         return;
       }
@@ -850,16 +861,16 @@ export default function LocalViewShell() {
       if (
         generation !== verifyGeneration.current
         || requestSessionId !== currentSessionIdRef.current
-        || ready.reference !== selectedReferenceRef.current
+        || reference !== selectedReferenceRef.current
       ) {
         return;
       }
       setVerifyState({
         status: 'failure',
-        verificationId: ready.verificationId,
-        reference: ready.reference,
-        displayFile: ready.displayFile,
-        scope: ready.scope,
+        verificationId,
+        reference,
+        displayFile,
+        scope,
         reason: classifyVerifyFailure(cause),
       });
     } finally {
