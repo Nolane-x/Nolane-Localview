@@ -26,6 +26,7 @@ localview-protocol = { path = "../protocol" }
 localview-resource-governor = { path = "../resource-governor" }
 localview-responsive = { path = "../responsive" }
 localview-security = { path = "../security" }
+localview-source-map = { path = "../source-map" }
 localview-sessions = { path = "../sessions" }
 localview-token-budget = { path = "../token-budget" }
 localview-verification = { path = "../verification" }
