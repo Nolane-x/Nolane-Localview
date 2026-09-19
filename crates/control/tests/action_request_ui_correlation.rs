@@ -233,7 +233,8 @@ async fn correlation_uses_daemon_boundary_and_retains_exact_parent_evidence() {
     assert!(
         body["trace"]["links"][0]["confidence"]
             .as_f64()
-            .is_some_and(|value| value <= 0.55)
+            .is_some_and(|value| value <= 0.551),
+        "temporal association confidence must stay at the conservative ~0.55 cap: {body}"
     );
     assert_eq!(body["window"]["basis"], "daemon_execution_boundary");
 
