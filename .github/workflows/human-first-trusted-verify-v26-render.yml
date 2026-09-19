@@ -1,0 +1,70 @@
+name: Human-first trusted Verify Change V2.6 render audit
+
+on:
+  push:
+    branches:
+      - feat/human-first-trusted-verify-v26
+    paths:
+      - .github/workflows/human-first-trusted-verify-v26-render.yml
+      - .github/workflows/human-first-trusted-verify-v26.yml
+      - tools/human-first-ui-v2/**
+      - apps/desktop/src/**
+      - apps/desktop/src-tauri/src/**
+      - apps/desktop/src-tauri/permissions/**
+      - apps/desktop/src-tauri/tests/human_first_trusted_verify_v26_contract.rs
+      - docs/superpowers/specs/2026-09-19-human-first-trusted-verify-v26.md
+  workflow_dispatch:
+
+concurrency:
+  group: human-first-trusted-verify-v26-render-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build frontend
+        run: npm run build
+      - name: Install Playwright Chromium
+        run: npm install --no-save --no-audit --no-fund playwright@1.55.0 && npx playwright install --with-deps chromium
+      - name: Start neutral localhost target
+        run: |
+          python3 -m http.server 5173 --directory ../../tools/human-first-ui-v2/demo > /tmp/localview-v26-demo.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5173/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/localview-v26-demo.log
+          exit 1
+      - name: Start LocalView frontend
+        run: |
+          npm run dev -- --host 127.0.0.1 > /tmp/localview-v26-vite.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:1420/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/localview-v26-vite.log
+          exit 1
+      - name: Capture and verify trusted Verify Change states
+        run: |
+          cp ../../tools/human-first-ui-v2/capture.mjs ./capture-human-first-v26.mjs
+          node ./capture-human-first-v26.mjs
+          rm ./capture-human-first-v26.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localview-human-first-trusted-verify-v26-render
+          path: apps/desktop/human-first-ui-v2-render/
+          if-no-files-found: error
+          retention-days: 7
