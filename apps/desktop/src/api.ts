@@ -55,6 +55,14 @@ export interface HumanApplyFixRequest {
   proposalId: string;
 }
 
+export type VerifyScope = 'semantic_visual' | 'semantic_only';
+
+export type VerifyStatus =
+  | 'change_observed'
+  | 'no_observable_change'
+  | 'regression_signal'
+  | 'inconclusive';
+
 export interface HumanApplyFixReceipt {
   proposalId: string;
   reference: string;
@@ -62,7 +70,30 @@ export interface HumanApplyFixReceipt {
   applied: true;
   changedStartLine: number;
   changedEndLine: number;
+  verificationId: string;
+  verificationScope: VerifyScope;
   appliedAtUnixMs: number;
+}
+
+export interface VerifyFixChangeRequest {
+  verificationId: string;
+}
+
+export interface HumanVerifyChangeReceipt {
+  verificationId: string;
+  reference: string;
+  displayFile: string;
+  scope: VerifyScope;
+  status: VerifyStatus;
+  semanticChanges: string[];
+  regressionSignals: string[];
+  viewportChangedRatio?: number | null;
+  targetChangedRatio?: number | null;
+  visualDiffEvidenceId?: string | null;
+  snapshotVersion: number;
+  providerLabel?: string | null;
+  advisorySummary?: string | null;
+  verifiedAtUnixMs: number;
 }
 
 export interface HumanSourceOpenRequest {
@@ -127,6 +158,8 @@ export const api = {
     invoke<HumanApplyFixReceipt>('apply_fix_proposal', { proposalId }),
   discardFixProposal: ({ proposalId }: HumanApplyFixRequest) =>
     invoke<void>('discard_fix_proposal', { proposalId }),
+  verifyFixChange: ({ verificationId }: VerifyFixChangeRequest) =>
+    invoke<HumanVerifyChangeReceipt>('verify_fix_change', { verificationId }),
   openSourceForSelection: ({ sessionId, reference }: HumanSourceOpenRequest) =>
     invoke<HumanSourceOpenReceipt>('open_source_for_selection', { sessionId, reference }),
   measureElement: (sessionId: string, reference: string) => invoke<ElementMeasureReceipt>('measure_current_selection', { sessionId, reference }),
