@@ -174,8 +174,17 @@ export type HumanVerifyState =
       reference?: string;
       displayFile?: string;
       scope?: VerifyScope;
-      reason: 'expired' | 'source_changed' | 'route_changed' | 'target_unavailable' | 'failed';
+      reason: 'expired' | 'source_changed' | 'route_changed' | 'target_unavailable' | 'settle_failed' | 'failed';
     };
+
+function verifyCanRetry(state: HumanVerifyState): boolean {
+  return state.status === 'failure'
+    && (state.reason === 'settle_failed' || state.reason === 'failed')
+    && !!state.verificationId
+    && !!state.reference
+    && !!state.displayFile
+    && !!state.scope;
+}
 
 export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { messageKey: MessageKey; shortcut: string }> = {
   inspect: { messageKey: 'tool.inspect', shortcut: 'I' },
@@ -782,6 +791,7 @@ function AiPanel({
   const [fixInstruction, setFixInstruction] = useState(() => translate(locale, 'fix.defaultInstruction'));
   const busy = askAiState.status === 'asking';
   const fixBusy = fixState.status === 'proposing' || fixState.status === 'applying';
+  const verifyRetryable = verifyCanRetry(verifyState);
   const canAsk = !!current && !!selectedReference && providerCapability.available && !busy;
   const unavailableReason = !current
     ? translate(locale, 'empty.noTarget')
@@ -868,20 +878,24 @@ function AiPanel({
       </button>
       <button
         onClick={onVerifyChange}
-        disabled={verifyState.status !== 'ready'}
-        aria-disabled={verifyState.status !== 'ready'}
+        disabled={verifyState.status !== 'ready' && !verifyRetryable}
+        aria-disabled={verifyState.status !== 'ready' && !verifyRetryable}
         aria-busy={verifyState.status === 'verifying'}
         title={
-          verifyState.status === 'ready'
-            ? translate(locale, 'verify.action')
-            : verifyState.status === 'verifying'
-              ? translate(locale, 'verify.inProgress')
-              : translate(locale, 'verify.ready')
+          verifyRetryable
+            ? translate(locale, 'action.retry')
+            : verifyState.status === 'ready'
+              ? translate(locale, 'verify.action')
+              : verifyState.status === 'verifying'
+                ? translate(locale, 'verify.inProgress')
+                : translate(locale, 'verify.ready')
         }
       >
-        {verifyState.status === 'verifying'
-          ? translate(locale, 'verify.inProgress')
-          : translate(locale, 'ai.verifyChange')}
+        {verifyRetryable
+          ? translate(locale, 'action.retry')
+          : verifyState.status === 'verifying'
+            ? translate(locale, 'verify.inProgress')
+            : translate(locale, 'ai.verifyChange')}
       </button>
     </div>
 
@@ -1007,7 +1021,7 @@ function AiPanel({
           <span>{translate(locale, 'verify.title')}</span>
           <strong>{translate(locale, 'verify.readOnlyDisclosure')}</strong>
         </div>
-        {(verifyState.status === 'ready' || verifyState.status === 'verifying' || verifyState.status === 'success') && (
+        {(verifyState.status === 'ready' || verifyState.status === 'verifying' || verifyState.status === 'success' || verifyRetryable) && (
           <span className="compact-status success">
             {verifyState.scope === 'semantic_visual'
               ? translate(locale, 'verify.semanticVisual')
@@ -1077,6 +1091,11 @@ function AiPanel({
                     ? translate(locale, 'verify.targetUnavailable')
                     : translate(locale, 'verify.failed')}
           </strong>
+          {verifyRetryable && (
+            <button className="verify-retry-action" onClick={onVerifyChange}>
+              {translate(locale, 'action.retry')}
+            </button>
+          )}
         </div>
       )}
     </section>
@@ -1118,6 +1137,7 @@ function CommandPanel({
   onCommand: (command: CommandId) => void;
 }) {
   const [query, setQuery] = useState('');
+  const verifyRetryable = verifyCanRetry(verifyState);
   const commands = [
     { id: COMMAND_IDS.inspectActivate, icon: <InspectIcon />, title: translate(locale, 'tool.inspect'), detail: current?.project.display_name ?? '', keys: 'I', disabled: !current },
     {
@@ -1166,9 +1186,11 @@ function CommandPanel({
       title: translate(locale, 'ai.verifyChange'),
       detail: verifyState.status === 'ready'
         ? verifyState.displayFile
-        : translate(locale, 'verify.ready'),
+        : verifyRetryable
+          ? translate(locale, 'action.retry')
+          : translate(locale, 'verify.ready'),
       keys: '',
-      disabled: verifyState.status !== 'ready',
+      disabled: verifyState.status !== 'ready' && !verifyRetryable,
     },
     { id: COMMAND_IDS.previewOpenNative, icon: <ExternalIcon />, title: translate(locale, 'action.openPreview'), detail: url ?? '', keys: '↵', disabled: !current },
     { id: COMMAND_IDS.settingsOpen, icon: <SettingsIcon />, title: translate(locale, 'tool.settings'), detail: '', keys: '⌘,', disabled: false },
