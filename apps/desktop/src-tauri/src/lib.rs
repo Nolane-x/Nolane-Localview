@@ -2430,6 +2430,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     unhandled_rejection: 'runtime_error',
     long_task: 'performance',
     layout_shift: 'performance',
+    hmr: 'hmr',
   })[type] || null;
 
   const eventTime = (raw) => {

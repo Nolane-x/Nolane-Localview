@@ -1,0 +1,96 @@
+name: Wave 3 live HMR signal authority
+
+on:
+  pull_request:
+    paths:
+      - "crates/instrumentation/**"
+      - "apps/desktop/src-tauri/src/**"
+      - "apps/desktop/src-tauri/tests/hmr_bridge_contract.rs"
+      - "tools/wave3-hmr/**"
+      - ".github/workflows/wave3-hmr-signal-authority.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-live-hmr-signal-authority-design.md"
+  push:
+    branches:
+      - "feat/wave3-live-hmr-signals"
+    paths:
+      - "crates/instrumentation/**"
+      - "apps/desktop/src-tauri/src/**"
+      - "apps/desktop/src-tauri/tests/hmr_bridge_contract.rs"
+      - "tools/wave3-hmr/**"
+      - ".github/workflows/wave3-hmr-signal-authority.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-live-hmr-signal-authority-design.md"
+
+concurrency:
+  group: wave3-hmr-signal-authority-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  instrumentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify bounded HMR instrumentation
+        run: cargo test -p localview-instrumentation -- --nocapture
+
+      - name: Check instrumentation crate
+        run: cargo check -p localview-instrumentation --all-targets
+
+  desktop-bridge:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify desktop HMR normalization
+        run: cargo test -p localview-desktop --test hmr_bridge_contract -- --nocapture
+
+  settle-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Preserve capture HMR quiet policy
+        run: |
+          cargo test -p localview-capture --test settle_contract -- --nocapture
+          cargo test -p localview-control --test capture_settle -- --nocapture
+
+  browser-runtime:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize exact LocalView HMR bootstrap
+        run: cargo run -p localview-instrumentation --example hmr_bootstrap > /tmp/localview-hmr-bootstrap.js
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install browser proof dependencies
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.55.0 ws@8.18.3
+          npx playwright install --with-deps chromium
+
+      - name: Prove real Chromium HMR privacy and isolation
+        working-directory: apps/desktop
+        run: |
+          cp ../../tools/wave3-hmr/runtime.mjs ./wave3-hmr-runtime.mjs
+          node ./wave3-hmr-runtime.mjs
+          rm ./wave3-hmr-runtime.mjs
