@@ -13,6 +13,7 @@ pub struct LiveAnalysis {
     pub network: Vec<NetworkFinding>,
     pub console: Vec<ConsoleGroup>,
     pub performance: Vec<PerformanceFinding>,
+    #[serde(default)]
     pub performance_lite: PerformanceLitePacket,
     pub counts: LiveEventCounts,
 }
@@ -25,6 +26,7 @@ pub struct LiveEventCounts {
     pub network: usize,
     pub runtime_errors: usize,
     pub performance: usize,
+    #[serde(default)]
     pub hmr: usize,
     pub semantic_snapshots: usize,
 }
@@ -336,22 +338,23 @@ fn apply_performance(event: &ObserverEvent, sample: &mut PerformanceSample) {
     let payload = &event.payload;
     match text(payload, "type") {
         Some("long_task") => {
-            let duration = payload
+            if let Some(duration) = payload
                 .get("duration")
                 .and_then(|value| value.as_f64())
-                .unwrap_or(0.0)
-                .max(0.0)
-                .round() as u64;
-            sample.long_tasks_ms.push(duration);
+                .filter(|value| value.is_finite() && *value >= 0.0)
+            {
+                sample.long_tasks_ms.push(duration.round() as u64);
+            }
         }
         Some("layout_shift") => {
-            let value = payload
+            if let Some(value) = payload
                 .get("value")
                 .and_then(|value| value.as_f64())
-                .unwrap_or(0.0)
-                .max(0.0);
-            sample.cumulative_layout_shift =
-                Some(sample.cumulative_layout_shift.unwrap_or(0.0) + value);
+                .filter(|value| value.is_finite() && *value >= 0.0)
+            {
+                sample.cumulative_layout_shift =
+                    Some(sample.cumulative_layout_shift.unwrap_or(0.0) + value);
+            }
         }
         _ => {}
     }
@@ -449,6 +452,33 @@ mod tests {
 
         let direct = performance_lite(&events);
         assert_eq!(direct, report.performance_lite);
+    }
+
+    #[test]
+    fn malformed_performance_payloads_do_not_inflate_packet() {
+        let events = vec![
+            event(
+                1,
+                ObserverEventKind::Performance,
+                json!({"type":"long_task","duration":-10.0}),
+            ),
+            event(
+                2,
+                ObserverEventKind::Performance,
+                json!({"type":"long_task","duration":"not-a-number"}),
+            ),
+            event(
+                3,
+                ObserverEventKind::Performance,
+                json!({"type":"layout_shift","value":-0.5}),
+            ),
+        ];
+
+        let packet = performance_lite(&events);
+        assert_eq!(packet.long_task_count, 0);
+        assert_eq!(packet.total_long_task_ms, 0);
+        assert_eq!(packet.max_long_task_ms, None);
+        assert_eq!(packet.cumulative_layout_shift, None);
     }
 
     #[test]
