@@ -81,6 +81,20 @@ fn responsive_transaction_uses_exact_preview_and_restores_before_persistence() {
     let persist = tx.find("persist_responsive_contact_sheet_and_register").unwrap();
     assert!(restore < persist, "preview restoration must happen before persistence");
 
+    let restore_fn = between(
+        source,
+        "async fn restore_responsive_preview(",
+        "async fn persist_responsive_contact_sheet_and_register(",
+    );
+    assert!(
+        restore_fn.contains("wait_for_capture_settle"),
+        "restored preview must settle before responsive persistence"
+    );
+    assert!(
+        restore_fn.contains("timeout_at(deadline"),
+        "restored settle must remain inside the bounded cleanup deadline"
+    );
+
     let loop_start = tx.find("for preset in").expect("responsive preset loop");
     let after_loop = &tx[loop_start..restore];
     assert!(
