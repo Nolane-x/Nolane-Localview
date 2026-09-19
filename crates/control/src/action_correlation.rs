@@ -178,7 +178,8 @@ async fn action_correlation(
         .iter()
         .map(|link| link.confidence)
         .fold(0.0_f32, f32::max);
-    let captured_at = Utc::now();
+    let captured_at = boundary.completed_at
+        + chrono::Duration::milliseconds(i64::try_from(policy.tail_ms).unwrap_or(0));
     let stored = state
         .evidence
         .insert(EvidenceDraft {
