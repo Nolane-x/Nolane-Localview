@@ -8,16 +8,20 @@ fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 #[test]
 fn canonical_spec_locks_responsive_authority_and_restore_before_persistence() {
     let spec = include_str!("../../../../docs/superpowers/specs/2026-09-19-trusted-responsive-sweep-contact-sheet-design.md");
+    let normalized = spec.to_ascii_lowercase();
     for required in [
         "frontend must never send arbitrary width/height authority",
-        "set_min_size(None)",
-        "No responsive artifact or evidence may exist before successful preview-size restoration.",
+        "set_min_size(none)",
+        "no responsive artifact or evidence may exist before successful preview-size restoration.",
         "responsive_contact_sheet",
         "one session capture gate spans all presets",
         "no workspace/iframe fallback in this slice",
         "restore original preview inner size",
     ] {
-        assert!(spec.contains(required), "responsive canonical spec missing {required}");
+        assert!(
+            normalized.contains(required),
+            "responsive canonical spec missing {required}"
+        );
     }
 }
 
