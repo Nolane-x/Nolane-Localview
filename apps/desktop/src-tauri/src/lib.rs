@@ -17,7 +17,8 @@ use std::{
 use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
     ActionCancellationSignal, BridgeAction, BridgeActionKind, BridgeActionResult, IngestReport,
-    ObserverBatch, ObserverEvent, PrivateBridgeAction,
+    NetworkFaultControlRequest, NetworkFaultControlResult, ObserverBatch, ObserverEvent,
+    PrivateBridgeAction,
 };
 use localview_protocol::{Health, PageSnapshot, SemanticNode, Session, SessionId, SourceLocation};
 use serde::{Deserialize, Serialize};
@@ -2062,11 +2063,37 @@ fn install_preview_surface_destroyed_reconciler(
         }
         let identity = identity.clone();
         tauri::async_runtime::spawn(async move {
+            if let Err(error) =
+                invalidate_network_fault_preview(identity.session_id, identity.incarnation).await
+            {
+                eprintln!("LocalView preview network-fault invalidation failed: {error}");
+            }
             if let Err(error) = workspace_surface::surface_resource::release_surface(&identity).await {
                 eprintln!("LocalView preview surface release failed: {error}");
             }
         });
     });
+}
+
+async fn invalidate_network_fault_preview(
+    session_id: SessionId,
+    surface_incarnation: u64,
+) -> Result<(), String> {
+    let token = read_token().await?;
+    control_client()?
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/network-faults/invalidate-preview"
+        ))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "surface_incarnation": surface_incarnation,
+        }))
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?;
+    Ok(())
 }
 
 fn preview_registry_error(
@@ -2146,6 +2173,58 @@ async fn preview_take_actions(
 }
 
 #[tauri::command]
+async fn preview_take_network_fault_controls(
+    webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    session_id: SessionId,
+) -> Result<Vec<NetworkFaultControlRequest>, String> {
+    network_fault_preview_surface(registry.inner(), &webview_window, session_id)?;
+    let token = read_token().await?;
+    control_client()?
+        .get(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/network-fault-controls"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json::<Vec<NetworkFaultControlRequest>>()
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+async fn preview_complete_network_fault_control(
+    webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    session_id: SessionId,
+    mut result: NetworkFaultControlResult,
+) -> Result<(), String> {
+    let surface = network_fault_preview_surface(registry.inner(), &webview_window, session_id)?;
+    if let Some(payload) = result.payload.as_object_mut() {
+        payload.insert(
+            "surface_incarnation".into(),
+            serde_json::Value::from(surface.identity.incarnation),
+        );
+    }
+    let token = read_token().await?;
+    control_client()?
+        .post(format!(
+            "http://127.0.0.1:45454/v1/sessions/{session_id}/network-fault-controls/results"
+        ))
+        .bearer_auth(token)
+        .json(&result)
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn preview_action_cancellation(
     webview_window: tauri::WebviewWindow,
     session_id: SessionId,
@@ -2219,6 +2298,27 @@ async fn preview_complete_action(
     }
     response.error_for_status().map_err(err)?;
     Ok(())
+}
+
+fn network_fault_preview_surface(
+    registry: &workspace_surface::surface_registry::DesktopSurfaceRegistry,
+    webview_window: &tauri::WebviewWindow,
+    session_id: SessionId,
+) -> Result<workspace_surface::surface_registry::DesktopSurfaceSnapshot, String> {
+    use workspace_surface::surface_registry::DesktopSurfaceKind;
+
+    let label = workspace_surface::preview_surface_label(session_id);
+    if webview_window.label() != label {
+        return Err("network fault control requires the exact LocalView preview surface".into());
+    }
+
+    let current = registry
+        .current(session_id, DesktopSurfaceKind::PreviewWindow, &label)
+        .ok_or_else(|| "network fault preview surface is not live in desktop owner registry".to_string())?;
+    if current.identity.owner_instance_id != registry.owner_instance_id() {
+        return Err("network fault preview surface owner mismatch".into());
+    }
+    Ok(current)
 }
 
 fn ensure_preview_caller(
@@ -2309,6 +2409,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
   let running = true;
   let busy = false;
   const pendingActions = new Map();
+  const pendingNetworkFaultControls = new Map();
 
   const MAX_PRIVATE_MASK_SELECTORS = 16;
   const MAX_PRIVATE_MASK_SELECTOR_BYTES = 256;
@@ -2605,6 +2706,66 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     }
   };
 
+  const rememberTakenNetworkFaultControls = (controls) => {
+    const batch = Array.isArray(controls) ? controls : [];
+    for (const control of batch) {
+      if (!control?.id || pendingNetworkFaultControls.has(control.id)) continue;
+      pendingNetworkFaultControls.set(control.id, {
+        control,
+        executed: false,
+        ok: true,
+        payload: null,
+        controlError: null,
+      });
+    }
+  };
+
+  const executeNetworkFaultControl = (control) => {
+    const api = window.__LOCALVIEW__;
+    if (!api?.installNetworkFaultPlan || !api?.clearNetworkFaultPlan || !api?.networkFaultState) {
+      throw new Error('network_fault_runtime_unavailable');
+    }
+    const command = control?.command || {};
+    if (command.type === 'install') {
+      const receipt = api.installNetworkFaultPlan(String(command.lease_token || ''), command.plan);
+      return { ...receipt, ...api.networkFaultState() };
+    }
+    if (command.type === 'clear') {
+      const receipt = api.clearNetworkFaultPlan(String(command.lease_token || ''));
+      return { ...receipt, ...api.networkFaultState() };
+    }
+    throw new Error('network_fault_control_unsupported');
+  };
+
+  const processPendingNetworkFaultControl = async (invoke, entry) => {
+    const control = entry.control;
+    if (!entry.executed) {
+      try {
+        entry.payload = executeNetworkFaultControl(control);
+        entry.ok = true;
+        entry.controlError = null;
+      } catch (error) {
+        entry.ok = false;
+        entry.payload = null;
+        entry.controlError = String(error?.message || error);
+      } finally {
+        entry.executed = true;
+      }
+    }
+
+    await invoke('preview_complete_network_fault_control', {
+      sessionId,
+      result: {
+        request_id: control.id,
+        ok: entry.ok,
+        error: entry.controlError,
+        payload: entry.payload,
+        completed_at: new Date().toISOString(),
+      },
+    });
+    pendingNetworkFaultControls.delete(control.id);
+  };
+
   const processPendingAction = async (invoke, entry) => {
     const cancellationDefaults = { cancellationSeen: false };
     if (entry.cancellationSeen === undefined) {
@@ -2665,6 +2826,19 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         await invoke('preview_ingest', {
           batch: { session_id: sessionId, generation, events: normalized },
         });
+      }
+
+      if (pendingNetworkFaultControls.size === 0) {
+        const controls = await invoke('preview_take_network_fault_controls', { sessionId });
+        rememberTakenNetworkFaultControls(controls);
+      }
+
+      for (const entry of pendingNetworkFaultControls.values()) {
+        try {
+          await processPendingNetworkFaultControl(invoke, entry);
+        } catch (_) {
+          break;
+        }
       }
 
       if (pendingActions.size === 0) {
@@ -2753,6 +2927,8 @@ pub fn run() {
             open_preview,
             preview_ingest,
             preview_take_actions,
+            preview_take_network_fault_controls,
+            preview_complete_network_fault_control,
             preview_action_cancellation,
             preview_ack_action_cancellation,
             preview_complete_action,

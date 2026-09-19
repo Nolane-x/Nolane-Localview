@@ -297,6 +297,7 @@ const SCRIPT: &str = r#"
   let routeSnapshotTimer = 0;
   let lastSnapshot = null;
   let inflightNetworkRequests = 0;
+  let networkFaultLease = null;
   const changedRefs = new Set();
 
   const beginNetworkRequest = () => {
@@ -323,6 +324,230 @@ const SCRIPT: &str = r#"
     } catch (_) {
       return redact(value).slice(0, 1000);
     }
+  };
+
+  const NETWORK_FAULT_MAX_RULES = 16;
+  const NETWORK_FAULT_MAX_PATH_BYTES = 256;
+  const NETWORK_FAULT_MIN_LEASE_MS = 100;
+  const NETWORK_FAULT_MAX_LEASE_MS = 30000;
+  const NETWORK_FAULT_MAX_DELAY_MS = 5000;
+  const NETWORK_FAULT_MAX_HITS = 64;
+  const NETWORK_FAULT_METHODS = new Set(['get', 'head', 'post', 'put', 'patch', 'delete', 'options']);
+  const NETWORK_FAULT_TRANSPORTS = new Set(['fetch', 'xhr', 'both']);
+
+  const normalizeNetworkFaultTarget = (rawUrl) => {
+    let faultUrl;
+    try {
+      faultUrl = new URL(String(rawUrl || ''), location.href);
+    } catch (_) {
+      return null;
+    }
+    if (faultUrl.protocol !== 'http:' && faultUrl.protocol !== 'https:') return null;
+    const hostname = String(faultUrl.hostname || '').toLowerCase();
+    const ipv4Parts = hostname.startsWith('127.') ? hostname.split('.') : [];
+    const ipv4Loopback = ipv4Parts.length === 4 && ipv4Parts.every(part => {
+      if (!/^\d{1,3}$/.test(part)) return false;
+      const value = Number(part);
+      return Number.isInteger(value) && value >= 0 && value <= 255;
+    });
+    const loopback = hostname === 'localhost'
+      || hostname.endsWith('.localhost')
+      || ipv4Loopback
+      || hostname === '::1'
+      || hostname === '[::1]';
+    if (!loopback) return null;
+    return { path: faultUrl.pathname || '/' };
+  };
+
+  const validateNetworkFaultPlan = (plan) => {
+    if (!config.include_network) throw new Error('network_fault_instrumentation_disabled');
+    if (!plan || typeof plan !== 'object') throw new Error('network_fault_invalid_plan');
+    const fingerprint = String(plan.fingerprint || '');
+    if (!/^[0-9a-f]{16}$/.test(fingerprint)) throw new Error('network_fault_invalid_fingerprint');
+    const leaseMs = Number(plan.lease_ms);
+    if (!Number.isInteger(leaseMs)
+        || leaseMs < NETWORK_FAULT_MIN_LEASE_MS
+        || leaseMs > NETWORK_FAULT_MAX_LEASE_MS) {
+      throw new Error('network_fault_invalid_lease');
+    }
+    if (!Array.isArray(plan.rules)
+        || plan.rules.length === 0
+        || plan.rules.length > NETWORK_FAULT_MAX_RULES) {
+      throw new Error('network_fault_invalid_rules');
+    }
+
+    const seen = new Set();
+    const rules = plan.rules.map(input => {
+      if (!input || typeof input !== 'object') throw new Error('network_fault_invalid_rule');
+      const id = String(input.id || '');
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error('network_fault_invalid_rule_id');
+      const transport = String(input.transport || '').toLowerCase();
+      if (!NETWORK_FAULT_TRANSPORTS.has(transport)) throw new Error('network_fault_invalid_transport');
+      const method = String(input.method || '').toLowerCase();
+      if (!NETWORK_FAULT_METHODS.has(method)) throw new Error('network_fault_invalid_method');
+      const path = String(input.path || '');
+      const pathBytes = new TextEncoder().encode(path).length;
+      if (!path.startsWith('/')
+          || path.startsWith('//')
+          || path.includes('?')
+          || path.includes('#')
+          || /[\u0000-\u001f\u007f]/.test(path)
+          || pathBytes === 0
+          || pathBytes > NETWORK_FAULT_MAX_PATH_BYTES) {
+        throw new Error('network_fault_invalid_path');
+      }
+      const maxHits = Number(input.max_hits);
+      if (!Number.isInteger(maxHits) || maxHits < 1 || maxHits > NETWORK_FAULT_MAX_HITS) {
+        throw new Error('network_fault_invalid_hit_budget');
+      }
+      const effectInput = input.effect;
+      if (!effectInput || typeof effectInput !== 'object') throw new Error('network_fault_invalid_effect');
+      const kind = String(effectInput.kind || '');
+      let effect;
+      if (kind === 'fail') {
+        effect = { kind: 'fail' };
+      } else if (kind === 'delay') {
+        const milliseconds = Number(effectInput.milliseconds);
+        if (!Number.isInteger(milliseconds)
+            || milliseconds < 1
+            || milliseconds > NETWORK_FAULT_MAX_DELAY_MS) {
+          throw new Error('network_fault_invalid_delay');
+        }
+        effect = { kind: 'delay', milliseconds };
+      } else if (kind === 'mock_status') {
+        const status = Number(effectInput.status);
+        if (!Number.isInteger(status) || status < 200 || status > 599) {
+          throw new Error('network_fault_invalid_status');
+        }
+        effect = { kind: 'mock_status', status };
+      } else {
+        throw new Error('network_fault_invalid_effect');
+      }
+
+      const selector = [transport, method, path].join('|');
+      if (seen.has(selector)) throw new Error('network_fault_duplicate_selector');
+      seen.add(selector);
+      return { id, transport, method, path, effect, max_hits: maxHits, hits: 0 };
+    });
+
+    return { fingerprint, lease_ms: leaseMs, rules };
+  };
+
+  const activeNetworkFaultLease = () => {
+    if (!networkFaultLease) return null;
+    if (performance.now() >= networkFaultLease.expiresAt) {
+      networkFaultLease = null;
+      return null;
+    }
+    return networkFaultLease;
+  };
+
+  const installNetworkFaultPlan = (token, plan) => {
+    token = String(token || '');
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(token)) throw new Error('network_fault_invalid_token');
+    if (!normalizeNetworkFaultTarget(location.href)) throw new Error('network_fault_route_not_loopback');
+    const canonical = validateNetworkFaultPlan(plan);
+    networkFaultLease = {
+      token,
+      fingerprint: canonical.fingerprint,
+      expiresAt: performance.now() + plan.lease_ms,
+      rules: canonical.rules,
+    };
+    return {
+      installed: true,
+      fingerprint: canonical.fingerprint,
+      rule_count: canonical.rules.length,
+      expires_in_ms: canonical.lease_ms,
+    };
+  };
+
+  const clearNetworkFaultPlan = (token) => {
+    token = String(token || '');
+    const lease = activeNetworkFaultLease();
+    if (!lease) return { cleared: true, active: false };
+    if (lease.token !== token) throw new Error('network_fault_token_mismatch');
+    const fingerprint = lease.fingerprint;
+    networkFaultLease = null;
+    return { cleared: true, active: false, fingerprint };
+  };
+
+  const networkFaultState = () => {
+    const lease = activeNetworkFaultLease();
+    if (!lease) return { active: false, fingerprint: null, rule_count: 0, total_hits: 0 };
+    return {
+      active: true,
+      fingerprint: lease.fingerprint,
+      rule_count: lease.rules.length,
+      total_hits: lease.rules.reduce((sum, rule) => sum + rule.hits, 0),
+      remaining_ms: Math.max(0, Math.round(lease.expiresAt - performance.now())),
+    };
+  };
+
+  const selectNetworkFaultRule = (requestedTransport, method, rawUrl, normalizedTarget = null) => {
+    const lease = activeNetworkFaultLease();
+    if (!lease) return null;
+    const target = normalizedTarget || normalizeNetworkFaultTarget(rawUrl);
+    if (!target) return null;
+    const normalizedMethod = String(method || 'GET').toLowerCase();
+    for (const rule of lease.rules) {
+      const transport = rule.transport;
+      if (transport !== 'both' && transport !== requestedTransport) continue;
+      if (rule.method !== normalizedMethod || rule.path !== target.path) continue;
+      if (rule.hits >= rule.max_hits) continue;
+      rule.hits += 1;
+      return rule;
+    }
+    return null;
+  };
+
+  const setSyntheticXhrValue = (xhr, name, value) => {
+    try {
+      Object.defineProperty(xhr, name, { configurable: true, value });
+    } catch (_) {}
+  };
+
+  const clearSyntheticXhrValues = (xhr) => {
+    for (const name of ['status', 'statusText', 'readyState', 'response', 'responseText', 'responseURL']) {
+      try { delete xhr[name]; } catch (_) {}
+    }
+  };
+
+  const completeSyntheticXhrFault = (xhr, meta, rule, success) => {
+    const faultCompleted = Boolean(meta.faultCompleted);
+    if (faultCompleted) return;
+    meta.faultCompleted = true;
+    meta.faultPending = false;
+    if (meta.active) {
+      meta.active = false;
+      finishNetworkRequest();
+    }
+
+    const status = success && rule.effect.kind === 'mock_status' ? rule.effect.status : 0;
+    Object.defineProperty(xhr, 'status', { configurable: true, value: status });
+    Object.defineProperty(xhr, 'readyState', { configurable: true, value: 4 });
+    setSyntheticXhrValue(xhr, 'statusText', '');
+    setSyntheticXhrValue(xhr, 'response', '');
+    setSyntheticXhrValue(xhr, 'responseText', '');
+    setSyntheticXhrValue(xhr, 'responseURL', '');
+
+    push('network', {
+      transport: 'xhr',
+      method: meta.method,
+      url: meta.url,
+      status: success ? status : null,
+      ok: success && status >= 200 && status < 400,
+      duration: Math.round((performance.now() - meta.started) * 10) / 10,
+      error: success ? null : 'LocalView injected network failure',
+      faultInjected: Boolean(rule),
+      faultRuleId: rule?.id || null,
+      faultEffect: rule?.effect?.kind || null,
+      faultDelayMs: rule?.effect?.kind === 'delay' ? rule.effect.milliseconds : null,
+      faultStatus: rule?.effect?.kind === 'mock_status' ? rule.effect.status : null,
+    });
+
+    xhr.dispatchEvent(new Event('readystatechange'));
+    xhr.dispatchEvent(new Event(success ? 'load' : 'error'));
+    xhr.dispatchEvent(new Event('loadend'));
   };
 
   const push = (type, payload = {}) => {
@@ -868,25 +1093,53 @@ const SCRIPT: &str = r#"
       const request = args[0];
       const init = args[1] || {};
       const method = String(init.method || request?.method || 'GET').toUpperCase();
-      const url = safeUrl(request?.url || request);
+      const rawUrl = request?.url || request;
+      const url = safeUrl(rawUrl);
+      const rule = selectNetworkFaultRule('fetch', method, rawUrl);
       const started = performance.now();
       beginNetworkRequest();
       try {
-        const response = await originalFetch(...args);
-        finishNetworkRequest();
+        if (rule && rule.effect.kind === 'fail') {
+          throw new TypeError('LocalView injected network failure');
+        }
+        if (rule && rule.effect.kind === 'delay') {
+          await new Promise(resolve => setTimeout(resolve, rule.effect.milliseconds));
+        }
+        const response = rule && rule.effect.kind === 'mock_status'
+          ? new Response(null, { status: rule.effect.status })
+          : await originalFetch(...args);
         push('network', {
-          transport: 'fetch', method, url, status: response.status, ok: response.ok,
+          transport: 'fetch',
+          method,
+          url,
+          status: response.status,
+          ok: response.ok,
           duration: Math.round((performance.now() - started) * 10) / 10,
+          faultInjected: Boolean(rule),
+          faultRuleId: rule?.id || null,
+          faultEffect: rule?.effect?.kind || null,
+          faultDelayMs: rule?.effect?.kind === 'delay' ? rule.effect.milliseconds : null,
+          faultStatus: rule?.effect?.kind === 'mock_status' ? rule.effect.status : null,
         });
         return response;
       } catch (error) {
-        finishNetworkRequest();
         push('network', {
-          transport: 'fetch', method, url, status: null, ok: false,
+          transport: 'fetch',
+          method,
+          url,
+          status: null,
+          ok: false,
           duration: Math.round((performance.now() - started) * 10) / 10,
           error: redact(error?.message || error),
+          faultInjected: Boolean(rule),
+          faultRuleId: rule?.id || null,
+          faultEffect: rule?.effect?.kind || null,
+          faultDelayMs: rule?.effect?.kind === 'delay' ? rule.effect.milliseconds : null,
+          faultStatus: rule?.effect?.kind === 'mock_status' ? rule.effect.status : null,
         });
         throw error;
+      } finally {
+        finishNetworkRequest();
       }
     };
 
@@ -894,32 +1147,92 @@ const SCRIPT: &str = r#"
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-      xhrMeta.set(this, { method: String(method || 'GET').toUpperCase(), url: safeUrl(url), started: 0, active: false });
+      clearSyntheticXhrValues(this);
+      const faultTarget = normalizeNetworkFaultTarget(url);
+      xhrMeta.set(this, {
+        method: String(method || 'GET').toUpperCase(),
+        url: safeUrl(url),
+        faultTarget,
+        started: 0,
+        active: false,
+        faultPending: false,
+        faultCompleted: false,
+      });
       return originalOpen.call(this, method, url, ...rest);
     };
     XMLHttpRequest.prototype.send = function(...args) {
-      const meta = xhrMeta.get(this) || { method: 'GET', url: '', started: 0, active: false };
+      const meta = xhrMeta.get(this) || {
+        method: 'GET',
+        url: '',
+        faultTarget: null,
+        started: 0,
+        active: false,
+        faultPending: false,
+        faultCompleted: false,
+      };
       const startedHere = !meta.active;
       let onLoadEnd = null;
+      if (meta.active || meta.faultPending) {
+        throw new DOMException('XMLHttpRequest send already active', 'InvalidStateError');
+      }
+      const rule = selectNetworkFaultRule('xhr', meta.method, '', meta.faultTarget);
       if (startedHere) {
         meta.started = performance.now();
         meta.active = true;
+        meta.faultPending = Boolean(rule);
+        meta.faultCompleted = false;
         beginNetworkRequest();
         xhrMeta.set(this, meta);
         onLoadEnd = () => {
+          const faultCompleted = Boolean(meta.faultCompleted);
+          if (faultCompleted) return;
+          meta.faultCompleted = true;
+          meta.faultPending = false;
           if (meta.active) {
             meta.active = false;
             finishNetworkRequest();
           }
           push('network', {
-            transport: 'xhr', method: meta.method, url: meta.url,
+            transport: 'xhr',
+            method: meta.method,
+            url: meta.url,
             status: Number.isFinite(this.status) ? this.status : null,
             ok: this.status >= 200 && this.status < 400,
             duration: Math.round((performance.now() - meta.started) * 10) / 10,
+            faultInjected: Boolean(rule),
+            faultRuleId: rule?.id || null,
+            faultEffect: rule?.effect?.kind || null,
+            faultDelayMs: rule?.effect?.kind === 'delay' ? rule.effect.milliseconds : null,
+            faultStatus: rule?.effect?.kind === 'mock_status' ? rule.effect.status : null,
           });
         };
-        this.addEventListener('loadend', onLoadEnd, { once: true });
+        if (!rule || rule.effect.kind === 'delay') {
+          this.addEventListener('loadend', onLoadEnd, { once: true });
+        }
       }
+
+      if (rule && rule.effect.kind === 'fail') {
+        queueMicrotask(() => completeSyntheticXhrFault(this, meta, rule, false));
+        return undefined;
+      }
+      if (rule && rule.effect.kind === 'mock_status') {
+        queueMicrotask(() => completeSyntheticXhrFault(this, meta, rule, true));
+        return undefined;
+      }
+      if (rule && rule.effect.kind === 'delay') {
+        setTimeout(() => {
+          if (meta.faultCompleted) return;
+          meta.faultPending = false;
+          try {
+            originalSend.apply(this, args);
+          } catch (_) {
+            if (onLoadEnd) this.removeEventListener('loadend', onLoadEnd);
+            completeSyntheticXhrFault(this, meta, rule, false);
+          }
+        }, rule.effect.milliseconds);
+        return undefined;
+      }
+
       try {
         return originalSend.apply(this, args);
       } catch (error) {
@@ -954,6 +1267,9 @@ const SCRIPT: &str = r#"
     version: '0.2.0',
     snapshot,
     inspect(reference) { return inspect(reference); },
+    installNetworkFaultPlan,
+    clearNetworkFaultPlan,
+    networkFaultState,
     drain(max = 256) {
       const count = Math.max(0, Math.min(Number(max) || 0, events.length));
       return events.splice(0, count);

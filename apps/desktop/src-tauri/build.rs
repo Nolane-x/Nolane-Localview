@@ -10,6 +10,8 @@ fn main() {
                 "open_preview",
                 "preview_ingest",
                 "preview_take_actions",
+                "preview_take_network_fault_controls",
+                "preview_complete_network_fault_control",
                 "preview_complete_action",
             ]),
         ),

@@ -1,0 +1,138 @@
+name: Wave 3 live network fault authority
+
+on:
+  pull_request:
+    paths:
+      - "crates/network/**"
+      - "crates/instrumentation/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/**"
+      - "tools/human-first-ui-v2/**"
+      - ".github/workflows/wave3-network-fault-authority.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-live-network-fault-authority-design.md"
+  push:
+    branches:
+      - "feat/wave3-network-fault-authority"
+    paths:
+      - "crates/network/**"
+      - "crates/instrumentation/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/**"
+      - "tools/human-first-ui-v2/**"
+      - ".github/workflows/wave3-network-fault-authority.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-live-network-fault-authority-design.md"
+
+concurrency:
+  group: wave3-network-fault-authority-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify live network fault pure policy
+        run: cargo test -p localview-network --test live_fault_policy -- --nocapture
+
+      - name: Verify existing network analyzer
+        run: cargo test -p localview-network --lib -- --nocapture
+
+      - name: Check network crate
+        run: cargo check -p localview-network --all-targets
+
+  instrumentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify instrumentation network fault contract
+        run: cargo test -p localview-instrumentation --test network_fault_contract -- --nocapture
+
+      - name: Preserve instrumentation network in-flight contract
+        run: cargo test -p localview-instrumentation --test network_inflight_contract -- --nocapture
+
+      - name: Check instrumentation crate
+        run: cargo check -p localview-instrumentation --all-targets
+
+  private-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify private network fault control authority
+        run: cargo test -p localview-live-bridge --test network_fault_private_control -- --nocapture
+
+      - name: Check live bridge
+        run: cargo check -p localview-live-bridge --all-targets
+
+  control:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify authenticated live network fault authority
+        run: cargo test -p localview-control --test network_fault_live_authority -- --nocapture
+
+      - name: Check control crate
+        run: cargo check -p localview-control --all-targets
+
+  desktop-authority:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify desktop network fault surface authority
+        run: cargo test -p localview-desktop --test network_fault_desktop_authority -- --nocapture
+
+      - name: Check desktop network fault wiring
+        run: cargo check -p localview-desktop
+
+  browser-runtime:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize exact LocalView instrumentation bootstrap
+        run: cargo run -p localview-instrumentation --example network_fault_bootstrap > /tmp/localview-network-fault-bootstrap.js
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install browser proof dependencies
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove real Chromium fault semantics
+        working-directory: apps/desktop
+        run: |
+          cp ../../tools/wave3-network-fault/runtime.mjs ./wave3-network-fault-runtime.mjs
+          node ./wave3-network-fault-runtime.mjs
+          rm ./wave3-network-fault-runtime.mjs
