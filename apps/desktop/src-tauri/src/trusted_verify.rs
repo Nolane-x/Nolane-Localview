@@ -1017,4 +1017,279 @@ mod trusted_verify_tests {
             DeterministicVerificationStatus::NoObservableChange
         );
     }
+
+    fn solid_image(width: u32, height: u32, rgba: [u8; 4]) -> RgbaImage {
+        let mut data = Vec::with_capacity(width as usize * height as usize * 4);
+        for _ in 0..(width as usize * height as usize) {
+            data.extend_from_slice(&rgba);
+        }
+        RgbaImage { width, height, data }
+    }
+
+    fn set_pixel(image: &mut RgbaImage, x: u32, y: u32, rgba: [u8; 4]) {
+        let offset = ((y * image.width + x) * 4) as usize;
+        image.data[offset..offset + 4].copy_from_slice(&rgba);
+    }
+
+    fn visual_baseline(
+        image: &RgbaImage,
+        viewport: ViewportMeta,
+        target_rect: Option<Rect>,
+    ) -> VerifyVisualBaseline {
+        VerifyVisualBaseline {
+            png: Arc::new(localview_visual::encode_png_rgba(image).unwrap()),
+            viewport,
+            pixel_width: image.width,
+            pixel_height: image.height,
+            target_rect,
+            captured_at_unix_ms: 1,
+        }
+    }
+
+    #[test]
+    fn trusted_verify_store_enforces_capacity_total_budget_and_cleanup() {
+        let capacity_store = VerificationStore::default();
+        for _ in 0..MAX_VERIFICATION_RECORDS {
+            capacity_store.insert(dummy_record(0)).unwrap();
+        }
+        let capacity_error = capacity_store.insert(dummy_record(0)).unwrap_err();
+        assert!(capacity_error.contains("capacity exceeded"));
+
+        let budget_store = VerificationStore::default();
+        for _ in 0..4 {
+            budget_store
+                .insert(dummy_record(MAX_VERIFY_VISUAL_BYTES_PER_RECORD))
+                .unwrap();
+        }
+        assert_eq!(
+            budget_store.retained_visual_bytes_for_test(),
+            MAX_VERIFY_TOTAL_VISUAL_BYTES
+        );
+        let budget_error = budget_store.insert(dummy_record(1)).unwrap_err();
+        assert!(budget_error.contains("budget exceeded"));
+
+        let cleanup_store = VerificationStore::default();
+        let record = dummy_record(1024);
+        let id = record.verification_id.clone();
+        cleanup_store.insert(record).unwrap();
+        assert_eq!(cleanup_store.retained_visual_bytes_for_test(), 1024);
+        cleanup_store.invalidate(&id).unwrap();
+        assert_eq!(cleanup_store.retained_visual_bytes_for_test(), 0);
+        assert!(cleanup_store.begin_verify(&id).is_err());
+    }
+
+    #[test]
+    fn trusted_verify_store_reaps_expired_records_and_visual_bytes() {
+        let store = VerificationStore::default();
+        let mut record = dummy_record(2048);
+        let id = record.verification_id.clone();
+        record.expires_at = Instant::now() - Duration::from_millis(1);
+        store.insert(record).unwrap();
+        assert_eq!(store.retained_visual_bytes_for_test(), 2048);
+
+        store.reap_expired().unwrap();
+
+        assert_eq!(store.retained_visual_bytes_for_test(), 0);
+        assert!(store.begin_verify(&id).is_err());
+    }
+
+    #[test]
+    fn trusted_verify_semantic_projection_order_and_target_identity_are_locked() {
+        let s = session();
+        let base_snapshot = snapshot(node(
+            "@e1",
+            "Deploy",
+            true,
+            Some(Rect { x: 10.0, y: 10.0, width: 20.0, height: 10.0 }),
+        ));
+        let before = build_semantic_baseline(&s, &base_snapshot, "@e1").unwrap();
+        assert!(compare_semantic_projection(&before.selected, &before.selected).is_empty());
+
+        let mut after = before.selected.clone();
+        after.role = Some("link".into());
+        after.name = Some("Publish".into());
+        after.interactive = false;
+        after.attributes.insert("aria-label".into(), "Publish".into());
+        after.rect = Some(Rect { x: 11.0, y: 10.0, width: 20.0, height: 10.0 });
+        assert_eq!(
+            compare_semantic_projection(&before.selected, &after),
+            vec![
+                "role_changed",
+                "name_changed",
+                "interactive_changed",
+                "attributes_changed",
+                "geometry_changed",
+            ]
+        );
+
+        let missing = snapshot(node("@other", "Other", true, None));
+        assert!(build_semantic_baseline(&s, &missing, "@e1").is_err());
+
+        let mut duplicate = base_snapshot.clone();
+        duplicate.root.children.push(node(
+            "@e1",
+            "Duplicate",
+            true,
+            Some(Rect { x: 40.0, y: 10.0, width: 20.0, height: 10.0 }),
+        ));
+        let duplicate_error = build_semantic_baseline(&s, &duplicate, "@e1").unwrap_err();
+        assert!(duplicate_error.contains("ambiguous"));
+    }
+
+    #[test]
+    fn trusted_verify_issue_fingerprints_are_bounded_and_unchanged_is_clean() {
+        let s = session();
+        let mut snap = snapshot(node("@e1", "Deploy", true, None));
+        snap.console_errors = (0..32)
+            .map(|index| ConsoleIssue {
+                level: "error".into(),
+                message: format!("console-{index}"),
+                source: None,
+                count: 1,
+            })
+            .collect();
+        snap.failed_requests = (0..32)
+            .map(|index| NetworkIssue {
+                method: "GET".into(),
+                url: format!("https://example.test/api/{index}?secret=hidden"),
+                status: Some(500),
+                error: Some("failed".into()),
+            })
+            .collect();
+
+        let baseline = build_semantic_baseline(&s, &snap, "@e1").unwrap();
+        assert_eq!(
+            baseline.console_issues.len(),
+            trusted_ai::MAX_AI_CONSOLE_ISSUES
+        );
+        assert_eq!(
+            baseline.network_issues.len(),
+            trusted_ai::MAX_AI_NETWORK_ISSUES
+        );
+        assert!(baseline
+            .network_issues
+            .iter()
+            .all(|issue| !issue.path.contains('?') && !issue.path.contains("secret")));
+
+        assert!(compare_issue_fingerprints(
+            &baseline.console_issues,
+            &baseline.console_issues,
+            &baseline.network_issues,
+            &baseline.network_issues,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn trusted_verify_visual_facts_cover_target_outside_dimension_and_threshold_cases() {
+        let viewport = ViewportMeta {
+            css_width: 4,
+            css_height: 4,
+            device_scale_factor: 1.0,
+        };
+        let target = Rect { x: 0.0, y: 0.0, width: 2.0, height: 2.0 };
+        let before_image = solid_image(4, 4, [0, 0, 0, 255]);
+        let before = visual_baseline(&before_image, viewport.clone(), Some(target.clone()));
+        let identical_png = localview_visual::encode_png_rgba(&before_image).unwrap();
+
+        let identical =
+            compare_visual_facts(&before, &identical_png, &viewport, Some(&target)).unwrap();
+        assert_eq!(identical.viewport_changed_ratio, Some(0.0));
+        assert_eq!(identical.target_changed_ratio, Some(0.0));
+
+        let mut target_changed_image = before_image.clone();
+        set_pixel(&mut target_changed_image, 1, 1, [255, 255, 255, 255]);
+        let target_changed_png = localview_visual::encode_png_rgba(&target_changed_image).unwrap();
+        let target_changed =
+            compare_visual_facts(&before, &target_changed_png, &viewport, Some(&target)).unwrap();
+        assert!(target_changed.viewport_changed_ratio.unwrap() > 0.0);
+        assert!(target_changed.target_changed_ratio.unwrap() > 0.0);
+
+        let mut outside_changed_image = before_image.clone();
+        set_pixel(&mut outside_changed_image, 3, 3, [255, 255, 255, 255]);
+        let outside_changed_png = localview_visual::encode_png_rgba(&outside_changed_image).unwrap();
+        let outside_changed =
+            compare_visual_facts(&before, &outside_changed_png, &viewport, Some(&target)).unwrap();
+        assert!(outside_changed.viewport_changed_ratio.unwrap() > 0.0);
+        assert_eq!(outside_changed.target_changed_ratio, Some(0.0));
+
+        let different_size = solid_image(5, 4, [0, 0, 0, 255]);
+        let different_size_png = localview_visual::encode_png_rgba(&different_size).unwrap();
+        let dimension_mismatch =
+            compare_visual_facts(&before, &different_size_png, &viewport, Some(&target)).unwrap();
+        assert_eq!(dimension_mismatch.viewport_changed_ratio, None);
+        assert_eq!(dimension_mismatch.target_changed_ratio, None);
+
+        let invalid_target = Rect { x: 8.0, y: 8.0, width: 1.0, height: 1.0 };
+        let invalid_target_facts =
+            compare_visual_facts(&before, &identical_png, &viewport, Some(&invalid_target)).unwrap();
+        assert_eq!(invalid_target_facts.viewport_changed_ratio, Some(0.0));
+        assert_eq!(invalid_target_facts.target_changed_ratio, None);
+
+        let mut threshold_equal_image = before_image.clone();
+        set_pixel(
+            &mut threshold_equal_image,
+            0,
+            0,
+            [VERIFY_PIXEL_THRESHOLD, 0, 0, 255],
+        );
+        let threshold_equal_png =
+            localview_visual::encode_png_rgba(&threshold_equal_image).unwrap();
+        let threshold_equal =
+            compare_visual_facts(&before, &threshold_equal_png, &viewport, Some(&target)).unwrap();
+
+        let mut threshold_exceeded_image = before_image.clone();
+        set_pixel(
+            &mut threshold_exceeded_image,
+            0,
+            0,
+            [VERIFY_PIXEL_THRESHOLD.saturating_add(1), 0, 0, 255],
+        );
+        let threshold_exceeded_png =
+            localview_visual::encode_png_rgba(&threshold_exceeded_image).unwrap();
+        let threshold_exceeded =
+            compare_visual_facts(&before, &threshold_exceeded_png, &viewport, Some(&target)).unwrap();
+
+        let equal_ratio = threshold_equal.viewport_changed_ratio.unwrap();
+        let exceeded_ratio = threshold_exceeded.viewport_changed_ratio.unwrap();
+        assert!((0.0..=1.0).contains(&equal_ratio));
+        assert!((0.0..=1.0).contains(&exceeded_ratio));
+        assert!(exceeded_ratio >= equal_ratio);
+    }
+
+    #[test]
+    fn trusted_verify_status_covers_semantic_only_change_and_visual_no_change() {
+        let visual_no_change = classify_verification_status(
+            Vec::new(),
+            Vec::new(),
+            &VisualVerificationFacts {
+                viewport_changed_ratio: Some(0.0),
+                target_changed_ratio: Some(0.0),
+            },
+            VerificationScope::SemanticVisual,
+            true,
+            true,
+        );
+        assert_eq!(
+            visual_no_change.deterministic_status,
+            DeterministicVerificationStatus::NoObservableChange
+        );
+
+        let semantic_only_change = classify_verification_status(
+            vec!["name_changed".into()],
+            Vec::new(),
+            &VisualVerificationFacts {
+                viewport_changed_ratio: None,
+                target_changed_ratio: None,
+            },
+            VerificationScope::SemanticOnly,
+            true,
+            true,
+        );
+        assert_eq!(
+            semantic_only_change.deterministic_status,
+            DeterministicVerificationStatus::ChangeObserved
+        );
+    }
+
 }
