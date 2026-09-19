@@ -39,6 +39,8 @@ The instrumentation replaces `window.WebSocket` with a transparent `Proxy` over 
 
 No socket is opened by LocalView.
 
+Observation is loopback-only. Before any framework/protocol classification, the socket URL must resolve to `localhost`, IPv4 `127/8`, or IPv6 loopback `::1`. A remote socket is ignored even if it advertises the `vite-hmr` subprotocol or a familiar HMR path.
+
 No socket message is modified, blocked, delayed, replied to, or retained.
 
 ## Strong framework classification
@@ -109,6 +111,7 @@ The ordinary LocalView route field remains query-redacted by the existing `safeU
 - JSON parse is best-effort and exception-safe.
 - Vite `updates.length` is clamped to 256.
 - Unknown framework messages are ignored.
+- Non-loopback sockets are ignored before payload classification.
 - No new history is introduced beyond the existing instrumentation ring buffer.
 
 ## Desktop bridge
@@ -162,8 +165,9 @@ Use deterministic Chromium + a local WebSocket server to prove:
 1. a `vite-hmr` socket carrying an `update` payload emits one bounded HMR event;
 2. update paths and token query do not appear in drained event JSON;
 3. a generic application WebSocket does not emit HMR telemetry;
-4. malformed/oversized messages do not break the socket or emit retained payload;
-5. the desktop-normalized event can be represented as observer kind `hmr`.
+4. non-loopback sockets are outside HMR observation authority;
+5. malformed/oversized messages do not break the socket or emit retained payload;
+6. the desktop-normalized event can be represented as observer kind `hmr`.
 
 ## Explicit non-claims
 
