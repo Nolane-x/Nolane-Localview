@@ -16,7 +16,7 @@ use localview_live_bridge::{
 };
 use localview_network::{canonicalize_fault_plan, NetworkFaultPlan};
 use localview_protocol::SessionId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -42,6 +42,12 @@ struct NetworkFaultLeaseView {
     expires_at: chrono::DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreviewInvalidation {
+    surface_incarnation: u64,
+}
+
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
         .route(
@@ -51,6 +57,10 @@ pub(crate) fn router(state: ControlState) -> Router {
         .route(
             "/v1/sessions/{id}/network-faults/{lease_id}",
             delete(clear_network_faults),
+        )
+        .route(
+            "/v1/sessions/{id}/network-faults/invalidate-preview",
+            post(invalidate_preview_fault_lease),
         )
         .route(
             "/v1/sessions/{id}/network-fault-controls",
@@ -202,10 +212,14 @@ async fn install_network_faults(
         .get("remaining_ms")
         .or_else(|| payload.get("expires_in_ms"))
         .and_then(Value::as_u64);
+    let surface_incarnation = payload
+        .get("surface_incarnation")
+        .and_then(Value::as_u64);
     if !active
         || fingerprint != Some(canonical.fingerprint.as_str())
         || rule_count != Some(canonical.rules.len() as u64)
         || !remaining_ms.is_some_and(|value| value > 0 && value <= canonical.lease_ms)
+        || !surface_incarnation.is_some_and(|value| value > 0)
     {
         return bounded_error(
             StatusCode::BAD_GATEWAY,
@@ -221,6 +235,7 @@ async fn install_network_faults(
         lease_token,
         fingerprint: canonical.fingerprint,
         rule_count: canonical.rules.len(),
+        surface_incarnation: surface_incarnation.expect("validated above"),
         expires_at,
     };
     state.live.set_network_fault_lease(id, lease.clone()).await;
@@ -284,12 +299,59 @@ async fn clear_network_faults(
     };
     if !result.ok
         || result.payload.get("active").and_then(Value::as_bool) != Some(false)
+        || result
+            .payload
+            .get("surface_incarnation")
+            .and_then(Value::as_u64)
+            != Some(lease.surface_incarnation)
     {
         return bounded_error(StatusCode::BAD_GATEWAY, "network_fault_clear_rejected");
     }
 
     if !state.live.clear_network_fault_lease(id, lease_id).await {
         return bounded_error(StatusCode::CONFLICT, "network_fault_lease_changed");
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn invalidate_preview_fault_lease(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return bounded_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    if !ensure_session(&state, id).await {
+        return bounded_error(StatusCode::NOT_FOUND, "session_not_found");
+    }
+    if body.len() > 1024 {
+        return bounded_error(StatusCode::PAYLOAD_TOO_LARGE, "network_fault_invalidation_too_large");
+    }
+    let invalidation: PreviewInvalidation = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => {
+            return bounded_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "network_fault_invalidation_invalid",
+            )
+        }
+    };
+    if invalidation.surface_incarnation == 0 {
+        return bounded_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "network_fault_invalidation_invalid",
+        );
+    }
+
+    if let Some(lease) = state.live.network_fault_lease(id).await {
+        if lease.surface_incarnation == invalidation.surface_incarnation {
+            let _ = state
+                .live
+                .clear_network_fault_lease(id, lease.lease_id)
+                .await;
+        }
     }
     StatusCode::NO_CONTENT.into_response()
 }
