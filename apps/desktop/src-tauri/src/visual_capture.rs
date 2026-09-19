@@ -1771,6 +1771,14 @@ fn preflight_managed_surface(app: &tauri::AppHandle, session_id: SessionId) -> R
     Err("no LocalView-managed native surface is open for this session".into())
 }
 
+pub(crate) async fn wait_for_verification_settle(
+    session_id: SessionId,
+) -> Result<(), String> {
+    wait_for_capture_settle(session_id)
+        .await
+        .map_err(|_| "trusted Verify settle failed".to_string())
+}
+
 async fn wait_for_capture_settle(session_id: SessionId) -> Result<(), String> {
     let policy = StableCapturePolicy::default();
     let last_reasons = Arc::new(Mutex::new(Vec::<SettleReason>::new()));
