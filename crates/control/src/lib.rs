@@ -13,6 +13,7 @@ mod perception_cycle;
 mod perception_execution;
 mod resource_runtime;
 mod source_map_runtime;
+mod runtime_source_map;
 #[path = "runtime.rs"]
 mod runtime;
 mod surface_liveness;
@@ -75,6 +76,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(perception_cycle::router(state.clone()))
         .merge(resource_runtime::router(state.clone()))
         .merge(source_map_runtime::router(state.clone()))
+        .merge(runtime_source_map::router(state.clone()))
         .merge(surface_liveness::router(state.clone()))
         .merge(visual_diff::router(state.clone()))
         .merge(visual_full_page::router(state.clone()))
