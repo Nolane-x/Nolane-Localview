@@ -8,7 +8,7 @@ Date: 2026-09-19
 
 Repository: `Nolane-x/Nolane-Localview`
 
-Base: `main@02905fc7d20f73cafe85412a3e8c3d4cf5636191`
+Base: `main@a73d4b71fb07ba8a7bf25e82027cf4bf493c71c8`
 
 Branch: `feat/wave5-source-map-consumer`
 
