@@ -121,6 +121,9 @@ impl SourceMap {
             .iter()
             .map(|source| normalize_source_reference(raw.source_root.as_deref(), source))
             .collect::<Vec<_>>();
+        if sources.iter().any(|source| source.len() > MAX_STRING_BYTES) {
+            return Err(SourceMapError::StringTooLong);
+        }
 
         let mut previous_source = 0_i64;
         let mut previous_original_line = 0_i64;
@@ -365,13 +368,13 @@ fn base64_value(byte: u8) -> Option<u8> {
 }
 
 fn normalize_source_reference(source_root: Option<&str>, source: &str) -> String {
-    let source = source.replace('\\', "/");
+    let source = strip_query_and_fragment(&source.replace('\\', "/"));
     let combined = if is_absolute_reference(&source) {
         source
     } else if let Some(root) = source_root.filter(|root| !root.is_empty()) {
         format!(
             "{}/{}",
-            root.replace('\\', "/").trim_end_matches('/'),
+            strip_query_and_fragment(&root.replace('\\', "/")).trim_end_matches('/'),
             source.trim_start_matches('/')
         )
     } else {
@@ -379,6 +382,18 @@ fn normalize_source_reference(source_root: Option<&str>, source: &str) -> String
     };
 
     collapse_dot_components(&combined)
+}
+
+fn strip_query_and_fragment(value: &str) -> String {
+    let query = value.find('?');
+    let fragment = value.find('#');
+    let end = match (query, fragment) {
+        (Some(query), Some(fragment)) => query.min(fragment),
+        (Some(query), None) => query,
+        (None, Some(fragment)) => fragment,
+        (None, None) => value.len(),
+    };
+    value[..end].to_owned()
 }
 
 fn is_absolute_reference(value: &str) -> bool {
@@ -531,6 +546,43 @@ mod tests {
         assert_eq!(map.resolve(2, 0), None);
         assert_eq!(map.resolve(3, 0), None);
         assert_eq!(map.resolve(4, 0), None);
+    }
+
+    #[test]
+    fn source_references_strip_query_and_fragment_metadata() {
+        let json = serde_json::json!({
+            "version": 3,
+            "sourceRoot": "https://localhost/src?token=MUST-NOT-LEAK",
+            "sources": ["Button.tsx?secret=ALSO-NOT#fragment"],
+            "names": [],
+            "mappings": "AAAA"
+        })
+        .to_string();
+
+        let map = SourceMap::parse(&json).unwrap();
+        let resolved = map.resolve(1, 0).unwrap();
+        assert_eq!(resolved.source, "https://localhost/src/Button.tsx");
+        assert!(!format!("{map:?}").contains("MUST-NOT-LEAK"));
+        assert!(!format!("{map:?}").contains("ALSO-NOT"));
+    }
+
+    #[test]
+    fn normalized_source_reference_remains_hard_bounded() {
+        let root = "r".repeat(700);
+        let source = "s".repeat(700);
+        let json = serde_json::json!({
+            "version": 3,
+            "sourceRoot": root,
+            "sources": [source],
+            "names": [],
+            "mappings": "AAAA"
+        })
+        .to_string();
+
+        assert_eq!(
+            SourceMap::parse(&json).unwrap_err(),
+            SourceMapError::StringTooLong
+        );
     }
 
     #[test]
