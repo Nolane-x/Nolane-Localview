@@ -462,8 +462,14 @@ fn collapse_dot_components(value: &str) -> String {
         ("", value)
     };
 
-    let leading_slash = rest.starts_with('/');
-    let trailing_slash = rest.ends_with('/') && rest.len() > 1;
+    let leading_slashes = if prefix.is_empty() && rest.starts_with("//") {
+        2
+    } else if rest.starts_with('/') {
+        1
+    } else {
+        0
+    };
+    let trailing_slash = rest.ends_with('/') && rest.len() > leading_slashes;
     let mut components = Vec::new();
 
     for component in rest.split('/') {
@@ -475,7 +481,7 @@ fn collapse_dot_components(value: &str) -> String {
 
     let mut normalized = String::new();
     normalized.push_str(prefix);
-    if leading_slash {
+    for _ in 0..leading_slashes {
         normalized.push('/');
     }
     normalized.push_str(&components.join("/"));
@@ -655,6 +661,37 @@ mod tests {
         assert_eq!(
             map.resolve(1, 0).unwrap().source,
             "file:///workspace/src/Button.tsx"
+        );
+    }
+
+    #[test]
+    fn normalization_preserves_protocol_relative_and_unc_identity() {
+        let protocol_relative = serde_json::json!({
+            "version": 3,
+            "sources": ["//cdn.example.test/src/./Button.tsx"],
+            "names": [],
+            "mappings": "AAAA"
+        })
+        .to_string();
+        let unc = serde_json::json!({
+            "version": 3,
+            "sources": ["\\\\server\\share\\src\\.\\Button.tsx"],
+            "names": [],
+            "mappings": "AAAA"
+        })
+        .to_string();
+
+        assert_eq!(
+            SourceMap::parse(&protocol_relative)
+                .unwrap()
+                .resolve(1, 0)
+                .unwrap()
+                .source,
+            "//cdn.example.test/src/Button.tsx"
+        );
+        assert_eq!(
+            SourceMap::parse(&unc).unwrap().resolve(1, 0).unwrap().source,
+            "//server/share/src/Button.tsx"
         );
     }
 
