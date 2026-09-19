@@ -204,7 +204,7 @@ fn ask_ai_v24_remains_read_only_when_fix_v25_is_present() {
     let desktop_ask = between(
         desktop,
         "async fn ask_ai_about_selection(",
-        "async fn prepare_fix_proposal(",
+        "fn ai_fix_capability()",
     );
     for forbidden in [
         "trusted_fix::",
