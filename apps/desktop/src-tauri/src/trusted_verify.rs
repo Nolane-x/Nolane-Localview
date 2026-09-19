@@ -298,6 +298,7 @@ impl VerificationStore {
                 return Err("trusted Verify record is not verifying".into());
             }
             record.status = VerificationStatus::Verified;
+            records.remove(verification_id);
             Ok(())
         })
     }
@@ -872,6 +873,7 @@ mod trusted_verify_tests {
         assert!(store.begin_verify(&id).is_ok());
         store.complete(&id).unwrap();
         assert!(store.begin_verify(&id).is_err());
+        assert_eq!(store.retained_visual_bytes_for_test(), 0);
     }
 
     #[test]
