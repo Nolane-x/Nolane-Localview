@@ -1,0 +1,52 @@
+name: Wave 5 live runtime source correlation
+
+on:
+  push:
+    branches:
+      - "feat/wave5-live-runtime-source-correlation"
+    paths:
+      - "crates/source-map/**"
+      - "crates/control/**"
+      - ".github/workflows/wave5-live-runtime-source-correlation.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-live-runtime-source-correlation-design.md"
+  pull_request:
+    paths:
+      - "crates/source-map/**"
+      - "crates/control/**"
+      - ".github/workflows/wave5-live-runtime-source-correlation.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-live-runtime-source-correlation-design.md"
+
+concurrency:
+  group: wave5-runtime-source-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify formatting
+        run: cargo fmt --all --check
+
+      - name: Preserve bounded Source Map consumer
+        run: cargo test -p localview-source-map -- --nocapture
+
+      - name: Preserve project-owned Source Map runtime
+        run: cargo test -p localview-control --test project_source_map_runtime -- --nocapture
+
+      - name: Prove live runtime source correlation
+        run: cargo test -p localview-control --test runtime_source_correlation -- --nocapture
+
+      - name: Clippy runtime source control
+        run: cargo clippy -p localview-control --all-targets --no-deps -- -D warnings
+
+      - name: Check runtime source control
+        run: cargo check -p localview-control --all-targets
