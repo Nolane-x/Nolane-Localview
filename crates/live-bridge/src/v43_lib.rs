@@ -12,7 +12,8 @@ pub use legacy::{
     ActionCancellationOutcome, ActionCancellationSignal, ActionCancellationState, ActionExecutionBoundary, BridgeAction,
     BridgeActionKind, BridgeActionResult, CompletionOrigin, IngestReport, NativeExecutorAction,
     NativeExecutorCancellationOutcome, NativeExecutorCancellationSignal,
-    NativeExecutorCancellationState, NativeExecutorRequest, NativeExecutorResult, ObserverBatch,
+    NativeExecutorCancellationState, NativeExecutorRequest, NativeExecutorResult,
+    NetworkFaultControlCommand, NetworkFaultControlRequest, NetworkFaultControlResult, ObserverBatch,
     ObserverEvent, ObserverEventKind, PrivateBridgeAction, PrivateCaptureActionData,
 };
 pub use postcondition_reconciliation::*;
