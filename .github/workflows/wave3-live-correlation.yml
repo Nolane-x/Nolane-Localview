@@ -1,0 +1,44 @@
+name: Wave 3 live action correlation
+
+on:
+  pull_request:
+    paths:
+      - "crates/causal/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - ".github/workflows/wave3-live-correlation.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-action-request-ui-correlation-design.md"
+  push:
+    branches:
+      - "feat/wave3-live-correlation-authority"
+    paths:
+      - "crates/causal/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - ".github/workflows/wave3-live-correlation.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-action-request-ui-correlation-design.md"
+
+permissions:
+  contents: read
+
+jobs:
+  live-correlation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify pure correlation policy
+        run: cargo test -p localview-causal --test action_request_ui_correlation -- --nocapture
+
+      - name: Verify daemon action execution boundaries
+        run: cargo test -p localview-live-bridge action_execution_boundary -- --nocapture
+
+      - name: Verify live control correlation authority
+        run: cargo test -p localview-control --test action_request_ui_correlation -- --nocapture
+
+      - name: Check touched crates
+        run: |
+          cargo check -p localview-live-bridge --all-targets
+          cargo check -p localview-control --all-targets
