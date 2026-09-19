@@ -736,7 +736,12 @@ function SettingsPanel({
 }
 
 function ResponsivePanel({ current, locale }: { current?: Session; locale: SupportedLocale }) {
-  const presets = [['Mobile S', '320', '568'], ['Mobile', '390', '844'], ['Tablet', '768', '1024'], ['Desktop', '1440', '900']];
+  const presets = [
+    [translate(locale, 'responsive.mobileSmall'), '320', '568'],
+    [translate(locale, 'responsive.mobile'), '390', '844'],
+    [translate(locale, 'responsive.tablet'), '768', '1024'],
+    [translate(locale, 'responsive.desktop'), '1440', '900'],
+  ];
   const unavailableReason = current
     ? translate(locale, 'responsive.unavailable')
     : translate(locale, 'empty.noTarget');
@@ -1131,11 +1136,26 @@ function SessionsPanel({ state, current, locale, onSelect }: { state: DashboardS
   const detectedLabel = state.sessions.length === 1
     ? translate(locale, 'sessions.detectedOne')
     : translate(locale, 'sessions.detectedMany');
+
+  const sessionStatusLabel = (status: Session['status']) => {
+    switch (status) {
+      case 'active':
+        return translate(locale, 'session.status.active');
+      case 'disconnected':
+        return translate(locale, 'session.status.disconnected');
+      case 'hidden':
+        return translate(locale, 'session.status.hidden');
+      case 'closed':
+        return translate(locale, 'session.status.closed');
+    }
+  };
+
   return <div className="sessions-panel"><div className="session-overview"><strong>{state.sessions.length}</strong><span>{detectedLabel}</span></div><div className="session-cards">
-    {state.sessions.map((session) => <button key={session.id} className={current?.id === session.id ? 'selected' : ''} onClick={() => onSelect(session.id)}><span className={`health-dot ${session.status === 'disconnected' ? 'danger' : session.status === 'hidden' ? 'warn' : ''}`} /><div><strong>{session.project.display_name}</strong><span>{session.classification.framework ?? 'Web'} · :{session.endpoint.port}</span></div><span className="session-state">{session.status}</span></button>)}
+    {state.sessions.map((session) => <button key={session.id} className={current?.id === session.id ? 'selected' : ''} onClick={() => onSelect(session.id)}><span className={`health-dot ${session.status === 'disconnected' ? 'danger' : session.status === 'hidden' ? 'warn' : ''}`} /><div><strong>{session.project.display_name}</strong><span>{session.classification.framework ?? translate(locale, 'session.framework.web')} · :{session.endpoint.port}</span></div><span className="session-state">{sessionStatusLabel(session.status)}</span></button>)}
     {!state.sessions.length && <PanelEmpty title={translate(locale, 'empty.noTarget')} text={translate(locale, 'empty.runDevServer')} />}
   </div></div>;
 }
+
 function CommandPanel({
   state,
   current,
