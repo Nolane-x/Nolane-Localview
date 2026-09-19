@@ -328,6 +328,8 @@ fn human_verify_state_is_reference_session_and_verification_bound() {
         "verifyGeneration",
         "verificationId",
         "verifyFixChange",
+        "verifyCanRetry",
+        "settle_failed",
         "COMMAND_IDS.aiVerifyChange",
     ] {
         assert!(
@@ -428,6 +430,8 @@ fn render_audit_proves_trusted_verify_runtime_matrix() {
         "verify:inconclusive",
         "verify:provider-advisory-separate",
         "verify:no-raw-error",
+        "verify:retryable-failure-action-visible",
+        "verify:retryable-failure-retry",
         "verify:stale-selection-isolated",
         "verify:stale-session-isolated",
         "verify:command-shared-request",
