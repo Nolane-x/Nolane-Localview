@@ -44,7 +44,7 @@ fn default_human_inspector_hides_machine_diagnostics() {
     assert!(inspector.contains("translate(locale, 'action.askAi')"));
 
     let advanced = between(source, "function AdvancedPanel(", "function ResponsivePanel(");
-    assert!(advanced.contains("Project identity"));
+    assert!(advanced.contains("translate(locale, 'advanced.projectIdentity')"));
     assert!(advanced.contains("EvidenceCard"));
     assert!(advanced.contains("observer"));
 }
