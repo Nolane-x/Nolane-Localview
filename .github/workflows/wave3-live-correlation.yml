@@ -6,6 +6,13 @@ on:
       - "crates/causal/**"
       - "crates/live-bridge/**"
       - "crates/control/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/build.rs"
+      - "apps/desktop/src-tauri/permissions/localview.toml"
+      - "apps/desktop/package.json"
+      - "apps/desktop/package-lock.json"
+      - "tools/human-first-ui-v2/**"
       - ".github/workflows/wave3-live-correlation.yml"
       - "docs/superpowers/specs/2026-09-19-wave3-action-request-ui-correlation-design.md"
   push:
@@ -15,6 +22,13 @@ on:
       - "crates/causal/**"
       - "crates/live-bridge/**"
       - "crates/control/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/build.rs"
+      - "apps/desktop/src-tauri/permissions/localview.toml"
+      - "apps/desktop/package.json"
+      - "apps/desktop/package-lock.json"
+      - "tools/human-first-ui-v2/**"
       - ".github/workflows/wave3-live-correlation.yml"
       - "docs/superpowers/specs/2026-09-19-wave3-action-request-ui-correlation-design.md"
 
@@ -42,3 +56,15 @@ jobs:
         run: |
           cargo check -p localview-live-bridge --all-targets
           cargo check -p localview-control --all-targets
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build
