@@ -17,6 +17,7 @@ localview-evidence = { path = "../evidence" }
 localview-live-analysis = { path = "../live-analysis" }
 localview-live-bridge = { path = "../live-bridge" }
 localview-native-provider = { path = "../native-provider" }
+localview-network = { path = "../network" }
 localview-observation = { path = "../observation" }
 localview-planner = { path = "../planner" }
 localview-postcondition-contracts = { path = "../postcondition-contracts" }
