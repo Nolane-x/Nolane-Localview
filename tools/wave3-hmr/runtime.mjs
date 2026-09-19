@@ -24,7 +24,12 @@ const connections = [];
 wss.on('connection', (ws, request) => {
   const protocol = request.headers['sec-websocket-protocol'] || '';
   const url = new URL(request.url || '/', 'http://127.0.0.1');
-  connections.push({ ws, protocol, pathname: url.pathname });
+  connections.push({
+    ws,
+    protocol,
+    pathname: url.pathname,
+    host: String(request.headers.host || '').toLowerCase(),
+  });
 });
 
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -49,7 +54,10 @@ const waitForConnection = async (predicate, timeoutMs = 2000) => {
   throw new Error('timed out waiting for websocket fixture connection');
 };
 
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({
+  headless: true,
+  args: ['--host-resolver-rules=MAP nonloopback.test 127.0.0.1'],
+});
 const page = await browser.newPage();
 await page.addInitScript({ content: bootstrap });
 
@@ -117,6 +125,31 @@ try {
   );
   invariant(hmrEvents.length === 1, 'generic application socket must not emit HMR telemetry', hmrEvents);
 
+  await page.evaluate(({ port }) => {
+    window.__remoteHmrProof = new WebSocket(
+      `ws://nonloopback.test:${port}/remote?token=remote-token-must-not-be-seen`,
+      'vite-hmr',
+    );
+    return new Promise((resolve, reject) => {
+      window.__remoteHmrProof.addEventListener('open', resolve, { once: true });
+      window.__remoteHmrProof.addEventListener('error', reject, { once: true });
+    });
+  }, { port: address.port });
+
+  const remote = await waitForConnection(
+    (entry) => entry.pathname === '/remote' && entry.host.startsWith('nonloopback.test:')
+  );
+  remote.ws.send(JSON.stringify({
+    type: 'update',
+    updates: [{ path: '/remote/private.tsx', acceptedPath: '/remote/private.tsx' }],
+  }));
+  await page.waitForTimeout(80);
+
+  hmrEvents = await page.evaluate(() =>
+    window.__LOCALVIEW__.peek(128).filter((event) => event.type === 'hmr')
+  );
+  invariant(hmrEvents.length === 1, 'non-loopback HMR socket must remain outside observation authority', hmrEvents);
+
   vite.ws.send('{broken-json');
   vite.ws.send('x'.repeat(256 * 1024 + 1));
   await page.waitForTimeout(80);
@@ -152,6 +185,7 @@ try {
       updateCount,
     })),
     genericSocketIgnored: true,
+    nonLoopbackSocketIgnored: true,
     rawPayloadPrivate: true,
   }) + '\n');
 } finally {
