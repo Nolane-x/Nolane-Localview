@@ -105,7 +105,7 @@ Support both `SourceMap` and legacy `X-SourceMap`, preferring `SourceMap`.
 
 ## sourceMappingURL discovery
 
-When no Source Map header exists, inspect only the last 64 KiB of the bounded generated source text.
+When no Source Map header exists, inspect only the final 4 non-empty lines of the already hard-capped 2 MiB generated source text. This keeps discovery deterministic while still allowing a bounded inline base64 map line to be larger than 64 KiB.
 
 Recognize line-comment annotations:
 
@@ -198,7 +198,7 @@ Do not place network/library error strings in the public response.
 - retained observer scan: <= 2,048 events;
 - runtime error candidates attempted: <= 8;
 - generated source: <= 2 MiB each;
-- source tail scanned for annotation: <= 64 KiB;
+- annotation discovery: <= 4 final non-empty lines inside the <= 2 MiB generated source;
 - external map reference: <= 2,048 bytes;
 - map body / decoded inline map: <= 2 MiB;
 - request timeout: 1.5 seconds each;
