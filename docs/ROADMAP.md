@@ -112,7 +112,7 @@ Landed native visual path:
 - Fresh snapshot presence is timestamped by the daemon at evaluation time rather than trusting the page-provided action completion clock.
 - DOM/layout quiet window of 200 ms and metadata-based fetch/XHR completion quiet window from capture policy (250 ms by default).
 - Stable capture now combines that completion quiet window with a privacy-safe fresh aggregate fetch/XHR in-flight count. Active requests block with `network_inflight`; missing or malformed state fails closed with `network_state_unknown` while the network gate is enabled. Readiness exports only the aggregate count, and repeated/rejected XHR `send()` attempts cannot steal another request's counter, timing metadata or completion-listener ownership.
-- The evaluator applies a 300 ms HMR quiet window when an HMR observer signal exists; framework-specific live HMR signal production remains Wave 3 work and is not claimed as complete here.
+- The evaluator applies a 300 ms HMR quiet window when an HMR observer signal exists. Managed-page instrumentation now produces bounded loopback-only HMR telemetry for strongly classified Vite, Next.js and webpack development transports; those events feed the existing daemon-owned settle gate while unrelated or remote WebSockets remain outside HMR observation authority.
 - Desktop managed-surface preflight followed by a five-second fail-closed settle transaction before native pixel acquisition; unstable timeout never falls through to capture.
 - Settle retry is bounded to 25–100 ms, while the native three-second capture timeout remains a separate post-settle budget.
 - The managed WebView route is read and loopback-validated again inside native acquisition after settle, closing the preflight/navigation race.
@@ -143,10 +143,10 @@ Landed live integration:
 - canonical action → request → UI-response correlation is connected to the live session path. Correlation is anchored to canonical V4.3 action IDs/receipts, derives bounded temporal/causal evidence from trusted observer/network/runtime signals, deduplicates repeated derived evidence and preserves stale-session isolation rather than reviving the legacy direct action route.
 - bounded live network fault authority is connected for exact LocalView-managed loopback sessions. Canonical rules support fetch/XHR fail, bounded delay and empty-body status mock effects under finite leases and hit budgets; authenticated control-plane install/get/clear operations are exact-session and exact-managed-surface scoped, private bridge state is sanitized, install acknowledgement failures compensate/clear fail-closed, and real Chromium proof covers fail/delay/mock, hit exhaustion, expiry, explicit clear, observation metadata, zero final in-flight debt, unrelated loopback pass-through and real HTTP non-loopback pass-through.
 - aggregate fetch/XHR in-flight accounting remains exactly-once and privacy-safe and is shared with capture settling; network fault observations expose only bounded rule/effect metadata rather than response bodies or secrets.
+- framework-specific HMR signal production is connected to the live managed-page path for strongly classified loopback Vite, Next.js and webpack transports. Retained HMR packets contain only bounded framework/phase/update-count metadata, the existing observer timeline carries them, and the existing daemon-owned 300 ms HMR quiet evaluator consumes them without retaining raw WebSocket payloads, module paths or query tokens.
 
 Remaining integration:
 
-- framework-specific HMR signal production, timeline and settle detection.
 - performance-lite sampling and budget packets.
 
 The Wave 3 fault layer is intentionally not a general proxy: arbitrary internet interception, TLS MITM, response/body/header fixtures, WebSocket interception and a permanent interception backend remain unclaimed.
