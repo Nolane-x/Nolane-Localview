@@ -17,6 +17,7 @@ import {
   type HumanCaptureState,
   type HumanAskAiState,
   type HumanFixState,
+  type HumanVerifyState,
   type HumanMeasureState,
   type HumanSourceOpenState,
   type ToolId,
@@ -163,6 +164,29 @@ function classifyAskAiFailure(
     : 'failed';
 }
 
+function classifyVerifyFailure(
+  cause: unknown,
+): Extract<HumanVerifyState, { status: 'failure' }>['reason'] {
+  const detail = String(cause).toLowerCase();
+  if (detail.includes('verification expired') || detail.includes('verification is unavailable')) {
+    return 'expired';
+  }
+  if (detail.includes('source changed') || detail.includes('source mapping changed')) {
+    return 'source_changed';
+  }
+  if (detail.includes('route changed')) {
+    return 'route_changed';
+  }
+  if (
+    detail.includes('target is unavailable')
+    || detail.includes('selection is no longer available')
+    || detail.includes('element reference')
+  ) {
+    return 'target_unavailable';
+  }
+  return 'failed';
+}
+
 function classifySourceOpenFailure(cause: unknown): 'launcher_unavailable' | 'unavailable' | 'failed' {
   const detail = String(cause).toLowerCase();
 
@@ -207,6 +231,7 @@ export default function LocalViewShell() {
   const [askAiState, setAskAiState] = useState<HumanAskAiState>({ status: 'idle' });
   const [fixCapability, setFixCapability] = useState<AiFixCapability>(unavailableFixCapability);
   const [fixState, setFixState] = useState<HumanFixState>({ status: 'idle' });
+  const [verifyState, setVerifyState] = useState<HumanVerifyState>({ status: 'idle' });
   const captureInFlight = useRef(false);
   const captureGeneration = useRef(0);
   const measureInFlight = useRef(false);
@@ -218,6 +243,8 @@ export default function LocalViewShell() {
   const fixProposalInFlight = useRef(false);
   const fixApplyInFlight = useRef(false);
   const fixGeneration = useRef(0);
+  const verifyInFlight = useRef(false);
+  const verifyGeneration = useRef(0);
   const fixProposalIdRef = useRef<string | undefined>(undefined);
   const selectedReferenceRef = useRef<string | undefined>(undefined);
   const currentSessionIdRef = useRef<string | undefined>(undefined);
@@ -324,6 +351,9 @@ export default function LocalViewShell() {
     fixProposalIdRef.current = undefined;
     if (staleProposalId) void api.discardFixProposal({ proposalId: staleProposalId });
     setFixState({ status: 'idle' });
+    verifyGeneration.current += 1;
+    verifyInFlight.current = false;
+    setVerifyState({ status: 'idle' });
   }, [selectedReference]);
 
   useEffect(() => {
@@ -348,6 +378,9 @@ export default function LocalViewShell() {
     fixProposalIdRef.current = undefined;
     if (staleProposalId) void api.discardFixProposal({ proposalId: staleProposalId });
     setFixState({ status: 'idle' });
+    verifyGeneration.current += 1;
+    verifyInFlight.current = false;
+    setVerifyState({ status: 'idle' });
   }, [current?.id]);
 
   useEffect(() => {
@@ -615,6 +648,9 @@ export default function LocalViewShell() {
     fixProposalIdRef.current = undefined;
     if (oldProposal) void api.discardFixProposal({ proposalId: oldProposal });
     setActiveTool('ai');
+    verifyGeneration.current += 1;
+    verifyInFlight.current = false;
+    setVerifyState({ status: 'idle' });
     setFixState({ status: 'disclosure', reference });
   }, [current, fixCapability.available, selectedReference]);
 
@@ -722,6 +758,13 @@ export default function LocalViewShell() {
         changedStartLine: receipt.changedStartLine,
         changedEndLine: receipt.changedEndLine,
       });
+      setVerifyState({
+        status: 'ready',
+        verificationId: receipt.verificationId,
+        reference: receipt.reference,
+        displayFile: receipt.displayFile,
+        scope: receipt.verificationScope,
+      });
     } catch (cause) {
       if (generation !== fixGeneration.current) return;
       fixProposalIdRef.current = undefined;
@@ -755,6 +798,70 @@ export default function LocalViewShell() {
     }
   }, []);
 
+  const verifyFixChange = useCallback(async () => {
+    if (verifyState.status !== 'ready' || verifyInFlight.current) return;
+    const ready = verifyState;
+    const requestSessionId = current?.id;
+    if (!requestSessionId) return;
+
+    const generation = ++verifyGeneration.current;
+    verifyInFlight.current = true;
+    currentSessionIdRef.current = requestSessionId;
+    setActiveTool('ai');
+    setVerifyState({
+      status: 'verifying',
+      verificationId: ready.verificationId,
+      reference: ready.reference,
+      displayFile: ready.displayFile,
+      scope: ready.scope,
+    });
+
+    try {
+      const receipt = await api.verifyFixChange({ verificationId: ready.verificationId });
+      if (
+        generation !== verifyGeneration.current
+        || requestSessionId !== currentSessionIdRef.current
+        || ready.reference !== selectedReferenceRef.current
+      ) {
+        return;
+      }
+      setVerifyState({
+        status: 'success',
+        verificationId: receipt.verificationId,
+        reference: receipt.reference,
+        displayFile: receipt.displayFile,
+        scope: receipt.scope,
+        result: receipt.status,
+        semanticChanges: receipt.semanticChanges,
+        regressionSignals: receipt.regressionSignals,
+        viewportChangedRatio: receipt.viewportChangedRatio,
+        targetChangedRatio: receipt.targetChangedRatio,
+        providerLabel: receipt.providerLabel,
+        advisorySummary: receipt.advisorySummary,
+      });
+    } catch (cause) {
+      if (
+        generation !== verifyGeneration.current
+        || requestSessionId !== currentSessionIdRef.current
+        || ready.reference !== selectedReferenceRef.current
+      ) {
+        return;
+      }
+      setVerifyState({
+        status: 'failure',
+        verificationId: ready.verificationId,
+        reference: ready.reference,
+        displayFile: ready.displayFile,
+        scope: ready.scope,
+        reason: classifyVerifyFailure(cause),
+      });
+    } finally {
+      if (generation === verifyGeneration.current) {
+        verifyInFlight.current = false;
+      }
+    }
+  }, [current?.id, verifyState]);
+
   const executeCommand = useCallback((command: CommandId) => {
     switch (command) {
       case COMMAND_IDS.inspectActivate:
@@ -784,6 +891,10 @@ export default function LocalViewShell() {
         return;
       case COMMAND_IDS.aiFixSelection:
         beginFixReview();
+        return;
+      case COMMAND_IDS.aiVerifyChange:
+        setActiveTool('ai');
+        void verifyFixChange();
         return;
       case COMMAND_IDS.advancedOpen:
         setActiveTool('advanced');
@@ -818,6 +929,7 @@ export default function LocalViewShell() {
     aiProviderCapability.available,
     askAiAboutSelection,
     beginFixReview,
+    verifyFixChange,
     openNative,
     openSourceForSelection,
     patchPreferences,
@@ -920,6 +1032,8 @@ export default function LocalViewShell() {
             onRefreshAiProvider={() => void refreshAiProviderCapability()}
             fixCapability={fixCapability}
             fixState={fixState}
+            verifyState={verifyState}
+            onVerifyChange={() => void verifyFixChange()}
             onBeginFix={beginFixReview}
             onPrepareFix={(instruction) => void prepareFixProposal(instruction)}
             onApplyFix={() => void applyFixProposal()}
