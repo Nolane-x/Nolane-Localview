@@ -364,8 +364,8 @@ async fn mismatched_install_ack_fails_closed_and_queues_exact_cleanup() {
     let cleanup = state.live.take_network_fault_controls(owner, 8).await;
     assert_eq!(cleanup.len(), 1, "committed mismatch needs one exact cleanup");
     assert!(matches!(
-        cleanup[0].command,
-        NetworkFaultControlCommand::Clear { lease_token } if lease_token == new_token
+        &cleanup[0].command,
+        NetworkFaultControlCommand::Clear { lease_token } if *lease_token == new_token
     ));
     assert_ne!(new_token, previous_token);
 }
