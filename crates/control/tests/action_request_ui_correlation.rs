@@ -257,4 +257,16 @@ async fn correlation_uses_daemon_boundary_and_retains_exact_parent_evidence() {
     assert!(parents.iter().any(|item| item.kind == EvidenceKind::Interaction));
     assert!(parents.iter().any(|item| item.kind == EvidenceKind::Network));
     assert!(parents.iter().any(|item| item.kind == EvidenceKind::Semantic));
+
+    let (repeat_status, repeat_body) = send(
+        state,
+        Method::GET,
+        format!("/v1/sessions/{owner}/actions/{}/correlation", action.id),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(repeat_status, StatusCode::OK, "{repeat_body}");
+    assert_eq!(repeat_body["evidence_id"], causal_id);
+    assert_eq!(repeat_body["deduplicated"], true);
 }
