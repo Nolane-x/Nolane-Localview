@@ -21,7 +21,7 @@ use chrono::{TimeZone, Utc};
 use localview_evidence::{
     EvidenceDraft, EvidenceKind, EvidenceStore, Provenance, RetentionTier, UncertaintyClass,
 };
-use localview_live_analysis::{analyze_live, diagnose_live, FindingClass};
+use localview_live_analysis::{analyze_live, diagnose_live, performance_lite, FindingClass};
 use localview_live_bridge::{
     BridgeAction, BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch, ObserverEvent,
     ObserverEventKind,
@@ -94,6 +94,10 @@ pub fn router(state: ControlState) -> Router {
         .route("/v1/sessions/{id}/observer", post(ingest_observer))
         .route("/v1/sessions/{id}/observer/recent", get(recent_observer))
         .route("/v1/sessions/{id}/analysis", get(session_analysis))
+        .route(
+            "/v1/sessions/{id}/performance-lite",
+            get(session_performance_lite),
+        )
         .route("/v1/sessions/{id}/diagnose", get(session_diagnose))
         .route("/v1/sessions/{id}/verify", get(session_verify))
         .route("/v1/sessions/{id}/coverage", get(session_coverage))
@@ -276,6 +280,21 @@ async fn session_analysis(
     }
     let events = state.live.recent(id, 2048).await;
     Json(analyze_live(&events)).into_response()
+}
+
+async fn session_performance_lite(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path(id): Path<SessionId>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    if let Err(error) = ensure_session(&state, id).await {
+        return error.into_response();
+    }
+    let events = state.live.recent(id, 2048).await;
+    Json(performance_lite(&events)).into_response()
 }
 
 async fn session_diagnose(

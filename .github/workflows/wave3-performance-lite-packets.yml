@@ -1,0 +1,49 @@
+name: Wave 3 performance-lite budget packets
+
+on:
+  pull_request:
+    paths:
+      - "crates/performance/**"
+      - "crates/live-analysis/**"
+      - "crates/control/**"
+      - ".github/workflows/wave3-performance-lite-packets.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-performance-lite-budget-packets-design.md"
+  push:
+    branches:
+      - "feat/wave3-performance-lite-packets"
+    paths:
+      - "crates/performance/**"
+      - "crates/live-analysis/**"
+      - "crates/control/**"
+      - ".github/workflows/wave3-performance-lite-packets.yml"
+      - "docs/superpowers/specs/2026-09-19-wave3-performance-lite-budget-packets-design.md"
+
+concurrency:
+  group: wave3-performance-lite-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  performance-lite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Normalize formatting for compiler gate
+        run: cargo fmt --all
+
+      - name: Verify bounded performance packet policy
+        run: cargo test -p localview-performance -- --nocapture
+
+      - name: Verify live-analysis packet integration
+        run: cargo test -p localview-live-analysis -- --nocapture
+
+      - name: Verify exact-session performance-lite endpoint
+        run: cargo test -p localview-control --test performance_lite -- --nocapture
+
+      - name: Check control crate
+        run: cargo check -p localview-control --all-targets
