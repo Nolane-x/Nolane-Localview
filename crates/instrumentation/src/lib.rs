@@ -541,6 +541,8 @@ const SCRIPT: &str = r#"
       faultInjected: Boolean(rule),
       faultRuleId: rule?.id || null,
       faultEffect: rule?.effect?.kind || null,
+      faultDelayMs: rule?.effect?.kind === 'delay' ? rule.effect.milliseconds : null,
+      faultStatus: rule?.effect?.kind === 'mock_status' ? rule.effect.status : null,
     });
 
     xhr.dispatchEvent(new Event('readystatechange'));
@@ -1200,6 +1202,8 @@ const SCRIPT: &str = r#"
             faultInjected: Boolean(rule),
             faultRuleId: rule?.id || null,
             faultEffect: rule?.effect?.kind || null,
+            faultDelayMs: rule?.effect?.kind === 'delay' ? rule.effect.milliseconds : null,
+            faultStatus: rule?.effect?.kind === 'mock_status' ? rule.effect.status : null,
           });
         };
         if (!rule || rule.effect.kind === 'delay') {
