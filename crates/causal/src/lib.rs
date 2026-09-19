@@ -297,6 +297,171 @@ impl ProofCapsule {
     }
 }
 
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeSignalKind {
+    Network,
+    DomMutation,
+    Layout,
+    Route,
+    Console,
+    Performance,
+}
+
+impl RuntimeSignalKind {
+    fn is_ui_response(self) -> bool {
+        matches!(self, Self::DomMutation | Self::Layout | Self::Route)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSignal {
+    pub id: String,
+    pub kind: RuntimeSignalKind,
+    pub observed_ms: u64,
+    pub route: Option<String>,
+    pub reference: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionCorrelationWindow {
+    pub action_id: String,
+    pub started_ms: u64,
+    pub completed_ms: u64,
+    pub route: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionRequestUiPolicy {
+    pub tail_ms: u64,
+    pub max_signals: usize,
+    pub max_responses_per_request: usize,
+}
+
+impl Default for ActionRequestUiPolicy {
+    fn default() -> Self {
+        Self {
+            tail_ms: 1_500,
+            max_signals: 256,
+            max_responses_per_request: 16,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CorrelationBasis {
+    TemporalWindow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RequestUiLink {
+    pub request_id: String,
+    pub response_ids: Vec<String>,
+    pub confidence: f32,
+    pub basis: CorrelationBasis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActionRequestUiTrace {
+    pub action_id: String,
+    pub links: Vec<RequestUiLink>,
+    pub observed_signal_count: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionCorrelationError {
+    InvalidWindow,
+    InvalidPolicy,
+}
+
+pub const MAX_ACTION_CORRELATION_TAIL_MS: u64 = 10_000;
+pub const MAX_ACTION_CORRELATION_SIGNALS: usize = 4_096;
+pub const MAX_ACTION_CORRELATION_RESPONSES_PER_REQUEST: usize = 64;
+
+pub fn correlate_action_request_ui(
+    window: &ActionCorrelationWindow,
+    signals: &[RuntimeSignal],
+    policy: &ActionRequestUiPolicy,
+) -> Result<ActionRequestUiTrace, ActionCorrelationError> {
+    if window.action_id.is_empty() || window.completed_ms < window.started_ms {
+        return Err(ActionCorrelationError::InvalidWindow);
+    }
+    if policy.max_signals == 0
+        || policy.max_signals > MAX_ACTION_CORRELATION_SIGNALS
+        || policy.max_responses_per_request == 0
+        || policy.max_responses_per_request > MAX_ACTION_CORRELATION_RESPONSES_PER_REQUEST
+        || policy.tail_ms > MAX_ACTION_CORRELATION_TAIL_MS
+    {
+        return Err(ActionCorrelationError::InvalidPolicy);
+    }
+
+    let end_ms = window.completed_ms.saturating_add(policy.tail_ms);
+    let route_matches = |signal: &RuntimeSignal| match window.route.as_deref() {
+        Some(route) => signal.route.as_deref() == Some(route),
+        None => true,
+    };
+
+    let mut eligible = signals
+        .iter()
+        .filter(|signal| {
+            signal.observed_ms >= window.started_ms
+                && signal.observed_ms <= end_ms
+                && route_matches(signal)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    eligible.sort_by(|left, right| {
+        left.observed_ms
+            .cmp(&right.observed_ms)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let truncated = eligible.len() > policy.max_signals;
+    if truncated {
+        eligible.truncate(policy.max_signals);
+    }
+
+    let observed_signal_count = eligible.len();
+    let mut links = Vec::new();
+    for (index, request) in eligible.iter().enumerate() {
+        if request.kind != RuntimeSignalKind::Network {
+            continue;
+        }
+
+        let response_ids = eligible
+            .iter()
+            .skip(index + 1)
+            .take_while(|signal| signal.observed_ms <= end_ms)
+            .filter(|signal| signal.kind.is_ui_response())
+            .take(policy.max_responses_per_request)
+            .map(|signal| signal.id.clone())
+            .collect::<Vec<_>>();
+
+        if response_ids.is_empty() {
+            continue;
+        }
+
+        let confidence = if window.route.is_some() { 0.65 } else { 0.55 };
+        links.push(RequestUiLink {
+            request_id: request.id.clone(),
+            response_ids,
+            confidence,
+            basis: CorrelationBasis::TemporalWindow,
+        });
+    }
+
+    Ok(ActionRequestUiTrace {
+        action_id: window.action_id.clone(),
+        links,
+        observed_signal_count,
+        truncated,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
