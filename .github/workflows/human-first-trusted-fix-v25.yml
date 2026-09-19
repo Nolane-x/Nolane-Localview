@@ -17,6 +17,7 @@ on:
       - apps/desktop/src-tauri/tests/human_first_trusted_measure_v22_contract.rs
       - apps/desktop/src-tauri/tests/human_first_trusted_capture_v21_contract.rs
       - tools/human-first-ui-v2/**
+      - crates/native-capture/**
       - Cargo.toml
       - Cargo.lock
       - apps/desktop/package.json
