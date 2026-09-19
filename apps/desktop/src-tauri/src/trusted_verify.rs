@@ -566,6 +566,11 @@ pub fn compare_visual_facts(
     after_viewport: &ViewportMeta,
     after_rect: Option<&Rect>,
 ) -> Result<VisualVerificationFacts, String> {
+    if before.png.len() > MAX_VERIFY_VISUAL_BYTES_PER_RECORD
+        || after_png.len() > MAX_VERIFY_VISUAL_BYTES_PER_RECORD
+    {
+        return Err("trusted Verify visual frame exceeds safety bound".into());
+    }
     if before.viewport != *after_viewport {
         return Ok(VisualVerificationFacts {
             viewport_changed_ratio: None,
@@ -928,6 +933,31 @@ mod trusted_verify_tests {
             comparison.deterministic_status,
             DeterministicVerificationStatus::Inconclusive
         );
+    }
+
+    #[test]
+    fn trusted_verify_visual_compare_rejects_oversized_current_frame_before_decode() {
+        let before = VerifyVisualBaseline {
+            png: Arc::new(vec![0; 1]),
+            viewport: ViewportMeta {
+                css_width: 100,
+                css_height: 100,
+                device_scale_factor: 1.0,
+            },
+            pixel_width: 100,
+            pixel_height: 100,
+            target_rect: None,
+            captured_at_unix_ms: 1,
+        };
+        let oversized = vec![0; MAX_VERIFY_VISUAL_BYTES_PER_RECORD + 1];
+        let error = compare_visual_facts(
+            &before,
+            &oversized,
+            &before.viewport,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("exceeds safety bound"));
     }
 
     #[test]
