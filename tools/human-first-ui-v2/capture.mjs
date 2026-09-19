@@ -3366,10 +3366,25 @@ await shot(page, '138-vi-verify-change-observed.png', 'vi-verify-change-observed
 await page.close();
 
 page = await appliedFixPageFor(browser, { width: 390, height: 844 }, 'en', liveMeasure, dashboard, {}, {
-  failure: 'trusted Verify runtime unavailable',
+  failure: 'trusted Verify settle failed',
 });
 await runVerifyAndWait(page, 'verify-failure-isolation');
 await assertVisible(page, '.verify-review .fix-status.failure', 'verify-failure-isolation');
+const verifyRetry = page.locator('.verify-retry-action');
+invariant(await verifyRetry.isVisible(), 'verify:retryable-failure-action-visible');
+await verifyRetry.click();
+await page.waitForTimeout(150);
+await assertVisible(page, '.verify-review .fix-status.failure', 'verify-retryable-failure-second-result');
+const verifyRetryCalls = await page.evaluate(() =>
+  window.__LOCALVIEW_AUDIT_INVOKES__.filter((entry) => entry.cmd === 'verify_fix_change')
+);
+invariant(
+  verifyRetryCalls.length === 2
+    && verifyRetryCalls.every((entry) => Object.keys(entry.args ?? {}).length === 1 && typeof entry.args?.verificationId === 'string')
+    && verifyRetryCalls[0]?.args?.verificationId === verifyRetryCalls[1]?.args?.verificationId,
+  'verify:retryable-failure-retry',
+  { verifyRetryCalls }
+);
 await page.keyboard.press('Escape');
 await page.keyboard.press('i');
 await page.waitForTimeout(100);
