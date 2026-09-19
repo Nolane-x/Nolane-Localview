@@ -1,6 +1,9 @@
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import process from 'node:process';
-import ts from 'typescript';
+
+const appRequire = createRequire(new URL('../../apps/desktop/package.json', import.meta.url));
+const ts = appRequire('typescript');
 
 const sourcePath = new URL('../../apps/desktop/src/i18n.ts', import.meta.url);
 const source = await fs.readFile(sourcePath, 'utf8');
