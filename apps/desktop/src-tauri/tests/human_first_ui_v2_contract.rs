@@ -152,13 +152,29 @@ fn command_palette_search_is_functional_not_decorative() {
 }
 
 #[test]
-fn human_first_panels_keep_responsive_placeholder_and_gate_real_ai_actions() {
+fn human_first_panels_use_real_bounded_responsive_and_gate_real_ai_actions() {
     let source = include_str!("../../src/features/FloatingTools.tsx");
     let responsive = between(source, "function ResponsivePanel(", "function ConsolePanel(");
     let ai = between(source, "function AiPanel(", "function SessionsPanel(");
 
-    assert!(!responsive.contains("disabled={!current}"));
-    assert!(responsive.contains("disabled aria-disabled=\"true\""));
+    for required in [
+        "mobile_s",
+        "mobile",
+        "tablet",
+        "desktop",
+        "responsiveState",
+        "onRunResponsiveSweep",
+        "responsive-result-viewports",
+        "responsive.evidence",
+    ] {
+        assert!(
+            responsive.contains(required),
+            "Responsive surface must expose trusted canonical sweep behavior: missing {required}"
+        );
+    }
+    assert!(!responsive.contains("disabled aria-disabled=\"true\""));
+    assert!(!responsive.contains("type=\"number\""));
+    assert!(!responsive.contains("responsive.unavailable"));
 
     for required in [
         "const canAsk",
@@ -238,6 +254,11 @@ fn render_audit_covers_minimum_human_first_states() {
         "26-vi-network.png",
         "27-vi-live-inspection-unavailable.png",
         "15-ai-unavailable.png",
+        "150-responsive-ready.png",
+        "151-responsive-in-progress.png",
+        "152-responsive-success.png",
+        "153-responsive-failure-retry.png",
+        "154-responsive-preview-required.png",
     ] {
         assert!(
             capture.contains(artifact),
@@ -368,8 +389,13 @@ fn top_level_human_panels_do_not_split_language() {
         "sessions.detectedOne",
         "sessions.detectedMany",
         "responsive.viewports",
-        "responsive.unavailable",
         "responsive.note",
+        "responsive.run",
+        "responsive.inProgress",
+        "responsive.success",
+        "responsive.failed",
+        "responsive.previewRequired",
+        "responsive.retry",
         "command.searchPlaceholder",
         "command.searchAria",
     ] {
@@ -382,8 +408,13 @@ fn top_level_human_panels_do_not_split_language() {
     let responsive = between(tools, "function ResponsivePanel(", "function ConsolePanel(");
     assert!(responsive.contains("locale: SupportedLocale"));
     assert!(responsive.contains("translate(locale, 'responsive.viewports')"));
-    assert!(responsive.contains("translate(locale, 'responsive.unavailable')"));
     assert!(responsive.contains("translate(locale, 'responsive.note')"));
+    assert!(responsive.contains("translate(locale, 'responsive.run')"));
+    assert!(responsive.contains("translate(locale, 'responsive.inProgress')"));
+    assert!(responsive.contains("translate(locale, 'responsive.success')"));
+    assert!(responsive.contains("translate(locale, 'responsive.failed')"));
+    assert!(responsive.contains("translate(locale, 'responsive.previewRequired')"));
+    assert!(responsive.contains("translate(locale, 'responsive.retry')"));
     assert!(responsive.contains("translate(locale, 'empty.noTarget')"));
     assert!(!responsive.contains(">VIEWPORTS<"));
     assert!(!responsive.contains("Viewport tools open only when needed."));
