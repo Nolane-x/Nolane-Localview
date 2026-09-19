@@ -138,12 +138,18 @@ Foundation already landed in Wave 1:
 - fetch/XHR request metadata and failed-request evidence;
 - long-task/layout-shift observation.
 
+Landed live integration:
+
+- canonical action → request → UI-response correlation is connected to the live session path. Correlation is anchored to canonical V4.3 action IDs/receipts, derives bounded temporal/causal evidence from trusted observer/network/runtime signals, deduplicates repeated derived evidence and preserves stale-session isolation rather than reviving the legacy direct action route.
+- bounded live network fault authority is connected for exact LocalView-managed loopback sessions. Canonical rules support fetch/XHR fail, bounded delay and empty-body status mock effects under finite leases and hit budgets; authenticated control-plane install/get/clear operations are exact-session and exact-managed-surface scoped, private bridge state is sanitized, install acknowledgement failures compensate/clear fail-closed, and real Chromium proof covers fail/delay/mock, hit exhaustion, expiry, explicit clear, observation metadata, zero final in-flight debt, unrelated loopback pass-through and real HTTP non-loopback pass-through.
+- aggregate fetch/XHR in-flight accounting remains exactly-once and privacy-safe and is shared with capture settling; network fault observations expose only bounded rule/effect metadata rather than response bodies or secrets.
+
 Remaining integration:
 
-- action → request → UI response correlation.
-- network failure/delay/mock layer wired to live sessions.
 - framework-specific HMR signal production, timeline and settle detection.
 - performance-lite sampling and budget packets.
+
+The Wave 3 fault layer is intentionally not a general proxy: arbitrary internet interception, TLS MITM, response/body/header fixtures, WebSocket interception and a permanent interception backend remain unclaimed.
 
 ## Wave 4 — Layout + responsive intelligence
 
