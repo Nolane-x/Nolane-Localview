@@ -973,16 +973,25 @@ pub async fn capture_viewport(
     .await
 }
 
-#[tauri::command]
-pub async fn capture_current_viewport(
+#[derive(Debug, Clone)]
+pub(crate) struct VerificationVisualFrame {
+    pub png: Vec<u8>,
+    pub viewport: ViewportMeta,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub route: String,
+    pub captured_at_unix_ms: u64,
+}
+
+async fn capture_current_redacted_frame(
     app: tauri::AppHandle,
-    state: tauri::State<'_, VisualCaptureState>,
+    state: &VisualCaptureState,
     session_id: SessionId,
     revision: Option<String>,
-) -> Result<VisualCaptureReceipt, String> {
+) -> Result<CapturedFrame, String> {
     preflight_managed_surface(&app, session_id)?;
 
-    let capture_gate = session_capture_gate(&state, session_id).await?;
+    let capture_gate = session_capture_gate(state, session_id).await?;
     let _capture_guard = capture_gate.lock().await;
 
     wait_for_capture_settle(session_id).await?;
@@ -1018,7 +1027,48 @@ pub async fn capture_current_viewport(
         }
     };
 
-    let frame = redact_private_pixels(frame, &freeze)?;
+    redact_private_pixels(frame, &freeze)
+}
+
+fn verification_visual_frame(frame: CapturedFrame) -> VerificationVisualFrame {
+    VerificationVisualFrame {
+        png: frame.png,
+        viewport: frame.viewport,
+        pixel_width: frame.pixel_width,
+        pixel_height: frame.pixel_height,
+        route: frame.route,
+        captured_at_unix_ms: frame.captured_at_unix_ms,
+    }
+}
+
+pub(crate) async fn capture_verification_baseline(
+    app: tauri::AppHandle,
+    state: &VisualCaptureState,
+    session_id: SessionId,
+) -> Result<VerificationVisualFrame, String> {
+    capture_current_redacted_frame(app, state, session_id, None)
+        .await
+        .map(verification_visual_frame)
+}
+
+pub(crate) async fn capture_verification_current(
+    app: tauri::AppHandle,
+    state: &VisualCaptureState,
+    session_id: SessionId,
+) -> Result<VerificationVisualFrame, String> {
+    capture_current_redacted_frame(app, state, session_id, None)
+        .await
+        .map(verification_visual_frame)
+}
+
+#[tauri::command]
+pub async fn capture_current_viewport(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, VisualCaptureState>,
+    session_id: SessionId,
+    revision: Option<String>,
+) -> Result<VisualCaptureReceipt, String> {
+    let frame = capture_current_redacted_frame(app, &state, session_id, revision).await?;
     persist_and_register(
         &state,
         session_id,
