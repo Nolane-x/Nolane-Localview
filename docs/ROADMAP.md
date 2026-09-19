@@ -121,14 +121,14 @@ Landed native visual path:
 - Private-region resolution is bounded to 16 selectors, 4,096 unique elements, 256 visible rectangles and a 100,000 × 100,000 CSS-pixel viewport; invalid selector/geometry/budget paths fail the capture instead of silently persisting an uncertain frame.
 - After exact restore, the desktop revalidates live target geometry and uses `localview-visual` to redact the native viewport PNG in memory before the artifact store or changed-region baseline is reachable. Region crops occur only after that redaction. PNG decode/encode budgets, native dimension checks, whole-mask validation and crop verification make malformed/incomplete processing fail closed.
 - Explicit guarded full-page capture is now connected through `capture_full_page` without adding a platform full-page adapter. One per-session gate owns settle → one non-renewed 30-second freeze lease → bounded pure-Rust planning (32 tiles, 50,000 CSS px document height, 128 MiB RGBA, 32,768 output-pixel height) → exact-token absolute scroll → fresh settle/probe/private-mask geometry → the existing native viewport acquisition → per-tile redaction before decode/stitch. Visible fixed/sticky content fails closed before native copy. The original scroll and exact visual state are restored before final encoding, artifact persistence or the dedicated `/evidence/visual-full-page` registration; no intermediate tile artifact/evidence is persisted and there is no Chromium/Playwright fallback.
+- Trusted responsive sweep/contact-sheet execution is now connected through `capture_responsive_sweep`. The request carries only a session ID plus 1–4 canonical preset IDs; desktop verifies the exact LocalView-owned preview/registry owner, rejects maximized/fullscreen authority, removes the preview minimum only for the bounded transaction, converges each canonical size, settles/freezes/captures/redacts each viewport, restores the original physical preview size and canonical minimum, settles and revalidates route, then persists exactly one contact-sheet artifact and dedicated responsive Visual evidence record. Arbitrary caller width/height, device emulation and Chromium/Playwright fallback are not claimed.
 
 Still required before the visual/runtime Active Perception path is considered complete:
 
 - framework-specific/sourcemap-backed ownership beyond current explicit source evidence;
 - extend the separate Runtime Resource Governor with analysis-concurrency enforcement when a concrete concurrent analysis owner exists;
-- responsive sweep/contact-sheet execution over the same bounded capture authority.
 
-**Done when:** one button edit normally costs an evidence-backed crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling with true aggregate network in-flight accounting, live freeze/restore, pre-persistence private-region redaction, bounded CSS-region execution, evidence-backed progressive semantic targeting, baseline-driven changed-region scheduling, token-aware visual packet selection, planner-owned four-dimensional Perception Budget authority, native visual execution, planner-authorized Chromium execution, retained semantic feedback, single-request whole-cycle budget accounting, cooperative public-action cancellation and the capture → diff → retained evidence → deterministic verification loop are now present. Runtime Resource Governor capture-storage/cache, Chromium-process and hidden-surface ownership enforcement are landed; analysis-concurrency enforcement, deeper framework/source ownership and responsive execution remain. Guarded full-page stitching is now present as an explicit bounded operation; infinite-page crawling and fixed/sticky normalization are not claimed. Hard force-abort inside an already-running synchronous WebView/platform action is intentionally not claimed by the cooperative cancellation protocol.
+**Done when:** one button edit normally costs an evidence-backed crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling with true aggregate network in-flight accounting, live freeze/restore, pre-persistence private-region redaction, bounded CSS-region execution, evidence-backed progressive semantic targeting, baseline-driven changed-region scheduling, token-aware visual packet selection, planner-owned four-dimensional Perception Budget authority, native visual execution, planner-authorized Chromium execution, retained semantic feedback, single-request whole-cycle budget accounting, cooperative public-action cancellation and the capture → diff → retained evidence → deterministic verification loop are now present. Runtime Resource Governor capture-storage/cache, Chromium-process and hidden-surface ownership enforcement are landed; analysis-concurrency enforcement and deeper framework/source ownership remain. Guarded full-page stitching and canonical responsive preset/contact-sheet execution are now present as explicit bounded operations; adaptive/binary responsive execution, content/locale stress, infinite-page crawling and fixed/sticky normalization are not claimed. Hard force-abort inside an already-running synchronous WebView/platform action is intentionally not claimed by the cooperative cancellation protocol.
 
 ## Wave 3 — Runtime telemetry
 
@@ -147,12 +147,18 @@ Remaining integration:
 
 ## Wave 4 — Layout + responsive intelligence
 
+Landed foundation:
+
+- canonical four-preset responsive sweep/contact-sheet execution over the exact LocalView-owned preview, with bounded native-pixel capture/redaction and restore-before-persistence authority.
+
+Still required:
+
 - computed grid/flex data.
 - overflow/occlusion/sticky collision detection beyond the bounded visibility packet.
 - spacing rhythm and alignment families connected to live snapshots.
 - breakpoint adaptive/binary search execution.
-- responsive contact sheet.
 - content stress matrix and locale expansion.
+- deeper responsive issue intelligence beyond evidence acquisition.
 
 ## Wave 5 — Source intelligence
 
