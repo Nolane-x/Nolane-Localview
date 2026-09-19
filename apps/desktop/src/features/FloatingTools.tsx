@@ -863,6 +863,24 @@ function ResponsivePanel({
           {' · '}
           {responsiveState.viewports.length} {translate(locale, 'responsive.viewports')}
         </span>
+        <div className="responsive-result-viewports">
+          {responsiveState.viewports.map((viewport) => (
+            <span key={viewport.preset}>
+              {translate(
+                locale,
+                viewport.preset === 'mobile_s'
+                  ? 'responsive.mobileS'
+                  : viewport.preset === 'mobile'
+                    ? 'responsive.mobile'
+                    : viewport.preset === 'tablet'
+                      ? 'responsive.tablet'
+                      : 'responsive.desktop'
+              )}
+              {' · '}
+              {viewport.cssWidth} × {viewport.cssHeight}
+            </span>
+          ))}
+        </div>
         <code>{translate(locale, 'responsive.evidence')}: {responsiveState.evidenceId}</code>
       </div>
     )}
