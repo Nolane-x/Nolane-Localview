@@ -35,7 +35,7 @@ fn desktop_not_page_authors_network_fault_surface_incarnation() {
         .expect("network-fault completion command must be bounded");
 
     assert!(completion.contains("network_fault_preview_surface("));
-    assert!(completion.contains(""surface_incarnation".into()"));
+    assert!(completion.contains(r#""surface_incarnation".into()"#));
     assert!(completion.contains("surface.identity.incarnation"));
 
     let bridge = lib
@@ -67,9 +67,9 @@ fn taking_private_controls_requires_live_preview_registry_authority() {
     assert!(take.contains("network_fault_preview_surface(registry.inner()"));
     assert!(
         take.find("network_fault_preview_surface")
-            .expect("owner validation") <
-        take.find("/network-fault-controls")
-            .expect("control-plane fetch"),
+            .expect("owner validation")
+            < take.find("/network-fault-controls")
+                .expect("control-plane fetch"),
         "desktop owner truth must be validated before private controls are fetched"
     );
 }
@@ -106,6 +106,6 @@ fn preview_destruction_invalidates_fault_authority_before_resource_release() {
         .next()
         .expect("network-fault invalidator must be bounded");
     assert!(invalidator.contains("/network-faults/invalidate-preview"));
-    assert!(invalidator.contains(""surface_incarnation""));
+    assert!(invalidator.contains(r#""surface_incarnation""#));
     assert!(invalidator.contains(".bearer_auth(token)"));
 }
