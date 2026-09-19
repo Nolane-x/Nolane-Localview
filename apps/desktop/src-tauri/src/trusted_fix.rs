@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
-use crate::{trusted_ai, TrustedSourceTarget};
+use crate::{trusted_ai, trusted_verify, TrustedSourceTarget};
 
 pub const MAX_FIX_INSTRUCTION_BYTES: usize = 8 * 1024;
 pub const MAX_FIX_FILE_BYTES: usize = 2 * 1024 * 1024;
