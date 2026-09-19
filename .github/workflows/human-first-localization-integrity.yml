@@ -1,0 +1,98 @@
+name: Human-first localization integrity
+
+on:
+  push:
+    branches:
+      - feat/human-first-localization-integrity
+    paths:
+      - .github/workflows/human-first-localization-integrity.yml
+      - docs/superpowers/specs/2026-09-18-human-first-localview-ui-ux-v2.md
+      - apps/desktop/src/**
+      - apps/desktop/src-tauri/tests/human_first_localization_integrity_contract.rs
+      - tools/human-first-ui-v2/**
+      - apps/desktop/package.json
+      - apps/desktop/package-lock.json
+      - Cargo.toml
+      - Cargo.lock
+  workflow_dispatch:
+
+concurrency:
+  group: human-first-localization-integrity-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify Human-First localization integrity contract
+        run: cargo test -p localview-desktop --test human_first_localization_integrity_contract -- --nocapture
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm install --no-audit --no-fund
+      - name: Run programmatic locale integrity audit
+        working-directory: apps/desktop
+        run: node ../../tools/human-first-ui-v2/check-locales.mjs
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+  runtime:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run programmatic locale integrity audit
+        run: node ../../tools/human-first-ui-v2/check-locales.mjs
+      - name: Build frontend
+        run: npm run build
+      - name: Install Playwright Chromium
+        run: npm install --no-save --no-audit --no-fund playwright@1.55.0 && npx playwright install --with-deps chromium
+      - name: Start neutral localhost target
+        run: |
+          python3 -m http.server 5173 --directory ../../tools/human-first-ui-v2/demo > /tmp/localview-i18n-demo.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5173/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/localview-i18n-demo.log
+          exit 1
+      - name: Start LocalView frontend
+        run: |
+          npm run dev -- --host 127.0.0.1 > /tmp/localview-i18n-vite.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:1420/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/localview-i18n-vite.log
+          exit 1
+      - name: Run complete Human-First browser audit
+        run: |
+          cp ../../tools/human-first-ui-v2/capture.mjs ./capture-human-first-localization.mjs
+          node ./capture-human-first-localization.mjs
+          rm ./capture-human-first-localization.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localview-human-first-localization-integrity
+          path: apps/desktop/human-first-ui-v2-render/
+          if-no-files-found: error
+          retention-days: 7
