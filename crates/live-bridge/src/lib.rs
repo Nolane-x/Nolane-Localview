@@ -220,6 +220,15 @@ pub struct NetworkFaultControlResult {
     pub completed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkFaultLeaseAuthority {
+    pub lease_id: Uuid,
+    pub lease_token: Uuid,
+    pub fingerprint: String,
+    pub rule_count: usize,
+    pub expires_at: DateTime<Utc>,
+}
+
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub enum CompletionOrigin {
@@ -279,6 +288,7 @@ struct SessionBridgeState {
     network_fault_inflight: VecDeque<NetworkFaultControlRequest>,
     network_fault_claimed: VecDeque<NetworkFaultControlRequest>,
     network_fault_results: VecDeque<NetworkFaultControlResult>,
+    network_fault_lease: Option<NetworkFaultLeaseAuthority>,
 }
 
 #[derive(Clone, Debug)]
@@ -600,6 +610,47 @@ impl LiveBridge {
             .rev()
             .find(|result| result.request_id == request_id)
             .cloned()
+    }
+
+    pub async fn set_network_fault_lease(
+        &self,
+        session_id: SessionId,
+        lease: NetworkFaultLeaseAuthority,
+    ) {
+        let mut states = self.inner.write().await;
+        states.entry(session_id).or_default().network_fault_lease = Some(lease);
+    }
+
+    pub async fn network_fault_lease(
+        &self,
+        session_id: SessionId,
+    ) -> Option<NetworkFaultLeaseAuthority> {
+        self.inner
+            .read()
+            .await
+            .get(&session_id)
+            .and_then(|state| state.network_fault_lease.clone())
+    }
+
+    pub async fn clear_network_fault_lease(
+        &self,
+        session_id: SessionId,
+        lease_id: Uuid,
+    ) -> bool {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return false;
+        };
+        if state
+            .network_fault_lease
+            .as_ref()
+            .is_some_and(|lease| lease.lease_id == lease_id)
+        {
+            state.network_fault_lease = None;
+            true
+        } else {
+            false
+        }
     }
 
     pub async fn take_actions(&self, session_id: SessionId, limit: usize) -> Vec<BridgeAction> {
