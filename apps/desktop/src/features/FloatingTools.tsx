@@ -792,6 +792,13 @@ function AiPanel({
   const busy = askAiState.status === 'asking';
   const fixBusy = fixState.status === 'proposing' || fixState.status === 'applying';
   const verifyRetryable = verifyCanRetry(verifyState);
+  const verifyScope = verifyState.status === 'ready'
+    || verifyState.status === 'verifying'
+    || verifyState.status === 'success'
+    ? verifyState.scope
+    : verifyState.status === 'failure' && verifyRetryable
+      ? verifyState.scope
+      : undefined;
   const canAsk = !!current && !!selectedReference && providerCapability.available && !busy;
   const unavailableReason = !current
     ? translate(locale, 'empty.noTarget')
@@ -1021,9 +1028,9 @@ function AiPanel({
           <span>{translate(locale, 'verify.title')}</span>
           <strong>{translate(locale, 'verify.readOnlyDisclosure')}</strong>
         </div>
-        {(verifyState.status === 'ready' || verifyState.status === 'verifying' || verifyState.status === 'success' || verifyRetryable) && (
+        {verifyScope && (
           <span className="compact-status success">
-            {verifyState.scope === 'semantic_visual'
+            {verifyScope === 'semantic_visual'
               ? translate(locale, 'verify.semanticVisual')
               : translate(locale, 'verify.semanticOnly')}
           </span>
