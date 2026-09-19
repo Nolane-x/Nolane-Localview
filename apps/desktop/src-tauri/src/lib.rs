@@ -2149,9 +2149,10 @@ async fn preview_take_actions(
 #[tauri::command]
 async fn preview_take_network_fault_controls(
     webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
     session_id: SessionId,
 ) -> Result<Vec<NetworkFaultControlRequest>, String> {
-    ensure_preview_caller(&webview_window, session_id)?;
+    network_fault_preview_surface(registry.inner(), &webview_window, session_id)?;
     let token = read_token().await?;
     control_client()?
         .get(format!(
@@ -2171,10 +2172,17 @@ async fn preview_take_network_fault_controls(
 #[tauri::command]
 async fn preview_complete_network_fault_control(
     webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
     session_id: SessionId,
-    result: NetworkFaultControlResult,
+    mut result: NetworkFaultControlResult,
 ) -> Result<(), String> {
-    ensure_preview_caller(&webview_window, session_id)?;
+    let surface = network_fault_preview_surface(registry.inner(), &webview_window, session_id)?;
+    if let Some(payload) = result.payload.as_object_mut() {
+        payload.insert(
+            "surface_incarnation".into(),
+            serde_json::Value::from(surface.identity.incarnation),
+        );
+    }
     let token = read_token().await?;
     control_client()?
         .post(format!(
@@ -2264,6 +2272,27 @@ async fn preview_complete_action(
     }
     response.error_for_status().map_err(err)?;
     Ok(())
+}
+
+fn network_fault_preview_surface(
+    registry: &workspace_surface::surface_registry::DesktopSurfaceRegistry,
+    webview_window: &tauri::WebviewWindow,
+    session_id: SessionId,
+) -> Result<workspace_surface::surface_registry::DesktopSurfaceSnapshot, String> {
+    use workspace_surface::surface_registry::DesktopSurfaceKind;
+
+    let label = workspace_surface::preview_surface_label(session_id);
+    if webview_window.label() != label {
+        return Err("network fault control requires the exact LocalView preview surface".into());
+    }
+
+    let current = registry
+        .current(session_id, DesktopSurfaceKind::PreviewWindow, &label)
+        .ok_or_else(|| "network fault preview surface is not live in desktop owner registry".to_string())?;
+    if current.identity.owner_instance_id != registry.owner_instance_id() {
+        return Err("network fault preview surface owner mismatch".into());
+    }
+    Ok(current)
 }
 
 fn ensure_preview_caller(
