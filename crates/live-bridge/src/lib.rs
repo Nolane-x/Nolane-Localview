@@ -147,6 +147,14 @@ pub struct BridgeActionResult {
     pub completed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionExecutionBoundary {
+    pub action_id: Uuid,
+    pub session_id: SessionId,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NativeExecutorAction {
@@ -229,6 +237,8 @@ struct SessionBridgeState {
     capture_inflight: VecDeque<BridgeAction>,
     claimed: VecDeque<BridgeAction>,
     capture_claimed: VecDeque<BridgeAction>,
+    action_started_at: HashMap<Uuid, DateTime<Utc>>,
+    action_boundaries: VecDeque<ActionExecutionBoundary>,
     results: VecDeque<BridgeActionResult>,
     capture_results: VecDeque<BridgeActionResult>,
     native_executor_requests: VecDeque<NativeExecutorRequest>,
@@ -454,12 +464,17 @@ impl LiveBridge {
         let Some(state) = states.get_mut(&session_id) else {
             return Vec::new();
         };
-        drain_actions(
+        let actions = drain_actions(
             &mut state.actions,
             &mut state.inflight,
             limit,
             self.action_capacity,
-        )
+        );
+        let started_at = Utc::now();
+        for action in &actions {
+            state.action_started_at.entry(action.id).or_insert(started_at);
+        }
+        actions
     }
 
     pub async fn take_internal_capture_actions(
@@ -545,7 +560,11 @@ impl LiveBridge {
         let Some(index) = state.inflight.iter().position(|action| action.id == action_id) else {
             return false;
         };
-        state.inflight.remove(index).is_some()
+        let removed = state.inflight.remove(index).is_some();
+        if removed {
+            state.action_started_at.remove(&action_id);
+        }
+        removed
     }
 
     pub async fn claim_native_executor(
@@ -612,6 +631,24 @@ impl LiveBridge {
             }
             CompletionOrigin::Session(_) => take_claimed_by_id(state, result.action_id),
         };
+
+        let daemon_completed_at = Utc::now();
+        if let Some((action, scope)) = completed.as_ref() {
+            if *scope == ActionScope::Public {
+                if let Some(started_at) = state.action_started_at.remove(&action.id) {
+                    push_bounded(
+                        &mut state.action_boundaries,
+                        ActionExecutionBoundary {
+                            action_id: action.id,
+                            session_id,
+                            started_at,
+                            completed_at: daemon_completed_at,
+                        },
+                        self.result_capacity,
+                    );
+                }
+            }
+        }
 
         sanitize_result_for_storage(completed.as_ref().map(|(action, _)| action), &mut result);
         match completed.map(|(_, scope)| scope).unwrap_or(ActionScope::Public) {
@@ -697,6 +734,33 @@ impl LiveBridge {
         states
             .get(&session_id)
             .map(|state| recent_from(&state.native_executor_results, limit))
+            .unwrap_or_default()
+    }
+
+    pub async fn action_execution_boundary(
+        &self,
+        session_id: SessionId,
+        action_id: Uuid,
+    ) -> Option<ActionExecutionBoundary> {
+        let states = self.inner.read().await;
+        states
+            .get(&session_id)?
+            .action_boundaries
+            .iter()
+            .rev()
+            .find(|boundary| boundary.action_id == action_id)
+            .cloned()
+    }
+
+    pub async fn recent_action_execution_boundaries(
+        &self,
+        session_id: SessionId,
+        limit: usize,
+    ) -> Vec<ActionExecutionBoundary> {
+        let states = self.inner.read().await;
+        states
+            .get(&session_id)
+            .map(|state| recent_from(&state.action_boundaries, limit))
             .unwrap_or_default()
     }
 
@@ -1488,6 +1552,76 @@ mod tests {
                 .await;
         }
         assert_eq!(bridge.take_actions(id, 20).await.len(), 8);
+    }
+
+    #[tokio::test]
+    async fn action_execution_boundary_is_daemon_owned_session_scoped_and_bounded() {
+        let bridge = LiveBridge::new(32, 8);
+        let session = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let client_completed_at = DateTime::<Utc>::from_timestamp(1, 0).expect("timestamp");
+
+        let mut newest = None;
+        for _ in 0..10 {
+            let action = bridge
+                .enqueue_action(session, None, BridgeActionKind::Snapshot)
+                .await;
+            assert!(bridge.action_execution_boundary(session, action.id).await.is_none());
+            let taken = bridge.take_actions(session, 1).await;
+            assert_eq!(taken.len(), 1);
+            let claimed = bridge
+                .claim_action(session, action.id)
+                .await
+                .expect("claimed action");
+            bridge
+                .complete_action(
+                    &claimed,
+                    BridgeActionResult {
+                        action_id: action.id,
+                        ok: true,
+                        error: None,
+                        payload: Value::Null,
+                        completed_at: client_completed_at,
+                    },
+                )
+                .await;
+            let boundary = bridge
+                .action_execution_boundary(session, action.id)
+                .await
+                .expect("daemon boundary");
+            assert_eq!(boundary.action_id, action.id);
+            assert_eq!(boundary.session_id, session);
+            assert!(boundary.started_at <= boundary.completed_at);
+            assert_ne!(boundary.completed_at, client_completed_at);
+            assert!(
+                bridge
+                    .action_execution_boundary(other, action.id)
+                    .await
+                    .is_none()
+            );
+            newest = Some(action.id);
+        }
+
+        let boundaries = bridge.recent_action_execution_boundaries(session, 64).await;
+        assert_eq!(boundaries.len(), 8, "boundary history follows result capacity");
+        assert_eq!(boundaries.last().map(|item| item.action_id), newest);
+    }
+
+    #[tokio::test]
+    async fn discarded_inflight_action_does_not_leave_an_execution_boundary() {
+        let bridge = LiveBridge::new(32, 8);
+        let session = Uuid::new_v4();
+        let action = bridge
+            .enqueue_action(session, None, BridgeActionKind::Focus)
+            .await;
+        assert_eq!(bridge.take_actions(session, 1).await.len(), 1);
+        assert!(bridge.discard_public_action(session, action.id).await);
+        assert!(
+            bridge
+                .action_execution_boundary(session, action.id)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
