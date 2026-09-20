@@ -101,6 +101,18 @@ export interface HumanVerifyChangeReceipt {
   verifiedAtUnixMs: number;
 }
 
+export type HumanPointSelectPhase = 'pending' | 'selected' | 'cancelled' | 'failed' | 'stale';
+
+export interface HumanPointSelectStatus {
+  sessionId: string;
+  requestToken: string;
+  route: string;
+  state: HumanPointSelectPhase;
+  reference?: string | null;
+  bridgeGeneration?: number | null;
+  reason?: string | null;
+}
+
 export interface HumanSourceOpenRequest {
   sessionId: string;
   reference: string;
@@ -197,6 +209,12 @@ export const api = {
   captureCurrentViewport: (sessionId: string) => invoke<VisualCaptureReceipt>('capture_current_viewport', { sessionId, revision: null }),
   captureResponsiveSweep: ({ sessionId, presets }: ResponsiveSweepRequest) =>
     invoke<ResponsiveSweepReceipt>('capture_responsive_sweep', { sessionId, presets }),
+  beginPointSelect: (sessionId: string, requestToken: string) =>
+    invoke<HumanPointSelectStatus>('point_select_begin', { sessionId, requestToken }),
+  pointSelectStatus: (sessionId: string, requestToken: string) =>
+    invoke<HumanPointSelectStatus>('point_select_status', { sessionId, requestToken }),
+  cancelPointSelect: (sessionId: string, requestToken: string) =>
+    invoke<HumanPointSelectStatus>('point_select_cancel', { sessionId, requestToken }),
   openSourceForSelection: ({ sessionId, reference }: HumanSourceOpenRequest) =>
     invoke<HumanSourceOpenReceipt>('open_source_for_selection', { sessionId, reference }),
   measureElement: (sessionId: string, reference: string) => invoke<ElementMeasureReceipt>('measure_current_selection', { sessionId, reference }),
