@@ -1066,6 +1066,155 @@ const SCRIPT: &str = r#"
     return packet;
   };
 
+  const CSS_TRACE_PROPERTIES = [
+    'display', 'position', 'overflow-x', 'overflow-y', 'box-sizing', 'z-index',
+    'flex-direction', 'flex-wrap', 'justify-content', 'align-items', 'gap', 'row-gap', 'column-gap',
+    'grid-template-columns', 'grid-template-rows',
+    'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+    'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+    'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+    'font-size', 'font-weight', 'font-family', 'line-height', 'color', 'background-color',
+    'opacity', 'pointer-events', 'visibility'
+  ];
+  const CSS_TRACE_PROPERTY_SET = new Set(CSS_TRACE_PROPERTIES);
+  const MAX_CSS_TRACE_STYLESHEETS = 64;
+  const MAX_CSS_TRACE_RULES = 512;
+  const MAX_CSS_TRACE_MATCHED_RULES = 64;
+  const MAX_CSS_TRACE_DECLARATIONS = 128;
+  const MAX_CSS_TRACE_SELECTOR_BYTES = 320;
+  const MAX_CSS_TRACE_VALUE_BYTES = 180;
+  const MAX_CSS_TRACE_PATH_BYTES = 260;
+
+  const safeStylesheetPath = (sheet) => {
+    if (!sheet?.href) return null;
+    try {
+      const url = new URL(sheet.href, location.href);
+      if (url.origin !== location.origin || url.username || url.password) return null;
+      const path = redact(url.pathname).slice(0, MAX_CSS_TRACE_PATH_BYTES);
+      if (!path || /[\u0000-\u001F\u007F]/.test(path)) return null;
+      return path;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const boundedCssValue = (value) => redact(value).trim().slice(0, MAX_CSS_TRACE_VALUE_BYTES);
+
+  const cssDeclarationEvidence = (el) => {
+    const computedStyle = getComputedStyle(el);
+    const computed = {};
+    for (const property of CSS_TRACE_PROPERTIES) {
+      const value = boundedCssValue(computedStyle.getPropertyValue(property));
+      if (value) computed[property] = value;
+    }
+
+    const declarations = [];
+    let truncated = false;
+    let opaqueStylesheets = 0;
+    let stylesheetsScanned = 0;
+    let rulesScanned = 0;
+    let matchedRules = 0;
+    let conditionalRulesOmitted = false;
+
+    const retainDeclaration = (record) => {
+      if (!CSS_TRACE_PROPERTY_SET.has(record.property)) return;
+      if (declarations.length >= MAX_CSS_TRACE_DECLARATIONS) {
+        truncated = true;
+        return;
+      }
+      const value = boundedCssValue(record.value);
+      if (!value) return;
+      declarations.push({ ...record, value });
+    };
+
+    for (const property of CSS_TRACE_PROPERTIES) {
+      const value = el.style?.getPropertyValue?.(property) || '';
+      if (!value) continue;
+      retainDeclaration({
+        property,
+        value,
+        important: el.style.getPropertyPriority(property) === 'important',
+        origin: 'inline',
+        selector: null,
+        stylesheet_path: null,
+        stylesheet_index: null,
+        rule_index: null,
+      });
+    }
+
+    const sheets = Array.from(document.styleSheets || []).slice(0, MAX_CSS_TRACE_STYLESHEETS);
+    if ((document.styleSheets?.length || 0) > sheets.length) truncated = true;
+    for (let stylesheetIndex = 0; stylesheetIndex < sheets.length; stylesheetIndex += 1) {
+      if (rulesScanned >= MAX_CSS_TRACE_RULES || matchedRules >= MAX_CSS_TRACE_MATCHED_RULES ||
+          declarations.length >= MAX_CSS_TRACE_DECLARATIONS) {
+        truncated = true;
+        break;
+      }
+      const sheet = sheets[stylesheetIndex];
+      stylesheetsScanned += 1;
+      let rules;
+      try {
+        rules = Array.from(sheet.cssRules || []);
+      } catch (_) {
+        opaqueStylesheets += 1;
+        continue;
+      }
+      const stylesheetPath = safeStylesheetPath(sheet);
+      for (let ruleIndex = 0; ruleIndex < rules.length; ruleIndex += 1) {
+        if (rulesScanned >= MAX_CSS_TRACE_RULES || matchedRules >= MAX_CSS_TRACE_MATCHED_RULES ||
+            declarations.length >= MAX_CSS_TRACE_DECLARATIONS) {
+          truncated = true;
+          break;
+        }
+        const rule = rules[ruleIndex];
+        rulesScanned += 1;
+        if (rule?.type !== 1 || typeof rule.selectorText !== 'string' || !rule.style) {
+          const isMedia = typeof CSSMediaRule !== 'undefined' && rule instanceof CSSMediaRule;
+          const isSupports = typeof CSSSupportsRule !== 'undefined' && rule instanceof CSSSupportsRule;
+          const isContainer = typeof CSSContainerRule !== 'undefined' && rule instanceof CSSContainerRule;
+          if (isMedia || isSupports || isContainer) conditionalRulesOmitted = true;
+          continue;
+        }
+
+        let matches = false;
+        try { matches = el.matches(rule.selectorText); } catch (_) {}
+        if (!matches) continue;
+        matchedRules += 1;
+        const selector = redact(rule.selectorText).trim().slice(0, MAX_CSS_TRACE_SELECTOR_BYTES);
+        if (!selector) continue;
+
+        for (const property of CSS_TRACE_PROPERTIES) {
+          const value = rule.style.getPropertyValue(property);
+          if (!value) continue;
+          retainDeclaration({
+            property,
+            value,
+            important: rule.style.getPropertyPriority(property) === 'important',
+            origin: 'author_stylesheet',
+            selector,
+            stylesheet_path: stylesheetPath,
+            stylesheet_index: stylesheetIndex,
+            rule_index: ruleIndex,
+          });
+          if (declarations.length >= MAX_CSS_TRACE_DECLARATIONS) break;
+        }
+      }
+    }
+
+    return {
+      reference: refFor(el),
+      route: safeUrl(location.href),
+      computed,
+      declarations,
+      opaque_stylesheets: opaqueStylesheets,
+      stylesheets_scanned: stylesheetsScanned,
+      rules_scanned: rulesScanned,
+      matched_rules: matchedRules,
+      truncated,
+      conditional_rules_omitted: conditionalRulesOmitted,
+    };
+  };
+
   const rectIntersects = (a, b) =>
     a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
 
@@ -1264,6 +1413,12 @@ const SCRIPT: &str = r#"
       viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
       route: safeUrl(location.href),
     };
+  };
+
+  const inspectCss = (reference) => {
+    const el = resolveRef(reference);
+    if (!el) return null;
+    return cssDeclarationEvidence(el);
   };
 
   const sampleGeometry = (reason) => {
@@ -1724,6 +1879,7 @@ const SCRIPT: &str = r#"
     version: '0.2.0',
     snapshot,
     inspect(reference) { return inspect(reference); },
+    inspectCss(reference) { return inspectCss(reference); },
     installNetworkFaultPlan,
     clearNetworkFaultPlan,
     networkFaultState,
