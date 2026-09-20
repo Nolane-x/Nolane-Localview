@@ -114,6 +114,7 @@ pub struct VerifyVisualBaseline {
     pub pixel_width: u32,
     pub pixel_height: u32,
     pub target_rect: Option<Rect>,
+    pub capture_region: Option<Rect>,
     pub captured_at_unix_ms: u64,
 }
 
@@ -143,6 +144,7 @@ pub struct VerificationRecord {
 pub struct VisualVerificationFacts {
     pub viewport_changed_ratio: Option<f64>,
     pub target_changed_ratio: Option<f64>,
+    pub affected_region_changed_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -153,6 +155,7 @@ pub struct VerificationComparison {
     pub regression_signals: Vec<String>,
     pub viewport_changed_ratio: Option<f64>,
     pub target_changed_ratio: Option<f64>,
+    pub affected_region_changed_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -167,6 +170,7 @@ pub struct HumanVerifyChangeReceipt {
     pub regression_signals: Vec<String>,
     pub viewport_changed_ratio: Option<f64>,
     pub target_changed_ratio: Option<f64>,
+    pub affected_region_changed_ratio: Option<f64>,
     pub visual_diff_evidence_id: Option<String>,
     pub snapshot_version: u64,
     pub provider_label: Option<String>,
@@ -520,6 +524,39 @@ fn crop_rgba(image: &RgbaImage, left: u32, top: u32, right: u32, bottom: u32) ->
     Some(cropped)
 }
 
+fn contains_rect(container: &Rect, child: &Rect) -> bool {
+    let values = [
+        container.x,
+        container.y,
+        container.width,
+        container.height,
+        child.x,
+        child.y,
+        child.width,
+        child.height,
+    ];
+    if values.iter().any(|value| !value.is_finite())
+        || container.width <= 0.0
+        || container.height <= 0.0
+        || child.width <= 0.0
+        || child.height <= 0.0
+    {
+        return false;
+    }
+    let container_right = container.x + container.width;
+    let container_bottom = container.y + container.height;
+    let child_right = child.x + child.width;
+    let child_bottom = child.y + child.height;
+    container_right.is_finite()
+        && container_bottom.is_finite()
+        && child_right.is_finite()
+        && child_bottom.is_finite()
+        && container.x <= child.x
+        && container.y <= child.y
+        && container_right >= child_right
+        && container_bottom >= child_bottom
+}
+
 fn target_union_pixels(
     before_rect: &Rect,
     after_rect: &Rect,
@@ -579,6 +616,7 @@ pub fn compare_visual_facts(
         return Ok(VisualVerificationFacts {
             viewport_changed_ratio: None,
             target_changed_ratio: None,
+            affected_region_changed_ratio: None,
         });
     }
     let before_image = decode_png_rgba(before.png.as_slice())
@@ -589,6 +627,31 @@ pub fn compare_visual_facts(
         return Ok(VisualVerificationFacts {
             viewport_changed_ratio: None,
             target_changed_ratio: None,
+            affected_region_changed_ratio: None,
+        });
+    }
+
+    if let Some(capture_region) = before.capture_region.as_ref() {
+        let target_still_covered = match (before.target_rect.as_ref(), after_rect) {
+            (Some(before_rect), Some(after_rect)) => {
+                contains_rect(capture_region, before_rect)
+                    && contains_rect(capture_region, after_rect)
+            }
+            _ => false,
+        };
+        let affected_region_changed_ratio = if target_still_covered {
+            Some(
+                pixel_diff(&before_image, &after_image, VERIFY_PIXEL_THRESHOLD)
+                    .map_err(|_| "trusted Verify affected-region diff failed".to_string())?
+                    .changed_ratio,
+            )
+        } else {
+            None
+        };
+        return Ok(VisualVerificationFacts {
+            viewport_changed_ratio: None,
+            target_changed_ratio: None,
+            affected_region_changed_ratio,
         });
     }
 
@@ -613,6 +676,7 @@ pub fn compare_visual_facts(
     Ok(VisualVerificationFacts {
         viewport_changed_ratio: Some(viewport_diff.changed_ratio),
         target_changed_ratio,
+        affected_region_changed_ratio: None,
     })
 }
 
@@ -637,22 +701,29 @@ pub fn classify_verification_status(
         .target_changed_ratio
         .map(|ratio| ratio > 0.0)
         .unwrap_or(false);
+    let affected_region_visual_changed = visual
+        .affected_region_changed_ratio
+        .map(|ratio| ratio > 0.0)
+        .unwrap_or(false);
     let viewport_visual_changed = visual
         .viewport_changed_ratio
         .map(|ratio| ratio > 0.0)
         .unwrap_or(false);
     let semantic_changed = !semantic_changes.is_empty();
+    let visual_available = visual.viewport_changed_ratio.is_some()
+        || visual.target_changed_ratio.is_some()
+        || visual.affected_region_changed_ratio.is_some();
 
     let deterministic_status = if !regression_signals.is_empty() {
         DeterministicVerificationStatus::RegressionSignal
-    } else if semantic_changed || target_visual_changed {
+    } else if semantic_changed || target_visual_changed || affected_region_visual_changed {
         DeterministicVerificationStatus::ChangeObserved
-    } else if scope == VerificationScope::SemanticVisual && visual.viewport_changed_ratio.is_none()
-    {
+    } else if scope == VerificationScope::SemanticVisual && !visual_available {
         DeterministicVerificationStatus::Inconclusive
     } else if scope == VerificationScope::SemanticVisual
         && viewport_visual_changed
         && !target_visual_changed
+        && visual.affected_region_changed_ratio.is_none()
     {
         DeterministicVerificationStatus::Inconclusive
     } else {
@@ -665,6 +736,7 @@ pub fn classify_verification_status(
         regression_signals,
         viewport_changed_ratio: visual.viewport_changed_ratio,
         target_changed_ratio: visual.target_changed_ratio,
+        affected_region_changed_ratio: visual.affected_region_changed_ratio,
     }
 }
 
@@ -859,6 +931,7 @@ mod trusted_verify_tests {
                 pixel_width: 100,
                 pixel_height: 100,
                 target_rect: None,
+                capture_region: None,
                 captured_at_unix_ms: 1,
             }),
             scope: if visual_bytes > 0 {
@@ -979,6 +1052,7 @@ mod trusted_verify_tests {
             pixel_width: 100,
             pixel_height: 100,
             target_rect: None,
+            capture_region: None,
             captured_at_unix_ms: 1,
         };
         let oversized = vec![0; MAX_VERIFY_VISUAL_BYTES_PER_RECORD + 1];
@@ -1081,6 +1155,7 @@ mod trusted_verify_tests {
             pixel_width: image.width,
             pixel_height: image.height,
             target_rect,
+            capture_region: None,
             captured_at_unix_ms: 1,
         }
     }
