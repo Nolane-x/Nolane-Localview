@@ -58,6 +58,10 @@ async function completions() {
   return page.evaluate(() => window.__LOCALVIEW__.takePointSelectCompletions(4));
 }
 
+function terminal(entries, token) {
+  return [...entries].reverse().find((entry) => entry.requestToken === token && entry.status !== 'armed');
+}
+
 async function center(selector) {
   const box = await page.locator(selector).boundingBox();
   assert.ok(box, `${selector} should have a box`);
@@ -115,7 +119,7 @@ assert.equal(await overlay.evaluate((node) => getComputedStyle(node).visibility)
 // Exact nested target wins; app click is suppressed; stable ref comes from instrumentation.
 const nestedRef = await page.evaluate(() => window.__LOCALVIEW__.refFor(document.querySelector('#nested')));
 await page.mouse.click(nested.x, nested.y);
-let receipt = (await completions()).find((entry) => entry.requestToken === 'point-hover');
+let receipt = terminal(await completions(), 'point-hover');
 assert.ok(receipt, 'selected receipt should exist');
 assert.equal(receipt.status, 'selected');
 assert.equal(receipt.reference, nestedRef);
@@ -130,7 +134,7 @@ assert.equal(await page.evaluate(() => window.__proofClicks), 1, 'listeners must
 // Escape cancels only while mode is active and cleans up.
 await begin('point-escape');
 await page.keyboard.press('Escape');
-receipt = (await completions()).find((entry) => entry.requestToken === 'point-escape');
+receipt = terminal(await completions(), 'point-escape');
 assert.ok(receipt);
 assert.equal(receipt.status, 'cancelled');
 assert.equal(receipt.reason, 'escape');
@@ -140,7 +144,7 @@ assert.equal(await page.locator('[data-localview-owned="point-select"]').count()
 await begin('point-route');
 await page.evaluate(() => history.pushState({}, '', '/route-b'));
 await page.waitForTimeout(0);
-receipt = (await completions()).find((entry) => entry.requestToken === 'point-route');
+receipt = terminal(await completions(), 'point-route');
 assert.ok(receipt);
 assert.equal(receipt.status, 'failed');
 assert.equal(receipt.reason, 'route_changed');
@@ -160,7 +164,7 @@ await page.mouse.move(removed.x, removed.y);
 const removedRef = await page.evaluate(() => window.__LOCALVIEW__.refFor(document.querySelector('#removed-target')));
 await page.evaluate(() => document.querySelector('#removed-target').remove());
 await page.mouse.click(removed.x, removed.y);
-receipt = (await completions()).find((entry) => entry.requestToken === 'point-removed');
+receipt = terminal(await completions(), 'point-removed');
 assert.ok(receipt);
 assert.notEqual(receipt.reference, removedRef, 'removed target reference must never be selected');
 assert.equal(receipt.status, 'failed');
@@ -170,7 +174,7 @@ await begin('point-private');
 const secret = await center('#secret');
 await page.mouse.move(secret.x, secret.y);
 await page.mouse.click(secret.x, secret.y);
-receipt = (await completions()).find((entry) => entry.requestToken === 'point-private');
+receipt = terminal(await completions(), 'point-private');
 assert.ok(receipt);
 assert.equal(receipt.status, 'selected');
 assert.match(receipt.reference, /^@e[0-9a-f]+$/i);
@@ -186,7 +190,7 @@ const circle = await center('#circle');
 await page.mouse.move(circle.x, circle.y);
 const circleRef = await page.evaluate(() => window.__LOCALVIEW__.refFor(document.querySelector('#circle')));
 await page.mouse.click(circle.x, circle.y);
-receipt = (await completions()).find((entry) => entry.requestToken === 'point-svg');
+receipt = terminal(await completions(), 'point-svg');
 assert.ok(receipt);
 assert.equal(receipt.status, 'selected');
 assert.equal(receipt.reference, circleRef);
