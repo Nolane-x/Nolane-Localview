@@ -1077,8 +1077,8 @@ const SCRIPT: &str = r#"
     'opacity', 'pointer-events', 'visibility'
   ];
   const CSS_AUTHOR_CASCADE_PROPERTIES = [
-    'display', 'position', 'box-sizing', 'z-index', 'justify-content',
-    'align-items', 'opacity', 'pointer-events', 'visibility', 'color'
+    'display', 'position', 'box-sizing', 'z-index',
+    'opacity', 'pointer-events', 'visibility', 'color'
   ];
   const CSS_AUTHOR_CASCADE_PROPERTY_SET = new Set(CSS_AUTHOR_CASCADE_PROPERTIES);
   const MAX_CSS_TRACE_STYLESHEETS = 96;
