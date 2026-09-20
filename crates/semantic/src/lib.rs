@@ -110,6 +110,7 @@ mod tests {
             interactive: true,
             attributes: BTreeMap::new(),
             source: None,
+            ownership: None,
             children: vec![],
         }
     }
