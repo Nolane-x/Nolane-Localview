@@ -21,7 +21,7 @@ on:
       - "docs/superpowers/specs/2026-09-20-wave4-adaptive-responsive-intelligence-design.md"
 
 concurrency:
-  group: wave4-adaptive-responsive-\${{ github.ref }}
+  group: wave4-adaptive-responsive-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
