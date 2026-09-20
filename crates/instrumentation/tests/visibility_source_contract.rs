@@ -130,3 +130,62 @@ fn svelte_ownership_is_exact_element_bounded_and_never_reads_parent_runtime_stat
         );
     }
 }
+
+#[test]
+fn vue_ownership_is_exact_element_bounded_and_does_not_fabricate_source_coordinates() {
+    let script = bootstrap_script(&InstrumentationConfig::default());
+
+    for required in [
+        "MAX_FRAMEWORK_OWNERSHIP_PROBES = 256",
+        "MAX_VUE_COMPONENT_BYTES = 96",
+        "MAX_VUE_SOURCE_FILE_BYTES = 260",
+        "ownDataDescriptor(el, '__vueParentComponent')",
+        "ownDataDescriptor(instance, 'type')",
+        "ownDataDescriptor(componentType, '__file')",
+        "boundedRelativeSourceFile(fileDescriptor.value, MAX_VUE_SOURCE_FILE_BYTES)",
+        "!file.endsWith('.vue')",
+        "origin: 'vue-dev-instance'",
+        "signal: 'element_parent_component'",
+        "vueSourceHint(el, ownershipBudget)",
+    ] {
+        assert!(
+            script.contains(required),
+            "missing bounded Vue ownership contract: {required}"
+        );
+    }
+
+    let explicit_index = script
+        .find("for (const attribute of ['data-component-source', 'data-source'])")
+        .expect("explicit source precedence");
+    let react_index = script
+        .find("const react = reactSourceHint(el, ownershipBudget)")
+        .expect("React precedence");
+    let svelte_index = script
+        .find("const svelte = svelteSourceHint(el, ownershipBudget)")
+        .expect("Svelte precedence");
+    let vue_index = script
+        .find("return vueSourceHint(el, ownershipBudget)")
+        .expect("Vue fallback");
+    assert!(
+        explicit_index < react_index && react_index < svelte_index && svelte_index < vue_index,
+        "explicit source must outrank React, Svelte and Vue framework fallback"
+    );
+
+    for forbidden in [
+        "instance.props",
+        "instance.attrs",
+        "instance.slots",
+        "instance.setupState",
+        "instance.ctx",
+        "instance.proxy",
+        "instance.exposed",
+        "instance.parent",
+        "instance.subTree",
+        "__VUE_DEVTOOLS_GLOBAL_HOOK__",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "Vue ownership must not read component runtime state: {forbidden}"
+        );
+    }
+}
