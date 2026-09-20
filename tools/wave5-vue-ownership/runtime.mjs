@@ -150,25 +150,44 @@ try {
       return null;
     };
 
-    const node = document.createElement('button');
-    node.id = 'vue-bounded-target';
-    node.textContent = 'Bounded';
-    Object.defineProperty(node, '__vueParentComponent', {
+    const element = document.getElementById('vue-target');
+    const instanceDescriptor = element
+      ? Object.getOwnPropertyDescriptor(element, '__vueParentComponent')
+      : null;
+    const instance = instanceDescriptor &&
+      Object.prototype.hasOwnProperty.call(instanceDescriptor, 'value')
+      ? instanceDescriptor.value
+      : null;
+    const typeDescriptor = instance
+      ? Object.getOwnPropertyDescriptor(instance, 'type')
+      : null;
+    const type = typeDescriptor &&
+      Object.prototype.hasOwnProperty.call(typeDescriptor, 'value')
+      ? typeDescriptor.value
+      : null;
+
+    if (!type) return { hint: null, normalized: false };
+    Object.defineProperty(type, '__file', {
       configurable: true,
-      value: { type: { __file: 'src/VueCard.vue' } },
+      enumerable: true,
+      writable: true,
+      value: 'src/VueCard.vue',
     });
-    document.body.appendChild(node);
 
     const snapshot = window.__LOCALVIEW__.snapshot();
-    return walk(snapshot.semantic_tree, 'vue-bounded-target')?.sourceHint ?? null;
+    return {
+      hint: walk(snapshot.semantic_tree, 'vue-target')?.sourceHint ?? null,
+      normalized: true,
+    };
   });
 
-  invariant(bounded?.origin === 'vue-dev-instance', 'bounded Vue ownership origin missing', bounded);
-  invariant(bounded?.file === 'src/VueCard.vue', 'bounded Vue project-relative source file mismatch', bounded);
-  invariant(bounded?.component === 'VueCard', 'bounded Vue component identity mismatch', bounded);
-  invariant(bounded?.signal === 'element_parent_component', 'bounded Vue signal mismatch', bounded);
-  invariant(!Object.prototype.hasOwnProperty.call(bounded, 'line'), 'Vue foundation fabricated a source line', bounded);
-  invariant(!Object.prototype.hasOwnProperty.call(bounded, 'column'), 'Vue foundation fabricated a source column', bounded);
+  invariant(bounded.normalized, 'fixture could not normalize genuine Vue component file metadata', bounded);
+  invariant(bounded.hint?.origin === 'vue-dev-instance', 'bounded Vue ownership origin missing', bounded);
+  invariant(bounded.hint?.file === 'src/VueCard.vue', 'bounded Vue project-relative source file mismatch', bounded);
+  invariant(bounded.hint?.component === 'VueCard', 'bounded Vue component identity mismatch', bounded);
+  invariant(bounded.hint?.signal === 'element_parent_component', 'bounded Vue signal mismatch', bounded);
+  invariant(!Object.prototype.hasOwnProperty.call(bounded.hint, 'line'), 'Vue foundation fabricated a source line', bounded);
+  invariant(!Object.prototype.hasOwnProperty.call(bounded.hint, 'column'), 'Vue foundation fabricated a source column', bounded);
 
   const explicit = await page.evaluate(() => {
     const walk = (root, id) => {
