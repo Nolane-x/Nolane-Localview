@@ -158,8 +158,8 @@ fn bridge_receipt_is_bounded_and_generation_bound() {
         );
     }
 
-    assert!(permissions.contains(""point_select_begin""));
-    assert!(permissions.contains(""preview_complete_point_select""));
+    assert!(permissions.contains("\"point_select_begin\""));
+    assert!(permissions.contains("\"preview_complete_point_select\""));
 }
 
 #[test]
