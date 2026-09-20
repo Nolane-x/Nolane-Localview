@@ -163,7 +163,7 @@ try {
     Object.defineProperty(fake, '__reactFiber$fake', {
       configurable: true,
       value: {
-        stateNode: null,
+        stateNode: fake,
         return: {
           type: function FakeComponent() {},
           _debugSource: {
@@ -184,7 +184,7 @@ try {
   });
 
   invariant(nonReact.plain === null, 'plain DOM node fabricated React ownership', nonReact);
-  invariant(nonReact.fake === null, 'unanchored React-shaped property fabricated ownership', nonReact);
+  invariant(nonReact.fake === null, 'unpaired React-shaped property fabricated ownership', nonReact);
 
   process.stdout.write(JSON.stringify({
     ok: true,
