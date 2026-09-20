@@ -9,7 +9,8 @@ use std::{
 use localview_artifacts::ArtifactStore;
 use localview_capture::{CaptureTarget, SettleDecision, SettleReason, StableCapturePolicy};
 use localview_native_capture::{
-    capture_webview, CaptureRequest, CapturedFrame, NativeCaptureError, ViewportMeta,
+    capture_webview, CaptureRequest, CapturedFrame, NativeCaptureBackend, NativeCaptureError,
+    ViewportMeta,
 };
 use localview_protocol::{Rect, SessionId};
 use localview_resource_governor::{
@@ -1541,14 +1542,16 @@ pub(crate) struct VerificationVisualFrame {
     pub viewport: ViewportMeta,
     pub pixel_width: u32,
     pub pixel_height: u32,
+    pub backend: NativeCaptureBackend,
     pub route: String,
+    pub revision: Option<String>,
     pub captured_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RegisteredVerificationVisualFrame {
-    pub frame: VerificationVisualFrame,
-    pub evidence_id: String,
+pub(crate) struct VerificationAffectedVisualEvidence {
+    pub visual_diff_evidence_id: String,
+    pub visual_evidence_ids: Vec<String>,
 }
 
 async fn capture_current_redacted_frame(
@@ -1604,7 +1607,9 @@ fn verification_visual_frame(frame: CapturedFrame) -> VerificationVisualFrame {
         viewport: frame.viewport,
         pixel_width: frame.pixel_width,
         pixel_height: frame.pixel_height,
+        backend: frame.backend,
         route: frame.route,
+        revision: frame.revision,
         captured_at_unix_ms: frame.captured_at_unix_ms,
     }
 }
@@ -1629,53 +1634,130 @@ pub(crate) async fn capture_verification_current(
         .map(verification_visual_frame)
 }
 
-pub(crate) async fn capture_registered_verification_current(
-    app: tauri::AppHandle,
+pub(crate) async fn persist_verification_affected_visual_evidence(
     state: &VisualCaptureState,
     session_id: SessionId,
-) -> Result<RegisteredVerificationVisualFrame, String> {
-    let frame = capture_current_redacted_frame(app, state, session_id, None).await?;
-    let verification = VerificationVisualFrame {
-        png: frame.png.clone(),
-        viewport: frame.viewport.clone(),
-        pixel_width: frame.pixel_width,
-        pixel_height: frame.pixel_height,
-        route: frame.route.clone(),
-        captured_at_unix_ms: frame.captured_at_unix_ms,
-    };
-    let receipt =
-        persist_and_register(state, session_id, frame, &RequestedCaptureTarget::Viewport).await?;
-    Ok(RegisteredVerificationVisualFrame {
-        frame: verification,
-        evidence_id: receipt.evidence_id,
-    })
-}
-
-pub(crate) async fn register_verification_visual_diff_evidence(
-    session_id: SessionId,
-    route: String,
-    viewport: ViewportMeta,
-    captured_at_unix_ms: u64,
+    frame: &VerificationVisualFrame,
+    mode: &str,
+    regions: &[Rect],
     changed_ratio: f64,
-    current_visual_evidence_id: String,
-) -> Result<String, String> {
-    let (mode, parents) = if changed_ratio == 0.0 {
-        ("unchanged", Vec::new())
-    } else {
-        ("viewport", vec![current_visual_evidence_id])
+) -> Result<VerificationAffectedVisualEvidence, String> {
+    if !changed_ratio.is_finite() || !(0.0..=1.0).contains(&changed_ratio) {
+        return Err("trusted Verify affected visual ratio is invalid".into());
+    }
+
+    let mode = match mode {
+        "unchanged" => "unchanged",
+        "regions" => "regions",
+        "viewport" => "viewport",
+        _ => return Err("trusted Verify affected visual mode is invalid".into()),
     };
-    register_visual_diff_evidence(
+    let mut visual_evidence_ids = Vec::new();
+
+    match mode {
+        "unchanged" => {
+            if changed_ratio != 0.0 || !regions.is_empty() {
+                return Err("trusted Verify unchanged visual plan is inconsistent".into());
+            }
+        }
+        "regions" => {
+            let max_regions = ChangedRegionPolicy::default().max_regions;
+            if regions.is_empty() || regions.len() > max_regions {
+                return Err("trusted Verify affected region count is invalid".into());
+            }
+            let image = decode_png_rgba(&frame.png)
+                .map_err(|_| "trusted Verify current visual decode failed".to_string())?;
+            if (image.width, image.height) != (frame.pixel_width, frame.pixel_height) {
+                return Err("trusted Verify current visual pixel metadata mismatch".into());
+            }
+            for rect in regions {
+                validate_region(
+                    rect,
+                    f64::from(frame.viewport.css_width),
+                    f64::from(frame.viewport.css_height),
+                )?;
+                let cropped = image
+                    .crop_css_rect(
+                        (
+                            f64::from(frame.viewport.css_width),
+                            f64::from(frame.viewport.css_height),
+                        ),
+                        rect,
+                    )
+                    .map_err(|_| "trusted Verify affected region crop failed".to_string())?;
+                let png = encode_png_rgba(&cropped)
+                    .map_err(|_| "trusted Verify affected region encode failed".to_string())?;
+                let region_frame = CapturedFrame {
+                    png,
+                    pixel_width: cropped.width,
+                    pixel_height: cropped.height,
+                    backend: frame.backend,
+                    viewport: frame.viewport.clone(),
+                    route: frame.route.clone(),
+                    revision: frame.revision.clone(),
+                    captured_at_unix_ms: frame.captured_at_unix_ms,
+                };
+                let receipt = persist_and_register(
+                    state,
+                    session_id,
+                    region_frame,
+                    &RequestedCaptureTarget::Region(rect.clone()),
+                )
+                .await?;
+                visual_evidence_ids.push(receipt.evidence_id);
+            }
+        }
+        "viewport" => {
+            if regions.len() != 1 {
+                return Err("trusted Verify viewport visual plan is inconsistent".into());
+            }
+            let expected = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: f64::from(frame.viewport.css_width),
+                height: f64::from(frame.viewport.css_height),
+            };
+            if regions[0] != expected {
+                return Err("trusted Verify viewport visual plan geometry is invalid".into());
+            }
+            let viewport_frame = CapturedFrame {
+                png: frame.png.clone(),
+                pixel_width: frame.pixel_width,
+                pixel_height: frame.pixel_height,
+                backend: frame.backend,
+                viewport: frame.viewport.clone(),
+                route: frame.route.clone(),
+                revision: frame.revision.clone(),
+                captured_at_unix_ms: frame.captured_at_unix_ms,
+            };
+            let receipt = persist_and_register(
+                state,
+                session_id,
+                viewport_frame,
+                &RequestedCaptureTarget::Viewport,
+            )
+            .await?;
+            visual_evidence_ids.push(receipt.evidence_id);
+        }
+        _ => unreachable!("trusted Verify visual mode validated above"),
+    }
+
+    let visual_diff = register_visual_diff_evidence(
         session_id,
-        route,
-        viewport,
-        None,
-        captured_at_unix_ms,
+        frame.route.clone(),
+        frame.viewport.clone(),
+        frame.revision.clone(),
+        frame.captured_at_unix_ms,
         mode,
         changed_ratio,
-        parents,
+        visual_evidence_ids.clone(),
     )
-    .await
-    .map(|receipt| receipt.evidence_id)
+    .await?;
+
+    Ok(VerificationAffectedVisualEvidence {
+        visual_diff_evidence_id: visual_diff.evidence_id,
+        visual_evidence_ids,
+    })
 }
 
 #[tauri::command]

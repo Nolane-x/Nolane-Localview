@@ -6,7 +6,10 @@ use std::{
 
 use localview_native_capture::ViewportMeta;
 use localview_protocol::{PageSnapshot, Rect, SemanticNode, Session, SessionId};
-use localview_visual::{RgbaImage, decode_png_rgba, pixel_diff};
+use localview_visual::{
+    ChangedRegionPlan, ChangedRegionPolicy, RgbaImage, decode_png_rgba, pixel_diff,
+    plan_changed_css_regions,
+};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -65,6 +68,38 @@ impl DeterministicVerificationStatus {
             Self::Inconclusive => "inconclusive",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationVisualChangeMode {
+    Unchanged,
+    Regions,
+    Viewport,
+}
+
+impl VerificationVisualChangeMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unchanged => "unchanged",
+            Self::Regions => "regions",
+            Self::Viewport => "viewport",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerificationAffectedVisualPlan {
+    pub mode: VerificationVisualChangeMode,
+    pub changed_ratio: f64,
+    pub regions: Vec<Rect>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerificationVisualAssessment {
+    pub facts: VisualVerificationFacts,
+    pub affected: Option<VerificationAffectedVisualPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -167,6 +202,9 @@ pub struct HumanVerifyChangeReceipt {
     pub regression_signals: Vec<String>,
     pub viewport_changed_ratio: Option<f64>,
     pub target_changed_ratio: Option<f64>,
+    pub visual_change_mode: Option<VerificationVisualChangeMode>,
+    pub affected_regions: Vec<Rect>,
+    pub affected_visual_evidence_ids: Vec<String>,
     pub visual_diff_evidence_id: Option<String>,
     pub snapshot_version: u64,
     pub provider_label: Option<String>,
@@ -564,21 +602,24 @@ fn target_union_pixels(
     Some((left, top, right, bottom))
 }
 
-pub fn compare_visual_facts(
+pub fn assess_visual_change(
     before: &VerifyVisualBaseline,
     after_png: &[u8],
     after_viewport: &ViewportMeta,
     after_rect: Option<&Rect>,
-) -> Result<VisualVerificationFacts, String> {
+) -> Result<VerificationVisualAssessment, String> {
     if before.png.len() > MAX_VERIFY_VISUAL_BYTES_PER_RECORD
         || after_png.len() > MAX_VERIFY_VISUAL_BYTES_PER_RECORD
     {
         return Err("trusted Verify visual frame exceeds safety bound".into());
     }
     if before.viewport != *after_viewport {
-        return Ok(VisualVerificationFacts {
-            viewport_changed_ratio: None,
-            target_changed_ratio: None,
+        return Ok(VerificationVisualAssessment {
+            facts: VisualVerificationFacts {
+                viewport_changed_ratio: None,
+                target_changed_ratio: None,
+            },
+            affected: None,
         });
     }
     let before_image = decode_png_rgba(before.png.as_slice())
@@ -586,9 +627,12 @@ pub fn compare_visual_facts(
     let after_image = decode_png_rgba(after_png)
         .map_err(|_| "trusted Verify current visual decode failed".to_string())?;
     if (before_image.width, before_image.height) != (after_image.width, after_image.height) {
-        return Ok(VisualVerificationFacts {
-            viewport_changed_ratio: None,
-            target_changed_ratio: None,
+        return Ok(VerificationVisualAssessment {
+            facts: VisualVerificationFacts {
+                viewport_changed_ratio: None,
+                target_changed_ratio: None,
+            },
+            affected: None,
         });
     }
 
@@ -610,10 +654,64 @@ pub fn compare_visual_facts(
         _ => None,
     };
 
-    Ok(VisualVerificationFacts {
-        viewport_changed_ratio: Some(viewport_diff.changed_ratio),
-        target_changed_ratio,
+    let policy = ChangedRegionPolicy {
+        threshold: VERIFY_PIXEL_THRESHOLD,
+        ..ChangedRegionPolicy::default()
+    };
+    let affected = plan_changed_css_regions(
+        &before_image,
+        &after_image,
+        (
+            f64::from(before.viewport.css_width),
+            f64::from(before.viewport.css_height),
+        ),
+        policy,
+    )
+    .map_err(|_| "trusted Verify affected-region planning failed".to_string())?;
+
+    let affected = Some(match affected {
+        ChangedRegionPlan::Unchanged => VerificationAffectedVisualPlan {
+            mode: VerificationVisualChangeMode::Unchanged,
+            changed_ratio: 0.0,
+            regions: Vec::new(),
+        },
+        ChangedRegionPlan::Regions {
+            regions,
+            changed_ratio,
+        } => VerificationAffectedVisualPlan {
+            mode: VerificationVisualChangeMode::Regions,
+            changed_ratio,
+            regions,
+        },
+        ChangedRegionPlan::Viewport { changed_ratio } => VerificationAffectedVisualPlan {
+            mode: VerificationVisualChangeMode::Viewport,
+            changed_ratio,
+            regions: vec![Rect {
+                x: 0.0,
+                y: 0.0,
+                width: f64::from(before.viewport.css_width),
+                height: f64::from(before.viewport.css_height),
+            }],
+        },
+    });
+
+    Ok(VerificationVisualAssessment {
+        facts: VisualVerificationFacts {
+            viewport_changed_ratio: Some(viewport_diff.changed_ratio),
+            target_changed_ratio,
+        },
+        affected,
     })
+}
+
+pub fn compare_visual_facts(
+    before: &VerifyVisualBaseline,
+    after_png: &[u8],
+    after_viewport: &ViewportMeta,
+    after_rect: Option<&Rect>,
+) -> Result<VisualVerificationFacts, String> {
+    assess_visual_change(before, after_png, after_viewport, after_rect)
+        .map(|assessment| assessment.facts)
 }
 
 pub fn classify_verification_status(
@@ -1328,6 +1426,109 @@ mod trusted_verify_tests {
         assert!((0.0..=1.0).contains(&equal_ratio));
         assert!((0.0..=1.0).contains(&exceeded_ratio));
         assert!(exceeded_ratio >= equal_ratio);
+    }
+
+    #[test]
+    fn trusted_verify_affected_region_plan_is_threshold_aligned_and_fail_closed() {
+        let viewport = ViewportMeta {
+            css_width: 128,
+            css_height: 128,
+            device_scale_factor: 1.0,
+        };
+        let target = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 32.0,
+        };
+        let before_image = solid_image(128, 128, [0, 0, 0, 255]);
+        let before = visual_baseline(&before_image, viewport.clone(), Some(target.clone()));
+        let identical_png = localview_visual::encode_png_rgba(&before_image).unwrap();
+
+        let unchanged =
+            assess_visual_change(&before, &identical_png, &viewport, Some(&target)).unwrap();
+        let unchanged_plan = unchanged.affected.expect("compatible unchanged plan");
+        assert_eq!(unchanged_plan.mode, VerificationVisualChangeMode::Unchanged);
+        assert_eq!(unchanged_plan.changed_ratio, 0.0);
+        assert!(unchanged_plan.regions.is_empty());
+
+        let mut local_image = before_image.clone();
+        for y in 4..12 {
+            for x in 4..12 {
+                set_pixel(&mut local_image, x, y, [255, 255, 255, 255]);
+            }
+        }
+        let local_png = localview_visual::encode_png_rgba(&local_image).unwrap();
+        let local = assess_visual_change(&before, &local_png, &viewport, Some(&target)).unwrap();
+        let local_plan = local.affected.expect("compatible local plan");
+        assert_eq!(local_plan.mode, VerificationVisualChangeMode::Regions);
+        assert!(!local_plan.regions.is_empty());
+        assert!(local_plan.regions.len() <= ChangedRegionPolicy::default().max_regions);
+        assert!(local_plan.changed_ratio > 0.0);
+        assert!(local.facts.target_changed_ratio.unwrap() > 0.0);
+
+        let broad_image = solid_image(128, 128, [255, 255, 255, 255]);
+        let broad_png = localview_visual::encode_png_rgba(&broad_image).unwrap();
+        let broad = assess_visual_change(&before, &broad_png, &viewport, Some(&target)).unwrap();
+        let broad_plan = broad.affected.expect("compatible broad plan");
+        assert_eq!(broad_plan.mode, VerificationVisualChangeMode::Viewport);
+        assert_eq!(
+            broad_plan.regions,
+            vec![Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 128.0,
+                height: 128.0,
+            }]
+        );
+
+        let incompatible_viewport = ViewportMeta {
+            css_width: 127,
+            css_height: 128,
+            device_scale_factor: 1.0,
+        };
+        let incompatible = assess_visual_change(
+            &before,
+            &identical_png,
+            &incompatible_viewport,
+            Some(&target),
+        )
+        .unwrap();
+        assert!(incompatible.affected.is_none());
+        assert_eq!(incompatible.facts.viewport_changed_ratio, None);
+
+        let mut threshold_equal_image = before_image.clone();
+        set_pixel(
+            &mut threshold_equal_image,
+            4,
+            4,
+            [VERIFY_PIXEL_THRESHOLD, 0, 0, 255],
+        );
+        let threshold_equal_png =
+            localview_visual::encode_png_rgba(&threshold_equal_image).unwrap();
+        let threshold_equal =
+            assess_visual_change(&before, &threshold_equal_png, &viewport, Some(&target)).unwrap();
+        assert_eq!(
+            threshold_equal.affected.unwrap().mode,
+            VerificationVisualChangeMode::Unchanged
+        );
+
+        let mut threshold_exceeded_image = before_image.clone();
+        set_pixel(
+            &mut threshold_exceeded_image,
+            4,
+            4,
+            [VERIFY_PIXEL_THRESHOLD.saturating_add(1), 0, 0, 255],
+        );
+        let threshold_exceeded_png =
+            localview_visual::encode_png_rgba(&threshold_exceeded_image).unwrap();
+        let threshold_exceeded =
+            assess_visual_change(&before, &threshold_exceeded_png, &viewport, Some(&target))
+                .unwrap();
+        assert_eq!(
+            threshold_exceeded.affected.unwrap().mode,
+            VerificationVisualChangeMode::Regions
+        );
     }
 
     #[test]

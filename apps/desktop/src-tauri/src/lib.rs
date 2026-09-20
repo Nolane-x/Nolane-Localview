@@ -973,40 +973,45 @@ async fn verify_fix_change(
         );
 
         let mut visual_diff_evidence_id = None;
+        let mut visual_change_mode = None;
+        let mut affected_regions = Vec::new();
+        let mut affected_visual_evidence_ids = Vec::new();
         let visual_facts = if let Some(before) = record.visual_before.as_ref() {
-            match visual_capture::capture_registered_verification_current(
+            match visual_capture::capture_verification_current(
                 app.clone(),
                 &visual_state,
                 record.session_id,
             )
             .await
             {
-                Ok(registered) => {
-                    let frame = &registered.frame;
+                Ok(frame) => {
                     let frame_route = visual_capture::canonical_visual_diff_route(&frame.route)?;
                     if frame_route != record.canonical_route {
                         return Err("trusted Verify route changed during verification".into());
                     }
-                    let facts = trusted_verify::compare_visual_facts(
+                    let assessment = trusted_verify::assess_visual_change(
                         before,
                         &frame.png,
                         &frame.viewport,
                         semantic_after.selected.rect.as_ref(),
                     )?;
-                    if let Some(changed_ratio) = facts.viewport_changed_ratio {
-                        visual_diff_evidence_id = Some(
-                            visual_capture::register_verification_visual_diff_evidence(
+                    if let Some(affected) = assessment.affected.as_ref() {
+                        let evidence =
+                            visual_capture::persist_verification_affected_visual_evidence(
+                                &visual_state,
                                 record.session_id,
-                                frame.route.clone(),
-                                frame.viewport.clone(),
-                                frame.captured_at_unix_ms,
-                                changed_ratio,
-                                registered.evidence_id,
+                                &frame,
+                                affected.mode.as_str(),
+                                &affected.regions,
+                                affected.changed_ratio,
                             )
-                            .await?,
-                        );
+                            .await?;
+                        visual_diff_evidence_id = Some(evidence.visual_diff_evidence_id);
+                        visual_change_mode = Some(affected.mode);
+                        affected_regions = affected.regions.clone();
+                        affected_visual_evidence_ids = evidence.visual_evidence_ids;
                     }
-                    facts
+                    assessment.facts
                 }
                 Err(_) => trusted_verify::VisualVerificationFacts {
                     viewport_changed_ratio: None,
@@ -1046,6 +1051,9 @@ async fn verify_fix_change(
                 regression_signals: comparison.regression_signals,
                 viewport_changed_ratio: comparison.viewport_changed_ratio,
                 target_changed_ratio: comparison.target_changed_ratio,
+                visual_change_mode,
+                affected_regions,
+                affected_visual_evidence_ids,
                 visual_diff_evidence_id,
                 snapshot_version: snapshot.version,
                 provider_label: None,
