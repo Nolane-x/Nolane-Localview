@@ -410,6 +410,42 @@ async fn project_owned_css_source_map_can_upgrade_to_original_source() {
 }
 
 #[tokio::test]
+async fn source_map_nearest_preceding_segment_is_not_exact_css_proof() {
+    let project = TempProject::new();
+    project.write("dist/app.css", ".save{color:red}");
+    project.write("src/button.scss", ".save { color: red; }");
+    project.write(
+        "dist/app.css.map",
+        serde_json::json!({
+            "version": 3,
+            "sources": ["../src/button.scss"],
+            "names": [],
+            "mappings": "AAAA"
+        })
+        .to_string(),
+    );
+    let (state, session_id) = test_state_with_cwd(Some(&project.root)).await;
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot(
+            executor_state,
+            session_id,
+            stylesheet_payload("dist/app.css", ".save", "color", "red", false),
+        )
+        .await;
+    });
+
+    let (status, body) = get_trace(state, session_id, "@save", true).await;
+    executor.await.expect("snapshot executor");
+    assert_eq!(status, StatusCode::OK);
+    let authority = &body["declarations"][0]["source_authority"];
+    assert_eq!(authority["level"], "exact_declaration_position");
+    assert_eq!(authority["file"], "dist/app.css");
+    assert_eq!(authority["column"], 6);
+    assert_eq!(authority["mapping"], "direct_css");
+}
+
+#[tokio::test]
 async fn source_map_escape_is_rejected_without_losing_direct_css_coordinate() {
     let project = TempProject::new();
     let outside = TempProject::new();
