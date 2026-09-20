@@ -1637,7 +1637,9 @@ mod tests {
         assert!(script.contains("'/_next/webpack-hmr'"));
         assert!(script.contains("'/sockjs-node'"));
         assert!(script.contains("MAX_HMR_MESSAGE_BYTES = 256 * 1024"));
-        assert!(script.contains("new TextEncoder().encode(data).byteLength > MAX_HMR_MESSAGE_BYTES"));
+        assert!(
+            script.contains("new TextEncoder().encode(data).byteLength > MAX_HMR_MESSAGE_BYTES")
+        );
         assert!(script.contains("MAX_HMR_UPDATE_COUNT = 256"));
         assert!(script.contains("isLoopbackHmrHost"));
         assert!(script.contains("!isLoopbackHmrHost(parsed.hostname)"));
