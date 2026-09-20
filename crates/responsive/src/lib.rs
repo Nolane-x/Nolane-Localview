@@ -485,6 +485,21 @@ pub fn bounded_adaptive_sweep(
     widths.sort_unstable();
     widths.dedup();
 
+    if widths.len() > initial_cap {
+        let last = widths.len() - 1;
+        let mut selected = Vec::with_capacity(initial_cap);
+        for slot in 0..initial_cap {
+            let index = slot
+                .checked_mul(last)
+                .ok_or(ResponsiveError::InvalidAdaptiveProbeCap)?
+                / (initial_cap - 1);
+            selected.push(widths[index]);
+        }
+        selected.sort_unstable();
+        selected.dedup();
+        widths = selected;
+    }
+
     while widths.len() < initial_cap {
         let Some((_, midpoint)) = widths
             .windows(2)
@@ -507,7 +522,6 @@ pub fn bounded_adaptive_sweep(
         widths.sort_unstable();
     }
 
-    widths.truncate(initial_cap);
     widths.sort_unstable();
     widths.dedup();
     Ok(widths)
@@ -552,6 +566,9 @@ fn issue(
     before_width: Option<u32>,
     after_width: Option<u32>,
 ) -> ResponsiveIssue {
+    let mut evidence_with_snapshot = Vec::with_capacity(evidence.len() + 1);
+    evidence_with_snapshot.push(format!("snapshot_version={}", observation.snapshot_version));
+    evidence_with_snapshot.extend(evidence);
     ResponsiveIssue {
         kind,
         session: observation.session.clone(),
@@ -559,7 +576,7 @@ fn issue(
         viewport: observation.viewport,
         refs,
         detector: "responsive_geometry_v1".to_string(),
-        evidence,
+        evidence: evidence_with_snapshot,
         confidence_milli: confidence_milli.min(1000),
         class,
         before_width,
@@ -957,7 +974,7 @@ pub fn resolve_observed_transition(
 }
 
 #[allow(async_fn_in_trait)]
-pub trait LayoutProbe: Send + Sync {
+pub trait LayoutProbe {
     async fn fails_at(&self, width: u32) -> bool;
 }
 
@@ -1019,7 +1036,7 @@ mod tests {
 
     struct P;
 
-        impl LayoutProbe for P {
+    impl LayoutProbe for P {
         async fn fails_at(&self, width: u32) -> bool {
             width < 728
         }
