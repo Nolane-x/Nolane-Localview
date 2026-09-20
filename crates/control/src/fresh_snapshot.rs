@@ -750,9 +750,10 @@ mod tests {
                 "component": "VueCard",
                 "signal": "element_parent_component"
             });
-            assert!(
-                project_ownership(Some(&hint)).is_none(),
-                "unsafe Vue ownership must fail closed: {file}"
+            assert_eq!(
+                project_ownership(Some(&hint)),
+                Some(None),
+                "unsafe Vue ownership must be dropped without invalidating the snapshot: {file}"
             );
         }
     }
