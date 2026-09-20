@@ -5,7 +5,9 @@ use localview_capture::{
     resolve_progressive_targets, ProgressiveTargetError, ProgressiveTargetKind,
     ProgressiveTargetProvenance,
 };
-use localview_protocol::{PageSnapshot, Rect, SemanticNode, SourceLocation};
+use localview_protocol::{
+    ComponentOwnership, PageSnapshot, Rect, SemanticNode, SourceLocation,
+};
 
 fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
     Rect {
@@ -360,4 +362,130 @@ fn zero_sized_snapshot_viewport_fails_closed_before_resolution() {
     let error = resolve_progressive_targets(&invalid, "@target")
         .expect_err("zero-height viewport must fail closed");
     assert!(matches!(error, ProgressiveTargetError::InvalidViewport));
+}
+
+
+#[test]
+fn structured_component_ownership_resolves_without_source_coordinates() {
+    let target = SemanticNode {
+        reference: "@vue-target".into(),
+        role: Some("button".into()),
+        name: Some("Save".into()),
+        tag: "button".into(),
+        rect: Some(rect(300.0, 300.0, 100.0, 40.0)),
+        interactive: true,
+        attributes: BTreeMap::new(),
+        source: None,
+        ownership: Some(ComponentOwnership {
+            framework: Some("vue".into()),
+            file: "src/VueCard.vue".into(),
+            component: "VueCard".into(),
+            signal: "element_parent_component".into(),
+        }),
+        children: vec![],
+    };
+    let owner = SemanticNode {
+        reference: "@vue-card".into(),
+        role: None,
+        name: None,
+        tag: "div".into(),
+        rect: Some(rect(250.0, 220.0, 500.0, 300.0)),
+        interactive: false,
+        attributes: BTreeMap::new(),
+        source: None,
+        ownership: Some(ComponentOwnership {
+            framework: Some("vue".into()),
+            file: "src/VueCard.vue".into(),
+            component: "VueCard".into(),
+            signal: "element_parent_component".into(),
+        }),
+        children: vec![target],
+    };
+    let root = node(
+        "@root",
+        "main",
+        Some("main"),
+        Some(rect(0.0, 0.0, 1000.0, 800.0)),
+        None,
+        vec![owner],
+    );
+
+    let plan = resolve_progressive_targets(&snapshot(root), "@vue-target")
+        .expect("resolve ownership-only component target");
+    let component = plan
+        .targets
+        .iter()
+        .find(|target| target.kind == ProgressiveTargetKind::Component)
+        .expect("component target");
+    assert_eq!(component.rect, rect(250.0, 220.0, 500.0, 300.0));
+    assert!(matches!(
+        &component.provenance,
+        ProgressiveTargetProvenance::SourceComponent { component, owner_ref }
+            if component == "VueCard" && owner_ref == "@vue-card"
+    ));
+}
+
+#[test]
+fn structured_component_ownership_mismatch_does_not_fallback_to_source_identity() {
+    let target = SemanticNode {
+        reference: "@target".into(),
+        role: None,
+        name: None,
+        tag: "button".into(),
+        rect: Some(rect(300.0, 300.0, 100.0, 40.0)),
+        interactive: true,
+        attributes: BTreeMap::new(),
+        source: Some(SourceLocation {
+            file: "legacy.tsx".into(),
+            line: 1,
+            column: None,
+            component: Some("Legacy".into()),
+        }),
+        ownership: Some(ComponentOwnership {
+            framework: Some("vue".into()),
+            file: "src/A.vue".into(),
+            component: "A".into(),
+            signal: "element_parent_component".into(),
+        }),
+        children: vec![],
+    };
+    let parent = SemanticNode {
+        reference: "@parent".into(),
+        role: None,
+        name: None,
+        tag: "div".into(),
+        rect: Some(rect(250.0, 220.0, 500.0, 300.0)),
+        interactive: false,
+        attributes: BTreeMap::new(),
+        source: Some(SourceLocation {
+            file: "legacy.tsx".into(),
+            line: 1,
+            column: None,
+            component: Some("Legacy".into()),
+        }),
+        ownership: Some(ComponentOwnership {
+            framework: Some("vue".into()),
+            file: "src/B.vue".into(),
+            component: "B".into(),
+            signal: "element_parent_component".into(),
+        }),
+        children: vec![target],
+    };
+    let root = node(
+        "@root",
+        "main",
+        Some("main"),
+        Some(rect(0.0, 0.0, 1000.0, 800.0)),
+        None,
+        vec![parent],
+    );
+
+    let plan = resolve_progressive_targets(&snapshot(root), "@target")
+        .expect("resolve targets without fabricated component fallback");
+    assert!(
+        !plan
+            .targets
+            .iter()
+            .any(|target| target.kind == ProgressiveTargetKind::Component)
+    );
 }
