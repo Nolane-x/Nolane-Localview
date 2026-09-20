@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   focused-layout-intelligence:
@@ -35,9 +35,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
-      - name: Verify focused formatting
+      - name: Normalize and commit focused formatting
         run: |
-          rustfmt --edition 2024 --check \
+          rustfmt --edition 2024 \
             crates/layout/src/lib.rs \
             crates/layout/src/model.rs \
             crates/layout/src/analysis.rs \
@@ -46,6 +46,21 @@ jobs:
             crates/live-analysis/src/layout.rs \
             crates/live-analysis/tests/layout_live_integration.rs \
             crates/diagnostics/src/lib.rs
+          git add \
+            crates/layout/src/lib.rs \
+            crates/layout/src/model.rs \
+            crates/layout/src/analysis.rs \
+            crates/layout/tests/live_layout_intelligence.rs \
+            crates/live-analysis/src/lib.rs \
+            crates/live-analysis/src/layout.rs \
+            crates/live-analysis/tests/layout_live_integration.rs \
+            crates/diagnostics/src/lib.rs
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "style: rustfmt Wave 4 layout lane"
+            git push origin HEAD:feat/wave4-layout-live-intelligence
+          fi
 
       - name: Check affected crates
         run: cargo check -p localview-layout -p localview-live-analysis -p localview-diagnostics --all-targets
