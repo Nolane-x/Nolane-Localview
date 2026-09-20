@@ -1543,6 +1543,7 @@ pub(crate) struct VerificationVisualFrame {
     pub pixel_height: u32,
     pub route: String,
     pub captured_at_unix_ms: u64,
+    pub region: Option<Rect>,
 }
 
 #[derive(Debug, Clone)]
@@ -1551,12 +1552,12 @@ pub(crate) struct RegisteredVerificationVisualFrame {
     pub evidence_id: String,
 }
 
-async fn capture_current_redacted_frame(
+async fn capture_current_redacted_frame_with_freeze(
     app: tauri::AppHandle,
     state: &VisualCaptureState,
     session_id: SessionId,
     revision: Option<String>,
-) -> Result<CapturedFrame, String> {
+) -> Result<(CapturedFrame, FreezeVisualStateReceipt), String> {
     preflight_managed_surface(&app, session_id)?;
 
     let capture_gate = session_capture_gate(state, session_id).await?;
@@ -1595,10 +1596,41 @@ async fn capture_current_redacted_frame(
         }
     };
 
-    redact_private_pixels(frame, &freeze)
+    let frame = redact_private_pixels(frame, &freeze)?;
+    Ok((frame, freeze))
 }
 
-fn verification_visual_frame(frame: CapturedFrame) -> VerificationVisualFrame {
+async fn capture_current_redacted_frame(
+    app: tauri::AppHandle,
+    state: &VisualCaptureState,
+    session_id: SessionId,
+    revision: Option<String>,
+) -> Result<CapturedFrame, String> {
+    capture_current_redacted_frame_with_freeze(app, state, session_id, revision)
+        .await
+        .map(|(frame, _)| frame)
+}
+
+async fn capture_verification_target_frame(
+    app: tauri::AppHandle,
+    state: &VisualCaptureState,
+    session_id: SessionId,
+    region: Option<Rect>,
+) -> Result<(CapturedFrame, RequestedCaptureTarget), String> {
+    let (frame, freeze) =
+        capture_current_redacted_frame_with_freeze(app, state, session_id, None).await?;
+    let target = region
+        .map(RequestedCaptureTarget::Region)
+        .unwrap_or(RequestedCaptureTarget::Viewport);
+    validate_live_target_viewport(&frame, &freeze, &target)?;
+    let frame = apply_capture_target(frame, &freeze, &target)?;
+    Ok((frame, target))
+}
+
+fn verification_visual_frame(
+    frame: CapturedFrame,
+    target: &RequestedCaptureTarget,
+) -> VerificationVisualFrame {
     VerificationVisualFrame {
         png: frame.png,
         viewport: frame.viewport,
@@ -1606,6 +1638,7 @@ fn verification_visual_frame(frame: CapturedFrame) -> VerificationVisualFrame {
         pixel_height: frame.pixel_height,
         route: frame.route,
         captured_at_unix_ms: frame.captured_at_unix_ms,
+        region: target.region(),
     }
 }
 
@@ -1613,28 +1646,29 @@ pub(crate) async fn capture_verification_baseline(
     app: tauri::AppHandle,
     state: &VisualCaptureState,
     session_id: SessionId,
+    region: Option<Rect>,
 ) -> Result<VerificationVisualFrame, String> {
-    capture_current_redacted_frame(app, state, session_id, None)
-        .await
-        .map(verification_visual_frame)
+    let (frame, target) = capture_verification_target_frame(app, state, session_id, region).await?;
+    Ok(verification_visual_frame(frame, &target))
 }
 
 pub(crate) async fn capture_verification_current(
     app: tauri::AppHandle,
     state: &VisualCaptureState,
     session_id: SessionId,
+    region: Option<Rect>,
 ) -> Result<VerificationVisualFrame, String> {
-    capture_current_redacted_frame(app, state, session_id, None)
-        .await
-        .map(verification_visual_frame)
+    let (frame, target) = capture_verification_target_frame(app, state, session_id, region).await?;
+    Ok(verification_visual_frame(frame, &target))
 }
 
 pub(crate) async fn capture_registered_verification_current(
     app: tauri::AppHandle,
     state: &VisualCaptureState,
     session_id: SessionId,
+    region: Option<Rect>,
 ) -> Result<RegisteredVerificationVisualFrame, String> {
-    let frame = capture_current_redacted_frame(app, state, session_id, None).await?;
+    let (frame, target) = capture_verification_target_frame(app, state, session_id, region).await?;
     let verification = VerificationVisualFrame {
         png: frame.png.clone(),
         viewport: frame.viewport.clone(),
@@ -1642,9 +1676,9 @@ pub(crate) async fn capture_registered_verification_current(
         pixel_height: frame.pixel_height,
         route: frame.route.clone(),
         captured_at_unix_ms: frame.captured_at_unix_ms,
+        region: target.region(),
     };
-    let receipt =
-        persist_and_register(state, session_id, frame, &RequestedCaptureTarget::Viewport).await?;
+    let receipt = persist_and_register(state, session_id, frame, &target).await?;
     Ok(RegisteredVerificationVisualFrame {
         frame: verification,
         evidence_id: receipt.evidence_id,
@@ -1655,12 +1689,15 @@ pub(crate) async fn register_verification_visual_diff_evidence(
     session_id: SessionId,
     route: String,
     viewport: ViewportMeta,
+    region: Option<Rect>,
     captured_at_unix_ms: u64,
     changed_ratio: f64,
     current_visual_evidence_id: String,
 ) -> Result<String, String> {
     let (mode, parents) = if changed_ratio == 0.0 {
         ("unchanged", Vec::new())
+    } else if region.is_some() {
+        ("region", vec![current_visual_evidence_id])
     } else {
         ("viewport", vec![current_visual_evidence_id])
     };
