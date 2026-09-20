@@ -586,6 +586,7 @@ mod trusted_ai_tests {
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
                 .collect(),
             source,
+            ownership: None,
             children,
         }
     }
