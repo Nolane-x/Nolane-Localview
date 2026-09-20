@@ -1066,6 +1066,144 @@ const SCRIPT: &str = r#"
     return packet;
   };
 
+  const CSS_TRACE_PROPERTIES = [
+    'display', 'position', 'overflow-x', 'overflow-y', 'box-sizing', 'z-index',
+    'flex-direction', 'flex-wrap', 'justify-content', 'align-items', 'gap', 'row-gap', 'column-gap',
+    'grid-template-columns', 'grid-template-rows',
+    'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+    'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+    'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+    'font-size', 'font-weight', 'font-family', 'line-height', 'color', 'background-color',
+    'opacity', 'pointer-events', 'visibility'
+  ];
+  const MAX_CSS_TRACE_STYLESHEETS = 96;
+  const MAX_CSS_TRACE_RULES = 512;
+  const MAX_CSS_TRACE_DECLARATIONS = 12;
+  const MAX_CSS_SELECTOR_BYTES = 256;
+  const MAX_CSS_VALUE_BYTES = 256;
+  const MAX_CSS_SOURCE_FILE_BYTES = 260;
+
+  const boundedCssValue = (value) => {
+    if (typeof value !== 'string') return null;
+    const withoutUrls = value.replace(/url\\([^)]*\\)/gi, 'url(<redacted>)');
+    return boundedUtf8String(withoutUrls, MAX_CSS_VALUE_BYTES);
+  };
+
+  const stylesheetSourceFile = (sheet) => {
+    try {
+      if (!sheet?.href) return null;
+      const url = new URL(sheet.href, location.href);
+      if (url.origin !== location.origin
+          || url.pathname.startsWith('/@fs/')
+          || url.pathname.startsWith('//')
+          || url.pathname.includes('%')) {
+        return null;
+      }
+      return boundedRelativeSourceFile(
+        url.pathname.replace(/^\\/+/, ''),
+        MAX_CSS_SOURCE_FILE_BYTES
+      );
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const cssDeclarationTrace = (el) => {
+    const declarations = [];
+    const pushDeclaration = (sourceKind, file, selector, property, value, important) => {
+      if (declarations.length >= MAX_CSS_TRACE_DECLARATIONS) return;
+      const boundedProperty = boundedUtf8String(property, 64);
+      const boundedValue = boundedCssValue(value);
+      const boundedSelector = selector == null
+        ? null
+        : boundedUtf8String(selector, MAX_CSS_SELECTOR_BYTES);
+      if (!boundedProperty || !boundedValue || (selector != null && !boundedSelector)) return;
+      declarations.push({
+        source_kind: sourceKind,
+        file,
+        selector: boundedSelector,
+        property: boundedProperty,
+        value: boundedValue,
+        important: !!important,
+      });
+    };
+
+    const inlineStyle = el?.style;
+    if (inlineStyle) {
+      for (const property of CSS_TRACE_PROPERTIES) {
+        const value = inlineStyle.getPropertyValue(property);
+        if (!value) continue;
+        pushDeclaration(
+          'inline_element',
+          null,
+          null,
+          property,
+          value,
+          inlineStyle.getPropertyPriority(property) === 'important'
+        );
+        if (declarations.length >= MAX_CSS_TRACE_DECLARATIONS) return { declarations };
+      }
+    }
+
+    let visitedRules = 0;
+    for (const sheet of Array.from(document.styleSheets || []).slice(0, MAX_CSS_TRACE_STYLESHEETS)) {
+      if (declarations.length >= MAX_CSS_TRACE_DECLARATIONS || visitedRules >= MAX_CSS_TRACE_RULES) break;
+      let rules;
+      try {
+        rules = Array.from(sheet.cssRules || []);
+      } catch (_) {
+        continue;
+      }
+      const sourceFile = stylesheetSourceFile(sheet);
+      const sourceKind = sourceFile ? 'same_origin_stylesheet' : 'inline_stylesheet';
+      const stack = rules.slice().reverse();
+      while (stack.length
+          && declarations.length < MAX_CSS_TRACE_DECLARATIONS
+          && visitedRules < MAX_CSS_TRACE_RULES) {
+        const rule = stack.pop();
+        visitedRules += 1;
+        if (!rule) continue;
+
+        if (rule.selectorText && rule.style) {
+          const selector = boundedUtf8String(rule.selectorText, MAX_CSS_SELECTOR_BYTES);
+          if (!selector) continue;
+          let matches = false;
+          try {
+            matches = el.matches(selector);
+          } catch (_) {
+            matches = false;
+          }
+          if (!matches) continue;
+          for (const property of CSS_TRACE_PROPERTIES) {
+            const value = rule.style.getPropertyValue(property);
+            if (!value) continue;
+            pushDeclaration(
+              sourceKind,
+              sourceFile,
+              selector,
+              property,
+              value,
+              rule.style.getPropertyPriority(property) === 'important'
+            );
+            if (declarations.length >= MAX_CSS_TRACE_DECLARATIONS) break;
+          }
+          continue;
+        }
+
+        let nested;
+        try {
+          nested = rule.cssRules ? Array.from(rule.cssRules) : [];
+        } catch (_) {
+          nested = [];
+        }
+        for (let index = nested.length - 1; index >= 0; index -= 1) {
+          stack.push(nested[index]);
+        }
+      }
+    }
+    return { declarations };
+  };
+
   const rectIntersects = (a, b) =>
     a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
 
@@ -1129,6 +1267,7 @@ const SCRIPT: &str = r#"
       sourceHint: sourceHint(el, ownershipBudget),
       attributes: safeAttributes(el),
       style: includeStyle ? computedStylePacket(el) : null,
+      styleTrace: includeStyle ? cssDeclarationTrace(el) : null,
     };
   };
 
