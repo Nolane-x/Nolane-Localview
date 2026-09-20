@@ -83,7 +83,10 @@ fn point_select_completion_transport_is_metadata_only() {
         "reference",
         "reason",
     ] {
-        assert!(queue.contains(required), "missing bounded receipt field: {required}");
+        assert!(
+            queue.contains(required),
+            "missing bounded receipt field: {required}"
+        );
     }
 
     for forbidden in [
