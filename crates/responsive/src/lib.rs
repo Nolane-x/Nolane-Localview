@@ -740,76 +740,6 @@ pub fn evaluate_responsive_observation(
         }
     }
 
-    if let Some(previous) = previous {
-        let width_delta = previous.viewport.width.abs_diff(observation.viewport.width);
-        let previous_by_ref = previous
-            .nodes
-            .iter()
-            .map(|node| (node.reference.as_str(), node))
-            .collect::<BTreeMap<_, _>>();
-
-        if width_delta <= NEARBY_WIDTH_DELTA_PX {
-            for previous_node in &previous.nodes {
-                if (previous_node.interactive || previous_node.text_or_control)
-                    && !nodes_by_ref.contains_key(previous_node.reference.as_str())
-                {
-                    issues.push(issue(
-                        observation,
-                        ResponsiveIssueKind::UnexpectedDisappearance,
-                        vec![previous_node.reference.clone()],
-                        ResponsiveIssueClass::Suspected,
-                        650,
-                        vec!["stable_ref_missing_at_nearby_width".to_string()],
-                        Some(previous.viewport.width),
-                        Some(observation.viewport.width),
-                    ));
-                }
-            }
-        }
-
-        for node in &observation.nodes {
-            let Some(previous_node) = previous_by_ref.get(node.reference.as_str()) else {
-                continue;
-            };
-            let previous_center_x =
-                (previous_node.rect.x + previous_node.rect.width / 2.0)
-                    / f64::from(previous.viewport.width);
-            let previous_center_y =
-                (previous_node.rect.y + previous_node.rect.height / 2.0)
-                    / f64::from(previous.viewport.height);
-            let center_x =
-                (node.rect.x + node.rect.width / 2.0) / f64::from(observation.viewport.width);
-            let center_y =
-                (node.rect.y + node.rect.height / 2.0) / f64::from(observation.viewport.height);
-            let center_shift =
-                (center_x - previous_center_x).abs().max((center_y - previous_center_y).abs());
-            let old_area = previous_node.rect.area();
-            let new_area = node.rect.area();
-            let area_ratio = if old_area > new_area {
-                old_area / new_area.max(1.0)
-            } else {
-                new_area / old_area.max(1.0)
-            };
-            if width_delta <= NEARBY_WIDTH_DELTA_PX
-                && (center_shift >= DRAMATIC_CENTER_SHIFT_RATIO
-                    || area_ratio >= DRAMATIC_AREA_RATIO)
-            {
-                issues.push(issue(
-                    observation,
-                    ResponsiveIssueKind::DramaticLayoutJump,
-                    vec![node.reference.clone()],
-                    ResponsiveIssueClass::Deterministic,
-                    900,
-                    vec![format!(
-                        "normalized_center_shift={center_shift:.3};area_ratio={area_ratio:.3}"
-                    )],
-                    Some(previous.viewport.width),
-                    Some(observation.viewport.width),
-                ));
-            }
-        }
-    }
-
     let issues = deduplicate_responsive_issues(issues);
     Ok(ResponsiveProbeEvaluation {
         state: if !observation.complete {
@@ -821,6 +751,102 @@ pub fn evaluate_responsive_observation(
         },
         issues,
     })
+}
+
+fn append_nearby_responsive_issues(
+    previous: &ResponsiveObservation,
+    observation: &ResponsiveObservation,
+    issues: &mut Vec<ResponsiveIssue>,
+) -> Result<(), ResponsiveError> {
+    if previous.session != observation.session || previous.route != observation.route {
+        return Err(ResponsiveError::InvalidResponsiveObservation);
+    }
+    let width_delta = previous.viewport.width.abs_diff(observation.viewport.width);
+    if width_delta > NEARBY_WIDTH_DELTA_PX {
+        return Ok(());
+    }
+
+    let previous_by_ref = previous
+        .nodes
+        .iter()
+        .map(|node| (node.reference.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let current_by_ref = observation
+        .nodes
+        .iter()
+        .map(|node| (node.reference.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+
+    for previous_node in &previous.nodes {
+        if (previous_node.interactive || previous_node.text_or_control)
+            && !current_by_ref.contains_key(previous_node.reference.as_str())
+        {
+            issues.push(issue(
+                observation,
+                ResponsiveIssueKind::UnexpectedDisappearance,
+                vec![previous_node.reference.clone()],
+                ResponsiveIssueClass::Suspected,
+                650,
+                vec!["stable_ref_present_only_at_one_nearby_width".to_string()],
+                Some(previous.viewport.width),
+                Some(observation.viewport.width),
+            ));
+        }
+    }
+    for current_node in &observation.nodes {
+        if (current_node.interactive || current_node.text_or_control)
+            && !previous_by_ref.contains_key(current_node.reference.as_str())
+        {
+            issues.push(issue(
+                observation,
+                ResponsiveIssueKind::UnexpectedDisappearance,
+                vec![current_node.reference.clone()],
+                ResponsiveIssueClass::Suspected,
+                650,
+                vec!["stable_ref_present_only_at_one_nearby_width".to_string()],
+                Some(previous.viewport.width),
+                Some(observation.viewport.width),
+            ));
+        }
+    }
+
+    for node in &observation.nodes {
+        let Some(previous_node) = previous_by_ref.get(node.reference.as_str()) else {
+            continue;
+        };
+        let previous_center_x = (previous_node.rect.x + previous_node.rect.width / 2.0)
+            / f64::from(previous.viewport.width);
+        let previous_center_y = (previous_node.rect.y + previous_node.rect.height / 2.0)
+            / f64::from(previous.viewport.height);
+        let center_x =
+            (node.rect.x + node.rect.width / 2.0) / f64::from(observation.viewport.width);
+        let center_y =
+            (node.rect.y + node.rect.height / 2.0) / f64::from(observation.viewport.height);
+        let center_shift =
+            (center_x - previous_center_x).abs().max((center_y - previous_center_y).abs());
+        let old_area = previous_node.rect.area();
+        let new_area = node.rect.area();
+        let area_ratio = if old_area > new_area {
+            old_area / new_area.max(1.0)
+        } else {
+            new_area / old_area.max(1.0)
+        };
+        if center_shift >= DRAMATIC_CENTER_SHIFT_RATIO || area_ratio >= DRAMATIC_AREA_RATIO {
+            issues.push(issue(
+                observation,
+                ResponsiveIssueKind::DramaticLayoutJump,
+                vec![node.reference.clone()],
+                ResponsiveIssueClass::Deterministic,
+                900,
+                vec![format!(
+                    "normalized_center_shift={center_shift:.3};area_ratio={area_ratio:.3}"
+                )],
+                Some(previous.viewport.width),
+                Some(observation.viewport.width),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn analyze_responsive_series(
@@ -843,6 +869,10 @@ pub fn analyze_responsive_series(
     }
 
     let mut issues = Vec::new();
+    for pair in indexed.windows(2) {
+        append_nearby_responsive_issues(pair[0].0, pair[1].0, &mut issues)?;
+    }
+
     for triple in indexed.windows(3) {
         let left = triple[0];
         let middle = triple[1];
@@ -879,36 +909,33 @@ pub fn analyze_responsive_series(
                 Some(left.0.viewport.width),
                 Some(right.0.viewport.width),
             ));
-        }
-    }
-
-    let states = indexed
-        .iter()
-        .map(|(observation, evaluation)| ResponsiveProbeSample {
-            width: observation.viewport.width,
-            state: evaluation.state,
-        })
-        .collect::<Vec<_>>();
-    let transitions = states
-        .windows(2)
-        .filter(|pair| {
-            pair[0].state != ResponsiveDetectorState::Inconclusive
-                && pair[1].state != ResponsiveDetectorState::Inconclusive
-                && pair[0].state != pair[1].state
-        })
-        .count();
-    if transitions > 1 {
-        if let Some((observation, _)) = indexed.get(indexed.len() / 2) {
-            issues.push(issue(
-                observation,
-                ResponsiveIssueKind::NearbyWidthInstability,
-                Vec::new(),
-                ResponsiveIssueClass::Inconclusive,
-                1000,
-                vec![format!("detector_transitions={transitions}")],
-                indexed.first().map(|entry| entry.0.viewport.width),
-                indexed.last().map(|entry| entry.0.viewport.width),
-            ));
+            if left
+                .0
+                .viewport
+                .width
+                .abs_diff(middle.0.viewport.width)
+                <= NEARBY_WIDTH_DELTA_PX
+                && middle
+                    .0
+                    .viewport
+                    .width
+                    .abs_diff(right.0.viewport.width)
+                    <= NEARBY_WIDTH_DELTA_PX
+            {
+                issues.push(issue(
+                    middle.0,
+                    ResponsiveIssueKind::NearbyWidthInstability,
+                    Vec::new(),
+                    ResponsiveIssueClass::Inconclusive,
+                    1000,
+                    vec![format!(
+                        "nearby_detector_state={:?}->{:?}->{:?}",
+                        left.1.state, middle.1.state, right.1.state
+                    )],
+                    Some(left.0.viewport.width),
+                    Some(right.0.viewport.width),
+                ));
+            }
         }
     }
 
