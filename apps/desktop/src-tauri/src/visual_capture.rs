@@ -2201,7 +2201,7 @@ pub(crate) fn canonical_visual_diff_route(route: &str) -> Result<String, String>
     Ok(route.to_string())
 }
 
-async fn session_capture_gate(
+pub(crate) async fn session_capture_gate(
     state: &VisualCaptureState,
     session_id: SessionId,
 ) -> Result<Arc<Mutex<()>>, String> {
