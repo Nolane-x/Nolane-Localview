@@ -723,7 +723,176 @@ const SCRIPT: &str = r#"
     return output;
   };
 
-  const sourceHint = (el) => {
+  const MAX_REACT_OWNERSHIP_PROBES = 256;
+  const MAX_REACT_HOST_KEYS = 64;
+  const MAX_REACT_FIBER_DEPTH = 32;
+  const MAX_REACT_COMPONENT_BYTES = 96;
+  const MAX_REACT_SOURCE_FILE_BYTES = 260;
+  const MAX_REACT_SOURCE_LINE = 1000000;
+  const MAX_REACT_SOURCE_COLUMN = 10000001;
+  const MAX_REACT_DEBUG_STACK_BYTES = 16384;
+  const MAX_REACT_DEBUG_STACK_LINES = 24;
+  const REACT_FIBER_PREFIXES = ['__reactFiber$', '__reactInternalInstance$'];
+  const REACT_PROPS_PREFIX = '__reactProps$';
+
+  const boundedUtf8String = (value, maxBytes) => {
+    if (typeof value !== 'string') return null;
+    const normalized = redact(value).trim();
+    if (!normalized || /[\u0000-\u001f\u007f]/.test(normalized)) return null;
+    if (new TextEncoder().encode(normalized).length > maxBytes) return null;
+    return normalized;
+  };
+
+  const reactComponentName = (type) => {
+    const candidates = [type, type?.render, type?.type].slice(0, 3);
+    for (const candidate of candidates) {
+      if (!candidate || (typeof candidate !== 'function' && typeof candidate !== 'object')) continue;
+      const name = boundedUtf8String(
+        candidate.displayName || candidate.name,
+        MAX_REACT_COMPONENT_BYTES
+      );
+      if (name) return name;
+    }
+    return null;
+  };
+
+  const reactDebugStackSource = (debugStack) => {
+    let raw;
+    try {
+      raw = typeof debugStack === 'string' ? debugStack : debugStack?.stack;
+    } catch (_) {
+      return null;
+    }
+    if (typeof raw !== 'string'
+        || new TextEncoder().encode(raw).length > MAX_REACT_DEBUG_STACK_BYTES) {
+      return null;
+    }
+
+    const lines = raw.split('\n').slice(0, MAX_REACT_DEBUG_STACK_LINES);
+    for (const line of lines) {
+      if (!line
+          || /node_modules|react(?:-dom)?|jsx-dev-runtime|jsxDEV|createElement|vite\/dist|\/@vite\//i.test(line)) {
+        continue;
+      }
+      const match = line.match(/(https?:\/\/[^\s()]+):(\d+):(\d+)\)?$/);
+      if (!match) continue;
+
+      let url;
+      try {
+        url = new URL(match[1]);
+      } catch (_) {
+        continue;
+      }
+      if (url.origin !== location.origin
+          || url.pathname.startsWith('/@fs/')
+          || url.pathname.startsWith('//')
+          || url.pathname.includes('%')
+          || url.pathname.split('/').includes('..')) {
+        continue;
+      }
+
+      const file = boundedUtf8String(
+        url.pathname.replace(/^\/+/, ''),
+        MAX_REACT_SOURCE_FILE_BYTES
+      );
+      const sourceLine = Number(match[2]);
+      const sourceColumn = Number(match[3]);
+      if (!file
+          || !Number.isInteger(sourceLine)
+          || sourceLine < 1
+          || sourceLine > MAX_REACT_SOURCE_LINE
+          || !Number.isInteger(sourceColumn)
+          || sourceColumn < 1
+          || sourceColumn > MAX_REACT_SOURCE_COLUMN) {
+        continue;
+      }
+      return {
+        file,
+        line: sourceLine,
+        column: sourceColumn,
+        signal: 'debug_stack',
+      };
+    }
+    return null;
+  };
+
+  const reactDebugSource = (fiber) => {
+    const debugSource = fiber?._debugSource;
+    if (debugSource && typeof debugSource === 'object') {
+      const file = boundedUtf8String(debugSource.fileName, MAX_REACT_SOURCE_FILE_BYTES);
+      const sourceLine = Number(debugSource.lineNumber);
+      const sourceColumn = debugSource.columnNumber == null ? null : Number(debugSource.columnNumber);
+      if (file
+          && Number.isInteger(sourceLine)
+          && sourceLine >= 1
+          && sourceLine <= MAX_REACT_SOURCE_LINE
+          && (sourceColumn === null
+            || (Number.isInteger(sourceColumn)
+              && sourceColumn >= 1
+              && sourceColumn <= MAX_REACT_SOURCE_COLUMN))) {
+        return {
+          file,
+          line: sourceLine,
+          column: sourceColumn,
+          signal: 'debug_source',
+        };
+      }
+    }
+    return reactDebugStackSource(fiber?._debugStack);
+  };
+
+  const reactSourceHint = (el, ownershipBudget) => {
+    if (!ownershipBudget || ownershipBudget.remaining <= 0) return null;
+    ownershipBudget.remaining -= 1;
+
+    let keys;
+    try {
+      keys = Object.getOwnPropertyNames(el).slice(0, MAX_REACT_HOST_KEYS);
+    } catch (_) {
+      return null;
+    }
+    const key = keys.find((candidate) =>
+      REACT_FIBER_PREFIXES.some((prefix) => candidate.startsWith(prefix))
+    );
+    if (!key) return null;
+
+    const prefix = REACT_FIBER_PREFIXES.find((candidate) => key.startsWith(candidate));
+    const suffix = prefix ? key.slice(prefix.length) : '';
+    if (!suffix || !keys.includes(`${REACT_PROPS_PREFIX}${suffix}`)) return null;
+
+    let descriptor;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(el, key);
+    } catch (_) {
+      return null;
+    }
+    const fiber = descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+      ? descriptor.value
+      : null;
+    if (!fiber || typeof fiber !== 'object' || fiber.stateNode !== el) return null;
+
+    const hostSource = reactDebugSource(fiber);
+    let cursor = fiber.return;
+    for (let depth = 0; cursor && depth < MAX_REACT_FIBER_DEPTH; depth += 1, cursor = cursor.return) {
+      if (typeof cursor !== 'object') break;
+      const component = reactComponentName(cursor.type);
+      if (!component) continue;
+      const source = hostSource || reactDebugSource(cursor);
+      if (!source) continue;
+
+      return {
+        origin: 'react-dev-fiber',
+        file: source.file,
+        line: source.line,
+        column: source.column,
+        component,
+        signal: source.signal,
+      };
+    }
+    return null;
+  };
+
+  const sourceHint = (el, ownershipBudget) => {
     for (const attribute of ['data-component-source', 'data-source']) {
       const raw = el.getAttribute?.(attribute);
       if (!raw) continue;
@@ -737,7 +906,7 @@ const SCRIPT: &str = r#"
         column: match?.[3] ? Number(match[3]) : null,
       };
     }
-    return null;
+    return reactSourceHint(el, ownershipBudget);
   };
 
   const STYLE_PROPERTIES = [
@@ -808,7 +977,7 @@ const SCRIPT: &str = r#"
     return { inViewport, clipped, occluded, occludedBy, sampled };
   };
 
-  const compactSemanticNode = (el, includeStyle, occlusionBudget) => {
+  const compactSemanticNode = (el, includeStyle, occlusionBudget, ownershipBudget) => {
     const style = getComputedStyle(el);
     return {
       ref: refFor(el),
@@ -821,7 +990,7 @@ const SCRIPT: &str = r#"
       interactive: isInteractive(el),
       states: statePacket(el, style),
       visibility: visibilityPacket(el, style, occlusionBudget),
-      sourceHint: sourceHint(el),
+      sourceHint: sourceHint(el, ownershipBudget),
       attributes: safeAttributes(el),
       style: includeStyle ? computedStylePacket(el) : null,
     };
@@ -829,7 +998,7 @@ const SCRIPT: &str = r#"
 
   const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'META', 'LINK', 'HEAD']);
 
-  const semanticTree = (occlusionBudget) => {
+  const semanticTree = (occlusionBudget, ownershipBudget) => {
     const root = document.body || document.documentElement;
     if (!root) return null;
     let nodes = 0;
@@ -841,7 +1010,7 @@ const SCRIPT: &str = r#"
       nodes += 1;
       const includeStyle = styled < config.max_style_nodes && (isInteractive(el) || depth <= 3);
       if (includeStyle) styled += 1;
-      const node = compactSemanticNode(el, includeStyle, occlusionBudget);
+      const node = compactSemanticNode(el, includeStyle, occlusionBudget, ownershipBudget);
       node.children = [];
       for (const child of Array.from(el.children || [])) {
         if (nodes >= config.max_semantic_nodes) break;
@@ -904,14 +1073,15 @@ const SCRIPT: &str = r#"
     };
   };
 
-  const interactiveSnapshot = (occlusionBudget) => Array.from(document.querySelectorAll(interactiveSelector))
+  const interactiveSnapshot = (occlusionBudget, ownershipBudget) => Array.from(document.querySelectorAll(interactiveSelector))
     .slice(0, config.max_interactive_nodes)
-    .map((el) => compactSemanticNode(el, false, occlusionBudget));
+    .map((el) => compactSemanticNode(el, false, occlusionBudget, ownershipBudget));
 
   const snapshot = () => {
     snapshotVersion += 1;
     const occlusionBudget = { remaining: Math.max(0, Number(config.max_occlusion_samples) || 0) };
-    const semantic_tree = semanticTree(occlusionBudget);
+    const ownershipBudget = { remaining: MAX_REACT_OWNERSHIP_PROBES };
+    const semantic_tree = semanticTree(occlusionBudget, ownershipBudget);
     const packet = {
       version: snapshotVersion,
       route: safeUrl(location.href),
@@ -921,7 +1091,7 @@ const SCRIPT: &str = r#"
       scroll: { x: scrollX, y: scrollY },
       activeRef: refFor(document.activeElement),
       semantic_tree,
-      interactive: interactiveSnapshot(occlusionBudget),
+      interactive: interactiveSnapshot(occlusionBudget, ownershipBudget),
       occlusion: {
         max_samples: config.max_occlusion_samples,
         sampled: Math.max(0, Number(config.max_occlusion_samples) || 0) - occlusionBudget.remaining,
@@ -953,7 +1123,7 @@ const SCRIPT: &str = r#"
     }
     return {
       reference,
-      node: compactSemanticNode(el, true, { remaining: 1 }),
+      node: compactSemanticNode(el, true, { remaining: 1 }, { remaining: 1 }),
       ancestry: parents,
       viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
       route: safeUrl(location.href),
@@ -1467,7 +1637,9 @@ mod tests {
         assert!(script.contains("'/_next/webpack-hmr'"));
         assert!(script.contains("'/sockjs-node'"));
         assert!(script.contains("MAX_HMR_MESSAGE_BYTES = 256 * 1024"));
-        assert!(script.contains("new TextEncoder().encode(data).byteLength > MAX_HMR_MESSAGE_BYTES"));
+        assert!(
+            script.contains("new TextEncoder().encode(data).byteLength > MAX_HMR_MESSAGE_BYTES")
+        );
         assert!(script.contains("MAX_HMR_UPDATE_COUNT = 256"));
         assert!(script.contains("isLoopbackHmrHost"));
         assert!(script.contains("!isLoopbackHmrHost(parsed.hostname)"));
