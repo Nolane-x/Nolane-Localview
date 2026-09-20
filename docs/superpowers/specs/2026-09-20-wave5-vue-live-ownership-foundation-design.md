@@ -171,7 +171,7 @@ Prove:
 
 1. a real Vue-rendered element has an own `__vueParentComponent` data descriptor;
 2. the real plugin-vue development fixture exposes an absolute `__file` and page instrumentation rejects it fail-closed;
-3. a bounded exact-element project-relative Vue marker is admitted as component/file ownership evidence;
+3. after that rejection is proven, the fixture rewrites only the genuine Vue component type's `__file` field to a bounded project-relative fixture identity and the same real Vue element/instance is admitted as component/file ownership evidence;
 4. explicit `data-component-source` outranks Vue introspection;
 5. no secret prop/setup-state value appears in serialized semantic evidence;
 6. plain DOM does not fabricate Vue ownership;
@@ -208,6 +208,6 @@ This slice does not claim:
 
 ## Completion definition
 
-The foundation is complete when a real pinned Vue 3 SFC development fixture proves the genuine exact-element runtime marker and the current absolute `__file` truth boundary, while page instrumentation rejects that absolute identity fail-closed; the same adapter must separately admit a bounded project-relative exact-element Vue marker under the shared framework probe budget, with explicit-source precedence, no getter invocation, no state leakage, strict path fencing and no fabricated source coordinates.
+The foundation is complete when a real pinned Vue 3 SFC development fixture proves the genuine exact-element runtime marker and the current absolute `__file` truth boundary, while page instrumentation rejects that absolute identity fail-closed; after that proof, the fixture may normalize only the genuine component type's `__file` field to a bounded project-relative fixture identity and the same real Vue element/instance must be admitted under the shared framework probe budget, with explicit-source precedence, no getter invocation, no state leakage, strict path fencing and no fabricated source coordinates.
 
 It remains a foundation, not full end-to-end Vue source correlation, until a dedicated component-ownership protocol field is landed.
