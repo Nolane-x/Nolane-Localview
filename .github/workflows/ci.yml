@@ -32,25 +32,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Normalize formatting for compiler gate
-        if: matrix.os != 'windows-latest'
         run: cargo fmt --all
-      - name: Normalize formatting for compiler gate (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-          $workspaceMembers = @{}
-          foreach ($id in $metadata.workspace_members) {
-            $workspaceMembers[$id] = $true
-          }
-          foreach ($package in $metadata.packages) {
-            if ($workspaceMembers.ContainsKey($package.id)) {
-              cargo fmt --manifest-path $package.manifest_path
-              if ($LASTEXITCODE -ne 0) {
-                exit $LASTEXITCODE
-              }
-            }
-          }
       - name: Formatting diff summary
         shell: bash
         run: git diff --stat || true
