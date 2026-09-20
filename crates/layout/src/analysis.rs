@@ -227,7 +227,7 @@ fn analyze_overflow(
                             || (overflow_y
                                 && parent.style.overflow_y.is_some_and(OverflowMode::scrolls));
 
-                        if clipped || element.visibility.clipped == Some(true) {
+                        if clipped {
                             push_fact(
                                 &mut result.facts,
                                 LayoutFact {
@@ -284,7 +284,8 @@ fn analyze_overflow(
             }
         }
 
-        let (viewport_x, viewport_y) = outside_viewport(&element.rect, viewport);
+        let (viewport_x, raw_viewport_y) = outside_viewport(&element.rect, viewport);
+        let viewport_y = raw_viewport_y && is_fixed_or_sticky(element);
         if !(viewport_x || viewport_y) || element.visibility.in_viewport == Some(false) {
             continue;
         }
