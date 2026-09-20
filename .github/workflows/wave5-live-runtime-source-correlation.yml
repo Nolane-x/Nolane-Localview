@@ -33,8 +33,14 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
-      - name: Verify formatting
-        run: cargo fmt --all --check
+      - name: Verify slice formatting
+        run: |
+          cargo fmt --all
+          git diff --exit-code -- \
+            crates/control/src/lib.rs \
+            crates/control/src/source_map_runtime.rs \
+            crates/control/src/runtime_source_map.rs \
+            crates/control/tests/runtime_source_correlation.rs
 
       - name: Preserve bounded Source Map consumer
         run: cargo test -p localview-source-map -- --nocapture
