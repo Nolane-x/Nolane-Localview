@@ -1,0 +1,88 @@
+name: Wave 5 component ownership protocol
+
+on:
+  pull_request:
+    paths:
+      - "crates/protocol/**"
+      - "crates/control/src/fresh_snapshot.rs"
+      - "crates/capture/**"
+      - "crates/semantic/**"
+      - "crates/a11y/**"
+      - "apps/desktop/src-tauri/src/trusted_ai.rs"
+      - "apps/desktop/src-tauri/src/trusted_verify.rs"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - ".github/workflows/wave5-component-ownership-protocol.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-component-ownership-protocol-design.md"
+  push:
+    branches:
+      - "feat/wave5-component-ownership-protocol"
+    paths:
+      - "crates/protocol/**"
+      - "crates/control/src/fresh_snapshot.rs"
+      - "crates/capture/**"
+      - "crates/semantic/**"
+      - "crates/a11y/**"
+      - "apps/desktop/src-tauri/src/trusted_ai.rs"
+      - "apps/desktop/src-tauri/src/trusted_verify.rs"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - ".github/workflows/wave5-component-ownership-protocol.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-component-ownership-protocol-design.md"
+
+concurrency:
+  group: wave5-component-ownership-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  focused-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify focused formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            crates/protocol/src/lib.rs \
+            crates/control/src/fresh_snapshot.rs \
+            crates/capture/src/lib.rs \
+            crates/capture/tests/progressive_target_resolution.rs \
+            crates/semantic/src/lib.rs \
+            crates/a11y/src/lib.rs \
+            apps/desktop/src-tauri/src/trusted_ai.rs \
+            apps/desktop/src-tauri/src/trusted_verify.rs
+
+      - name: Verify protocol compatibility
+        run: cargo test -p localview-protocol -- --nocapture
+
+      - name: Verify fresh ownership projection
+        run: cargo test -p localview-control --lib -- --nocapture
+
+      - name: Verify progressive ownership targeting
+        run: cargo test -p localview-capture --test progressive_target_resolution -- --nocapture
+
+      - name: Verify semantic and accessibility consumers
+        run: |
+          cargo test -p localview-semantic -- --nocapture
+          cargo test -p localview-a11y -- --nocapture
+
+      - name: Check changed core crates
+        run: cargo check -p localview-protocol -p localview-control -p localview-capture -p localview-semantic -p localview-a11y --all-targets
+
+  workspace-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check complete workspace
+        run: cargo check --workspace --all-targets
