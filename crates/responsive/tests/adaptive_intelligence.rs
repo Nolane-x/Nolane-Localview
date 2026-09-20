@@ -194,10 +194,19 @@ fn deterministic_issue_model_covers_overflow_clipping_collision_disappearance_an
         ],
     );
 
-    let evaluation = evaluate_responsive_observation(Some(&previous), &current).unwrap();
+    let previous_evaluation = evaluate_responsive_observation(None, &previous).unwrap();
+    let evaluation = evaluate_responsive_observation(None, &current).unwrap();
     assert_eq!(evaluation.state, ResponsiveDetectorState::Fail);
 
-    let kinds = evaluation.issues.iter().map(|issue| issue.kind).collect::<Vec<_>>();
+    let mut issues = evaluation.issues.clone();
+    issues.extend(
+        analyze_responsive_series(
+            &[previous.clone(), current.clone()],
+            &[previous_evaluation, evaluation.clone()],
+        )
+        .unwrap(),
+    );
+    let kinds = issues.iter().map(|issue| issue.kind).collect::<Vec<_>>();
     for required in [
         ResponsiveIssueKind::HorizontalOverflow,
         ResponsiveIssueKind::Clipping,
@@ -208,12 +217,13 @@ fn deterministic_issue_model_covers_overflow_clipping_collision_disappearance_an
     ] {
         assert!(kinds.contains(&required), "missing issue {required:?}");
     }
-    assert!(evaluation
-        .issues
-        .iter()
-        .all(|issue| issue.evidence.iter().any(|entry| entry == "snapshot_version=11")));
-    let clipping = evaluation
-        .issues
+    assert!(issues.iter().all(|issue| {
+        issue
+            .evidence
+            .iter()
+            .any(|entry| entry.starts_with("snapshot_version="))
+    }));
+    let clipping = issues
         .iter()
         .find(|issue| issue.kind == ResponsiveIssueKind::Clipping)
         .unwrap();
