@@ -332,6 +332,7 @@ fn project_author_cascade(
 
 fn project_cascade_winner(value: &Value) -> Result<CssCascadeWinner, CssTraceError> {
     let object = value.as_object().ok_or(CssTraceError::InvalidSnapshot)?;
+    validate_runtime_relevance_markers(object)?;
     let source_kind = bounded_string(object.get("source_kind"), MAX_CSS_SOURCE_KIND_BYTES)
         .ok_or(CssTraceError::InvalidSnapshot)?;
     if !matches!(
@@ -435,6 +436,7 @@ fn project_cascade_winner(value: &Value) -> Result<CssCascadeWinner, CssTraceErr
 
 fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTraceError> {
     let object = value.as_object().ok_or(CssTraceError::InvalidSnapshot)?;
+    validate_runtime_relevance_markers(object)?;
     let source_kind = bounded_string(object.get("source_kind"), MAX_CSS_SOURCE_KIND_BYTES)
         .ok_or(CssTraceError::InvalidSnapshot)?;
     if !matches!(
@@ -488,6 +490,22 @@ fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTrace
         important,
         source_authority: CssSourceAuthority::initial(source_kind),
     })
+}
+
+fn validate_runtime_relevance_markers(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), CssTraceError> {
+    if let Some(active) = object.get("active") {
+        if active.as_bool() != Some(true) {
+            return Err(CssTraceError::InvalidSnapshot);
+        }
+    }
+    if let Some(disabled) = object.get("disabled") {
+        if disabled.as_bool() != Some(false) {
+            return Err(CssTraceError::InvalidSnapshot);
+        }
+    }
+    Ok(())
 }
 
 fn valid_css_author_cascade_property(property: &str) -> bool {
