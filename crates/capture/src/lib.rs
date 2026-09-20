@@ -25,9 +25,17 @@ pub enum ProgressiveTargetKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProgressiveTargetProvenance {
-    StableElementRef { reference: ElementRef },
-    SourceComponent { component: String, owner_ref: ElementRef },
-    SemanticSection { owner_ref: ElementRef, boundary: String },
+    StableElementRef {
+        reference: ElementRef,
+    },
+    SourceComponent {
+        component: String,
+        owner_ref: ElementRef,
+    },
+    SemanticSection {
+        owner_ref: ElementRef,
+        boundary: String,
+    },
     ViewportFallback,
 }
 
@@ -167,9 +175,7 @@ pub fn evaluate_settle(
     if needs_snapshot && observation.latest_semantic_at_unix_ms.is_none() {
         reasons.push(SettleReason::NoSemanticSnapshot);
     } else {
-        if policy.wait_dom_ready
-            && observation.ready_state.as_deref() != Some("complete")
-        {
+        if policy.wait_dom_ready && observation.ready_state.as_deref() != Some("complete") {
             reasons.push(SettleReason::DomNotReady);
         }
         if policy.wait_fonts
@@ -394,6 +400,28 @@ fn resolve_component_ancestor<'a>(
     viewport: (u32, u32),
 ) -> Option<(&'a SemanticNode, Rect, String)> {
     let target = *path.last()?;
+
+    if let Some(target_owner) = target.ownership.as_ref() {
+        return path[..path.len().saturating_sub(1)]
+            .iter()
+            .rev()
+            .copied()
+            .find_map(|ancestor| {
+                let ancestor_owner = ancestor.ownership.as_ref()?;
+                if ancestor_owner.framework != target_owner.framework
+                    || ancestor_owner.file != target_owner.file
+                    || ancestor_owner.component != target_owner.component
+                {
+                    return None;
+                }
+                let rect = validate_and_clip(ancestor.rect.as_ref()?, viewport)?;
+                if !contains_rect(&rect, element) {
+                    return None;
+                }
+                Some((ancestor, rect, target_owner.component.clone()))
+            });
+    }
+
     let component_name = target.source.as_ref()?.component.as_deref()?;
     path[..path.len().saturating_sub(1)]
         .iter()
@@ -433,7 +461,10 @@ fn resolve_section_ancestor<'a>(
 
 fn semantic_section_boundary(node: &SemanticNode) -> Option<String> {
     let tag = node.tag.to_ascii_lowercase();
-    if matches!(tag.as_str(), "section" | "main" | "article" | "nav" | "aside" | "form") {
+    if matches!(
+        tag.as_str(),
+        "section" | "main" | "article" | "nav" | "aside" | "form"
+    ) {
         return Some(format!("tag:{tag}"));
     }
     let role = node.role.as_deref()?.to_ascii_lowercase();

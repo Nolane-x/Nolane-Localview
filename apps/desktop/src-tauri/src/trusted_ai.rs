@@ -6,9 +6,11 @@ use std::{
     time::Duration,
 };
 
-use localview_protocol::{ConsoleIssue, NetworkIssue, PageSnapshot, SemanticNode, Session, SourceLocation};
+use localview_protocol::{
+    ConsoleIssue, NetworkIssue, PageSnapshot, SemanticNode, Session, SourceLocation,
+};
 use reqwest::Client;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
 
 pub const MAX_AI_QUESTION_BYTES: usize = 8 * 1024;
@@ -314,8 +316,14 @@ fn trusted_attributes(node: &SemanticNode) -> BTreeMap<String, String> {
 fn semantic_summary(node: &SemanticNode) -> TrustedSemanticSummary {
     TrustedSemanticSummary {
         reference: bounded_text(&node.reference, MAX_AI_REFERENCE_BYTES),
-        role: node.role.as_deref().map(|value| bounded_text(value, MAX_AI_LABEL_BYTES)),
-        name: node.name.as_deref().map(|value| bounded_text(value, MAX_AI_NAME_BYTES)),
+        role: node
+            .role
+            .as_deref()
+            .map(|value| bounded_text(value, MAX_AI_LABEL_BYTES)),
+        name: node
+            .name
+            .as_deref()
+            .map(|value| bounded_text(value, MAX_AI_NAME_BYTES)),
         tag: bounded_text(&node.tag, MAX_AI_LABEL_BYTES),
         interactive: node.interactive,
         attributes: trusted_attributes(node),
@@ -362,8 +370,7 @@ fn collect_descendants<'a>(
 }
 
 fn route_path_only(route: &str) -> Result<String, String> {
-    let url = Url::parse(route)
-        .map_err(|_| "trusted AI snapshot route is invalid".to_string())?;
+    let url = Url::parse(route).map_err(|_| "trusted AI snapshot route is invalid".to_string())?;
     Ok(bounded_text(url.path(), 2048))
 }
 
@@ -564,7 +571,9 @@ pub async fn ask_with_provider(
 mod trusted_ai_tests {
     use super::*;
     use chrono::Utc;
-    use localview_protocol::{Classification, Endpoint, ProjectIdentity, ServerKind, SessionStatus};
+    use localview_protocol::{
+        Classification, Endpoint, ProjectIdentity, ServerKind, SessionStatus,
+    };
     use uuid::Uuid;
 
     fn node(
@@ -586,6 +595,7 @@ mod trusted_ai_tests {
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
                 .collect(),
             source,
+            ownership: None,
             children,
         }
     }
@@ -646,8 +656,14 @@ mod trusted_ai_tests {
 
     #[test]
     fn trusted_ai_question_validator_is_bounded_but_preserves_human_text() {
-        assert_eq!(validate_question("  Why does this fail?  ").unwrap(), "Why does this fail?");
-        assert_eq!(validate_question("xin chào\n世界").unwrap(), "xin chào\n世界");
+        assert_eq!(
+            validate_question("  Why does this fail?  ").unwrap(),
+            "Why does this fail?"
+        );
+        assert_eq!(
+            validate_question("xin chào\n世界").unwrap(),
+            "xin chào\n世界"
+        );
         assert_eq!(
             validate_question("src/App.tsx; rm -rf /").unwrap(),
             "src/App.tsx; rm -rf /"
@@ -712,7 +728,10 @@ mod trusted_ai_tests {
             context.selected.source.as_deref(),
             Some("src/components/DeployButton.tsx:42:3")
         );
-        assert_eq!(context.selected.attributes.get("id").map(String::as_str), Some("deploy"));
+        assert_eq!(
+            context.selected.attributes.get("id").map(String::as_str),
+            Some("deploy")
+        );
         assert!(!context.selected.attributes.contains_key("value"));
         assert!(!context.selected.attributes.contains_key("data-token"));
 
@@ -742,7 +761,14 @@ mod trusted_ai_tests {
 
         let missing = node("@e0", None, &[], None, Vec::new());
         assert!(build_trusted_ai_context(&session(), &snapshot(missing), "@e1").is_err());
-        assert!(build_trusted_ai_context(&session(), &snapshot(node("@e0", None, &[], None, Vec::new())), "button#save").is_err());
+        assert!(
+            build_trusted_ai_context(
+                &session(),
+                &snapshot(node("@e0", None, &[], None, Vec::new())),
+                "button#save"
+            )
+            .is_err()
+        );
     }
 
     #[test]

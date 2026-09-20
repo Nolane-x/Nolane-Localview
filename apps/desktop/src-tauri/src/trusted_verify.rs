@@ -6,7 +6,7 @@ use std::{
 
 use localview_native_capture::ViewportMeta;
 use localview_protocol::{PageSnapshot, Rect, SemanticNode, Session, SessionId};
-use localview_visual::{decode_png_rgba, pixel_diff, RgbaImage};
+use localview_visual::{RgbaImage, decode_png_rgba, pixel_diff};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -209,9 +209,7 @@ impl VerificationStore {
     fn reap_expired_locked(records: &mut HashMap<String, VerificationRecord>) {
         let now = Instant::now();
         for record in records.values_mut() {
-            if matches!(record.status, VerificationStatus::Pending)
-                && record.expires_at <= now
-            {
+            if matches!(record.status, VerificationStatus::Pending) && record.expires_at <= now {
                 record.status = VerificationStatus::Expired;
             }
         }
@@ -356,10 +354,9 @@ fn selected_rect(snapshot: &PageSnapshot, reference: &str) -> Result<Option<Rect
     Ok(found.and_then(|node| node.rect.clone()))
 }
 
-pub fn issue_fingerprint(context: &trusted_ai::TrustedAiContext) -> (
-    Vec<VerifyConsoleFingerprint>,
-    Vec<VerifyNetworkFingerprint>,
-) {
+pub fn issue_fingerprint(
+    context: &trusted_ai::TrustedAiContext,
+) -> (Vec<VerifyConsoleFingerprint>, Vec<VerifyNetworkFingerprint>) {
     let mut console = context
         .console_issues
         .iter()
@@ -514,7 +511,11 @@ fn crop_rgba(image: &RgbaImage, left: u32, top: u32, right: u32, bottom: u32) ->
         let end = ((y * image.width + right) * 4) as usize;
         data.extend_from_slice(&image.data[start..end]);
     }
-    let cropped = RgbaImage { width, height, data };
+    let cropped = RgbaImage {
+        width,
+        height,
+        data,
+    };
     cropped.validate().ok()?;
     Some(cropped)
 }
@@ -535,7 +536,10 @@ fn target_union_pixels(
         after_rect.width,
         after_rect.height,
     ];
-    if values.iter().any(|value| !value.is_finite()) || viewport.css_width == 0 || viewport.css_height == 0 {
+    if values.iter().any(|value| !value.is_finite())
+        || viewport.css_width == 0
+        || viewport.css_height == 0
+    {
         return None;
     }
 
@@ -592,19 +596,17 @@ pub fn compare_visual_facts(
         .map_err(|_| "trusted Verify viewport diff failed".to_string())?;
 
     let target_changed_ratio = match (before.target_rect.as_ref(), after_rect) {
-        (Some(before_rect), Some(after_rect)) => target_union_pixels(
-            before_rect,
-            after_rect,
-            &before.viewport,
-            &before_image,
-        )
-        .and_then(|(left, top, right, bottom)| {
-            let before_crop = crop_rgba(&before_image, left, top, right, bottom)?;
-            let after_crop = crop_rgba(&after_image, left, top, right, bottom)?;
-            pixel_diff(&before_crop, &after_crop, VERIFY_PIXEL_THRESHOLD)
-                .ok()
-                .map(|diff| diff.changed_ratio)
-        }),
+        (Some(before_rect), Some(after_rect)) => {
+            target_union_pixels(before_rect, after_rect, &before.viewport, &before_image).and_then(
+                |(left, top, right, bottom)| {
+                    let before_crop = crop_rgba(&before_image, left, top, right, bottom)?;
+                    let after_crop = crop_rgba(&after_image, left, top, right, bottom)?;
+                    pixel_diff(&before_crop, &after_crop, VERIFY_PIXEL_THRESHOLD)
+                        .ok()
+                        .map(|diff| diff.changed_ratio)
+                },
+            )
+        }
         _ => None,
     };
 
@@ -622,7 +624,10 @@ pub fn classify_verification_status(
     before_interactive: bool,
     after_interactive: bool,
 ) -> VerificationComparison {
-    if before_interactive && !after_interactive && regression_signals.len() < MAX_VERIFY_REGRESSION_CODES {
+    if before_interactive
+        && !after_interactive
+        && regression_signals.len() < MAX_VERIFY_REGRESSION_CODES
+    {
         regression_signals.push("target_became_non_interactive".to_owned());
     }
     regression_signals.sort();
@@ -642,8 +647,7 @@ pub fn classify_verification_status(
         DeterministicVerificationStatus::RegressionSignal
     } else if semantic_changed || target_visual_changed {
         DeterministicVerificationStatus::ChangeObserved
-    } else if scope == VerificationScope::SemanticVisual
-        && visual.viewport_changed_ratio.is_none()
+    } else if scope == VerificationScope::SemanticVisual && visual.viewport_changed_ratio.is_none()
     {
         DeterministicVerificationStatus::Inconclusive
     } else if scope == VerificationScope::SemanticVisual
@@ -743,6 +747,7 @@ mod trusted_verify_tests {
                 column: Some(3),
                 component: Some("App".into()),
             }),
+            ownership: None,
             children: Vec::new(),
         }
     }
@@ -789,10 +794,16 @@ mod trusted_verify_tests {
                 role: Some("document".into()),
                 name: None,
                 tag: "body".into(),
-                rect: Some(Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 }),
+                rect: Some(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                }),
                 interactive: false,
                 attributes: BTreeMap::new(),
                 source: None,
+                ownership: None,
                 children: vec![selected],
             },
             console_errors: vec![ConsoleIssue {
@@ -817,7 +828,12 @@ mod trusted_verify_tests {
             "@e1",
             "Deploy",
             true,
-            Some(Rect { x: 10.0, y: 10.0, width: 20.0, height: 10.0 }),
+            Some(Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 20.0,
+                height: 10.0,
+            }),
         ));
         let semantic = build_semantic_baseline(&s, &snap, "@e1").unwrap();
         VerificationRecord {
@@ -835,13 +851,21 @@ mod trusted_verify_tests {
             semantic_before: semantic,
             visual_before: (visual_bytes > 0).then(|| VerifyVisualBaseline {
                 png: Arc::new(vec![0; visual_bytes]),
-                viewport: ViewportMeta { css_width: 100, css_height: 100, device_scale_factor: 1.0 },
+                viewport: ViewportMeta {
+                    css_width: 100,
+                    css_height: 100,
+                    device_scale_factor: 1.0,
+                },
                 pixel_width: 100,
                 pixel_height: 100,
                 target_rect: None,
                 captured_at_unix_ms: 1,
             }),
-            scope: if visual_bytes > 0 { VerificationScope::SemanticVisual } else { VerificationScope::SemanticOnly },
+            scope: if visual_bytes > 0 {
+                VerificationScope::SemanticVisual
+            } else {
+                VerificationScope::SemanticOnly
+            },
             created_at: Instant::now(),
             expires_at: Instant::now() + VERIFICATION_TTL,
             status: VerificationStatus::Pending,
@@ -855,7 +879,12 @@ mod trusted_verify_tests {
             "@e1",
             "Deploy",
             true,
-            Some(Rect { x: 10.0, y: 10.0, width: 20.0, height: 10.0 }),
+            Some(Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 20.0,
+                height: 10.0,
+            }),
         ));
         let baseline = build_semantic_baseline(&s, &snap, "@e1").unwrap();
         let encoded = serde_json::to_string(&baseline).unwrap();
@@ -913,7 +942,10 @@ mod trusted_verify_tests {
             &before.network_issues,
             &after.network_issues,
         );
-        assert_eq!(regressions, vec!["new_console_error", "new_network_failure"]);
+        assert_eq!(
+            regressions,
+            vec!["new_console_error", "new_network_failure"]
+        );
     }
 
     #[test]
@@ -950,13 +982,7 @@ mod trusted_verify_tests {
             captured_at_unix_ms: 1,
         };
         let oversized = vec![0; MAX_VERIFY_VISUAL_BYTES_PER_RECORD + 1];
-        let error = compare_visual_facts(
-            &before,
-            &oversized,
-            &before.viewport,
-            None,
-        )
-        .unwrap_err();
+        let error = compare_visual_facts(&before, &oversized, &before.viewport, None).unwrap_err();
         assert!(error.contains("exceeds safety bound"));
     }
 
@@ -973,7 +999,10 @@ mod trusted_verify_tests {
             true,
             true,
         );
-        assert_eq!(clean.deterministic_status, DeterministicVerificationStatus::ChangeObserved);
+        assert_eq!(
+            clean.deterministic_status,
+            DeterministicVerificationStatus::ChangeObserved
+        );
 
         let regression = classify_verification_status(
             Vec::new(),
@@ -986,7 +1015,10 @@ mod trusted_verify_tests {
             true,
             true,
         );
-        assert_eq!(regression.deterministic_status, DeterministicVerificationStatus::RegressionSignal);
+        assert_eq!(
+            regression.deterministic_status,
+            DeterministicVerificationStatus::RegressionSignal
+        );
 
         let outside_only = classify_verification_status(
             Vec::new(),
@@ -999,7 +1031,10 @@ mod trusted_verify_tests {
             true,
             true,
         );
-        assert_eq!(outside_only.deterministic_status, DeterministicVerificationStatus::Inconclusive);
+        assert_eq!(
+            outside_only.deterministic_status,
+            DeterministicVerificationStatus::Inconclusive
+        );
 
         let semantic_only_unchanged = classify_verification_status(
             Vec::new(),
@@ -1023,7 +1058,11 @@ mod trusted_verify_tests {
         for _ in 0..(width as usize * height as usize) {
             data.extend_from_slice(&rgba);
         }
-        RgbaImage { width, height, data }
+        RgbaImage {
+            width,
+            height,
+            data,
+        }
     }
 
     fn set_pixel(image: &mut RgbaImage, x: u32, y: u32, rgba: [u8; 4]) {
@@ -1100,7 +1139,12 @@ mod trusted_verify_tests {
             "@e1",
             "Deploy",
             true,
-            Some(Rect { x: 10.0, y: 10.0, width: 20.0, height: 10.0 }),
+            Some(Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 20.0,
+                height: 10.0,
+            }),
         ));
         let before = build_semantic_baseline(&s, &base_snapshot, "@e1").unwrap();
         assert!(compare_semantic_projection(&before.selected, &before.selected).is_empty());
@@ -1109,8 +1153,15 @@ mod trusted_verify_tests {
         after.role = Some("link".into());
         after.name = Some("Publish".into());
         after.interactive = false;
-        after.attributes.insert("aria-label".into(), "Publish".into());
-        after.rect = Some(Rect { x: 11.0, y: 10.0, width: 20.0, height: 10.0 });
+        after
+            .attributes
+            .insert("aria-label".into(), "Publish".into());
+        after.rect = Some(Rect {
+            x: 11.0,
+            y: 10.0,
+            width: 20.0,
+            height: 10.0,
+        });
         assert_eq!(
             compare_semantic_projection(&before.selected, &after),
             vec![
@@ -1130,7 +1181,12 @@ mod trusted_verify_tests {
             "@e1",
             "Duplicate",
             true,
-            Some(Rect { x: 40.0, y: 10.0, width: 20.0, height: 10.0 }),
+            Some(Rect {
+                x: 40.0,
+                y: 10.0,
+                width: 20.0,
+                height: 10.0,
+            }),
         ));
         let duplicate_error = build_semantic_baseline(&s, &duplicate, "@e1").unwrap_err();
         assert!(duplicate_error.contains("ambiguous"));
@@ -1166,18 +1222,22 @@ mod trusted_verify_tests {
             baseline.network_issues.len(),
             trusted_ai::MAX_AI_NETWORK_ISSUES
         );
-        assert!(baseline
-            .network_issues
-            .iter()
-            .all(|issue| !issue.path.contains('?') && !issue.path.contains("secret")));
+        assert!(
+            baseline
+                .network_issues
+                .iter()
+                .all(|issue| !issue.path.contains('?') && !issue.path.contains("secret"))
+        );
 
-        assert!(compare_issue_fingerprints(
-            &baseline.console_issues,
-            &baseline.console_issues,
-            &baseline.network_issues,
-            &baseline.network_issues,
-        )
-        .is_empty());
+        assert!(
+            compare_issue_fingerprints(
+                &baseline.console_issues,
+                &baseline.console_issues,
+                &baseline.network_issues,
+                &baseline.network_issues,
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -1187,7 +1247,12 @@ mod trusted_verify_tests {
             css_height: 4,
             device_scale_factor: 1.0,
         };
-        let target = Rect { x: 0.0, y: 0.0, width: 2.0, height: 2.0 };
+        let target = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 2.0,
+            height: 2.0,
+        };
         let before_image = solid_image(4, 4, [0, 0, 0, 255]);
         let before = visual_baseline(&before_image, viewport.clone(), Some(target.clone()));
         let identical_png = localview_visual::encode_png_rgba(&before_image).unwrap();
@@ -1207,7 +1272,8 @@ mod trusted_verify_tests {
 
         let mut outside_changed_image = before_image.clone();
         set_pixel(&mut outside_changed_image, 3, 3, [255, 255, 255, 255]);
-        let outside_changed_png = localview_visual::encode_png_rgba(&outside_changed_image).unwrap();
+        let outside_changed_png =
+            localview_visual::encode_png_rgba(&outside_changed_image).unwrap();
         let outside_changed =
             compare_visual_facts(&before, &outside_changed_png, &viewport, Some(&target)).unwrap();
         assert!(outside_changed.viewport_changed_ratio.unwrap() > 0.0);
@@ -1220,9 +1286,15 @@ mod trusted_verify_tests {
         assert_eq!(dimension_mismatch.viewport_changed_ratio, None);
         assert_eq!(dimension_mismatch.target_changed_ratio, None);
 
-        let invalid_target = Rect { x: f64::NAN, y: 0.0, width: 1.0, height: 1.0 };
+        let invalid_target = Rect {
+            x: f64::NAN,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
         let invalid_target_facts =
-            compare_visual_facts(&before, &identical_png, &viewport, Some(&invalid_target)).unwrap();
+            compare_visual_facts(&before, &identical_png, &viewport, Some(&invalid_target))
+                .unwrap();
         assert_eq!(invalid_target_facts.viewport_changed_ratio, Some(0.0));
         assert_eq!(invalid_target_facts.target_changed_ratio, None);
 
@@ -1248,7 +1320,8 @@ mod trusted_verify_tests {
         let threshold_exceeded_png =
             localview_visual::encode_png_rgba(&threshold_exceeded_image).unwrap();
         let threshold_exceeded =
-            compare_visual_facts(&before, &threshold_exceeded_png, &viewport, Some(&target)).unwrap();
+            compare_visual_facts(&before, &threshold_exceeded_png, &viewport, Some(&target))
+                .unwrap();
 
         let equal_ratio = threshold_equal.viewport_changed_ratio.unwrap();
         let exceeded_ratio = threshold_exceeded.viewport_changed_ratio.unwrap();
@@ -1291,5 +1364,4 @@ mod trusted_verify_tests {
             DeterministicVerificationStatus::ChangeObserved
         );
     }
-
 }

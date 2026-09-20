@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 
 macro_rules! semantic_ref {
     ($name:ident) => {
-        #[derive(
-            Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord,
-        )]
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
         #[serde(transparent)]
         pub struct $name(String);
 

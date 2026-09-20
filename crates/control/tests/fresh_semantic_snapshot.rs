@@ -269,7 +269,8 @@ async fn fresh_semantic_snapshot_projects_bounded_svelte_component_ownership() {
         "file": "src/SvelteCard.svelte",
         "line": 17,
         "column": 0,
-        "component": "SvelteCard"
+        "component": "SvelteCard",
+        "signal": "element_meta"
     });
 
     let (status, body) = get_fresh_with_result(state, session_id, payload).await;
@@ -283,6 +284,54 @@ async fn fresh_semantic_snapshot_projects_bounded_svelte_component_ownership() {
         source["component"],
         "svelte:src/SvelteCard.svelte:SvelteCard"
     );
+    let ownership = &body["root"]["children"][0]["children"][0]["ownership"];
+    assert_eq!(ownership["framework"], "svelte");
+    assert_eq!(ownership["file"], "src/SvelteCard.svelte");
+    assert_eq!(ownership["component"], "SvelteCard");
+    assert_eq!(ownership["signal"], "element_meta");
+}
+
+#[tokio::test]
+async fn fresh_semantic_snapshot_projects_vue_ownership_without_fake_source_coordinates() {
+    let (state, session_id) = test_state().await;
+    let mut payload = raw_snapshot_payload();
+    payload["semantic_tree"]["children"][0]["children"][0]["sourceHint"] = serde_json::json!({
+        "origin": "vue-dev-instance",
+        "file": "src/VueCard.vue",
+        "component": "VueCard",
+        "signal": "element_parent_component"
+    });
+
+    let (status, body) = get_fresh_with_result(state, session_id, payload).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let target = &body["root"]["children"][0]["children"][0];
+    assert!(target["source"].is_null());
+    assert_eq!(target["ownership"]["framework"], "vue");
+    assert_eq!(target["ownership"]["file"], "src/VueCard.vue");
+    assert_eq!(target["ownership"]["component"], "VueCard");
+    assert_eq!(target["ownership"]["signal"], "element_parent_component");
+    assert!(target["ownership"].get("line").is_none());
+    assert!(target["ownership"].get("column").is_none());
+}
+
+#[tokio::test]
+async fn fresh_semantic_snapshot_drops_unsafe_vue_ownership_without_losing_snapshot() {
+    let (state, session_id) = test_state().await;
+    let mut payload = raw_snapshot_payload();
+    payload["semantic_tree"]["children"][0]["children"][0]["sourceHint"] = serde_json::json!({
+        "origin": "vue-dev-instance",
+        "file": "/private/VueCard.vue",
+        "component": "VueCard",
+        "signal": "element_parent_component"
+    });
+
+    let (status, body) = get_fresh_with_result(state, session_id, payload).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let target = &body["root"]["children"][0]["children"][0];
+    assert!(target["source"].is_null());
+    assert!(target.get("ownership").is_none());
 }
 
 #[tokio::test]

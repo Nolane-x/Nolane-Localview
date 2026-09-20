@@ -9,7 +9,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use localview_live_bridge::{BridgeActionKind, BridgeActionResult};
-use localview_protocol::{PageSnapshot, Rect, SemanticNode, SessionId, SourceLocation};
+use localview_protocol::{
+    ComponentOwnership, PageSnapshot, Rect, SemanticNode, SessionId, SourceLocation,
+};
 use serde_json::Value;
 use tokio::time::{Instant, sleep};
 use uuid::Uuid;
@@ -38,6 +40,8 @@ const MAX_SVELTE_COMPONENT_BYTES: usize = 96;
 const MAX_SVELTE_COMPONENT_ID_BYTES: usize = 384;
 const MAX_SVELTE_SOURCE_LINE: u32 = 1_000_000;
 const MAX_SVELTE_SOURCE_COLUMN: u32 = 10_000_000;
+const MAX_VUE_COMPONENT_BYTES: usize = 96;
+const MAX_COMPONENT_SIGNAL_BYTES: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FreshSnapshotError {
@@ -184,6 +188,7 @@ fn project_node(value: &Value, depth: usize, remaining: &mut usize) -> Option<Se
     let interactive = value.get("interactive")?.as_bool()?;
     let attributes = project_attributes(value.get("attributes"))?;
     let source = project_source(value.get("sourceHint"))?;
+    let ownership = project_ownership(value.get("sourceHint"))?;
 
     let raw_children = value.get("children")?.as_array()?;
     let mut children = Vec::with_capacity(raw_children.len().min(*remaining));
@@ -200,6 +205,7 @@ fn project_node(value: &Value, depth: usize, remaining: &mut usize) -> Option<Se
         interactive,
         attributes,
         source,
+        ownership,
         children,
     })
 }
@@ -262,9 +268,16 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
     let origin = bounded_required_string(value.get("origin")?, 64)?;
     if !matches!(
         origin.as_str(),
-        "data-component-source" | "data-source" | "react-dev-fiber" | "svelte-dev-meta"
+        "data-component-source"
+            | "data-source"
+            | "react-dev-fiber"
+            | "svelte-dev-meta"
+            | "vue-dev-instance"
     ) {
         return None;
+    }
+    if origin == "vue-dev-instance" {
+        return Some(None);
     }
     let file = bounded_required_string(value.get("file")?, MAX_SOURCE_FILE_BYTES)?;
     let line = u32::try_from(value.get("line")?.as_u64()?).ok()?;
@@ -322,8 +335,115 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
     }))
 }
 
+fn project_ownership(value: Option<&Value>) -> Option<Option<ComponentOwnership>> {
+    let Some(value) = value else {
+        return Some(None);
+    };
+    if value.is_null() {
+        return Some(None);
+    }
+
+    let origin = bounded_required_string(value.get("origin")?, 64)?;
+    match origin.as_str() {
+        "data-source" => Some(None),
+        "data-component-source" => {
+            let source = project_source(Some(value))??;
+            let component = source.component.clone()?;
+            Some(Some(ComponentOwnership {
+                framework: None,
+                file: source.file,
+                component,
+                signal: "data_component_source".into(),
+            }))
+        }
+        "react-dev-fiber" => {
+            let source = project_source(Some(value))??;
+            let component =
+                bounded_required_string(value.get("component")?, MAX_REACT_COMPONENT_BYTES)?;
+            let Some(signal_value) = value.get("signal") else {
+                return Some(None);
+            };
+            let Some(signal) = bounded_required_string(signal_value, MAX_COMPONENT_SIGNAL_BYTES)
+            else {
+                return Some(None);
+            };
+            if !matches!(signal.as_str(), "debug_source" | "debug_stack") {
+                return Some(None);
+            }
+            Some(Some(ComponentOwnership {
+                framework: Some("react".into()),
+                file: source.file,
+                component,
+                signal,
+            }))
+        }
+        "svelte-dev-meta" => {
+            let source = project_source(Some(value))??;
+            let component =
+                bounded_required_string(value.get("component")?, MAX_SVELTE_COMPONENT_BYTES)?;
+            let Some(signal_value) = value.get("signal") else {
+                return Some(None);
+            };
+            let Some(signal) = bounded_required_string(signal_value, MAX_COMPONENT_SIGNAL_BYTES)
+            else {
+                return Some(None);
+            };
+            if signal != "element_meta" {
+                return Some(None);
+            }
+            Some(Some(ComponentOwnership {
+                framework: Some("svelte".into()),
+                file: source.file,
+                component,
+                signal,
+            }))
+        }
+        "vue-dev-instance" => {
+            let Some(file) = value
+                .get("file")
+                .and_then(|value| bounded_required_string(value, MAX_SOURCE_FILE_BYTES))
+            else {
+                return Some(None);
+            };
+            if !valid_vue_relative_file(&file) {
+                return Some(None);
+            }
+            let Some(component) = value
+                .get("component")
+                .and_then(|value| bounded_required_string(value, MAX_VUE_COMPONENT_BYTES))
+            else {
+                return Some(None);
+            };
+            let Some(signal) = value
+                .get("signal")
+                .and_then(|value| bounded_required_string(value, MAX_COMPONENT_SIGNAL_BYTES))
+            else {
+                return Some(None);
+            };
+            if signal != "element_parent_component" {
+                return Some(None);
+            }
+            Some(Some(ComponentOwnership {
+                framework: Some("vue".into()),
+                file,
+                component,
+                signal,
+            }))
+        }
+        _ => None,
+    }
+}
+
 fn valid_svelte_relative_file(file: &str) -> bool {
-    if !file.ends_with(".svelte")
+    valid_framework_relative_file(file, ".svelte")
+}
+
+fn valid_vue_relative_file(file: &str) -> bool {
+    valid_framework_relative_file(file, ".vue")
+}
+
+fn valid_framework_relative_file(file: &str, extension: &str) -> bool {
+    if !file.ends_with(extension)
         || file.starts_with('/')
         || file.contains('\\')
         || file
@@ -595,6 +715,47 @@ mod tests {
             assert!(
                 project_source(Some(&source)).is_none(),
                 "invalid React ownership must fail closed"
+            );
+        }
+    }
+    #[test]
+    fn vue_file_only_ownership_never_fabricates_source_location() {
+        let hint = serde_json::json!({
+            "origin": "vue-dev-instance",
+            "file": "src/VueCard.vue",
+            "component": "VueCard",
+            "signal": "element_parent_component"
+        });
+
+        assert_eq!(project_source(Some(&hint)), Some(None));
+        let ownership = project_ownership(Some(&hint))
+            .expect("valid Vue ownership")
+            .expect("Vue component ownership");
+        assert_eq!(ownership.framework.as_deref(), Some("vue"));
+        assert_eq!(ownership.file, "src/VueCard.vue");
+        assert_eq!(ownership.component, "VueCard");
+        assert_eq!(ownership.signal, "element_parent_component");
+    }
+
+    #[test]
+    fn vue_file_only_ownership_fails_closed_for_unsafe_identity() {
+        for file in [
+            "/private/VueCard.vue",
+            "src/../VueCard.vue",
+            "src/%2e%2e/VueCard.vue",
+            "https://example.test/VueCard.vue",
+            "src/VueCard.ts",
+        ] {
+            let hint = serde_json::json!({
+                "origin": "vue-dev-instance",
+                "file": file,
+                "component": "VueCard",
+                "signal": "element_parent_component"
+            });
+            assert_eq!(
+                project_ownership(Some(&hint)),
+                Some(None),
+                "unsafe Vue ownership must be dropped without invalidating the snapshot: {file}"
             );
         }
     }
