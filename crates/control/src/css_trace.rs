@@ -26,6 +26,10 @@ const MAX_CSS_DECLARATIONS: usize = 12;
 const MAX_CSS_SOURCE_KIND_BYTES: usize = 32;
 const MAX_CSS_SOURCE_FILE_BYTES: usize = 260;
 const MAX_CSS_SELECTOR_BYTES: usize = 256;
+const MAX_CSS_CASCADE_WINNERS: usize = 8;
+const MAX_CSS_UNRESOLVED_PROPERTIES: usize = 8;
+const MAX_CSS_SOURCE_ORDER: u64 = 512;
+const MAX_CSS_SPECIFICITY_UNIT: u64 = 255;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct CssDeclarationEvidence {
@@ -40,10 +44,34 @@ pub(crate) struct CssDeclarationEvidence {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct CssCascadeWinner {
+    pub source_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stylesheet_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    pub property: String,
+    pub value: String,
+    pub important: bool,
+    pub specificity: [u16; 4],
+    pub source_order: u32,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct CssAuthorCascade {
+    pub scope: String,
+    pub coverage_complete: bool,
+    pub unresolved_properties: Vec<String>,
+    pub winners: Vec<CssCascadeWinner>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct CssStyleTrace {
     pub reference: String,
     pub computed: BTreeMap<String, String>,
     pub declarations: Vec<CssDeclarationEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_cascade: Option<CssAuthorCascade>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,7 +156,8 @@ fn project_style_trace(payload: &Value, reference: &str) -> Result<CssStyleTrace
 
     let computed = project_computed(node.get("style"))?;
     let declarations = project_declarations(node.get("styleTrace"))?;
-    if computed.is_empty() && declarations.is_empty() {
+    let author_cascade = project_author_cascade(node.get("styleTrace"))?;
+    if computed.is_empty() && declarations.is_empty() && author_cascade.is_none() {
         return Err(CssTraceError::TraceUnavailable);
     }
 
@@ -136,6 +165,7 @@ fn project_style_trace(payload: &Value, reference: &str) -> Result<CssStyleTrace
         reference: reference.to_owned(),
         computed,
         declarations,
+        author_cascade,
     })
 }
 
@@ -215,6 +245,184 @@ fn project_declarations(
     declarations.iter().map(project_declaration).collect()
 }
 
+fn project_author_cascade(
+    value: Option<&Value>,
+) -> Result<Option<CssAuthorCascade>, CssTraceError> {
+    let Some(style_trace) = value else {
+        return Ok(None);
+    };
+    if style_trace.is_null() {
+        return Ok(None);
+    }
+    let Some(cascade) = style_trace.get("authorCascade") else {
+        return Ok(None);
+    };
+    if cascade.is_null() {
+        return Ok(None);
+    }
+
+    let object = cascade.as_object().ok_or(CssTraceError::InvalidSnapshot)?;
+    let scope = bounded_string(object.get("scope"), 64).ok_or(CssTraceError::InvalidSnapshot)?;
+    if scope != "supported_author_subset" {
+        return Err(CssTraceError::InvalidSnapshot);
+    }
+    let coverage_complete = object
+        .get("coverage_complete")
+        .and_then(Value::as_bool)
+        .ok_or(CssTraceError::InvalidSnapshot)?;
+
+    let unresolved_values = object
+        .get("unresolved_properties")
+        .and_then(Value::as_array)
+        .ok_or(CssTraceError::InvalidSnapshot)?;
+    if unresolved_values.len() > MAX_CSS_UNRESOLVED_PROPERTIES {
+        return Err(CssTraceError::InvalidSnapshot);
+    }
+    let mut unresolved_properties = Vec::with_capacity(unresolved_values.len());
+    let mut unresolved_seen = std::collections::BTreeSet::new();
+    for property in unresolved_values {
+        let property = bounded_string(Some(property), MAX_CSS_PROPERTY_BYTES)
+            .ok_or(CssTraceError::InvalidSnapshot)?;
+        if !valid_css_author_cascade_property(property)
+            || !unresolved_seen.insert(property.to_owned())
+        {
+            return Err(CssTraceError::InvalidSnapshot);
+        }
+        unresolved_properties.push(property.to_owned());
+    }
+
+    let winner_values = object
+        .get("winners")
+        .and_then(Value::as_array)
+        .ok_or(CssTraceError::InvalidSnapshot)?;
+    if winner_values.len() > MAX_CSS_CASCADE_WINNERS
+        || (!coverage_complete && !winner_values.is_empty())
+    {
+        return Err(CssTraceError::InvalidSnapshot);
+    }
+
+    let mut winners = Vec::with_capacity(winner_values.len());
+    let mut winner_seen = std::collections::BTreeSet::new();
+    for value in winner_values {
+        let winner = project_cascade_winner(value)?;
+        if unresolved_seen.contains(&winner.property)
+            || !winner_seen.insert(winner.property.clone())
+        {
+            return Err(CssTraceError::InvalidSnapshot);
+        }
+        winners.push(winner);
+    }
+
+    Ok(Some(CssAuthorCascade {
+        scope: scope.to_owned(),
+        coverage_complete,
+        unresolved_properties,
+        winners,
+    }))
+}
+
+fn project_cascade_winner(value: &Value) -> Result<CssCascadeWinner, CssTraceError> {
+    let object = value.as_object().ok_or(CssTraceError::InvalidSnapshot)?;
+    let source_kind = bounded_string(object.get("source_kind"), MAX_CSS_SOURCE_KIND_BYTES)
+        .ok_or(CssTraceError::InvalidSnapshot)?;
+    if !matches!(
+        source_kind,
+        "inline_element" | "same_origin_stylesheet" | "inline_stylesheet"
+    ) {
+        return Err(CssTraceError::InvalidSnapshot);
+    }
+
+    let stylesheet_path =
+        optional_bounded_string(object.get("stylesheet_path"), MAX_CSS_SOURCE_FILE_BYTES)?;
+    if stylesheet_path
+        .as_deref()
+        .is_some_and(|path| !valid_relative_file(path))
+    {
+        return Err(CssTraceError::InvalidSnapshot);
+    }
+
+    let selector = optional_bounded_string(object.get("selector"), MAX_CSS_SELECTOR_BYTES)?;
+    let property = bounded_string(object.get("property"), MAX_CSS_PROPERTY_BYTES)
+        .ok_or(CssTraceError::InvalidSnapshot)?;
+    if !valid_css_author_cascade_property(property) {
+        return Err(CssTraceError::InvalidSnapshot);
+    }
+    let value = bounded_string(object.get("value"), MAX_CSS_VALUE_BYTES)
+        .ok_or(CssTraceError::InvalidSnapshot)?
+        .to_owned();
+    let important = object
+        .get("important")
+        .and_then(Value::as_bool)
+        .ok_or(CssTraceError::InvalidSnapshot)?;
+
+    let specificity_values = object
+        .get("specificity")
+        .and_then(Value::as_array)
+        .ok_or(CssTraceError::InvalidSnapshot)?;
+    if specificity_values.len() != 4 {
+        return Err(CssTraceError::InvalidSnapshot);
+    }
+    let mut specificity = [0_u16; 4];
+    for (index, raw) in specificity_values.iter().enumerate() {
+        let value = raw.as_u64().ok_or(CssTraceError::InvalidSnapshot)?;
+        if value > MAX_CSS_SPECIFICITY_UNIT {
+            return Err(CssTraceError::InvalidSnapshot);
+        }
+        specificity[index] = u16::try_from(value).map_err(|_| CssTraceError::InvalidSnapshot)?;
+    }
+
+    let source_order = object
+        .get("source_order")
+        .and_then(Value::as_u64)
+        .ok_or(CssTraceError::InvalidSnapshot)?;
+    if source_order > MAX_CSS_SOURCE_ORDER {
+        return Err(CssTraceError::InvalidSnapshot);
+    }
+    let source_order = u32::try_from(source_order).map_err(|_| CssTraceError::InvalidSnapshot)?;
+
+    match source_kind {
+        "inline_element" => {
+            if stylesheet_path.is_some()
+                || selector.is_some()
+                || specificity != [1, 0, 0, 0]
+                || source_order != 0
+            {
+                return Err(CssTraceError::InvalidSnapshot);
+            }
+        }
+        "same_origin_stylesheet" => {
+            if stylesheet_path.is_none()
+                || selector.is_none()
+                || specificity[0] != 0
+                || source_order == 0
+            {
+                return Err(CssTraceError::InvalidSnapshot);
+            }
+        }
+        "inline_stylesheet" => {
+            if stylesheet_path.is_some()
+                || selector.is_none()
+                || specificity[0] != 0
+                || source_order == 0
+            {
+                return Err(CssTraceError::InvalidSnapshot);
+            }
+        }
+        _ => unreachable!("source kind validated above"),
+    }
+
+    Ok(CssCascadeWinner {
+        source_kind: source_kind.to_owned(),
+        stylesheet_path,
+        selector,
+        property: property.to_owned(),
+        value,
+        important,
+        specificity,
+        source_order,
+    })
+}
+
 fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTraceError> {
     let object = value.as_object().ok_or(CssTraceError::InvalidSnapshot)?;
     let source_kind = bounded_string(object.get("source_kind"), MAX_CSS_SOURCE_KIND_BYTES)
@@ -269,6 +477,20 @@ fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTrace
         value,
         important,
     })
+}
+
+fn valid_css_author_cascade_property(property: &str) -> bool {
+    matches!(
+        property,
+        "display"
+            | "position"
+            | "box-sizing"
+            | "z-index"
+            | "opacity"
+            | "pointer-events"
+            | "visibility"
+            | "color"
+    )
 }
 
 fn valid_css_property(property: &str) -> bool {
@@ -480,5 +702,126 @@ mod tests {
             "@same",
         );
         assert_eq!(duplicate, Err(CssTraceError::AmbiguousReference));
+    }
+
+    #[test]
+    fn projects_bounded_author_cascade_winner_evidence() {
+        let trace = project_style_trace(
+            &payload(serde_json::json!({
+                "ref": "@save",
+                "style": {"display": "flex", "color": "rgb(20, 20, 20)"},
+                "styleTrace": {
+                    "declarations": [],
+                    "authorCascade": {
+                        "scope": "supported_author_subset",
+                        "coverage_complete": true,
+                        "unresolved_properties": ["color"],
+                        "winners": [{
+                            "source_kind": "same_origin_stylesheet",
+                            "stylesheet_path": "src/button.css",
+                            "selector": "#app .save",
+                            "property": "display",
+                            "value": "flex",
+                            "important": false,
+                            "specificity": [0, 1, 1, 0],
+                            "source_order": 7
+                        }]
+                    }
+                },
+                "children": []
+            })),
+            "@save",
+        )
+        .expect("bounded author cascade");
+
+        let cascade = trace.author_cascade.expect("author cascade");
+        assert!(cascade.coverage_complete);
+        assert_eq!(cascade.scope, "supported_author_subset");
+        assert_eq!(cascade.unresolved_properties, vec!["color"]);
+        assert_eq!(cascade.winners.len(), 1);
+        assert_eq!(cascade.winners[0].property, "display");
+        assert_eq!(cascade.winners[0].specificity, [0, 1, 1, 0]);
+        assert_eq!(cascade.winners[0].source_order, 7);
+    }
+
+    #[test]
+    fn rejects_false_or_conflicting_author_cascade_proof() {
+        let incomplete_with_winner = project_style_trace(
+            &payload(serde_json::json!({
+                "ref": "@save",
+                "style": {"display": "flex"},
+                "styleTrace": {
+                    "declarations": [],
+                    "authorCascade": {
+                        "scope": "supported_author_subset",
+                        "coverage_complete": false,
+                        "unresolved_properties": [],
+                        "winners": [{
+                            "source_kind": "inline_element",
+                            "property": "display",
+                            "value": "flex",
+                            "important": false,
+                            "specificity": [1, 0, 0, 0],
+                            "source_order": 0
+                        }]
+                    }
+                },
+                "children": []
+            })),
+            "@save",
+        );
+        assert_eq!(incomplete_with_winner, Err(CssTraceError::InvalidSnapshot));
+
+        let unresolved_winner = project_style_trace(
+            &payload(serde_json::json!({
+                "ref": "@save",
+                "style": {"display": "flex"},
+                "styleTrace": {
+                    "declarations": [],
+                    "authorCascade": {
+                        "scope": "supported_author_subset",
+                        "coverage_complete": true,
+                        "unresolved_properties": ["display"],
+                        "winners": [{
+                            "source_kind": "inline_element",
+                            "property": "display",
+                            "value": "flex",
+                            "important": false,
+                            "specificity": [1, 0, 0, 0],
+                            "source_order": 0
+                        }]
+                    }
+                },
+                "children": []
+            })),
+            "@save",
+        );
+        assert_eq!(unresolved_winner, Err(CssTraceError::InvalidSnapshot));
+
+        let bad_inline_specificity = project_style_trace(
+            &payload(serde_json::json!({
+                "ref": "@save",
+                "style": {"display": "flex"},
+                "styleTrace": {
+                    "declarations": [],
+                    "authorCascade": {
+                        "scope": "supported_author_subset",
+                        "coverage_complete": true,
+                        "unresolved_properties": [],
+                        "winners": [{
+                            "source_kind": "inline_element",
+                            "property": "display",
+                            "value": "flex",
+                            "important": false,
+                            "specificity": [0, 1, 0, 0],
+                            "source_order": 0
+                        }]
+                    }
+                },
+                "children": []
+            })),
+            "@save",
+        );
+        assert_eq!(bad_inline_specificity, Err(CssTraceError::InvalidSnapshot));
     }
 }

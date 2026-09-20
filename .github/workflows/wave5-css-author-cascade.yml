@@ -1,0 +1,104 @@
+name: Wave 5 CSS author cascade authority
+
+on:
+  pull_request:
+    paths:
+      - "crates/instrumentation/**"
+      - "crates/control/src/css_trace.rs"
+      - "crates/control/tests/css_trace.rs"
+      - "tools/wave5-css-cascade/**"
+      - ".github/workflows/wave5-css-author-cascade.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-css-author-cascade-design.md"
+  push:
+    branches:
+      - "feat/wave5-css-author-cascade"
+    paths:
+      - "crates/instrumentation/**"
+      - "crates/control/src/css_trace.rs"
+      - "crates/control/tests/css_trace.rs"
+      - "tools/wave5-css-cascade/**"
+      - ".github/workflows/wave5-css-author-cascade.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-css-author-cascade-design.md"
+
+concurrency:
+  group: wave5-css-author-cascade-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  focused-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify focused formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            crates/instrumentation/src/lib.rs \
+            crates/instrumentation/examples/css_cascade_bootstrap.rs \
+            crates/instrumentation/tests/visibility_source_contract.rs \
+            crates/control/src/css_trace.rs \
+            crates/control/tests/css_trace.rs
+
+      - name: Verify instrumentation contracts
+        run: cargo test -p localview-instrumentation --test visibility_source_contract -- --nocapture
+
+      - name: Verify cascade projection contracts
+        run: cargo test -p localview-control --lib css_trace -- --nocapture
+
+      - name: Verify fresh cascade HTTP contract
+        run: cargo test -p localview-control --test css_trace -- --nocapture
+
+      - name: Check changed crates
+        run: cargo check -p localview-instrumentation -p localview-control --all-targets
+
+  browser-chromium:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize exact LocalView CSS cascade bootstrap
+        run: cargo run -p localview-instrumentation --example css_cascade_bootstrap > /tmp/localview-css-cascade-bootstrap.js
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install browser proof dependency
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove bounded CSS author cascade in Chromium
+        working-directory: apps/desktop
+        run: |
+          cp ../../tools/wave5-css-cascade/runtime.mjs ./wave5-css-cascade-runtime.mjs
+          node ./wave5-css-cascade-runtime.mjs
+          rm ./wave5-css-cascade-runtime.mjs
+
+  workspace-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check complete workspace
+        run: cargo check --workspace --all-targets

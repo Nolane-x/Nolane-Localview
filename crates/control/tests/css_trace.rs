@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
@@ -106,7 +108,22 @@ fn raw_snapshot_payload() -> Value {
                             "value": "16px",
                             "important": false
                         }
-                    ]
+                    ],
+                    "authorCascade": {
+                        "scope": "supported_author_subset",
+                        "coverage_complete": true,
+                        "unresolved_properties": ["color"],
+                        "winners": [{
+                            "source_kind": "inline_element",
+                            "stylesheet_path": null,
+                            "selector": null,
+                            "property": "display",
+                            "value": "flex",
+                            "important": false,
+                            "specificity": [1, 0, 0, 0],
+                            "source_order": 0
+                        }]
+                    }
                 },
                 "children": []
             }]
@@ -196,5 +213,13 @@ async fn fresh_style_trace_returns_only_selected_bounded_css_evidence() {
     assert_eq!(body["declarations"].as_array().map(Vec::len), Some(2));
     assert_eq!(body["declarations"][1]["stylesheet_path"], "src/button.css");
     assert_eq!(body["declarations"][1]["selector"], ".save");
+    assert_eq!(body["author_cascade"]["scope"], "supported_author_subset");
+    assert_eq!(body["author_cascade"]["coverage_complete"], true);
+    assert_eq!(body["author_cascade"]["unresolved_properties"][0], "color");
+    assert_eq!(body["author_cascade"]["winners"][0]["property"], "display");
+    assert_eq!(
+        body["author_cascade"]["winners"][0]["specificity"],
+        serde_json::json!([1, 0, 0, 0])
+    );
     assert!(body.get("semantic_tree").is_none());
 }
