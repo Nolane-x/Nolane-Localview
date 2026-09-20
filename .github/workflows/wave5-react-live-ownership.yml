@@ -41,7 +41,7 @@ jobs:
 
       - name: Verify slice formatting
         run: |
-          rustfmt --edition 2021 --check \
+          rustfmt --edition 2024 --check \
             crates/instrumentation/src/lib.rs \
             crates/instrumentation/examples/react_ownership_bootstrap.rs \
             crates/instrumentation/tests/visibility_source_contract.rs \
