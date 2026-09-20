@@ -278,8 +278,8 @@ html[data-localview-visual-freeze] *::after {
   window.__LOCALVIEW__ = Object.freeze({"#,
         )
         .replace(
-            "    snapshot,\n    inspect(reference)",
-            "    snapshot,\n    freezeVisuals,\n    restoreVisuals,\n    captureScrollTo,\n    captureTileProbe,\n    inspect(reference)",
+            "    snapshot,\n    beginPointSelect,",
+            "    snapshot,\n    freezeVisuals,\n    restoreVisuals,\n    captureScrollTo,\n    captureTileProbe,\n    beginPointSelect,",
         )
 }
 
