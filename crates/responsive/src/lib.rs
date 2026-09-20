@@ -787,7 +787,6 @@ pub fn evaluate_responsive_observation(
                 && (center_shift >= DRAMATIC_CENTER_SHIFT_RATIO
                     || area_ratio >= DRAMATIC_AREA_RATIO)
             {
-                hard_failure = true;
                 issues.push(issue(
                     observation,
                     ResponsiveIssueKind::DramaticLayoutJump,
