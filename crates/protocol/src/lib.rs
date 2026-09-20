@@ -207,4 +207,24 @@ mod tests {
         assert!(ServerKind::Storybook.visual_candidate());
         assert!(!ServerKind::ApiServer.visual_candidate());
     }
+
+    #[test]
+    fn absent_component_ownership_is_backward_deserializable_and_not_serialized() {
+        let raw = serde_json::json!({
+            "reference": "@button",
+            "role": "button",
+            "name": "Save",
+            "tag": "button",
+            "rect": null,
+            "interactive": true,
+            "attributes": {},
+            "source": null,
+            "children": []
+        });
+        let node: SemanticNode = serde_json::from_value(raw).expect("legacy semantic node");
+        assert_eq!(node.ownership, None);
+
+        let serialized = serde_json::to_value(&node).expect("serialize semantic node");
+        assert!(serialized.get("ownership").is_none());
+    }
 }
