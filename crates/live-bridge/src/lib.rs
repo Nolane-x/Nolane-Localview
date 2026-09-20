@@ -79,6 +79,7 @@ pub enum BridgeActionKind {
     Focus,
     Snapshot,
     Measure,
+    StyleInspect,
     FreezeVisuals,
     RestoreVisuals { token: Uuid },
     CaptureScrollTo { token: Uuid, y: f64 },
@@ -1170,6 +1171,10 @@ fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut Bridg
             sanitize_measure_result(action, result);
             return;
         }
+        if matches!(action.action, BridgeActionKind::StyleInspect) {
+            sanitize_style_inspect_result(action, result);
+            return;
+        }
     }
 
     match action.map(|action| &action.action) {
@@ -1199,6 +1204,326 @@ fn sanitize_result_for_storage(action: Option<&BridgeAction>, result: &mut Bridg
             }
         }
     }
+}
+
+pub fn sanitize_public_action_result(action: &BridgeAction, result: &mut BridgeActionResult) {
+    sanitize_result_for_storage(Some(action), result);
+}
+
+fn sanitize_style_inspect_result(action: &BridgeAction, result: &mut BridgeActionResult) {
+    const MAX_REFERENCE_BYTES: usize = 64;
+    const MAX_ROUTE_BYTES: usize = 2_048;
+    const MAX_SELECTOR_BYTES: usize = 320;
+    const MAX_VALUE_BYTES: usize = 180;
+    const MAX_PATH_BYTES: usize = 260;
+    const MAX_STYLESHEETS: u64 = 64;
+    const MAX_RULES: u64 = 512;
+    const MAX_MATCHED_RULES: u64 = 64;
+    const MAX_DECLARATIONS: usize = 128;
+
+    fn property_allowed(property: &str) -> bool {
+        matches!(
+            property,
+            "display"
+                | "position"
+                | "overflow-x"
+                | "overflow-y"
+                | "box-sizing"
+                | "z-index"
+                | "flex-direction"
+                | "flex-wrap"
+                | "justify-content"
+                | "align-items"
+                | "gap"
+                | "row-gap"
+                | "column-gap"
+                | "grid-template-columns"
+                | "grid-template-rows"
+                | "padding-top"
+                | "padding-right"
+                | "padding-bottom"
+                | "padding-left"
+                | "margin-top"
+                | "margin-right"
+                | "margin-bottom"
+                | "margin-left"
+                | "border-top-width"
+                | "border-right-width"
+                | "border-bottom-width"
+                | "border-left-width"
+                | "font-size"
+                | "font-weight"
+                | "font-family"
+                | "line-height"
+                | "color"
+                | "background-color"
+                | "opacity"
+                | "pointer-events"
+                | "visibility"
+        )
+    }
+
+    fn bounded_text(value: &str, max: usize) -> bool {
+        !value.is_empty()
+            && value.len() <= max
+            && !value.chars().any(char::is_control)
+    }
+
+    fn safe_path(value: &str) -> bool {
+        bounded_text(value, MAX_PATH_BYTES)
+            && value.starts_with('/')
+            && !value.contains(['?', '#', '\\'])
+            && !value.contains("://")
+    }
+
+    fn fail(result: &mut BridgeActionResult) {
+        result.ok = false;
+        result.payload = Value::Null;
+        result.error = Some("style inspect action failed".into());
+    }
+
+    if !result.ok {
+        result.payload = Value::Null;
+        if result.error.is_some() {
+            result.error = Some("style inspect action failed".into());
+        }
+        return;
+    }
+
+    let Some(expected_reference) = action.reference.as_deref() else {
+        fail(result);
+        return;
+    };
+    let Some(reference) = result.payload.get("reference").and_then(Value::as_str) else {
+        fail(result);
+        return;
+    };
+    let Some(reference_hash) = reference.strip_prefix("@e") else {
+        fail(result);
+        return;
+    };
+    if reference != expected_reference
+        || reference.len() > MAX_REFERENCE_BYTES
+        || reference_hash.is_empty()
+        || !reference_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        fail(result);
+        return;
+    }
+
+    let Some(route) = result.payload.get("route").and_then(Value::as_str) else {
+        fail(result);
+        return;
+    };
+    if route.len() > MAX_ROUTE_BYTES {
+        fail(result);
+        return;
+    }
+    let Ok(mut route_url) = url::Url::parse(route) else {
+        fail(result);
+        return;
+    };
+    if !matches!(route_url.scheme(), "http" | "https") {
+        fail(result);
+        return;
+    }
+    let Some(host) = route_url.host_str() else {
+        fail(result);
+        return;
+    };
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false);
+    if !loopback {
+        fail(result);
+        return;
+    }
+    route_url.set_query(None);
+    route_url.set_fragment(None);
+
+    let Some(computed_input) = result.payload.get("computed").and_then(Value::as_object) else {
+        fail(result);
+        return;
+    };
+    if computed_input.len() > 40 {
+        fail(result);
+        return;
+    }
+    let mut computed = serde_json::Map::new();
+    for (property, value) in computed_input {
+        let Some(value) = value.as_str() else {
+            fail(result);
+            return;
+        };
+        if !property_allowed(property) || !bounded_text(value, MAX_VALUE_BYTES) {
+            fail(result);
+            return;
+        }
+        computed.insert(property.clone(), Value::String(value.to_owned()));
+    }
+
+    let Some(declarations_input) = result.payload.get("declarations").and_then(Value::as_array)
+    else {
+        fail(result);
+        return;
+    };
+    if declarations_input.len() > MAX_DECLARATIONS {
+        fail(result);
+        return;
+    }
+    let mut declarations = Vec::with_capacity(declarations_input.len());
+    for declaration in declarations_input {
+        let Some(object) = declaration.as_object() else {
+            fail(result);
+            return;
+        };
+        let Some(property) = object.get("property").and_then(Value::as_str) else {
+            fail(result);
+            return;
+        };
+        let Some(value) = object.get("value").and_then(Value::as_str) else {
+            fail(result);
+            return;
+        };
+        let Some(important) = object.get("important").and_then(Value::as_bool) else {
+            fail(result);
+            return;
+        };
+        let Some(origin) = object.get("origin").and_then(Value::as_str) else {
+            fail(result);
+            return;
+        };
+        if !property_allowed(property) || !bounded_text(value, MAX_VALUE_BYTES) {
+            fail(result);
+            return;
+        }
+
+        let selector = object.get("selector").and_then(Value::as_str);
+        let stylesheet_path = object.get("stylesheet_path").and_then(Value::as_str);
+        let stylesheet_index = object.get("stylesheet_index").and_then(Value::as_u64);
+        let rule_index = object.get("rule_index").and_then(Value::as_u64);
+
+        let record = match origin {
+            "inline" => {
+                if selector.is_some()
+                    || stylesheet_path.is_some()
+                    || stylesheet_index.is_some()
+                    || rule_index.is_some()
+                {
+                    fail(result);
+                    return;
+                }
+                serde_json::json!({
+                    "property": property,
+                    "value": value,
+                    "important": important,
+                    "origin": "inline",
+                    "selector": null,
+                    "stylesheet_path": null,
+                    "stylesheet_index": null,
+                    "rule_index": null,
+                })
+            }
+            "author_stylesheet" => {
+                let Some(selector) = selector else {
+                    fail(result);
+                    return;
+                };
+                let Some(stylesheet_index) = stylesheet_index else {
+                    fail(result);
+                    return;
+                };
+                let Some(rule_index) = rule_index else {
+                    fail(result);
+                    return;
+                };
+                if !bounded_text(selector, MAX_SELECTOR_BYTES)
+                    || stylesheet_index >= MAX_STYLESHEETS
+                    || rule_index >= MAX_RULES
+                    || stylesheet_path.is_some_and(|path| !safe_path(path))
+                {
+                    fail(result);
+                    return;
+                }
+                serde_json::json!({
+                    "property": property,
+                    "value": value,
+                    "important": important,
+                    "origin": "author_stylesheet",
+                    "selector": selector,
+                    "stylesheet_path": stylesheet_path,
+                    "stylesheet_index": stylesheet_index,
+                    "rule_index": rule_index,
+                })
+            }
+            _ => {
+                fail(result);
+                return;
+            }
+        };
+        declarations.push(record);
+    }
+
+    let Some(opaque_stylesheets) = result
+        .payload
+        .get("opaque_stylesheets")
+        .and_then(Value::as_u64)
+    else {
+        fail(result);
+        return;
+    };
+    let Some(stylesheets_scanned) = result
+        .payload
+        .get("stylesheets_scanned")
+        .and_then(Value::as_u64)
+    else {
+        fail(result);
+        return;
+    };
+    let Some(rules_scanned) = result.payload.get("rules_scanned").and_then(Value::as_u64) else {
+        fail(result);
+        return;
+    };
+    let Some(matched_rules) = result.payload.get("matched_rules").and_then(Value::as_u64) else {
+        fail(result);
+        return;
+    };
+    let Some(truncated) = result.payload.get("truncated").and_then(Value::as_bool) else {
+        fail(result);
+        return;
+    };
+    let Some(conditional_rules_omitted) = result
+        .payload
+        .get("conditional_rules_omitted")
+        .and_then(Value::as_bool)
+    else {
+        fail(result);
+        return;
+    };
+    if opaque_stylesheets > MAX_STYLESHEETS
+        || stylesheets_scanned > MAX_STYLESHEETS
+        || rules_scanned > MAX_RULES
+        || matched_rules > MAX_MATCHED_RULES
+    {
+        fail(result);
+        return;
+    }
+
+    result.payload = serde_json::json!({
+        "reference": reference,
+        "route": route_url.to_string(),
+        "computed": computed,
+        "declarations": declarations,
+        "opaque_stylesheets": opaque_stylesheets,
+        "stylesheets_scanned": stylesheets_scanned,
+        "rules_scanned": rules_scanned,
+        "matched_rules": matched_rules,
+        "truncated": truncated,
+        "conditional_rules_omitted": conditional_rules_omitted,
+    });
+    result.error = None;
 }
 
 fn sanitize_measure_result(action: &BridgeAction, result: &mut BridgeActionResult) {
