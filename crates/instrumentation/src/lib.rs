@@ -1559,6 +1559,25 @@ const SCRIPT: &str = r#"
     };
 
     for (const sheet of allSheets.slice(0, MAX_CSS_TRACE_STYLESHEETS)) {
+      if (sheet?.disabled) continue;
+      let sheetMedia = '';
+      try {
+        sheetMedia = String(sheet?.media?.mediaText || '').trim();
+      } catch (_) {
+        cascadeCoverageComplete = false;
+        continue;
+      }
+      if (sheetMedia && sheetMedia !== 'all') {
+        let active = false;
+        try {
+          active = window.matchMedia(sheetMedia).matches;
+        } catch (_) {
+          cascadeCoverageComplete = false;
+          continue;
+        }
+        if (!active) continue;
+      }
+
       let rules;
       try {
         rules = Array.from(sheet.cssRules || []);
