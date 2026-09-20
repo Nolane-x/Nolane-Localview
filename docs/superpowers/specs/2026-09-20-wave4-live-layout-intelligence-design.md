@@ -55,7 +55,7 @@ For a child crossing its observed parent:
 - explicit `visible` on the crossed axis -> deterministic `container_overflow`;
 - missing/unsupported overflow evidence -> no deterministic parent-overflow claim.
 
-Viewport overflow is emitted only for an axis crossing the viewport without an observed constraining ancestor. Fully offscreen nodes (`inViewport=false`) are not called accidental viewport overflow merely because they are elsewhere in the document. A large child fully inside its container is valid.
+Viewport overflow is emitted only when geometry crosses the viewport without an observed constraining ancestor. Horizontal escape is checked for normal layout; vertical escape is promoted to a viewport issue only for viewport-relevant fixed/sticky positioning, because ordinary document height and normal page scrolling are not overflow bugs. Fully offscreen nodes (`inViewport=false`) are not called accidental viewport overflow merely because they are elsewhere in the document. A large child fully inside its container is valid.
 
 ## Occlusion and collision authority
 
@@ -97,7 +97,7 @@ The existing `LiveAnalysis` response gains a `LiveLayoutAnalysis` packet contain
 
 ## Verification matrix
 
-Tests cover horizontal/vertical flex, grid, nested containers, intentional scroll overflow, accidental overflow, clipping, large valid children, overlap/non-overlap, supported fixed/sticky collision, insufficient authority, spacing families/outliers, alignment families/outliers, subpixel jitter, invalid/zero/negative geometry, bounded node count, live semantic snapshot -> analyzer integration, latest-snapshot selection, retained-snapshot shape, private/arbitrary-style non-retention, and diagnostic class preservation.
+Tests cover horizontal/vertical flex, grid, nested containers, intentional scroll overflow, accidental overflow, clipping, large valid children, normal document scroll height, horizontal viewport escape, fixed vertical viewport escape, overlap/non-overlap, supported fixed/sticky collision, insufficient authority, spacing families/outliers, alignment families/outliers, subpixel jitter, invalid/zero/negative geometry, bounded node count, live semantic snapshot -> analyzer integration, latest-snapshot selection, retained-snapshot shape, private/arbitrary-style non-retention, and diagnostic class preservation.
 
 ## Truth boundaries / remaining non-closures
 
