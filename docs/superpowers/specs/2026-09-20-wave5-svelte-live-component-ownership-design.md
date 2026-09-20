@@ -68,8 +68,8 @@ A Svelte candidate is accepted only when all of the following hold:
 
 1. the exact DOM element has an **own** property descriptor named `__svelte_meta`;
 2. that descriptor is a data property with its own `value`; accessors/getters are never invoked;
-3. the value is a plain runtime object containing a bounded `loc` object;
-4. `loc.file`, `loc.line` and `loc.column` pass the source rules below;
+3. `meta.loc` is itself an own data property; a nested accessor is rejected without invocation;
+4. `loc.file`, `loc.line` and `loc.column` are each own data properties and pass the source rules below;
 5. the normalized source file must end in `.svelte`;
 6. a bounded component identity is derived only from that source file's basename.
 
@@ -100,7 +100,7 @@ A candidate Svelte file must:
 - not begin with `/` or `//`;
 - not contain a Windows drive prefix such as `C:/`;
 - not contain a URI scheme;
-- not contain `%`, `?` or `#`;
+- not contain `%`, `?`, `#` or `:`;
 - not contain an explicit `..` path segment;
 - drop empty and `.` path segments deterministically;
 - remain non-empty after normalization.
@@ -197,7 +197,7 @@ It proves:
 4. a secret component prop is absent from the semantic snapshot;
 5. explicit `data-component-source` outranks Svelte introspection;
 6. plain DOM does not fabricate Svelte ownership;
-7. an accessor-backed fake `__svelte_meta` is never invoked;
+7. accessor-backed fake `__svelte_meta` and nested `meta.loc` accessors are never invoked;
 8. absolute/traversal-like/non-`.svelte` fake source files fail closed;
 9. root-component metadata with `parent = null` remains valid because LocalView does not depend on the parent stack.
 
@@ -208,8 +208,8 @@ It proves:
 Prove:
 
 - one shared 256 framework marker budget;
-- exact own-data-descriptor Svelte access;
-- no getter invocation;
+- exact own-data-descriptor Svelte access at `__svelte_meta`, `loc`, `file`, `line` and `column`;
+- no top-level or nested getter invocation;
 - no Svelte parent-stack traversal;
 - relative-path privacy fencing plus mandatory `.svelte` identity;
 - real line/zero-based-column validation;
