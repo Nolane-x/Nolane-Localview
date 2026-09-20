@@ -55,7 +55,6 @@ Current safety gate before native workspace becomes default:
 Remaining Wave 1 integration:
 
 - native accessibility-tree enrichment where platform APIs materially improve over DOM/ARIA semantics;
-- live runtime-position extraction/correlation over the project-owned source-map runtime;
 - React component ownership adapter, followed by Vue/Svelte ownership adapters;
 - CSS declaration/specificity tracing and runtime/source correlation beyond explicit dev attributes.
 
@@ -175,10 +174,10 @@ Landed foundation:
 - progressive component targeting consumes corroborated explicit `source.component` ancestry without fabricating ownership from tag/class/depth heuristics.
 - `localview-source-map` now contains a bounded Source Map v3 consumer with checked Base64 VLQ decoding, exact generated-line lookup, deterministic unmapped-region failure, strict source/name/mapping/coordinate caps, normalized `sourceRoot` references and no `sourcesContent` retention.
 - project-owned Source Map runtime authority is connected through authenticated exact-session resolution. The daemon derives the project root from session authority, accepts only project-relative generated files and bounded generated positions, discovers only deterministic sibling `.map` files, canonicalizes generated/map/original source paths under the exact project root, rejects traversal/symlink/remote-source escapes, caps map input before parse, and returns only project-relative source identity without `sourcesContent` or absolute project paths.
+- trusted live RuntimeError position correlation is connected to that project-owned resolver through authenticated exact-session `POST /v1/sessions/{id}/runtime-source/resolve`. Callers supply only retained `event_seq`; LocalView derives the same-server generated URL/line/column from bounded RuntimeError evidence, enforces loopback + exact scheme/effective-port authority, normalizes browser 1-based columns to Source Map generated coordinates, rejects encoded/remote/mismatched sources, and returns only the bounded project-relative source resolution without runtime message/stack/query/source content.
 
 Remaining integration:
 
-- live runtime-position extraction/correlation from trusted runtime evidence into the project-owned Source Map resolver.
 - React component ownership adapter.
 - Vue/Svelte adapters.
 - CSS declaration/specificity tracing.
