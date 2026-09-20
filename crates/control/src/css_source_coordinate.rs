@@ -185,10 +185,7 @@ pub(crate) async fn enrich_style_trace_source_authority(
     }
 }
 
-async fn resolve_query(
-    context: &ProjectCssContext,
-    query: CssEvidenceQuery,
-) -> CssSourceAuthority {
+async fn resolve_query(context: &ProjectCssContext, query: CssEvidenceQuery) -> CssSourceAuthority {
     if query.source_kind != "same_origin_stylesheet" {
         return CssSourceAuthority::initial(&query.source_kind);
     }
@@ -310,8 +307,7 @@ async fn mapped_source_authority(
     // declaration coordinate. Nearest-preceding Source Map lookup is useful
     // for runtime stacks, but is insufficient proof for this lane.
     let resolved = source_map.resolve_exact(generated_line, generated_column)?;
-    let source_path =
-        resolve_original_source_path(&context.root, &map_path, &resolved).await?;
+    let source_path = resolve_original_source_path(&context.root, &map_path, &resolved).await?;
     let file = project_relative_display(&context.root, &source_path)?;
 
     Some(CssSourceAuthority::exact(
@@ -482,15 +478,9 @@ fn parse_rule_list(
                         _ => return Err(CssParseError::Unsupported),
                     }
                 } else {
-                    let selector = normalize_selector(&prelude).ok_or(CssParseError::Unsupported)?;
-                    parse_declarations(
-                        source,
-                        open + 1,
-                        close,
-                        &selector,
-                        budget,
-                        output,
-                    )?;
+                    let selector =
+                        normalize_selector(&prelude).ok_or(CssParseError::Unsupported)?;
+                    parse_declarations(source, open + 1, close, &selector, budget, output)?;
                 }
                 cursor = close + 1;
             }
@@ -794,7 +784,9 @@ fn normalize_property(value: &str) -> Result<String, CssParseError> {
     let property = stripped.trim();
     if property.is_empty()
         || property.len() > MAX_PROPERTY_BYTES
-        || property.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+        || property
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch.is_control())
         || !property
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
@@ -892,7 +884,10 @@ fn strip_comments(value: &str) -> Result<String, CssParseError> {
             continue;
         }
 
-        let ch = value[cursor..].chars().next().ok_or(CssParseError::Invalid)?;
+        let ch = value[cursor..]
+            .chars()
+            .next()
+            .ok_or(CssParseError::Invalid)?;
         output.push(ch);
         cursor += ch.len_utf8();
 
@@ -998,11 +993,7 @@ fn first_non_ws_comment(
     Ok(None)
 }
 
-fn skip_ws_comments(
-    source: &str,
-    cursor: &mut usize,
-    end: usize,
-) -> Result<(), CssParseError> {
+fn skip_ws_comments(source: &str, cursor: &mut usize, end: usize) -> Result<(), CssParseError> {
     let bytes = source.as_bytes();
     while *cursor < end {
         if bytes[*cursor].is_ascii_whitespace() {
@@ -1072,7 +1063,13 @@ fn line_columns(source: &str, offset: usize) -> Result<(u32, u32, u32), CssParse
 mod tests {
     use super::*;
 
-    fn locate(source: &str, selector: &str, property: &str, value: &str, important: bool) -> Vec<ParsedDeclaration> {
+    fn locate(
+        source: &str,
+        selector: &str,
+        property: &str,
+        value: &str,
+        important: bool,
+    ) -> Vec<ParsedDeclaration> {
         let selector = normalize_selector(selector).expect("selector");
         let value = normalize_css_value(value).expect("value");
         parse_stylesheet(source)
@@ -1131,7 +1128,8 @@ mod tests {
 
     #[test]
     fn nested_media_and_supports_are_located_without_claiming_runtime_activity() {
-        let source = "@media (min-width: 1px) { @supports (display: grid) { .save { color: red; } } }";
+        let source =
+            "@media (min-width: 1px) { @supports (display: grid) { .save { color: red; } } }";
         assert_eq!(locate(source, ".save", "color", "red", false).len(), 1);
     }
 
