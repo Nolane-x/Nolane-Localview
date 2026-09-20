@@ -1,6 +1,6 @@
 use chrono::Utc;
 use localview_layout::LayoutIssueClass;
-use localview_live_analysis::analyze_live;
+use localview_live_analysis::{analyze_live, diagnose_live};
 use localview_live_bridge::{ObserverEvent, ObserverEventKind};
 use serde_json::json;
 
@@ -151,19 +151,22 @@ fn missing_or_invalid_live_viewport_is_unknown_not_a_critical_layout_finding() {
             }
         }),
     ] {
-        let report = analyze_live(&[snapshot_event(21, snapshot)]);
-        assert_eq!(report.layout.snapshot_seq, Some(21));
-        assert_eq!(report.layout.analysis.analyzed_nodes, 0);
-        assert!(report.layout.analysis.issues.is_empty());
+        let event = snapshot_event(21, snapshot);
+        let analysis = analyze_live(std::slice::from_ref(&event));
+        assert_eq!(analysis.layout.snapshot_seq, Some(21));
+        assert_eq!(analysis.layout.analysis.analyzed_nodes, 0);
+        assert!(analysis.layout.analysis.issues.is_empty());
+
+        let diagnosis = diagnose_live(&[event]);
         assert!(
-            !report
+            !diagnosis
                 .findings
                 .iter()
                 .any(|finding| finding.code == "invalid_viewport_geometry"),
             "unverified live viewport must not become an application defect"
         );
         assert!(
-            report
+            diagnosis
                 .unknowns
                 .iter()
                 .any(|unknown| unknown.statement == "Current layout geometry has not been verified")
