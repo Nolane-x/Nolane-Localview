@@ -72,7 +72,7 @@ fn responsive_transaction_uses_exact_preview_and_restores_before_persistence() {
     for required in [
         "preview_surface_label",
         "DesktopSurfaceKind::PreviewWindow",
-        "registry.current",
+        "validate_responsive_preview_authority",
         "session_capture_gate",
         "set_min_size",
         "set_size",
@@ -94,6 +94,18 @@ fn responsive_transaction_uses_exact_preview_and_restores_before_persistence() {
     assert!(
         !tx.contains("workspace_label"),
         "first responsive slice must not silently fall back to workspace/iframe authority"
+    );
+
+    let authority = between(
+        source,
+        "fn validate_responsive_preview_authority(",
+        "fn responsive_text_or_control(",
+    );
+    assert!(
+        authority.contains(".current(")
+            && authority.contains("DesktopSurfaceKind::PreviewWindow")
+            && authority.contains("owner_instance_id"),
+        "responsive preview authority must remain registry-owned and exact-session bound"
     );
 
     let restore = tx.find("restore_responsive_preview").unwrap();
