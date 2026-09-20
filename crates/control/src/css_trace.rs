@@ -702,4 +702,132 @@ mod tests {
         );
         assert_eq!(duplicate, Err(CssTraceError::AmbiguousReference));
     }
+
+    #[test]
+    fn projects_bounded_author_cascade_winner_evidence() {
+        let trace = project_style_trace(
+            &payload(serde_json::json!({
+                "ref": "@save",
+                "style": {"display": "flex", "color": "rgb(20, 20, 20)"},
+                "styleTrace": {
+                    "declarations": [],
+                    "authorCascade": {
+                        "scope": "supported_author_subset",
+                        "coverage_complete": true,
+                        "unresolved_properties": ["color"],
+                        "winners": [{
+                            "source_kind": "same_origin_stylesheet",
+                            "stylesheet_path": "src/button.css",
+                            "selector": "#app .save",
+                            "property": "display",
+                            "value": "flex",
+                            "important": false,
+                            "specificity": [0, 1, 1, 0],
+                            "source_order": 7
+                        }]
+                    }
+                },
+                "children": []
+            })),
+            "@save",
+        )
+        .expect("bounded author cascade");
+
+        let cascade = trace.author_cascade.expect("author cascade");
+        assert!(cascade.coverage_complete);
+        assert_eq!(cascade.scope, "supported_author_subset");
+        assert_eq!(cascade.unresolved_properties, vec!["color"]);
+        assert_eq!(cascade.winners.len(), 1);
+        assert_eq!(cascade.winners[0].property, "display");
+        assert_eq!(cascade.winners[0].specificity, [0, 1, 1, 0]);
+        assert_eq!(cascade.winners[0].source_order, 7);
+    }
+
+    #[test]
+    fn rejects_false_or_conflicting_author_cascade_proof() {
+        let incomplete_with_winner = project_style_trace(
+            &payload(serde_json::json!({
+                "ref": "@save",
+                "style": {"display": "flex"},
+                "styleTrace": {
+                    "declarations": [],
+                    "authorCascade": {
+                        "scope": "supported_author_subset",
+                        "coverage_complete": false,
+                        "unresolved_properties": [],
+                        "winners": [{
+                            "source_kind": "inline_element",
+                            "property": "display",
+                            "value": "flex",
+                            "important": false,
+                            "specificity": [1, 0, 0, 0],
+                            "source_order": 0
+                        }]
+                    }
+                },
+                "children": []
+            })),
+            "@save",
+        );
+        assert_eq!(
+            incomplete_with_winner,
+            Err(CssTraceError::InvalidSnapshot)
+        );
+
+        let unresolved_winner = project_style_trace(
+            &payload(serde_json::json!({
+                "ref": "@save",
+                "style": {"display": "flex"},
+                "styleTrace": {
+                    "declarations": [],
+                    "authorCascade": {
+                        "scope": "supported_author_subset",
+                        "coverage_complete": true,
+                        "unresolved_properties": ["display"],
+                        "winners": [{
+                            "source_kind": "inline_element",
+                            "property": "display",
+                            "value": "flex",
+                            "important": false,
+                            "specificity": [1, 0, 0, 0],
+                            "source_order": 0
+                        }]
+                    }
+                },
+                "children": []
+            })),
+            "@save",
+        );
+        assert_eq!(unresolved_winner, Err(CssTraceError::InvalidSnapshot));
+
+        let bad_inline_specificity = project_style_trace(
+            &payload(serde_json::json!({
+                "ref": "@save",
+                "style": {"display": "flex"},
+                "styleTrace": {
+                    "declarations": [],
+                    "authorCascade": {
+                        "scope": "supported_author_subset",
+                        "coverage_complete": true,
+                        "unresolved_properties": [],
+                        "winners": [{
+                            "source_kind": "inline_element",
+                            "property": "display",
+                            "value": "flex",
+                            "important": false,
+                            "specificity": [0, 1, 0, 0],
+                            "source_order": 0
+                        }]
+                    }
+                },
+                "children": []
+            })),
+            "@save",
+        );
+        assert_eq!(
+            bad_inline_specificity,
+            Err(CssTraceError::InvalidSnapshot)
+        );
+    }
+
 }
