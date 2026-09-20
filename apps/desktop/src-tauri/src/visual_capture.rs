@@ -414,12 +414,13 @@ pub async fn capture_responsive_sweep(
     let window = app
         .get_webview_window(&preview_label)
         .ok_or_else(|| "responsive_preview_unavailable".to_string())?;
-    let current = registry.current(
-        session_id,
-        DesktopSurfaceKind::PreviewWindow,
-        &preview_label,
-    )
-    .ok_or_else(|| "responsive_preview_owner_mismatch".to_string())?;
+    let current = registry
+        .current(
+            session_id,
+            DesktopSurfaceKind::PreviewWindow,
+            &preview_label,
+        )
+        .ok_or_else(|| "responsive_preview_owner_mismatch".to_string())?;
     if current.identity.label != preview_label
         || current.identity.session_id != session_id
         || current.identity.owner_instance_id != registry.owner_instance_id()
@@ -428,12 +429,34 @@ pub async fn capture_responsive_sweep(
     {
         return Err("responsive_preview_owner_mismatch".into());
     }
-    if window.is_maximized().map_err(|_| "responsive_preview_unavailable".to_string())? {
+    if window
+        .is_maximized()
+        .map_err(|_| "responsive_preview_unavailable".to_string())?
+    {
         return Err("responsive_preview_maximized".into());
     }
-    if window.is_fullscreen().map_err(|_| "responsive_preview_unavailable".to_string())? {
+    if window
+        .is_fullscreen()
+        .map_err(|_| "responsive_preview_unavailable".to_string())?
+    {
         return Err("responsive_preview_fullscreen".into());
     }
+
+    let capture_gate = session_capture_gate(&state, session_id)
+        .await
+        .map_err(|_| "responsive_preview_unavailable".to_string())?;
+    let _capture_guard = capture_gate.lock().await;
+    let deadline = tokio::time::Instant::now()
+        + Duration::from_millis(RESPONSIVE_TRANSACTION_TIMEOUT_MS);
+    let work_deadline = deadline - Duration::from_millis(RESPONSIVE_CLEANUP_RESERVE_MS);
+
+    validate_responsive_preview_authority(
+        &registry,
+        &window,
+        session_id,
+        &preview_label,
+        "responsive_preview_owner_mismatch",
+    )?;
     let route = window
         .url()
         .map_err(|_| "responsive_preview_unavailable".to_string())?;
@@ -448,19 +471,26 @@ pub async fn capture_responsive_sweep(
     if original.width == 0 || original.height == 0 {
         return Err("responsive_preview_unavailable".into());
     }
+    let initial_scale = window
+        .scale_factor()
+        .map_err(|_| "responsive_preview_unavailable".to_string())?;
+    validate_trusted_scale_factor(initial_scale)
+        .map_err(|_| "responsive_viewport_mismatch".to_string())?;
+    let initial_css_width = trusted_css_dimension(
+        (f64::from(original.width) / initial_scale).round(),
+        "width",
+    )
+    .map_err(|_| "responsive_viewport_mismatch".to_string())?;
+    let initial_css_height = trusted_css_dimension(
+        (f64::from(original.height) / initial_scale).round(),
+        "height",
+    )
+    .map_err(|_| "responsive_viewport_mismatch".to_string())?;
     let preview_state = ResponsivePreviewState {
         original_physical_width: original.width,
         original_physical_height: original.height,
         canonical_route: canonical_route.clone(),
     };
-
-    let capture_gate = session_capture_gate(&state, session_id)
-        .await
-        .map_err(|_| "responsive_preview_unavailable".to_string())?;
-    let _capture_guard = capture_gate.lock().await;
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_millis(RESPONSIVE_TRANSACTION_TIMEOUT_MS);
-    let work_deadline = deadline - Duration::from_millis(RESPONSIVE_CLEANUP_RESERVE_MS);
 
     window
         .set_min_size(None::<tauri::LogicalSize<f64>>)
@@ -468,6 +498,8 @@ pub async fn capture_responsive_sweep(
 
     let work = tokio::time::timeout_at(work_deadline, async {
         let mut captured = Vec::with_capacity(plan.presets.len());
+        let mut seed_probes = Vec::with_capacity(plan.presets.len());
+
         for preset in plan.presets.iter().copied() {
             let viewport = preset.viewport();
             window
@@ -484,6 +516,13 @@ pub async fn capture_responsive_sweep(
             )
             .await?;
 
+            validate_responsive_preview_authority(
+                &registry,
+                &window,
+                session_id,
+                &preview_label,
+                "responsive_session_drift",
+            )?;
             let current_route = window
                 .url()
                 .map_err(|_| "responsive_preview_unavailable".to_string())?;
@@ -508,11 +547,29 @@ pub async fn capture_responsive_sweep(
                 &app,
                 &window,
                 session_id,
-                preset,
                 viewport_meta,
                 &canonical_route,
             )
             .await?;
+
+            let snapshot = fresh_semantic_snapshot(session_id)
+                .await
+                .map_err(|_| "responsive_evidence_capture_failed".to_string())?;
+            let observation = responsive_observation_from_snapshot(
+                session_id,
+                &canonical_route,
+                viewport,
+                &snapshot,
+            )?;
+            let previous = seed_probes
+                .last()
+                .map(|probe: &LiveResponsiveProbe| &probe.observation);
+            let evaluation = evaluate_responsive_observation(previous, &observation)
+                .map_err(|_| "responsive_detector_failed".to_string())?;
+            seed_probes.push(LiveResponsiveProbe {
+                observation,
+                evaluation,
+            });
 
             let image = decode_png_rgba(&frame.png)
                 .map_err(|_| "responsive_redaction_failed".to_string())?;
@@ -533,14 +590,31 @@ pub async fn capture_responsive_sweep(
                 captured_at_unix_ms: frame.captured_at_unix_ms,
             });
         }
-        Ok::<Vec<ResponsiveCapturedViewport>, String>(captured)
+
+        let adaptive = run_live_adaptive_responsive(
+            &window,
+            &registry,
+            session_id,
+            &preview_label,
+            &canonical_route,
+            initial_css_width,
+            initial_css_height,
+            seed_probes,
+            work_deadline,
+        )
+        .await?;
+
+        Ok::<ResponsiveTransactionOutput, String>(ResponsiveTransactionOutput {
+            captured,
+            adaptive,
+        })
     })
     .await
     .unwrap_or_else(|_| Err("responsive_transaction_timeout".to_string()));
 
     let restore = restore_responsive_preview(&window, session_id, &preview_state, deadline).await;
-    let captured = match (work, restore) {
-        (Ok(captured), Ok(())) => captured,
+    let transaction = match (work, restore) {
+        (Ok(transaction), Ok(())) => transaction,
         (Err(primary), Ok(())) => return Err(primary),
         (Ok(_), Err(_)) => return Err("responsive_restore_failed".into()),
         (Err(primary), Err(_)) => return Err(format!("{primary};responsive_restore_failed")),
@@ -555,7 +629,8 @@ pub async fn capture_responsive_sweep(
         return Err("responsive_route_drift".into());
     }
 
-    let responsive_frames = captured
+    let responsive_frames = transaction
+        .captured
         .iter()
         .map(|entry| entry.responsive_frame.clone())
         .collect::<Vec<_>>();
@@ -591,10 +666,11 @@ pub async fn capture_responsive_sweep(
             &state,
             session_id,
             &plan,
-            &captured,
+            &transaction.captured,
             &contact_sheet.geometry,
             png,
             &preview_state.canonical_route,
+            transaction.adaptive,
         ),
     )
     .await
@@ -638,7 +714,6 @@ async fn capture_responsive_viewport_after_resize(
     app: &tauri::AppHandle,
     window: &tauri::WebviewWindow,
     session_id: SessionId,
-    preset: ResponsivePresetId,
     viewport: ViewportMeta,
     expected_route: &str,
 ) -> Result<CapturedFrame, String> {
@@ -675,8 +750,8 @@ async fn capture_responsive_viewport_after_resize(
     let canonical_route = canonical_visual_diff_route(&frame.route)
         .map_err(|_| "responsive_route_drift".to_string())?;
     if canonical_route != expected_route
-        || frame.viewport.css_width != preset.viewport().width
-        || frame.viewport.css_height != preset.viewport().height
+        || frame.viewport.css_width != viewport.css_width
+        || frame.viewport.css_height != viewport.css_height
         || (frame.viewport.device_scale_factor - viewport.device_scale_factor).abs() > f64::EPSILON
     {
         return Err("responsive_viewport_mismatch".into());
@@ -771,6 +846,7 @@ async fn persist_responsive_contact_sheet_and_register(
     geometry: &localview_responsive::ContactSheetGeometry,
     png: Vec<u8>,
     route: &str,
+    adaptive: ResponsiveAdaptiveReceipt,
 ) -> Result<ResponsiveSweepReceipt, String> {
     let artifact_id = {
         let mut artifacts = state.artifacts.lock().await;
@@ -885,6 +961,7 @@ async fn persist_responsive_contact_sheet_and_register(
                 sheet_y: viewport.sheet_y,
             })
             .collect(),
+        adaptive,
     })
 }
 
