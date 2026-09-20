@@ -613,7 +613,10 @@ async fn run_profile(
     state
         .begin(session_id, token.clone(), route.to_owned(), profile)
         .await?;
-    managed_eval(app, session_id, &begin_script(&token, route, profile)?)?;
+    if let Err(error) = managed_eval(app, session_id, &begin_script(&token, route, profile)?) {
+        best_effort_restore(app, state, session_id, &token).await;
+        return Err(error);
+    }
 
     let applied = match state
         .wait_for(session_id, &token, StressPhase::Applied)
@@ -642,22 +645,32 @@ async fn run_profile(
         }
     };
 
-    state.mark_restore_pending(session_id, &token).await?;
-    managed_eval(app, session_id, &restore_script(&token)?)?;
-    let restored_entry = state
-        .wait_for(session_id, &token, StressPhase::Restored)
-        .await?;
+    let restore_result = async {
+        state.mark_restore_pending(session_id, &token).await?;
+        managed_eval(app, session_id, &restore_script(&token)?)?;
+        state
+            .wait_for(session_id, &token, StressPhase::Restored)
+            .await
+    }
+    .await;
+    let restored_entry = match restore_result {
+        Ok(entry) => entry,
+        Err(error) => {
+            best_effort_restore(app, state, session_id, &token).await;
+            return Err(error);
+        }
+    };
     if restored_entry.conflict_nodes != 0
         || restored_entry.restored_nodes > restored_entry.mutated_nodes
     {
         state.clear(session_id, &token).await;
         return Err("content_stress_restore_conflict".into());
     }
+    state.clear(session_id, &token).await;
 
     visual_capture::wait_for_content_stress_settle(session_id).await?;
     let restored = visual_capture::fresh_semantic_snapshot(session_id).await?;
     validate_restored_snapshot(baseline, &restored)?;
-    state.clear(session_id, &token).await;
 
     Ok((
         ContentStressProfileReceipt {
@@ -675,8 +688,11 @@ async fn run_profile(
 pub async fn capture_content_locale_stress(
     app: tauri::AppHandle,
     state: tauri::State<'_, ContentStressState>,
+    capture_state: tauri::State<'_, visual_capture::VisualCaptureState>,
     session_id: SessionId,
 ) -> Result<ContentStressReceipt, String> {
+    let capture_gate = visual_capture::session_capture_gate(&capture_state, session_id).await?;
+    let _capture_guard = capture_gate.lock().await;
     let managed_route = visual_capture::managed_surface_canonical_route(&app, session_id)?;
     let managed_route = canonical_route(&managed_route)?;
     visual_capture::wait_for_content_stress_settle(session_id).await?;
