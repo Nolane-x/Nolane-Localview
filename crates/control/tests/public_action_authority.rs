@@ -179,6 +179,52 @@ async fn measure_public_route_rejects_missing_or_malformed_reference_without_enq
 }
 
 #[tokio::test]
+async fn style_inspect_public_route_accepts_only_bounded_stable_reference() {
+    let (app, live, session_id) = fixture().await;
+
+    assert_eq!(
+        post_action_with_reference(
+            &app,
+            session_id,
+            Some("@eabc123"),
+            json!({"type": "style_inspect"}),
+        )
+        .await,
+        StatusCode::ACCEPTED
+    );
+
+    let queued = live.take_actions(session_id, 64).await;
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].reference.as_deref(), Some("@eabc123"));
+    assert!(matches!(
+        queued[0].action,
+        localview_live_bridge::BridgeActionKind::StyleInspect
+    ));
+}
+
+#[tokio::test]
+async fn style_inspect_public_route_rejects_missing_or_malformed_reference_without_enqueueing() {
+    for reference in [None, Some(""), Some("@e"), Some("button#save"), Some("@e-not-hex")] {
+        let (app, live, session_id) = fixture().await;
+        assert_eq!(
+            post_action_with_reference(
+                &app,
+                session_id,
+                reference,
+                json!({"type": "style_inspect"}),
+            )
+            .await,
+            StatusCode::BAD_REQUEST,
+            "invalid StyleInspect reference must fail before queue mutation: {reference:?}"
+        );
+        assert!(
+            live.take_actions(session_id, 64).await.is_empty(),
+            "invalid StyleInspect reference must not mutate the public action queue"
+        );
+    }
+}
+
+#[tokio::test]
 async fn legacy_public_route_keeps_observe_only_snapshot_available() {
     let (app, live, session_id) = fixture().await;
 
