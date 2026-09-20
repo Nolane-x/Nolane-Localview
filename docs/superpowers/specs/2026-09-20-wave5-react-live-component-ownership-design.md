@@ -41,10 +41,12 @@ A candidate host fiber must satisfy all of the following:
 1. discovered only from an own property of the exact DOM element;
 2. property name begins with `__reactFiber$` or legacy `__reactInternalInstance$`;
 3. own-property inspection is capped at 64 keys;
-4. the candidate fiber is an object;
-5. `fiber.stateNode === element` exactly, proving the fiber belongs to that host element;
-6. ancestor traversal follows only `return`;
-7. traversal depth is capped at 32.
+4. the exact element also exposes the paired `__reactProps$<same-suffix>` own-property marker used by React DOM, but LocalView never reads its value;
+5. the fiber is read only from an own data-property descriptor, never through an arbitrary getter;
+6. the candidate fiber is an object;
+7. `fiber.stateNode === element` exactly, proving the fiber belongs to that host element;
+8. ancestor traversal follows only `return`;
+9. traversal depth is capped at 32.
 
 The adapter must not install or replace `__REACT_DEVTOOLS_GLOBAL_HOOK__`, patch React APIs, mutate fibers, traverse arbitrary child/sibling graphs, or create a second framework runtime.
 
@@ -154,6 +156,7 @@ If a future React runtime exposes neither an admissible bounded `_debugSource` n
 Prove generated bootstrap contains:
 
 - bounded React property prefixes;
+- paired fiber/props host marker with matching suffix, without reading props;
 - exact host `stateNode` anchor;
 - bounded key/depth/probe limits;
 - bounded React 19 debug-stack bytes/lines;
