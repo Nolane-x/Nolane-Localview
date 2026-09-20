@@ -38,6 +38,7 @@ fn node(
             column: Some(1),
             component: Some(name.into()),
         }),
+        ownership: None,
         children,
     }
 }
