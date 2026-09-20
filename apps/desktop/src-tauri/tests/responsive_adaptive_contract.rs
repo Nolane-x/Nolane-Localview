@@ -10,7 +10,7 @@ fn live_adaptive_probe_reuses_exact_preview_settle_and_fresh_snapshot_authority(
     let source = include_str!("../src/visual_capture.rs");
     let adaptive = between(
         source,
-        "async fn run_live_adaptive_responsive(",
+        "impl LiveResponsiveLayoutProbe<'_> {",
         "async fn wait_for_responsive_size_convergence(",
     );
 
@@ -24,6 +24,9 @@ fn live_adaptive_probe_reuses_exact_preview_settle_and_fresh_snapshot_authority(
         "responsive_session_drift",
         "responsive_route_drift",
         "responsive_probe_cap_exceeded",
+        "semantic_state_drift",
+        "semantic_state_fingerprint_incomplete",
+        "adaptive_height_drift",
         "resolve_observed_transition",
         "analyze_responsive_series",
     ] {
