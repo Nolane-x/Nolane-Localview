@@ -66,7 +66,7 @@ jobs:
         run: cargo check -p localview-layout -p localview-live-analysis -p localview-diagnostics --all-targets
 
       - name: Clippy affected crates
-        run: cargo clippy -p localview-layout -p localview-live-analysis -p localview-diagnostics --all-targets -- -D warnings
+        run: cargo clippy -p localview-layout -p localview-live-analysis -p localview-diagnostics --all-targets --no-deps -- -D warnings
 
       - name: Test layout algorithms and adversarial cases
         run: cargo test -p localview-layout -- --nocapture
