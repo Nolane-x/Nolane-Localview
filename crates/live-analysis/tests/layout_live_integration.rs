@@ -1,6 +1,6 @@
 use chrono::Utc;
 use localview_layout::LayoutIssueClass;
-use localview_live_analysis::analyze_live;
+use localview_live_analysis::{analyze_live, diagnose_live};
 use localview_live_bridge::{ObserverEvent, ObserverEventKind};
 use serde_json::json;
 
@@ -134,4 +134,42 @@ fn arbitrary_style_fields_and_private_text_are_not_retained_in_layout_output() {
     assert!(!serialized.contains("private-token"));
     assert!(!serialized.contains("customSecret"));
     assert!(serialized.contains("grid_container"));
+}
+
+
+#[test]
+fn missing_or_invalid_live_viewport_is_unknown_not_a_critical_layout_finding() {
+    for snapshot in [
+        json!({"version": 21}),
+        json!({
+            "version": 22,
+            "viewport": {"width": 0, "height": 720},
+            "semantic_tree": {
+                "ref": "@root",
+                "rect": {"x":0.0,"y":0.0,"width":400.0,"height":300.0},
+                "children": []
+            }
+        }),
+    ] {
+        let event = snapshot_event(21, snapshot);
+        let analysis = analyze_live(std::slice::from_ref(&event));
+        assert_eq!(analysis.layout.snapshot_seq, Some(21));
+        assert_eq!(analysis.layout.analysis.analyzed_nodes, 0);
+        assert!(analysis.layout.analysis.issues.is_empty());
+
+        let diagnosis = diagnose_live(&[event]);
+        assert!(
+            !diagnosis
+                .findings
+                .iter()
+                .any(|finding| finding.code == "invalid_viewport_geometry"),
+            "unverified live viewport must not become an application defect"
+        );
+        assert!(
+            diagnosis
+                .unknowns
+                .iter()
+                .any(|unknown| unknown.statement == "Current layout geometry has not been verified")
+        );
+    }
 }
