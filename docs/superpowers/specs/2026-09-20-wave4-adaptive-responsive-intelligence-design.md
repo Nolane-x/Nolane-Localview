@@ -88,7 +88,7 @@ Backend-owned constants:
 - duplicate widths are cache hits and never trigger another resize;
 - no arbitrary caller-authored width is accepted.
 
-The initial planner keeps domain endpoints and deterministically subdivides gaps. Binary refinement is attempted only when the already-observed detector sequence has exactly one concrete PASS/FAIL transition.
+The initial planner calls the pre-existing `adaptive_sweep` primitive to obtain candidates, then applies only a deterministic domain/dedup/hard-cap selection layer. It does not introduce a second midpoint-generation authority. Binary refinement is attempted only when the already-observed detector sequence has exactly one concrete PASS/FAIL transition and the initial semantic-state fingerprint is stable.
 
 The existing \`discover_breakpoint\` primitive is used only to choose additional live probes. Its scalar return value is deliberately not exposed as breakpoint truth.
 
@@ -137,7 +137,7 @@ Binary search requires an order-independent condition. Therefore \`responsive_ge
 - text/control region outside the viewport;
 - geometric collision between independent interactive controls.
 
-Cross-width observations do **not** alter this width-local PASS/FAIL state. This prevents binary results from depending on probe order.
+Cross-width observations do **not** alter this width-local PASS/FAIL state. This prevents binary results from depending on probe order. Cross-width issue generation is also performed only after all probes are sorted by width, so midpoint execution order cannot change disappearance/jump evidence.
 
 Clipping without computed overflow authority, disappearance across a nearby width, and other semantically ambiguous observations can still become issues, but they do not manufacture a width-local failure.
 
