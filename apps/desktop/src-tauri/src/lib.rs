@@ -781,10 +781,25 @@ async fn apply_fix_proposal(
 
         let semantic_before =
             trusted_verify::build_semantic_baseline(&session, &snapshot, &proposal.reference)?;
+        let verification_region = localview_capture::resolve_progressive_targets(
+            &snapshot,
+            &proposal.reference,
+        )
+        .ok()
+        .and_then(|plan| {
+            plan.targets.into_iter().find_map(|target| {
+                matches!(
+                    target.kind,
+                    localview_capture::ProgressiveTargetKind::Element
+                )
+                .then_some(target.rect)
+            })
+        });
         let visual_before = match visual_capture::capture_verification_baseline(
             app.clone(),
             &visual_state,
             proposal.session_id,
+            verification_region,
         )
         .await
         {
@@ -801,6 +816,7 @@ async fn apply_fix_proposal(
                     pixel_width: frame.pixel_width,
                     pixel_height: frame.pixel_height,
                     target_rect: semantic_before.selected.rect.clone(),
+                    capture_region: frame.region,
                     captured_at_unix_ms: frame.captured_at_unix_ms,
                 })
             }
@@ -978,6 +994,7 @@ async fn verify_fix_change(
                 app.clone(),
                 &visual_state,
                 record.session_id,
+                before.capture_region.clone(),
             )
             .await
             {
@@ -987,18 +1004,25 @@ async fn verify_fix_change(
                     if frame_route != record.canonical_route {
                         return Err("trusted Verify route changed during verification".into());
                     }
+                    if frame.region != before.capture_region {
+                        return Err("trusted Verify affected region changed during verification".into());
+                    }
                     let facts = trusted_verify::compare_visual_facts(
                         before,
                         &frame.png,
                         &frame.viewport,
                         semantic_after.selected.rect.as_ref(),
                     )?;
-                    if let Some(changed_ratio) = facts.viewport_changed_ratio {
+                    if let Some(changed_ratio) = facts
+                        .affected_region_changed_ratio
+                        .or(facts.viewport_changed_ratio)
+                    {
                         visual_diff_evidence_id = Some(
                             visual_capture::register_verification_visual_diff_evidence(
                                 record.session_id,
                                 frame.route.clone(),
                                 frame.viewport.clone(),
+                                frame.region.clone(),
                                 frame.captured_at_unix_ms,
                                 changed_ratio,
                                 registered.evidence_id,
@@ -1011,12 +1035,14 @@ async fn verify_fix_change(
                 Err(_) => trusted_verify::VisualVerificationFacts {
                     viewport_changed_ratio: None,
                     target_changed_ratio: None,
+                    affected_region_changed_ratio: None,
                 },
             }
         } else {
             trusted_verify::VisualVerificationFacts {
                 viewport_changed_ratio: None,
                 target_changed_ratio: None,
+                affected_region_changed_ratio: None,
             }
         };
 
@@ -1046,6 +1072,7 @@ async fn verify_fix_change(
                 regression_signals: comparison.regression_signals,
                 viewport_changed_ratio: comparison.viewport_changed_ratio,
                 target_changed_ratio: comparison.target_changed_ratio,
+                affected_region_changed_ratio: comparison.affected_region_changed_ratio,
                 visual_diff_evidence_id,
                 snapshot_version: snapshot.version,
                 provider_label: None,
