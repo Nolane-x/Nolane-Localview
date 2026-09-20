@@ -1,6 +1,8 @@
 #![recursion_limit = "256"]
 
 use std::{
+    fs,
+    path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
@@ -21,7 +23,37 @@ use localview_sessions::SessionManager;
 use serde_json::Value;
 use tower::ServiceExt;
 
-fn discovered() -> DiscoveredServer {
+struct TempProject {
+    root: PathBuf,
+}
+
+impl TempProject {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!("localview-css-source-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create temporary CSS project root");
+        Self { root }
+    }
+
+    fn path(&self, relative: &str) -> PathBuf {
+        self.root.join(relative)
+    }
+
+    fn write(&self, relative: &str, contents: impl AsRef<[u8]>) {
+        let path = self.path(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create CSS fixture parent");
+        }
+        fs::write(path, contents).expect("write CSS fixture");
+    }
+}
+
+impl Drop for TempProject {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn discovered_with_cwd(cwd: Option<&Path>) -> DiscoveredServer {
     DiscoveredServer {
         candidate: ListenerCandidate {
             endpoint: Endpoint {
@@ -32,7 +64,7 @@ fn discovered() -> DiscoveredServer {
             pid: Some(42),
             process_name: Some("node".into()),
             command: Some("vite".into()),
-            cwd: Some("/tmp/localview-css-trace-test".into()),
+            cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
         },
         classification: Classification {
             kind: ServerKind::FrontendDevServer,
@@ -43,6 +75,27 @@ fn discovered() -> DiscoveredServer {
             evidence: Default::default(),
         },
     }
+}
+
+fn discovered() -> DiscoveredServer {
+    discovered_with_cwd(Some(Path::new("/tmp/localview-css-trace-test")))
+}
+
+async fn test_state_with_cwd(cwd: Option<&Path>) -> (ControlState, uuid::Uuid) {
+    let sessions = Arc::new(SessionManager::new(Duration::from_secs(2)));
+    let reconcile = sessions
+        .reconcile(vec![discovered_with_cwd(cwd)], Utc::now())
+        .await;
+    let session_id = reconcile.created[0];
+    let state = ControlState {
+        token: Arc::from("test-token"),
+        sessions,
+        observations: ObservationBus::new(32),
+        live: LiveBridge::default(),
+        evidence: EvidenceStore::new(128),
+        paused: Arc::new(AtomicBool::new(false)),
+    };
+    (state, session_id)
 }
 
 async fn test_state() -> (ControlState, uuid::Uuid) {
@@ -222,4 +275,252 @@ async fn fresh_style_trace_returns_only_selected_bounded_css_evidence() {
         serde_json::json!([1, 0, 0, 0])
     );
     assert!(body.get("semantic_tree").is_none());
+}
+
+
+fn stylesheet_payload(
+    stylesheet_path: &str,
+    selector: &str,
+    property: &str,
+    value: &str,
+    important: bool,
+) -> Value {
+    let mut payload = raw_snapshot_payload();
+    payload["semantic_tree"]["children"][0]["styleTrace"]["declarations"] = serde_json::json!([{
+        "source_kind": "same_origin_stylesheet",
+        "stylesheet_path": stylesheet_path,
+        "selector": selector,
+        "property": property,
+        "value": value,
+        "important": important
+    }]);
+    payload
+}
+
+#[tokio::test]
+async fn fresh_style_trace_upgrades_unique_project_css_to_exact_source_coordinate() {
+    let project = TempProject::new();
+    project.write(
+        "src/button.css",
+        "/* lead */\r\n.save {\r\n  color: red;\r\n}\r\n",
+    );
+    let (state, session_id) = test_state_with_cwd(Some(&project.root)).await;
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot(
+            executor_state,
+            session_id,
+            stylesheet_payload("src/button.css", ".save", "color", "red", false),
+        )
+        .await;
+    });
+
+    let (status, body) = get_trace(state, session_id, "@save", true).await;
+    executor.await.expect("snapshot executor");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["declarations"][0]["source_authority"]["level"],
+        "exact_declaration_position"
+    );
+    assert_eq!(
+        body["declarations"][0]["source_authority"]["file"],
+        "src/button.css"
+    );
+    assert_eq!(body["declarations"][0]["source_authority"]["line"], 3);
+    assert_eq!(body["declarations"][0]["source_authority"]["column"], 2);
+    assert_eq!(
+        body["declarations"][0]["source_authority"]["mapping"],
+        "direct_css"
+    );
+    assert_eq!(
+        body["author_cascade"]["winners"][0]["source_authority"]["level"],
+        "runtime_inline"
+    );
+    let serialized = serde_json::to_string(&body).expect("serialize trace");
+    assert!(!serialized.contains(&project.root.to_string_lossy().to_string()));
+}
+
+#[tokio::test]
+async fn ambiguous_duplicate_css_declarations_stop_at_verified_project_file() {
+    let project = TempProject::new();
+    project.write(
+        "src/button.css",
+        ".save { color: red; }\n.save { color: red; }\n",
+    );
+    let (state, session_id) = test_state_with_cwd(Some(&project.root)).await;
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot(
+            executor_state,
+            session_id,
+            stylesheet_payload("src/button.css", ".save", "color", "red", false),
+        )
+        .await;
+    });
+
+    let (status, body) = get_trace(state, session_id, "@save", true).await;
+    executor.await.expect("snapshot executor");
+    assert_eq!(status, StatusCode::OK);
+    let authority = &body["declarations"][0]["source_authority"];
+    assert_eq!(authority["level"], "project_file_verified");
+    assert_eq!(authority["file"], "src/button.css");
+    assert!(authority.get("line").is_none());
+    assert!(authority.get("column").is_none());
+}
+
+#[tokio::test]
+async fn project_owned_css_source_map_can_upgrade_to_original_source() {
+    let project = TempProject::new();
+    project.write("dist/app.css", ".save{color:red}");
+    project.write("src/button.scss", "$tone: red;\n.save { color: $tone; }");
+    project.write(
+        "dist/app.css.map",
+        serde_json::json!({
+            "version": 3,
+            "sources": ["../src/button.scss"],
+            "names": [],
+            "sourcesContent": ["MUST-NOT-LEAK"],
+            "mappings": "MAAA"
+        })
+        .to_string(),
+    );
+    let (state, session_id) = test_state_with_cwd(Some(&project.root)).await;
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot(
+            executor_state,
+            session_id,
+            stylesheet_payload("dist/app.css", ".save", "color", "red", false),
+        )
+        .await;
+    });
+
+    let (status, body) = get_trace(state, session_id, "@save", true).await;
+    executor.await.expect("snapshot executor");
+    assert_eq!(status, StatusCode::OK);
+    let authority = &body["declarations"][0]["source_authority"];
+    assert_eq!(authority["level"], "exact_declaration_position");
+    assert_eq!(authority["file"], "src/button.scss");
+    assert_eq!(authority["line"], 1);
+    assert_eq!(authority["column"], 0);
+    assert_eq!(authority["mapping"], "project_source_map");
+    let serialized = serde_json::to_string(&body).expect("serialize trace");
+    assert!(!serialized.contains("MUST-NOT-LEAK"));
+    assert!(!serialized.contains(&project.root.to_string_lossy().to_string()));
+}
+
+#[tokio::test]
+async fn source_map_escape_is_rejected_without_losing_direct_css_coordinate() {
+    let project = TempProject::new();
+    let outside = TempProject::new();
+    project.write("dist/app.css", ".save{color:red}");
+    outside.write("private.scss", ".save { color: red; }");
+    project.write(
+        "dist/app.css.map",
+        serde_json::json!({
+            "version": 3,
+            "sources": [format!("../../{}/private.scss", outside.root.file_name().unwrap().to_string_lossy())],
+            "names": [],
+            "mappings": "MAAA"
+        })
+        .to_string(),
+    );
+    let (state, session_id) = test_state_with_cwd(Some(&project.root)).await;
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot(
+            executor_state,
+            session_id,
+            stylesheet_payload("dist/app.css", ".save", "color", "red", false),
+        )
+        .await;
+    });
+
+    let (status, body) = get_trace(state, session_id, "@save", true).await;
+    executor.await.expect("snapshot executor");
+    assert_eq!(status, StatusCode::OK);
+    let authority = &body["declarations"][0]["source_authority"];
+    assert_eq!(authority["file"], "dist/app.css");
+    assert_eq!(authority["mapping"], "direct_css");
+}
+
+#[tokio::test]
+async fn oversized_css_is_verified_but_never_parsed_for_exact_position() {
+    let project = TempProject::new();
+    project.write("src/huge.css", vec![b'a'; 513 * 1024]);
+    let (state, session_id) = test_state_with_cwd(Some(&project.root)).await;
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot(
+            executor_state,
+            session_id,
+            stylesheet_payload("src/huge.css", ".save", "color", "red", false),
+        )
+        .await;
+    });
+
+    let (status, body) = get_trace(state, session_id, "@save", true).await;
+    executor.await.expect("snapshot executor");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["declarations"][0]["source_authority"]["level"],
+        "project_file_verified"
+    );
+}
+
+#[tokio::test]
+async fn inline_stylesheet_evidence_never_invents_filesystem_coordinates() {
+    let (state, session_id) = test_state().await;
+    let mut payload = raw_snapshot_payload();
+    payload["semantic_tree"]["children"][0]["styleTrace"]["declarations"] = serde_json::json!([{
+        "source_kind": "inline_stylesheet",
+        "stylesheet_path": null,
+        "selector": ".save",
+        "property": "color",
+        "value": "red",
+        "important": false
+    }]);
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot(executor_state, session_id, payload).await;
+    });
+
+    let (status, body) = get_trace(state, session_id, "@save", true).await;
+    executor.await.expect("snapshot executor");
+    assert_eq!(status, StatusCode::OK);
+    let authority = &body["declarations"][0]["source_authority"];
+    assert_eq!(authority["level"], "runtime_inline");
+    assert!(authority.get("file").is_none());
+    assert!(authority.get("line").is_none());
+    assert!(authority.get("column").is_none());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stylesheet_symlink_escape_never_becomes_project_file_authority() {
+    use std::os::unix::fs::symlink;
+
+    let project = TempProject::new();
+    let outside = TempProject::new();
+    outside.write("private.css", ".save { color: red; }");
+    fs::create_dir_all(project.path("src")).expect("create source dir");
+    symlink(outside.path("private.css"), project.path("src/button.css")).expect("create symlink");
+
+    let (state, session_id) = test_state_with_cwd(Some(&project.root)).await;
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot(
+            executor_state,
+            session_id,
+            stylesheet_payload("src/button.css", ".save", "color", "red", false),
+        )
+        .await;
+    });
+
+    let (status, body) = get_trace(state, session_id, "@save", true).await;
+    executor.await.expect("snapshot executor");
+    assert_eq!(status, StatusCode::OK);
+    let authority = &body["declarations"][0]["source_authority"];
+    assert_eq!(authority["level"], "stylesheet_hint");
+    assert!(authority.get("file").is_none());
 }
