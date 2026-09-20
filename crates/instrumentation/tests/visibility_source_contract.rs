@@ -237,7 +237,6 @@ fn css_declaration_trace_is_bounded_privacy_safe_and_separate_from_component_own
     );
 }
 
-
 #[test]
 fn css_author_cascade_is_bounded_active_condition_aware_and_fail_closed() {
     let script = bootstrap_script(&InstrumentationConfig::default());
