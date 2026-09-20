@@ -913,7 +913,28 @@ const SCRIPT: &str = r#"
       });
     }
     refreshPointSelectOverlayVisibility(state);
+    queuePointSelectCompletion({
+      requestToken,
+      route: pointSelectCanonicalRoute(),
+      status: 'armed',
+      reference: null,
+      reason: null,
+    });
     return true;
+  };
+
+  const probePointSelect = (requestToken) => {
+    requestToken = String(requestToken || '');
+    if (!validPointSelectToken(requestToken)) return false;
+    const active = pointSelectState?.requestToken === requestToken;
+    queuePointSelectCompletion({
+      requestToken,
+      route: pointSelectCanonicalRoute(),
+      status: active ? 'armed' : 'failed',
+      reference: null,
+      reason: active ? null : 'runtime_unavailable',
+    });
+    return active;
   };
 
   const resolveRefForPointSelect = (element, reference) =>
@@ -2551,6 +2572,7 @@ const SCRIPT: &str = r#"
     version: '0.2.0',
     snapshot,
     beginPointSelect,
+    probePointSelect,
     cancelPointSelect,
     takePointSelectCompletions,
     inspect(reference) { return inspect(reference); },
