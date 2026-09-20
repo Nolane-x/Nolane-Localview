@@ -110,6 +110,10 @@ fn bridge_receipt_is_bounded_and_generation_bound() {
         assert!(authority.contains(required), "missing desktop race/privacy authority: {required}");
     }
 
+    let transport_authority = authority
+        .split("#[cfg(test)]")
+        .next()
+        .expect("production point-select authority");
     for forbidden in [
         "inner_html",
         "text_content",
@@ -120,7 +124,10 @@ fn bridge_receipt_is_bounded_and_generation_bound() {
         "props",
         "hooks",
     ] {
-        assert!(!authority.contains(forbidden), "point-select receipt must not retain private payload: {forbidden}");
+        assert!(
+            !transport_authority.contains(forbidden),
+            "point-select receipt must not retain private payload: {forbidden}"
+        );
     }
 
     assert!(permissions.contains(""point_select_begin""));
