@@ -12,6 +12,8 @@ Base: `main@0fd77c0a31226597500761e8d556b61156f77e4d`
 
 Branch: `feat/wave5-css-declaration-trace`
 
+Pull request: #177
+
 ## Goal
 
 Let an agent ask why a bounded semantic element has its current layout/visual CSS values without turning every semantic snapshot into a stylesheet dump and without claiming a full browser cascade debugger.
