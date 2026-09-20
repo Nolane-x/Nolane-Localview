@@ -1167,6 +1167,7 @@ export default function LocalViewShell() {
         regressionSignals: receipt.regressionSignals,
         viewportChangedRatio: receipt.viewportChangedRatio,
         targetChangedRatio: receipt.targetChangedRatio,
+        affectedRegionChangedRatio: receipt.affectedRegionChangedRatio,
         providerLabel: receipt.providerLabel,
         advisorySummary: receipt.advisorySummary,
       });
