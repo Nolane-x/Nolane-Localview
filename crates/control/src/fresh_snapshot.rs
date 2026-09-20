@@ -30,6 +30,10 @@ const MAX_ATTRIBUTE_ENTRIES: usize = 64;
 const MAX_ATTRIBUTE_KEY_BYTES: usize = 128;
 const MAX_ATTRIBUTE_VALUE_BYTES: usize = 256;
 const MAX_SOURCE_FILE_BYTES: usize = 260;
+const MAX_REACT_COMPONENT_BYTES: usize = 96;
+const MAX_REACT_COMPONENT_ID_BYTES: usize = 384;
+const MAX_REACT_SOURCE_LINE: u32 = 1_000_000;
+const MAX_REACT_SOURCE_COLUMN: u32 = 10_000_001;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FreshSnapshotError {
@@ -253,7 +257,10 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
     }
 
     let origin = bounded_required_string(value.get("origin")?, 64)?;
-    if !matches!(origin.as_str(), "data-component-source" | "data-source") {
+    if !matches!(
+        origin.as_str(),
+        "data-component-source" | "data-source" | "react-dev-fiber"
+    ) {
         return None;
     }
     let file = bounded_required_string(value.get("file")?, MAX_SOURCE_FILE_BYTES)?;
@@ -262,12 +269,31 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
         None | Some(Value::Null) => None,
         Some(raw) => Some(u32::try_from(raw.as_u64()?).ok()?),
     };
-    // `data-component-source` is an explicit ownership hint, but a file alone is not a
-    // component identity: one file may contain many components. Bind the identity to the
-    // declared source line as well so only ancestors carrying the same explicit component
-    // source location can corroborate ownership. Column stays diagnostic, not identity.
-    let component =
-        (origin == "data-component-source").then(|| format!("{file}:{line}"));
+
+    let component = match origin.as_str() {
+        "data-component-source" => {
+            // Explicit ownership is bound to source location because one file may contain
+            // multiple components. Column remains diagnostic rather than identity.
+            Some(format!("{file}:{line}"))
+        }
+        "react-dev-fiber" => {
+            if line == 0 || line > MAX_REACT_SOURCE_LINE {
+                return None;
+            }
+            if column.is_some_and(|value| value == 0 || value > MAX_REACT_SOURCE_COLUMN) {
+                return None;
+            }
+            let component_name =
+                bounded_required_string(value.get("component")?, MAX_REACT_COMPONENT_BYTES)?;
+            let identity = format!("react:{file}:{line}:{component_name}");
+            if identity.len() > MAX_REACT_COMPONENT_ID_BYTES {
+                return None;
+            }
+            Some(identity)
+        }
+        "data-source" => None,
+        _ => unreachable!("source origin was validated above"),
+    };
 
     Some(Some(SourceLocation {
         file,
@@ -342,5 +368,57 @@ mod tests {
             .expect("valid component source hint")
             .expect("source location");
         assert_eq!(projected.component.as_deref(), Some("SettingsCard.tsx:10"));
+    }
+
+    #[test]
+    fn react_dev_fiber_hint_preserves_bounded_component_evidence() {
+        let source = serde_json::json!({
+            "origin": "react-dev-fiber",
+            "file": "src/SettingsCard.tsx",
+            "line": 17,
+            "column": 5,
+            "component": "SettingsCard"
+        });
+        let projected = project_source(Some(&source))
+            .expect("valid React source hint")
+            .expect("source location");
+        assert_eq!(projected.file, "src/SettingsCard.tsx");
+        assert_eq!(projected.line, 17);
+        assert_eq!(projected.column, Some(5));
+        assert_eq!(
+            projected.component.as_deref(),
+            Some("react:src/SettingsCard.tsx:17:SettingsCard")
+        );
+    }
+
+    #[test]
+    fn react_dev_fiber_hint_fails_closed_without_valid_identity() {
+        for source in [
+            serde_json::json!({
+                "origin": "react-dev-fiber",
+                "file": "src/App.tsx",
+                "line": 0,
+                "column": 1,
+                "component": "App"
+            }),
+            serde_json::json!({
+                "origin": "react-dev-fiber",
+                "file": "src/App.tsx",
+                "line": 1,
+                "column": 0,
+                "component": "App"
+            }),
+            serde_json::json!({
+                "origin": "react-dev-fiber",
+                "file": "src/App.tsx",
+                "line": 1,
+                "column": 1
+            }),
+        ] {
+            assert!(
+                project_source(Some(&source)).is_none(),
+                "invalid React ownership must fail closed"
+            );
+        }
     }
 }
