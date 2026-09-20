@@ -253,6 +253,31 @@ async fn fresh_semantic_snapshot_projects_the_matching_new_action_result() {
 }
 
 #[tokio::test]
+async fn fresh_semantic_snapshot_projects_bounded_svelte_component_ownership() {
+    let (state, session_id) = test_state().await;
+    let mut payload = raw_snapshot_payload();
+    payload["semantic_tree"]["children"][0]["children"][0]["sourceHint"] = serde_json::json!({
+        "origin": "svelte-dev-meta",
+        "file": "src/SvelteCard.svelte",
+        "line": 17,
+        "column": 0,
+        "component": "SvelteCard"
+    });
+
+    let (status, body) = get_fresh_with_result(state, session_id, payload).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let source = &body["root"]["children"][0]["children"][0]["source"];
+    assert_eq!(source["file"], "src/SvelteCard.svelte");
+    assert_eq!(source["line"], 17);
+    assert_eq!(source["column"], 0);
+    assert_eq!(
+        source["component"],
+        "svelte:src/SvelteCard.svelte:SvelteCard"
+    );
+}
+
+#[tokio::test]
 async fn failed_matching_snapshot_action_result_fails_closed() {
     let (state, session_id) = test_state().await;
     let (status, body) = get_fresh_with_action_result(
