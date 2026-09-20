@@ -1,0 +1,102 @@
+name: Wave 5 affected-region trusted verify
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/src/api.ts"
+      - "apps/desktop/src/app/LocalViewShell.tsx"
+      - "apps/desktop/src/features/FloatingTools.tsx"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/src/trusted_verify.rs"
+      - "apps/desktop/src-tauri/src/visual_capture.rs"
+      - "apps/desktop/src-tauri/tests/wave5_affected_region_verify_contract.rs"
+      - "docs/superpowers/specs/2026-09-20-wave5-affected-region-trusted-verify-design.md"
+      - ".github/workflows/wave5-affected-region-verify.yml"
+  push:
+    branches:
+      - "feat/wave5-affected-region-verify"
+    paths:
+      - "apps/desktop/src/api.ts"
+      - "apps/desktop/src/app/LocalViewShell.tsx"
+      - "apps/desktop/src/features/FloatingTools.tsx"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/src/trusted_verify.rs"
+      - "apps/desktop/src-tauri/src/visual_capture.rs"
+      - "apps/desktop/src-tauri/tests/wave5_affected_region_verify_contract.rs"
+      - "docs/superpowers/specs/2026-09-20-wave5-affected-region-trusted-verify-design.md"
+      - ".github/workflows/wave5-affected-region-verify.yml"
+
+concurrency:
+  group: wave5-affected-region-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  focused-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify focused formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            apps/desktop/src-tauri/src/lib.rs \
+            apps/desktop/src-tauri/src/trusted_verify.rs \
+            apps/desktop/src-tauri/src/visual_capture.rs \
+            apps/desktop/src-tauri/tests/wave5_affected_region_verify_contract.rs
+
+      - name: Verify affected-region unit semantics
+        run: cargo test -p localview-desktop trusted_verify_affected_region -- --nocapture
+
+      - name: Verify affected-region orchestration contract
+        run: cargo test -p localview-desktop --test wave5_affected_region_verify_contract -- --nocapture
+
+      - name: Preserve Trusted Verify V2.6
+        run: cargo test -p localview-desktop --test human_first_trusted_verify_v26_contract -- --nocapture
+
+      - name: Preserve progressive target capture
+        run: cargo test -p localview-desktop --test progressive_target_capture_contract -- --nocapture
+
+      - name: Preserve changed-region scheduler
+        run: cargo test -p localview-desktop --test changed_region_schedule_contract -- --nocapture
+
+      - name: Check desktop all targets
+        run: cargo check -p localview-desktop --all-targets
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build frontend
+        run: npm run build
+
+  workspace-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check complete workspace
+        run: cargo check --workspace --all-targets
