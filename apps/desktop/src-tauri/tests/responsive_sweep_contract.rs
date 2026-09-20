@@ -159,3 +159,32 @@ fn responsive_evidence_is_dedicated_and_contact_sheet_only() {
         );
     }
 }
+
+
+#[test]
+fn adaptive_runtime_stays_inside_the_existing_restore_before_persistence_transaction() {
+    let source = include_str!("../src/visual_capture.rs");
+    let tx = between(
+        source,
+        "pub async fn capture_responsive_sweep(",
+        "async fn wait_for_responsive_size_convergence(",
+    );
+
+    for required in [
+        "run_live_adaptive_responsive",
+        "responsive_observation_from_snapshot",
+        "fresh_semantic_snapshot",
+        "ResponsiveTransactionOutput",
+        "ResponsiveAdaptiveReceipt",
+    ] {
+        assert!(tx.contains(required), "adaptive responsive transaction missing {required}");
+    }
+
+    let adaptive = tx.find("run_live_adaptive_responsive").unwrap();
+    let restore = tx.find("restore_responsive_preview").unwrap();
+    let persist = tx
+        .find("persist_responsive_contact_sheet_and_register")
+        .unwrap();
+    assert!(adaptive < restore, "adaptive probes must finish before exact preview restoration");
+    assert!(restore < persist, "adaptive integration must preserve restore-before-persistence");
+}
