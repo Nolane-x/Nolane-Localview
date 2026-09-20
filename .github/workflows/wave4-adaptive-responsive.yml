@@ -1,0 +1,66 @@
+name: Wave 4 adaptive responsive intelligence
+
+on:
+  pull_request:
+    paths:
+      - "crates/responsive/**"
+      - "apps/desktop/src-tauri/src/visual_capture.rs"
+      - "apps/desktop/src-tauri/tests/responsive_sweep_contract.rs"
+      - "apps/desktop/src-tauri/tests/responsive_adaptive_contract.rs"
+      - ".github/workflows/wave4-adaptive-responsive.yml"
+      - "docs/superpowers/specs/2026-09-20-wave4-adaptive-responsive-intelligence-design.md"
+  push:
+    branches:
+      - "feat/wave4-responsive-adaptive"
+    paths:
+      - "crates/responsive/**"
+      - "apps/desktop/src-tauri/src/visual_capture.rs"
+      - "apps/desktop/src-tauri/tests/responsive_sweep_contract.rs"
+      - "apps/desktop/src-tauri/tests/responsive_adaptive_contract.rs"
+      - ".github/workflows/wave4-adaptive-responsive.yml"
+      - "docs/superpowers/specs/2026-09-20-wave4-adaptive-responsive-intelligence-design.md"
+
+concurrency:
+  group: wave4-adaptive-responsive-\${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  adaptive-responsive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install desktop native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify owned Rust formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            crates/responsive/src/lib.rs \
+            crates/responsive/tests/adaptive_intelligence.rs \
+            apps/desktop/src-tauri/src/visual_capture.rs \
+            apps/desktop/src-tauri/tests/responsive_sweep_contract.rs \
+            apps/desktop/src-tauri/tests/responsive_adaptive_contract.rs
+
+      - name: Verify adaptive responsive policy and adversarial cases
+        run: cargo test -p localview-responsive -- --nocapture
+
+      - name: Preserve canonical responsive transaction
+        run: cargo test -p localview-desktop --test responsive_sweep_contract -- --nocapture
+
+      - name: Verify live adaptive responsive contract
+        run: cargo test -p localview-desktop --test responsive_adaptive_contract -- --nocapture
+
+      - name: Check desktop integration
+        run: cargo check -p localview-desktop --all-targets
