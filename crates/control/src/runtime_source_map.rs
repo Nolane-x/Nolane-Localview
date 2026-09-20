@@ -1,5 +1,3 @@
-use std::net::IpAddr;
-
 use axum::{
     extract::{Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
@@ -10,7 +8,7 @@ use axum::{
 use localview_live_bridge::ObserverEventKind;
 use localview_protocol::SessionId;
 use serde::{Deserialize, Serialize};
-use url::Url;
+use url::{Host, Url};
 
 use crate::{
     source_map_runtime::{
@@ -152,10 +150,7 @@ async fn resolve_runtime_source_inner(
         return Err(RuntimeSourceError::RuntimeSourceAuthorityMismatch);
     }
 
-    let host = source_url
-        .host_str()
-        .ok_or(RuntimeSourceError::RuntimeSourceUnsupported)?;
-    if !is_loopback_host(host)
+    if !is_loopback_url(&source_url)
         || source_url.port_or_known_default() != Some(session.endpoint.port)
     {
         return Err(RuntimeSourceError::RuntimeSourceAuthorityMismatch);
@@ -206,12 +201,13 @@ fn bounded_payload_u32(
     (min..=max).contains(&value).then_some(value)
 }
 
-fn is_loopback_host(host: &str) -> bool {
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
+fn is_loopback_url(url: &Url) -> bool {
+    match url.host() {
+        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
     }
-
-    host.parse::<IpAddr>().is_ok_and(|address| address.is_loopback())
 }
 
 fn authorized(headers: &HeaderMap, state: &ControlState) -> bool {
@@ -228,12 +224,21 @@ mod tests {
 
     #[test]
     fn loopback_authority_is_conservative() {
-        assert!(is_loopback_host("localhost"));
-        assert!(is_loopback_host("127.0.0.1"));
-        assert!(is_loopback_host("127.42.0.9"));
-        assert!(is_loopback_host("::1"));
-        assert!(!is_loopback_host("192.168.1.20"));
-        assert!(!is_loopback_host("example.com"));
+        for value in [
+            "http://localhost:5173/app.js",
+            "http://127.0.0.1:5173/app.js",
+            "http://127.42.0.9:5173/app.js",
+            "http://[::1]:5173/app.js",
+        ] {
+            assert!(is_loopback_url(&Url::parse(value).expect("valid loopback URL")));
+        }
+
+        for value in [
+            "http://192.168.1.20:5173/app.js",
+            "http://example.com:5173/app.js",
+        ] {
+            assert!(!is_loopback_url(&Url::parse(value).expect("valid non-loopback URL")));
+        }
     }
 
     #[test]
