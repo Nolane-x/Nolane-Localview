@@ -483,8 +483,6 @@ fn valid_css_author_cascade_property(property: &str) -> bool {
             | "position"
             | "box-sizing"
             | "z-index"
-            | "justify-content"
-            | "align-items"
             | "opacity"
             | "pointer-events"
             | "visibility"
