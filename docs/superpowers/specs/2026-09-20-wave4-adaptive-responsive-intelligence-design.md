@@ -49,10 +49,8 @@ exact preview ownership
      -> native viewport capture
      -> exact visual restore
      -> redaction
-     -> fresh semantic/layout snapshot
-     -> seed responsive detector
--> bounded adaptive planning
--> only missing adaptive widths
+-> bounded adaptive planning at one fixed initial CSS height
+-> adaptive widths
      -> exact preview revalidation
      -> resize
      -> convergence
@@ -84,7 +82,8 @@ Backend-owned constants:
 - adaptive hard cap: **12 unique widths total**;
 - initial adaptive target: at most 6 widths;
 - observed-transition tolerance: 16 CSS px;
-- canonical preset widths seed the adaptive cache;
+- canonical preset widths are planning anchors but their different preset heights are **not** reused as binary detector samples;
+- every adaptive/binary detector sample uses the same CSS height derived from the original live viewport;
 - the original live viewport width is clamped into the backend-owned domain and may become an anchor;
 - duplicate widths are cache hits and never trigger another resize;
 - no arbitrary caller-authored width is accepted.
@@ -112,7 +111,10 @@ Resolution requires:
 
 - same exact session;
 - same canonical route;
+- same fixed adaptive viewport height;
 - same detector;
+- the same bounded non-layout semantic state fingerprint;
+- a complete state fingerprint projection;
 - concrete PASS/FAIL evidence;
 - exactly one monotonic state transition;
 - a final bracket no wider than tolerance.
@@ -231,6 +233,7 @@ Adaptive resource limits are explicit:
 - maximum 12 unique responsive probe widths;
 - maximum 256 projected geometry nodes per width;
 - maximum 64 derived issues;
+- one fixed adaptive CSS height for every detector sample;
 - same 30-second responsive transaction deadline;
 - same 5-second cleanup reserve;
 - same 2-second resize convergence bound;
@@ -289,6 +292,8 @@ Desktop contracts cover:
 - no Chromium path;
 - route drift;
 - session drift;
+- semantic state drift;
+- adaptive height drift;
 - resize failure;
 - settle failure;
 - evidence capture failure;
