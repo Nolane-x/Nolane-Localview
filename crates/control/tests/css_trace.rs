@@ -211,19 +211,10 @@ async fn fresh_style_trace_returns_only_selected_bounded_css_evidence() {
     assert_eq!(body["declarations"].as_array().map(Vec::len), Some(2));
     assert_eq!(body["declarations"][1]["stylesheet_path"], "src/button.css");
     assert_eq!(body["declarations"][1]["selector"], ".save");
-    assert_eq!(
-        body["author_cascade"]["scope"],
-        "supported_author_subset"
-    );
+    assert_eq!(body["author_cascade"]["scope"], "supported_author_subset");
     assert_eq!(body["author_cascade"]["coverage_complete"], true);
-    assert_eq!(
-        body["author_cascade"]["unresolved_properties"][0],
-        "color"
-    );
-    assert_eq!(
-        body["author_cascade"]["winners"][0]["property"],
-        "display"
-    );
+    assert_eq!(body["author_cascade"]["unresolved_properties"][0], "color");
+    assert_eq!(body["author_cascade"]["winners"][0]["property"], "display");
     assert_eq!(
         body["author_cascade"]["winners"][0]["specificity"],
         serde_json::json!([1, 0, 0, 0])
