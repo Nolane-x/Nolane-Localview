@@ -550,7 +550,6 @@ pub async fn capture_responsive_sweep(
             )
             .await?;
 
-
             let image = decode_png_rgba(&frame.png)
                 .map_err(|_| "responsive_redaction_failed".to_string())?;
             if image.width != frame.pixel_width || image.height != frame.pixel_height {
@@ -1031,12 +1030,31 @@ async fn run_live_adaptive_responsive(
     let all_concrete = initial_samples
         .iter()
         .all(|sample| sample.state != ResponsiveDetectorState::Inconclusive);
+    let initial_state_fingerprints_complete = initial_probes
+        .iter()
+        .all(|probe| probe.observation.state_fingerprint_complete);
+    let initial_same_semantic_state = initial_probes
+        .first()
+        .map(|first| {
+            initial_probes.iter().all(|probe| {
+                probe.observation.state_fingerprint == first.observation.state_fingerprint
+            })
+        })
+        .unwrap_or(false);
+    let initial_fixed_height = initial_probes
+        .iter()
+        .all(|probe| probe.observation.viewport.height == css_height);
     let transition_pairs = initial_samples
         .windows(2)
         .filter(|pair| pair[0].state != pair[1].state)
         .collect::<Vec<_>>();
 
-    if all_concrete && transition_pairs.len() == 1 {
+    if all_concrete
+        && initial_state_fingerprints_complete
+        && initial_same_semantic_state
+        && initial_fixed_height
+        && transition_pairs.len() == 1
+    {
         let pair = transition_pairs[0];
         let (known_good, known_bad) = if pair[0].state == ResponsiveDetectorState::Pass {
             (pair[0].width, pair[1].width)
