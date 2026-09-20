@@ -55,7 +55,7 @@ Current safety gate before native workspace becomes default:
 Remaining Wave 1 integration:
 
 - native accessibility-tree enrichment where platform APIs materially improve over DOM/ARIA semantics;
-- Vue/Svelte ownership adapters building on the landed bounded React ownership path;
+- Vue ownership remains to be connected beyond the landed bounded React + Svelte ownership paths;
 - CSS declaration/specificity tracing and runtime/source correlation beyond explicit dev attributes.
 
 **Done when:** an agent can list a bounded semantic tree, inspect one element, click/type it, and receive only relevant semantic/layout/runtime deltas through an isolated LocalView surface. The core path for that definition now exists; the remaining Wave 1 work deepens native accessibility and framework/source ownership rather than reopening the basic bridge.
@@ -124,7 +124,7 @@ Landed native visual path:
 
 Still required before the visual/runtime Active Perception path is considered complete:
 
-- Vue/Svelte/CSS ownership depth beyond the landed bounded React ownership path;
+- Vue/CSS ownership depth beyond the landed bounded React + Svelte ownership paths;
 - extend the separate Runtime Resource Governor with analysis-concurrency enforcement when a concrete concurrent analysis owner exists;
 
 **Done when:** one button edit normally costs an evidence-backed crop + delta instead of a full-page screenshot, and every visual artifact can be traced to a session/revision/viewport/target. Native viewport acquisition, all three hosted rendered-pixel proofs, artifact/evidence registration, fail-closed fresh-snapshot settling with true aggregate network in-flight accounting, live freeze/restore, pre-persistence private-region redaction, bounded CSS-region execution, evidence-backed progressive semantic targeting, baseline-driven changed-region scheduling, token-aware visual packet selection, planner-owned four-dimensional Perception Budget authority, native visual execution, planner-authorized Chromium execution, retained semantic feedback, single-request whole-cycle budget accounting, cooperative public-action cancellation and the capture → diff → retained evidence → deterministic verification loop are now present. Runtime Resource Governor capture-storage/cache, Chromium-process and hidden-surface ownership enforcement are landed; analysis-concurrency enforcement and Vue/Svelte/CSS ownership depth remain. Guarded full-page stitching and canonical responsive preset/contact-sheet execution are now present as explicit bounded operations; adaptive/binary responsive execution, content/locale stress, infinite-page crawling and fixed/sticky normalization are not claimed. Hard force-abort inside an already-running synchronous WebView/platform action is intentionally not claimed by the cooperative cancellation protocol.
@@ -176,10 +176,11 @@ Landed foundation:
 - project-owned Source Map runtime authority is connected through authenticated exact-session resolution. The daemon derives the project root from session authority, accepts only project-relative generated files and bounded generated positions, discovers only deterministic sibling `.map` files, canonicalizes generated/map/original source paths under the exact project root, rejects traversal/symlink/remote-source escapes, caps map input before parse, and returns only project-relative source identity without `sourcesContent` or absolute project paths.
 - trusted live RuntimeError position correlation is connected to that project-owned resolver through authenticated exact-session `POST /v1/sessions/{id}/runtime-source/resolve`. Callers supply only retained `event_seq`; LocalView derives the same-server generated URL/line/column from bounded RuntimeError evidence, enforces loopback + exact scheme/effective-port authority, normalizes browser 1-based columns to Source Map generated coordinates, rejects encoded/remote/mismatched sources, and returns only the bounded project-relative source resolution without runtime message/stack/query/source content.
 - bounded React live component ownership is connected to fresh semantic projection. Explicit `data-component-source` remains higher authority; otherwise LocalView performs read-only exact-element host-fiber discovery with `fiber.stateNode === element`, bounded host-key/probe/owner depth, React <=18 `_debugSource` support and a bounded same-origin React 19 `_debugStack` fallback. Retained ownership contains only bounded component/source identity, never props/state/context/hooks, and real Chromium + React 19.2.8/Vite proof covers ownership, explicit-source precedence, privacy, plain-DOM isolation and fake-fiber rejection.
+- bounded Svelte 5 live ownership is landed: exact-element own-data `__svelte_meta` → `loc` evidence is read without invoking accessors, accepts only bounded project-relative `.svelte` file identity with true compiler line/column, retains no props/state/context/reactive values, and projects deterministic Svelte component ownership into fresh semantic snapshots. Real Svelte 5.57.1 + Vite + Chromium proof covers ownership, explicit-source precedence, privacy, accessor isolation and unsafe-path rejection.
 
 Remaining integration:
 
-- Vue/Svelte adapters.
+- Vue ownership foundation and backend-safe absolute-path correlation; bounded Svelte ownership is landed.
 - CSS declaration/specificity tracing.
 - issue → element → component → source resolution.
 - save/HMR/affected-region validation loop.
