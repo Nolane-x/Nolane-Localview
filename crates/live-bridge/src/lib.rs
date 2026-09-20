@@ -1272,7 +1272,9 @@ fn sanitize_style_inspect_result(action: &BridgeAction, result: &mut BridgeActio
     fn safe_path(value: &str) -> bool {
         bounded_text(value, MAX_PATH_BYTES)
             && value.starts_with('/')
-            && !value.contains(['?', '#', '\\'])
+            && !value
+                .chars()
+                .any(|character| matches!(character, '?' | '#' | '\\'))
             && !value.contains("://")
     }
 
