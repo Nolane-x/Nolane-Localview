@@ -68,10 +68,10 @@ The first slice reports exact specificity only for the bounded supported selecto
 Supported:
 - type/universal selectors;
 - ID, class and attribute selectors;
-- ordinary pseudo-classes;
-- pseudo-elements;
-- `:where()` as zero specificity;
-- `:is()`, `:not()`, `:has()` using the maximum supported argument specificity.
+- non-functional ordinary pseudo-classes;
+- non-functional pseudo-elements.
+
+Functional pseudo-classes/pseudo-elements (including `:is()`, `:not()`, `:has()`, `:where()`, `:nth-child()`, `:host()` and `::slotted()`), namespace syntax and escaped selector grammar deliberately degrade to `specificity = null` in this first slice. Matching evidence is still retained when the browser itself accepts and matches the selector.
 
 If parsing is ambiguous/unsupported, `specificity = null`.
 
