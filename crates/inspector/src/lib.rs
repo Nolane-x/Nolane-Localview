@@ -323,6 +323,54 @@ mod tests {
     }
 
     #[test]
+    fn bounded_author_cascade_inline_important_beats_stylesheet_important() {
+        let candidates = vec![
+            author_candidate(
+                "stylesheet-important",
+                AuthorCascadeOrigin::Stylesheet,
+                (40, 40, 40),
+                true,
+                99,
+            ),
+            author_candidate(
+                "inline-important",
+                AuthorCascadeOrigin::Inline,
+                (0, 0, 0),
+                true,
+                1,
+            ),
+        ];
+
+        let winner = resolve_unlayered_author_winner("color", &candidates, author_proof())
+            .expect("author winner");
+        assert_eq!(winner.value, "inline-important");
+    }
+
+    #[test]
+    fn bounded_author_cascade_specificity_beats_later_source_order() {
+        let candidates = vec![
+            author_candidate(
+                "specific",
+                AuthorCascadeOrigin::Stylesheet,
+                (1, 0, 0),
+                false,
+                1,
+            ),
+            author_candidate(
+                "later",
+                AuthorCascadeOrigin::Stylesheet,
+                (0, 99, 99),
+                false,
+                100,
+            ),
+        ];
+
+        let winner = resolve_unlayered_author_winner("color", &candidates, author_proof())
+            .expect("author winner");
+        assert_eq!(winner.value, "specific");
+    }
+
+    #[test]
     fn bounded_author_cascade_refuses_unproven_layer_scope_or_relevance_domain() {
         let candidates = vec![author_candidate(
             "candidate",
@@ -381,5 +429,22 @@ mod tests {
         let winner = resolve_unlayered_author_winner("color", &candidates, author_proof())
             .expect("author winner");
         assert_eq!(winner.value, "active");
+    }
+
+    #[test]
+    fn bounded_author_cascade_reports_no_active_candidate() {
+        let mut inactive = author_candidate(
+            "inactive",
+            AuthorCascadeOrigin::Stylesheet,
+            (1, 0, 0),
+            true,
+            1,
+        );
+        inactive.active = false;
+
+        assert_eq!(
+            resolve_unlayered_author_winner("color", &[inactive], author_proof()),
+            Err(AuthorCascadeResolutionError::NoActiveCandidate)
+        );
     }
 }
