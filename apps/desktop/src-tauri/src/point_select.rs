@@ -215,13 +215,19 @@ impl PointSelectState {
                 entry.state = HumanPointSelectPhase::Cancelled;
                 entry.reference = None;
                 entry.bridge_generation = Some(completion.bridge_generation);
-                entry.reason = Some(validate_completion_reason(completion.reason.as_deref(), "cancelled"));
+                entry.reason = Some(validate_completion_reason(
+                    completion.reason.as_deref(),
+                    "cancelled",
+                ));
             }
             "failed" => {
                 entry.state = HumanPointSelectPhase::Failed;
                 entry.reference = None;
                 entry.bridge_generation = Some(completion.bridge_generation);
-                entry.reason = Some(validate_completion_reason(completion.reason.as_deref(), "target_unavailable"));
+                entry.reason = Some(validate_completion_reason(
+                    completion.reason.as_deref(),
+                    "target_unavailable",
+                ));
             }
             _ => entry.fail("invalid_completion"),
         }
@@ -268,9 +274,9 @@ fn validate_point_select_token(token: &str) -> Result<(), String> {
 
 fn valid_element_reference(reference: &str) -> bool {
     reference.len() <= MAX_POINT_SELECT_REFERENCE_BYTES
-        && reference
-            .strip_prefix("@e")
-            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        && reference.strip_prefix("@e").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
 }
 
 fn canonical_point_select_route(route: &str) -> Result<String, String> {
@@ -288,7 +294,9 @@ fn managed_point_select_eval(
         if !workspace_surface::bridge_surface_label_allowed(window.label(), session_id) {
             return Err("point_select_surface_owner_mismatch".into());
         }
-        return window.eval(script).map_err(|_| "point_select_eval_failed".to_string());
+        return window
+            .eval(script)
+            .map_err(|_| "point_select_eval_failed".to_string());
     }
 
     #[cfg(feature = "native-workspace")]
@@ -298,7 +306,9 @@ fn managed_point_select_eval(
             if !workspace_surface::bridge_surface_label_allowed(webview.label(), session_id) {
                 return Err("point_select_surface_owner_mismatch".into());
             }
-            return webview.eval(script).map_err(|_| "point_select_eval_failed".to_string());
+            return webview
+                .eval(script)
+                .map_err(|_| "point_select_eval_failed".to_string());
         }
     }
 
@@ -370,9 +380,7 @@ pub async fn point_select_cancel(
     request_token: String,
 ) -> Result<HumanPointSelectStatus, String> {
     validate_point_select_token(&request_token)?;
-    let status = state
-        .cancel(session_id, &request_token, "cancelled")
-        .await;
+    let status = state.cancel(session_id, &request_token, "cancelled").await;
     if status.state != HumanPointSelectPhase::Stale {
         let _ = managed_point_select_eval(&app, session_id, &cancel_script(&request_token)?);
     }
@@ -389,14 +397,14 @@ pub async fn preview_complete_point_select(
     if !workspace_surface::bridge_surface_label_allowed(webview_window.label(), session_id) {
         return Err("point_select_bridge_session_window_mismatch".into());
     }
-    let caller_url = webview_window.url().map_err(|_| "point_select_route_unavailable")?;
+    let caller_url = webview_window
+        .url()
+        .map_err(|_| "point_select_route_unavailable")?;
     if !workspace_surface::workspace_navigation_allowed(&caller_url) {
         return Err("point_select_route_not_loopback".into());
     }
     let caller_route = canonical_point_select_route(caller_url.as_str())?;
-    state
-        .complete(session_id, &caller_route, completion)
-        .await
+    state.complete(session_id, &caller_route, completion).await
 }
 
 #[cfg(test)]
@@ -407,7 +415,12 @@ mod tests {
         uuid::Uuid::from_u128(seed)
     }
 
-    fn selected(token: &str, route: &str, reference: &str, generation: u64) -> PreviewPointSelectCompletion {
+    fn selected(
+        token: &str,
+        route: &str,
+        reference: &str,
+        generation: u64,
+    ) -> PreviewPointSelectCompletion {
         PreviewPointSelectCompletion {
             request_token: token.to_owned(),
             route: route.to_owned(),
@@ -460,8 +473,14 @@ mod tests {
         let state = PointSelectState::default();
         let session_id = session(1);
         let route = "http://127.0.0.1:5173/".to_string();
-        state.begin(session_id, "point-A".into(), route.clone()).await.unwrap();
-        state.begin(session_id, "point-B".into(), route.clone()).await.unwrap();
+        state
+            .begin(session_id, "point-A".into(), route.clone())
+            .await
+            .unwrap();
+        state
+            .begin(session_id, "point-B".into(), route.clone())
+            .await
+            .unwrap();
 
         state
             .complete(
@@ -497,21 +516,18 @@ mod tests {
         let first = session(2);
         let second = session(3);
         let route = "http://127.0.0.1:5173/a".to_string();
-        state.begin(first, "point-route".into(), route.clone()).await.unwrap();
+        state
+            .begin(first, "point-route".into(), route.clone())
+            .await
+            .unwrap();
 
         let drifted = state
-            .status(
-                first,
-                "point-route",
-                Ok("http://127.0.0.1:5173/b".into()),
-            )
+            .status(first, "point-route", Ok("http://127.0.0.1:5173/b".into()))
             .await;
         assert_eq!(drifted.state, HumanPointSelectPhase::Failed);
         assert_eq!(drifted.reason, Some("route_changed"));
 
-        let foreign = state
-            .status(second, "point-route", Ok(route))
-            .await;
+        let foreign = state.status(second, "point-route", Ok(route)).await;
         assert_eq!(foreign.state, HumanPointSelectPhase::Stale);
         assert!(foreign.reference.is_none());
     }
@@ -534,9 +550,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let status = state
-            .status(session_id, "point-invalid", Ok(route))
-            .await;
+        let status = state.status(session_id, "point-invalid", Ok(route)).await;
         assert_eq!(status.state, HumanPointSelectPhase::Failed);
         assert_eq!(status.reason, Some("invalid_reference"));
         assert!(status.reference.is_none());
