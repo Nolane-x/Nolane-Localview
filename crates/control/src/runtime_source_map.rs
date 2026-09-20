@@ -1,9 +1,9 @@
 use axum::{
+    Json, Router,
     extract::{Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use localview_live_bridge::ObserverEventKind;
 use localview_protocol::SessionId;
@@ -11,10 +11,10 @@ use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
 use crate::{
-    source_map_runtime::{
-        resolve_project_source_position, ProjectSourceMapError, ProjectSourceMapResponse,
-    },
     ControlState,
+    source_map_runtime::{
+        ProjectSourceMapError, ProjectSourceMapResponse, resolve_project_source_position,
+    },
 };
 
 const MAX_RECENT_RUNTIME_EVENTS: usize = 2_048;
@@ -72,10 +72,9 @@ impl RuntimeSourceError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "runtime_source_authority_mismatch",
             ),
-            Self::RuntimePositionInvalid => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "runtime_position_invalid",
-            ),
+            Self::RuntimePositionInvalid => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "runtime_position_invalid")
+            }
             Self::Project(_) => unreachable!("project errors return above"),
         };
 
@@ -167,9 +166,8 @@ async fn resolve_runtime_source_inner(
 
     let browser_line = bounded_payload_u32(&event.payload, "line", 1, MAX_BROWSER_LINE)
         .ok_or(RuntimeSourceError::RuntimePositionInvalid)?;
-    let browser_column =
-        bounded_payload_u32(&event.payload, "column", 1, MAX_BROWSER_COLUMN)
-            .ok_or(RuntimeSourceError::RuntimePositionInvalid)?;
+    let browser_column = bounded_payload_u32(&event.payload, "column", 1, MAX_BROWSER_COLUMN)
+        .ok_or(RuntimeSourceError::RuntimePositionInvalid)?;
     let generated_column = browser_column
         .checked_sub(1)
         .ok_or(RuntimeSourceError::RuntimePositionInvalid)?;
@@ -190,12 +188,7 @@ async fn resolve_runtime_source_inner(
     })
 }
 
-fn bounded_payload_u32(
-    payload: &serde_json::Value,
-    key: &str,
-    min: u32,
-    max: u32,
-) -> Option<u32> {
+fn bounded_payload_u32(payload: &serde_json::Value, key: &str, min: u32, max: u32) -> Option<u32> {
     let value = payload.get(key)?.as_u64()?;
     let value = u32::try_from(value).ok()?;
     (min..=max).contains(&value).then_some(value)
@@ -230,14 +223,18 @@ mod tests {
             "http://127.42.0.9:5173/app.js",
             "http://[::1]:5173/app.js",
         ] {
-            assert!(is_loopback_url(&Url::parse(value).expect("valid loopback URL")));
+            assert!(is_loopback_url(
+                &Url::parse(value).expect("valid loopback URL")
+            ));
         }
 
         for value in [
             "http://192.168.1.20:5173/app.js",
             "http://example.com:5173/app.js",
         ] {
-            assert!(!is_loopback_url(&Url::parse(value).expect("valid non-loopback URL")));
+            assert!(!is_loopback_url(
+                &Url::parse(value).expect("valid non-loopback URL")
+            ));
         }
     }
 
