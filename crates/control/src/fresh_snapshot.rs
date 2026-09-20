@@ -326,7 +326,9 @@ fn valid_svelte_relative_file(file: &str) -> bool {
     if !file.ends_with(".svelte")
         || file.starts_with('/')
         || file.contains('\\')
-        || file.contains(['%', '?', '#', ':'])
+        || file
+            .chars()
+            .any(|character| matches!(character, '%' | '?' | '#' | ':'))
         || file.chars().any(char::is_control)
     {
         return false;
