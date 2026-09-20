@@ -36,7 +36,7 @@ fn point_select_uses_real_hit_testing_and_exact_cleanup() {
     for required in [
         "document.elementFromPoint",
         "refFor(freshTarget)",
-        "pointer-events:none",
+        "overlay.style.pointerEvents = 'none'",
         "data-localview-owned",
         "removeEventListener(type, listener, true)",
         "freezeObserver?.disconnect()",
@@ -76,13 +76,7 @@ fn point_select_completion_transport_is_metadata_only() {
         .next()
         .expect("bounded completion queue");
 
-    for required in [
-        "requestToken",
-        "route",
-        "status",
-        "reference",
-        "reason",
-    ] {
+    for required in ["requestToken", "route", "status", "reference", "reason"] {
         assert!(
             queue.contains(required),
             "missing bounded receipt field: {required}"
