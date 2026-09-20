@@ -50,13 +50,14 @@ The adapter must not install or replace `__REACT_DEVTOOLS_GLOBAL_HOOK__`, patch 
 
 ## Component evidence
 
-A component ancestor is accepted only when:
+A component ancestor is accepted only when a bounded component identity can be derived from its React type and one bounded development source signal is available.
 
-- a bounded component identity can be derived from its React type;
-- `_debugSource` exists;
-- `_debugSource.fileName` is a non-empty bounded string;
-- `lineNumber` is a positive bounded integer;
-- optional `columnNumber` is a positive bounded integer.
+Supported development source signals are:
+
+- React <=18-style `_debugSource`, with bounded `fileName`, positive `lineNumber` and optional positive `columnNumber`;
+- React 19-style `_debugStack`, parsed from at most 16 KiB / 24 lines and admitted only when one HTTP(S) frame belongs to the exact current `location.origin`.
+
+For `_debugStack`, LocalView skips React/ReactDOM/JSX runtime/Vite-internal/dependency frames and rejects `/@fs/`, percent-encoded paths, protocol-relative paths and explicit `..` path components. It retains only the bounded same-origin path plus line/column; the raw stack is never retained. The host fiber's source signal is preferred, because it identifies the JSX/source position that created the DOM host node; a component ancestor source signal is only a bounded fallback.
 
 Component identity may use:
 
@@ -101,7 +102,9 @@ Per semantic-tree snapshot:
 - component display identity capped at 96 UTF-8 bytes;
 - React source file capped at the existing 260-byte source-file limit;
 - source line <= 1,000,000;
-- source column <= 10,000,001.
+- source column <= 10,000,001;
+- React 19 debug-stack inspection capped at 16 KiB and 24 lines;
+- only exact same-origin HTTP(S) debug-stack frames may become source evidence.
 
 An exhausted ownership probe budget produces no React ownership hint for later nodes. It does not make the semantic snapshot fail.
 
@@ -135,14 +138,14 @@ React runtime evidence must never overwrite an explicit application source decla
 A real Chromium + React development fixture must prove:
 
 1. LocalView bootstrap is injected before the React app;
-2. a React-rendered host element can produce `react-dev-fiber` ownership when the runtime exposes valid development source metadata;
-3. the retained hint contains bounded file/line/component data;
+2. the repository's React 19.2.8 development runtime can produce `react-dev-fiber` ownership through bounded `_debugStack` evidence (while the adapter keeps React <=18 `_debugSource` compatibility);
+3. the retained hint contains only bounded file/line/column/component/signal data;
 4. no props/state/source contents appear in the semantic snapshot JSON;
 5. an explicit `data-component-source` on the same node overrides React introspection;
 6. a plain non-React DOM node produces no React ownership;
 7. invalid/synthetic React-shaped properties that fail the `stateNode === element` anchor produce no ownership.
 
-If the exact React runtime version does not expose development source metadata, the browser proof must report that as unsupported rather than fabricate ownership; the deterministic contract tests still prove the fail-closed adapter behavior.
+If a future React runtime exposes neither an admissible bounded `_debugSource` nor an admissible same-origin `_debugStack`, the adapter must return no ownership rather than fabricate it. React private fields remain version-sensitive evidence, never a guaranteed public API.
 
 ## Verification gates
 
@@ -153,6 +156,8 @@ Prove generated bootstrap contains:
 - bounded React property prefixes;
 - exact host `stateNode` anchor;
 - bounded key/depth/probe limits;
+- bounded React 19 debug-stack bytes/lines;
+- same-origin debug-stack source fencing;
 - explicit-source precedence;
 - `react-dev-fiber` output;
 - no React mutation hook.
@@ -195,7 +200,7 @@ This slice does not claim:
 
 - React production/minified builds always expose ownership metadata;
 - React Server Component ownership;
-- source-map lookup from React ownership itself;
+- arbitrary source-map lookup or remote/bundled source reconstruction from React ownership itself;
 - Vue/Svelte ownership;
 - CSS ownership;
 - component props/state inspection;
