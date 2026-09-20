@@ -2068,6 +2068,164 @@ mod tests {
     }
 
     #[test]
+    fn style_inspect_result_storage_reconstructs_only_bounded_css_evidence() {
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            reference: Some("@e1".into()),
+            action: BridgeActionKind::StyleInspect,
+            created_at: Utc::now(),
+        };
+        let mut result = BridgeActionResult {
+            action_id: action.id,
+            ok: true,
+            error: Some("raw page detail must disappear".into()),
+            payload: serde_json::json!({
+                "reference": "@e1",
+                "route": "http://127.0.0.1:5173/dashboard?token=secret#fragment",
+                "computed": {
+                    "color": "rgb(1, 2, 3)",
+                    "display": "block"
+                },
+                "declarations": [
+                    {
+                        "property": "color",
+                        "value": "red",
+                        "important": false,
+                        "origin": "inline",
+                        "selector": null,
+                        "stylesheet_path": null,
+                        "stylesheet_index": null,
+                        "rule_index": null,
+                        "secret": "drop-me"
+                    },
+                    {
+                        "property": "display",
+                        "value": "block",
+                        "important": true,
+                        "origin": "author_stylesheet",
+                        "selector": ".card",
+                        "stylesheet_path": "/src/app.css",
+                        "stylesheet_index": 0,
+                        "rule_index": 3
+                    }
+                ],
+                "opaque_stylesheets": 1,
+                "stylesheets_scanned": 2,
+                "rules_scanned": 8,
+                "matched_rules": 1,
+                "truncated": false,
+                "conditional_rules_omitted": true,
+                "arbitrary": "must-not-survive"
+            }),
+            completed_at: Utc::now(),
+        };
+
+        sanitize_result_for_storage(Some(&action), &mut result);
+
+        assert!(result.ok);
+        assert!(result.error.is_none());
+        let text = result.payload.to_string();
+        assert!(text.contains("rgb(1, 2, 3)"));
+        assert!(text.contains("/src/app.css"));
+        assert!(text.contains(".card"));
+        assert!(!text.contains("token=secret"));
+        assert!(!text.contains("fragment"));
+        assert!(!text.contains("drop-me"));
+        assert!(!text.contains("arbitrary"));
+    }
+
+    #[test]
+    fn style_inspect_result_storage_fails_closed_on_untrusted_shape() {
+        let action = BridgeAction {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            reference: Some("@e1".into()),
+            action: BridgeActionKind::StyleInspect,
+            created_at: Utc::now(),
+        };
+
+        for payload in [
+            serde_json::json!({
+                "reference": "@e2",
+                "route": "http://127.0.0.1:5173/",
+                "computed": {},
+                "declarations": [],
+                "opaque_stylesheets": 0,
+                "stylesheets_scanned": 0,
+                "rules_scanned": 0,
+                "matched_rules": 0,
+                "truncated": false,
+                "conditional_rules_omitted": false
+            }),
+            serde_json::json!({
+                "reference": "@e1",
+                "route": "https://example.com/",
+                "computed": {},
+                "declarations": [],
+                "opaque_stylesheets": 0,
+                "stylesheets_scanned": 0,
+                "rules_scanned": 0,
+                "matched_rules": 0,
+                "truncated": false,
+                "conditional_rules_omitted": false
+            }),
+            serde_json::json!({
+                "reference": "@e1",
+                "route": "http://127.0.0.1:5173/",
+                "computed": {"--secret": "private"},
+                "declarations": [],
+                "opaque_stylesheets": 0,
+                "stylesheets_scanned": 0,
+                "rules_scanned": 0,
+                "matched_rules": 0,
+                "truncated": false,
+                "conditional_rules_omitted": false
+            }),
+            serde_json::json!({
+                "reference": "@e1",
+                "route": "http://127.0.0.1:5173/",
+                "computed": {},
+                "declarations": [{
+                    "property": "color",
+                    "value": "red",
+                    "important": false,
+                    "origin": "author_stylesheet",
+                    "selector": ".card",
+                    "stylesheet_path": "https://example.com/app.css",
+                    "stylesheet_index": 0,
+                    "rule_index": 0
+                }],
+                "opaque_stylesheets": 0,
+                "stylesheets_scanned": 1,
+                "rules_scanned": 1,
+                "matched_rules": 1,
+                "truncated": false,
+                "conditional_rules_omitted": false
+            }),
+        ] {
+            let mut result = BridgeActionResult {
+                action_id: action.id,
+                ok: true,
+                error: Some("raw target error".into()),
+                payload,
+                completed_at: Utc::now(),
+            };
+            sanitize_result_for_storage(Some(&action), &mut result);
+            assert!(!result.ok);
+            assert_eq!(result.payload, Value::Null);
+            assert_eq!(result.error.as_deref(), Some("style inspect action failed"));
+        }
+    }
+
+    #[test]
+    fn style_inspect_action_serializes_as_read_only_type() {
+        let encoded = serde_json::to_value(BridgeActionKind::StyleInspect).unwrap();
+        assert_eq!(encoded, serde_json::json!({"type": "style_inspect"}));
+        assert!(!BridgeActionKind::StyleInspect.is_internal_capture_action());
+    }
+
+    #[test]
     fn measure_action_serializes_as_read_only_measure_type() {
         let encoded = serde_json::to_value(BridgeActionKind::Measure).unwrap();
         assert_eq!(encoded, serde_json::json!({"type": "measure"}));
