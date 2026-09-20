@@ -29,7 +29,8 @@ struct TempProject {
 
 impl TempProject {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!("localview-css-source-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("localview-css-source-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create temporary CSS project root");
         Self { root }
     }
@@ -276,7 +277,6 @@ async fn fresh_style_trace_returns_only_selected_bounded_css_evidence() {
     );
     assert!(body.get("semantic_tree").is_none());
 }
-
 
 fn stylesheet_payload(
     stylesheet_path: &str,
