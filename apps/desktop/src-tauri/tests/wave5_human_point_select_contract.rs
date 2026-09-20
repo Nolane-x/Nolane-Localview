@@ -9,7 +9,7 @@ fn point_select_uses_stable_instrumentation_authority_and_not_selectors() {
         "refFor(freshTarget)",
         "validStableReference",
         "data-localview-owned",
-        "pointer-events:none",
+        "overlay.style.pointerEvents = 'none'",
         "takePointSelectCompletions",
         "target_changed",
         "target_unavailable",
