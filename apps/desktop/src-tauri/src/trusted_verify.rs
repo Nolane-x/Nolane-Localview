@@ -6,7 +6,10 @@ use std::{
 
 use localview_native_capture::ViewportMeta;
 use localview_protocol::{PageSnapshot, Rect, SemanticNode, Session, SessionId};
-use localview_visual::{RgbaImage, decode_png_rgba, pixel_diff};
+use localview_visual::{
+    ChangedRegionPlan, ChangedRegionPolicy, RgbaImage, decode_png_rgba,
+    pixel_diff, plan_changed_css_regions,
+};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -65,6 +68,38 @@ impl DeterministicVerificationStatus {
             Self::Inconclusive => "inconclusive",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationVisualChangeMode {
+    Unchanged,
+    Regions,
+    Viewport,
+}
+
+impl VerificationVisualChangeMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unchanged => "unchanged",
+            Self::Regions => "regions",
+            Self::Viewport => "viewport",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerificationAffectedVisualPlan {
+    pub mode: VerificationVisualChangeMode,
+    pub changed_ratio: f64,
+    pub regions: Vec<Rect>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerificationVisualAssessment {
+    pub facts: VisualVerificationFacts,
+    pub affected: Option<VerificationAffectedVisualPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -167,6 +202,9 @@ pub struct HumanVerifyChangeReceipt {
     pub regression_signals: Vec<String>,
     pub viewport_changed_ratio: Option<f64>,
     pub target_changed_ratio: Option<f64>,
+    pub visual_change_mode: Option<VerificationVisualChangeMode>,
+    pub affected_regions: Vec<Rect>,
+    pub affected_visual_evidence_ids: Vec<String>,
     pub visual_diff_evidence_id: Option<String>,
     pub snapshot_version: u64,
     pub provider_label: Option<String>,
@@ -564,21 +602,24 @@ fn target_union_pixels(
     Some((left, top, right, bottom))
 }
 
-pub fn compare_visual_facts(
+pub fn assess_visual_change(
     before: &VerifyVisualBaseline,
     after_png: &[u8],
     after_viewport: &ViewportMeta,
     after_rect: Option<&Rect>,
-) -> Result<VisualVerificationFacts, String> {
+) -> Result<VerificationVisualAssessment, String> {
     if before.png.len() > MAX_VERIFY_VISUAL_BYTES_PER_RECORD
         || after_png.len() > MAX_VERIFY_VISUAL_BYTES_PER_RECORD
     {
         return Err("trusted Verify visual frame exceeds safety bound".into());
     }
     if before.viewport != *after_viewport {
-        return Ok(VisualVerificationFacts {
-            viewport_changed_ratio: None,
-            target_changed_ratio: None,
+        return Ok(VerificationVisualAssessment {
+            facts: VisualVerificationFacts {
+                viewport_changed_ratio: None,
+                target_changed_ratio: None,
+            },
+            affected: None,
         });
     }
     let before_image = decode_png_rgba(before.png.as_slice())
@@ -586,9 +627,12 @@ pub fn compare_visual_facts(
     let after_image = decode_png_rgba(after_png)
         .map_err(|_| "trusted Verify current visual decode failed".to_string())?;
     if (before_image.width, before_image.height) != (after_image.width, after_image.height) {
-        return Ok(VisualVerificationFacts {
-            viewport_changed_ratio: None,
-            target_changed_ratio: None,
+        return Ok(VerificationVisualAssessment {
+            facts: VisualVerificationFacts {
+                viewport_changed_ratio: None,
+                target_changed_ratio: None,
+            },
+            affected: None,
         });
     }
 
@@ -610,10 +654,64 @@ pub fn compare_visual_facts(
         _ => None,
     };
 
-    Ok(VisualVerificationFacts {
-        viewport_changed_ratio: Some(viewport_diff.changed_ratio),
-        target_changed_ratio,
+    let policy = ChangedRegionPolicy {
+        threshold: VERIFY_PIXEL_THRESHOLD,
+        ..ChangedRegionPolicy::default()
+    };
+    let affected = plan_changed_css_regions(
+        &before_image,
+        &after_image,
+        (
+            f64::from(before.viewport.css_width),
+            f64::from(before.viewport.css_height),
+        ),
+        policy,
+    )
+    .map_err(|_| "trusted Verify affected-region planning failed".to_string())?;
+
+    let affected = Some(match affected {
+        ChangedRegionPlan::Unchanged => VerificationAffectedVisualPlan {
+            mode: VerificationVisualChangeMode::Unchanged,
+            changed_ratio: 0.0,
+            regions: Vec::new(),
+        },
+        ChangedRegionPlan::Regions {
+            regions,
+            changed_ratio,
+        } => VerificationAffectedVisualPlan {
+            mode: VerificationVisualChangeMode::Regions,
+            changed_ratio,
+            regions,
+        },
+        ChangedRegionPlan::Viewport { changed_ratio } => VerificationAffectedVisualPlan {
+            mode: VerificationVisualChangeMode::Viewport,
+            changed_ratio,
+            regions: vec![Rect {
+                x: 0.0,
+                y: 0.0,
+                width: f64::from(before.viewport.css_width),
+                height: f64::from(before.viewport.css_height),
+            }],
+        },
+    });
+
+    Ok(VerificationVisualAssessment {
+        facts: VisualVerificationFacts {
+            viewport_changed_ratio: Some(viewport_diff.changed_ratio),
+            target_changed_ratio,
+        },
+        affected,
     })
+}
+
+pub fn compare_visual_facts(
+    before: &VerifyVisualBaseline,
+    after_png: &[u8],
+    after_viewport: &ViewportMeta,
+    after_rect: Option<&Rect>,
+) -> Result<VisualVerificationFacts, String> {
+    assess_visual_change(before, after_png, after_viewport, after_rect)
+        .map(|assessment| assessment.facts)
 }
 
 pub fn classify_verification_status(
