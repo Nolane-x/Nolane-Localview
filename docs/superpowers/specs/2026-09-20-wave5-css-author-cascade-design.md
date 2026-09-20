@@ -52,14 +52,12 @@ Winner authority is emitted only for direct declarations of this conservative pr
 - `position`
 - `box-sizing`
 - `z-index`
-- `justify-content`
-- `align-items`
 - `opacity`
 - `pointer-events`
 - `visibility`
 - `color`
 
-These properties were chosen because this slice can compare their direct author declarations without having to expand a common shorthand that can silently set the same property.
+These properties were chosen because this slice can compare their direct author declarations without having to expand a common shorthand that can silently set the same property. `align-items` and `justify-content` remain ordinary trace properties but are intentionally excluded from winner authority because `place-items` and `place-content` can set them indirectly.
 
 A property outside this set may still appear in ordinary declaration trace evidence, but it receives no cascade-winner claim.
 
