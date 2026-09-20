@@ -412,6 +412,8 @@ pub struct ResponsiveObservation {
     pub route: String,
     pub viewport: Viewport,
     pub snapshot_version: u64,
+    pub state_fingerprint: u64,
+    pub state_fingerprint_complete: bool,
     pub complete: bool,
     pub nodes: Vec<ResponsiveNodeObservation>,
 }
@@ -569,6 +571,10 @@ fn issue(
 ) -> ResponsiveIssue {
     let mut evidence_with_snapshot = Vec::with_capacity(evidence.len() + 1);
     evidence_with_snapshot.push(format!("snapshot_version={}", observation.snapshot_version));
+    evidence_with_snapshot.push(format!(
+        "state_fingerprint={:016x}",
+        observation.state_fingerprint
+    ));
     evidence_with_snapshot.extend(evidence);
     ResponsiveIssue {
         kind,
