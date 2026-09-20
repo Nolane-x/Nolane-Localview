@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod content_stress;
 mod native_executor_worker;
 mod point_select;
 mod trusted_ai;
@@ -2854,6 +2855,23 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         });
       }
 
+      const contentStressCompletions = api?.takeContentStressCompletions?.(8) || [];
+      for (const completion of contentStressCompletions) {
+        await invoke('preview_complete_content_stress', {
+          sessionId,
+          completion: {
+            requestToken: String(completion?.requestToken || ''),
+            route: String(completion?.route || ''),
+            status: String(completion?.status || ''),
+            profile: String(completion?.profile || ''),
+            mutatedNodes: Number(completion?.mutatedNodes || 0),
+            restoredNodes: Number(completion?.restoredNodes || 0),
+            conflictNodes: Number(completion?.conflictNodes || 0),
+            bridgeGeneration: generation,
+          },
+        });
+      }
+
       if (pendingNetworkFaultControls.size === 0) {
         const controls = await invoke('preview_take_network_fault_controls', { sessionId });
         rememberTakenNetworkFaultControls(controls);
@@ -2900,6 +2918,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let _ = app.manage(visual_capture::VisualCaptureState::default());
+            let _ = app.manage(content_stress::ContentStressState::default());
             let _ = app.manage(point_select::PointSelectState::default());
             let _ = app.manage(trusted_fix::FixProposalStore::default());
             let _ = app.manage(trusted_verify::VerificationStore::default());
@@ -2949,6 +2968,7 @@ pub fn run() {
             verify_fix_change,
             open_source_for_selection,
             measure_current_selection,
+            content_stress::capture_content_locale_stress,
             point_select::point_select_begin,
             point_select::point_select_status,
             point_select::point_select_cancel,
@@ -2962,6 +2982,7 @@ pub fn run() {
             preview_action_cancellation,
             preview_ack_action_cancellation,
             preview_complete_action,
+            content_stress::preview_complete_content_stress,
             point_select::preview_complete_point_select,
             visual_capture::capture_responsive_sweep,
             visual_capture::capture_full_page,
