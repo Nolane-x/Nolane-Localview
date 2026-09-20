@@ -28,6 +28,12 @@ try {
     <!doctype html>
     <html>
       <head>
+        <style media="(max-width: 200px)">
+          #target { align-items: end; }
+        </style>
+        <style id="disabled-sheet">
+          #target { justify-content: end; }
+        </style>
         <style>
           button.target { display: flex; }
           .target { display: grid; }
@@ -59,6 +65,9 @@ try {
       </body>
     </html>
   `);
+  await page.evaluate(() => {
+    document.getElementById('disabled-sheet').sheet.disabled = true;
+  });
   await page.addScriptTag({ content: bootstrap });
 
   const first = await page.evaluate(() => window.__LOCALVIEW__.snapshot());
@@ -109,6 +118,18 @@ try {
   invariant(winners.get('visibility')?.value === 'visible', 'active supports winner missing', winners.get('visibility'));
   invariant(winners.get('z-index')?.value === '2', 'later equal-specificity source order must win', winners.get('z-index'));
   invariant(!winners.has('opacity'), 'unsupported functional selector must not mint opacity winner', winners.get('opacity'));
+  invariant(
+    !winners.has('align-items')
+      && !declarations.some((item) => item.property === 'align-items'),
+    'inactive stylesheet-level media must not contribute evidence',
+    { winners: Array.from(winners.values()), declarations },
+  );
+  invariant(
+    !winners.has('justify-content')
+      && !declarations.some((item) => item.property === 'justify-content'),
+    'disabled stylesheet must not contribute evidence',
+    { winners: Array.from(winners.values()), declarations },
+  );
 
   const capPage = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const paddingRules = Array.from({ length: 13 }, (_, index) => `.cap { padding-top: ${index + 1}px; }`).join('\n');
@@ -168,6 +189,8 @@ try {
     unsupportedSelectorFailClosed: true,
     retentionIndependent: true,
     layerFailClosed: true,
+    stylesheetMediaFiltered: true,
+    disabledStylesheetFiltered: true,
   }) + '\n');
 } finally {
   await browser.close();
