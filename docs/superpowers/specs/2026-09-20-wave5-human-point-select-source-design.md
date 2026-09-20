@@ -63,9 +63,9 @@ The `data-localview-owned="point-select"` attribute is diagnostic only; ownershi
 
 Desktop status is keyed by `(session_id, request_token)`.
 
-The begin route is read from the existing managed-surface canonical-route authority. Completion must come from an allowed LocalView bridge surface, with the same canonical caller route. The bridge contributes its document generation to the receipt.
+The begin route is read from the existing managed-surface canonical-route authority. Completion must come from an allowed LocalView bridge surface, with the same canonical caller route. Arming emits a bounded non-terminal `armed` handshake, so desktop records the exact bridge/document generation before accepting any terminal completion. Every selected/cancelled/failed completion must match that generation.
 
-SPA route signals terminate active point selection immediately. Desktop polling independently rechecks the managed route and fails closed on drift. Session change increments the UI generation, cancels the old token best-effort, clears point selection and prevents stale async completion from writing state.
+SPA route signals terminate active point selection immediately. Desktop polling independently rechecks the managed route and probes the exact active token inside the managed page. A same-URL hard reload therefore cannot silently retain point authority: the new document either reports no active token or presents a different bridge generation, which becomes terminal `generation_changed`. Session change increments the UI generation, cancels the old token best-effort, clears point selection and prevents stale async completion from writing state.
 
 ## Focus evidence precedence
 
@@ -126,4 +126,4 @@ The deterministic Playwright fixture proves:
 
 The ordinary fallback iframe in the dashboard is not treated as point-selection authority because it is not the exact Tauri-managed/instrumented WebView. If no managed surface exists, the Human Inspector opens the existing managed LocalView preview and arms selection there. Cross-origin iframe content remains opaque; the frame element itself may be hit, but LocalView does not traverse its document.
 
-Same-URL hard reload is bounded by document-generation receipts and token ownership, but a reload that destroys the active page before it can emit a terminal completion is ultimately cleared by desktop lifecycle/status authority rather than by recovering selection from the new document. No ref is synthesized across that boundary.
+A same-URL hard reload is treated as document-generation drift and clears the active request through the status probe; no ref is recovered or synthesized across that boundary.
