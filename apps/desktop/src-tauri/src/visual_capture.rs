@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Weak},
     time::Duration,
 };
@@ -12,14 +12,20 @@ use localview_native_capture::{
     capture_webview, CaptureRequest, CapturedFrame, NativeCaptureBackend, NativeCaptureError,
     ViewportMeta,
 };
-use localview_protocol::{Rect, SessionId};
+use localview_protocol::{ElementRef, PageSnapshot, Rect, SemanticNode, SessionId};
 use localview_resource_governor::{
     RetainedResourceBudget, RetainedResourceKind, RetainedResourceLedger,
     RetainedResourceViolation,
 };
 use localview_responsive::{
-    build_responsive_contact_sheet, plan_canonical_sweep, ContactSheetPolicy, ResponsiveFrame,
-    ResponsivePresetId, ResponsiveSweepPlan,
+    analyze_responsive_series, bounded_adaptive_sweep, build_responsive_contact_sheet,
+    deduplicate_responsive_issues, discover_breakpoint, evaluate_responsive_observation,
+    plan_canonical_sweep, resolve_observed_transition, ContactSheetPolicy, LayoutProbe,
+    ObservedTransitionResolution, ResponsiveDetectorState, ResponsiveFrame, ResponsiveIssue,
+    ResponsiveNodeObservation, ResponsiveObservation, ResponsivePresetId, ResponsiveProbeEvaluation,
+    ResponsiveProbeSample, ResponsiveRect, ResponsiveSweepPlan, DEFAULT_ADAPTIVE_INITIAL_PROBE_CAP,
+    DEFAULT_ADAPTIVE_MAX_WIDTH, DEFAULT_ADAPTIVE_MIN_WIDTH, DEFAULT_ADAPTIVE_PROBE_CAP,
+    DEFAULT_BREAKPOINT_TOLERANCE_PX, MAX_RESPONSIVE_OBSERVATION_NODES,
 };
 use localview_visual::{
     decode_png_rgba, encode_png_rgba, plan_changed_css_regions, plan_full_page,
@@ -201,6 +207,7 @@ pub struct ResponsiveSweepReceipt {
     pub contact_sheet_pixel_width: u32,
     pub contact_sheet_pixel_height: u32,
     pub viewports: Vec<ResponsiveViewportReceipt>,
+    pub adaptive: ResponsiveAdaptiveReceipt,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -213,6 +220,24 @@ pub struct ResponsiveViewportReceipt {
     pub pixel_height: u32,
     pub sheet_x: u32,
     pub sheet_y: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponsiveAdaptiveReceipt {
+    pub detector: String,
+    pub probe_cap: usize,
+    pub probes: Vec<ResponsiveAdaptiveProbeReceipt>,
+    pub transition: ObservedTransitionResolution,
+    pub issues: Vec<ResponsiveIssue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponsiveAdaptiveProbeReceipt {
+    pub css_width: u32,
+    pub css_height: u32,
+    pub snapshot_version: u64,
+    pub state: ResponsiveDetectorState,
+    pub issue_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -252,6 +277,37 @@ struct ResponsivePreviewState {
     original_physical_width: u32,
     original_physical_height: u32,
     canonical_route: String,
+}
+
+#[derive(Debug)]
+struct ResponsiveTransactionOutput {
+    captured: Vec<ResponsiveCapturedViewport>,
+    adaptive: ResponsiveAdaptiveReceipt,
+}
+
+#[derive(Debug, Clone)]
+struct LiveResponsiveProbe {
+    observation: ResponsiveObservation,
+    evaluation: ResponsiveProbeEvaluation,
+}
+
+#[derive(Debug)]
+struct LiveResponsiveProbeState {
+    probes: BTreeMap<u32, LiveResponsiveProbe>,
+    attempted_widths: BTreeSet<u32>,
+    failure: Option<String>,
+}
+
+struct LiveResponsiveLayoutProbe<'a> {
+    window: &'a tauri::WebviewWindow,
+    registry: &'a workspace_surface::surface_registry::DesktopSurfaceRegistry,
+    session_id: SessionId,
+    preview_label: &'a str,
+    expected_route: &'a str,
+    css_height: u32,
+    deadline: tokio::time::Instant,
+    probe_cap: usize,
+    state: Mutex<LiveResponsiveProbeState>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2799,7 +2855,6 @@ use localview_capture::{
     resolve_progressive_targets, ProgressiveTargetError, ProgressiveTargetKind,
     ProgressiveTargetProvenance,
 };
-use localview_protocol::{ElementRef, PageSnapshot};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProgressiveTargetCaptureReceipt {
