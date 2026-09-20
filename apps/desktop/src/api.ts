@@ -89,6 +89,7 @@ export interface HumanVerifyChangeReceipt {
   regressionSignals: string[];
   viewportChangedRatio?: number | null;
   targetChangedRatio?: number | null;
+  affectedRegionChangedRatio?: number | null;
   visualDiffEvidenceId?: string | null;
   snapshotVersion: number;
   providerLabel?: string | null;
