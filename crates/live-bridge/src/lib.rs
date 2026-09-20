@@ -79,6 +79,7 @@ pub enum BridgeActionKind {
     Focus,
     Snapshot,
     Measure,
+    CssInspect,
     FreezeVisuals,
     RestoreVisuals { token: Uuid },
     CaptureScrollTo { token: Uuid, y: f64 },
