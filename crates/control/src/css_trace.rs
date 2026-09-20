@@ -853,4 +853,56 @@ mod tests {
         );
         assert_eq!(bad_inline_specificity, Err(CssTraceError::InvalidSnapshot));
     }
+
+    #[test]
+    fn rejects_remote_encoded_traversal_and_explicitly_inactive_css_evidence() {
+        for declaration in [
+            serde_json::json!({
+                "source_kind": "same_origin_stylesheet",
+                "stylesheet_path": "src/%2e%2e/private.css",
+                "selector": ".save",
+                "property": "color",
+                "value": "red",
+                "important": false
+            }),
+            serde_json::json!({
+                "source_kind": "cross_origin_stylesheet",
+                "stylesheet_path": "remote.css",
+                "selector": ".save",
+                "property": "color",
+                "value": "red",
+                "important": false
+            }),
+            serde_json::json!({
+                "source_kind": "same_origin_stylesheet",
+                "stylesheet_path": "src/button.css",
+                "selector": ".save",
+                "property": "color",
+                "value": "red",
+                "important": false,
+                "active": false
+            }),
+            serde_json::json!({
+                "source_kind": "same_origin_stylesheet",
+                "stylesheet_path": "src/button.css",
+                "selector": ".save",
+                "property": "color",
+                "value": "red",
+                "important": false,
+                "disabled": true
+            }),
+        ] {
+            let result = project_style_trace(
+                &payload(serde_json::json!({
+                    "ref": "@save",
+                    "style": {"color": "red"},
+                    "styleTrace": {"declarations": [declaration]},
+                    "children": []
+                })),
+                "@save",
+            );
+            assert_eq!(result, Err(CssTraceError::InvalidSnapshot));
+        }
+    }
+
 }
