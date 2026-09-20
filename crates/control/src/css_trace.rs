@@ -245,7 +245,6 @@ fn project_declarations(
     declarations.iter().map(project_declaration).collect()
 }
 
-
 fn project_author_cascade(value: Option<&Value>) -> Result<Option<CssAuthorCascade>, CssTraceError> {
     let Some(style_trace) = value else {
         return Ok(None);
@@ -261,7 +260,8 @@ fn project_author_cascade(value: Option<&Value>) -> Result<Option<CssAuthorCasca
     }
 
     let object = cascade.as_object().ok_or(CssTraceError::InvalidSnapshot)?;
-    let scope = bounded_string(object.get("scope"), 64).ok_or(CssTraceError::InvalidSnapshot)?;
+    let scope =
+        bounded_string(object.get("scope"), 64).ok_or(CssTraceError::InvalidSnapshot)?;
     if scope != "supported_author_subset" {
         return Err(CssTraceError::InvalidSnapshot);
     }
@@ -294,7 +294,8 @@ fn project_author_cascade(value: Option<&Value>) -> Result<Option<CssAuthorCasca
         .get("winners")
         .and_then(Value::as_array)
         .ok_or(CssTraceError::InvalidSnapshot)?;
-    if winner_values.len() > MAX_CSS_CASCADE_WINNERS || (!coverage_complete && !winner_values.is_empty())
+    if winner_values.len() > MAX_CSS_CASCADE_WINNERS
+        || (!coverage_complete && !winner_values.is_empty())
     {
         return Err(CssTraceError::InvalidSnapshot);
     }
@@ -303,7 +304,9 @@ fn project_author_cascade(value: Option<&Value>) -> Result<Option<CssAuthorCasca
     let mut winner_seen = std::collections::BTreeSet::new();
     for value in winner_values {
         let winner = project_cascade_winner(value)?;
-        if unresolved_seen.contains(&winner.property) || !winner_seen.insert(winner.property.clone()) {
+        if unresolved_seen.contains(&winner.property)
+            || !winner_seen.insert(winner.property.clone())
+        {
             return Err(CssTraceError::InvalidSnapshot);
         }
         winners.push(winner);
@@ -364,7 +367,8 @@ fn project_cascade_winner(value: &Value) -> Result<CssCascadeWinner, CssTraceErr
         if value > MAX_CSS_SPECIFICITY_UNIT {
             return Err(CssTraceError::InvalidSnapshot);
         }
-        specificity[index] = u16::try_from(value).map_err(|_| CssTraceError::InvalidSnapshot)?;
+        specificity[index] =
+            u16::try_from(value).map_err(|_| CssTraceError::InvalidSnapshot)?;
     }
 
     let source_order = object
