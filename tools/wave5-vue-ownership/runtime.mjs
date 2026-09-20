@@ -310,8 +310,8 @@ try {
   process.stdout.write(JSON.stringify({
     ok: true,
     framework: 'vue',
-    component: result.hint.component,
-    file: result.hint.file,
+    component: bounded.hint.component,
+    file: bounded.hint.file,
     upstreamFile: result.diagnostic.upstreamFile,
     explicitPrecedence: true,
     propsPrivate: true,
