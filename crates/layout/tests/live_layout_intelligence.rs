@@ -85,10 +85,7 @@ fn nested_containers_use_only_observed_parent_relationships() {
         .iter()
         .find(|issue| issue.code == "container_overflow")
         .expect("child should exceed its actual parent");
-    assert_eq!(
-        issue.refs,
-        vec!["@panel".to_string(), "@child".to_string()]
-    );
+    assert_eq!(issue.refs, vec!["@panel".to_string(), "@child".to_string()]);
     assert!(!issue.refs.contains(&"@root".to_string()));
 }
 
@@ -97,11 +94,7 @@ fn intentional_scroll_overflow_is_evidence_not_an_error() {
     let mut parent = element("@scroller", rect(0.0, 0.0, 120.0, 100.0), None);
     parent.style.overflow_x = Some(OverflowMode::Hidden);
     parent.style.overflow_y = Some(OverflowMode::Scroll);
-    let child = element(
-        "@long",
-        rect(0.0, 0.0, 120.0, 320.0),
-        Some("@scroller"),
-    );
+    let child = element("@long", rect(0.0, 0.0, 120.0, 320.0), Some("@scroller"));
 
     let report = analyze(&[parent, child], (120.0, 100.0));
     assert!(
@@ -110,9 +103,11 @@ fn intentional_scroll_overflow_is_evidence_not_an_error() {
             .iter()
             .any(|fact| fact.code == "scroll_container_overflow")
     );
-    assert!(!report.issues.iter().any(|issue| {
-        issue.code == "container_overflow" || issue.code == "viewport_overflow"
-    }));
+    assert!(
+        !report.issues.iter().any(|issue| {
+            issue.code == "container_overflow" || issue.code == "viewport_overflow"
+        })
+    );
 }
 
 #[test]
@@ -157,11 +152,7 @@ fn clipped_child_is_not_mislabeled_as_accidental_overflow() {
 #[test]
 fn large_child_inside_large_container_is_valid() {
     let parent = element("@large", rect(0.0, 0.0, 900.0, 900.0), None);
-    let child = element(
-        "@child",
-        rect(50.0, 50.0, 800.0, 800.0),
-        Some("@large"),
-    );
+    let child = element("@child", rect(50.0, 50.0, 800.0, 800.0), Some("@large"));
 
     let report = analyze(&[parent, child], (1000.0, 1000.0));
     assert!(
@@ -176,21 +167,14 @@ fn large_child_inside_large_container_is_valid() {
 fn sibling_overlap_and_non_overlap_are_distinguished() {
     let parent = element("@parent", rect(0.0, 0.0, 500.0, 200.0), None);
     let left = element("@left", rect(10.0, 10.0, 100.0, 100.0), Some("@parent"));
-    let overlapping = element(
-        "@overlap",
-        rect(55.0, 10.0, 100.0, 100.0),
-        Some("@parent"),
-    );
+    let overlapping = element("@overlap", rect(55.0, 10.0, 100.0, 100.0), Some("@parent"));
     let separate = element(
         "@separate",
         rect(300.0, 10.0, 100.0, 100.0),
         Some("@parent"),
     );
 
-    let report = analyze(
-        &[parent, left, overlapping, separate],
-        (500.0, 300.0),
-    );
+    let report = analyze(&[parent, left, overlapping, separate], (500.0, 300.0));
     assert!(report.issues.iter().any(|issue| {
         issue.code == "sibling_collision"
             && issue.refs.contains(&"@left".to_string())
@@ -295,11 +279,7 @@ fn alignment_families_are_parent_local_and_report_measured_deviation() {
     let parent = element("@parent", rect(0.0, 0.0, 300.0, 250.0), None);
     let a = element("@a", rect(20.0, 0.0, 60.0, 40.0), Some("@parent"));
     let b = element("@b", rect(20.4, 60.0, 72.0, 40.0), Some("@parent"));
-    let outlier = element(
-        "@outlier",
-        rect(28.0, 120.0, 86.0, 40.0),
-        Some("@parent"),
-    );
+    let outlier = element("@outlier", rect(28.0, 120.0, 86.0, 40.0), Some("@parent"));
 
     let report = analyze(&[parent, a, b, outlier], (400.0, 300.0));
     let issue = report
@@ -338,11 +318,7 @@ fn invalid_geometry_fails_closed_before_relational_checks() {
         rect(10.0, 10.0, f64::NAN, 40.0),
         Some("@parent"),
     );
-    let negative = element(
-        "@negative",
-        rect(10.0, 60.0, -4.0, 20.0),
-        Some("@parent"),
-    );
+    let negative = element("@negative", rect(10.0, 60.0, -4.0, 20.0), Some("@parent"));
     let zero = element("@zero", rect(10.0, 100.0, 0.0, 20.0), Some("@parent"));
 
     let report = analyze(&[parent, invalid, negative, zero], (300.0, 300.0));
@@ -352,9 +328,12 @@ fn invalid_geometry_fails_closed_before_relational_checks() {
     assert!(report.issues.iter().any(|issue| {
         issue.code == "invalid_geometry" && issue.refs == vec!["@negative".to_string()]
     }));
-    assert!(report.issues.iter().any(|issue| {
-        issue.code == "zero_area" && issue.refs == vec!["@zero".to_string()]
-    }));
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| { issue.code == "zero_area" && issue.refs == vec!["@zero".to_string()] })
+    );
     assert!(!report.issues.iter().any(|issue| {
         issue.code == "sibling_collision" && issue.refs.contains(&"@invalid".to_string())
     }));

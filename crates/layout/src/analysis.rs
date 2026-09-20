@@ -129,7 +129,8 @@ fn classify_geometry(element: &LayoutElement, issues: &mut Vec<LayoutIssue>) -> 
                 confidence: 1.0,
                 class: LayoutIssueClass::Deterministic,
                 refs: vec![element.reference.clone()],
-                message: "Element geometry is invalid and was excluded from relational analysis".into(),
+                message: "Element geometry is invalid and was excluded from relational analysis"
+                    .into(),
                 evidence: format!("rect={rect:?}"),
             },
         );
@@ -215,9 +216,15 @@ fn analyze_overflow(
                     let (overflow_x, overflow_y) = outside_rect(&element.rect, &parent.rect);
                     if overflow_x || overflow_y {
                         let constrained_x = overflow_x
-                            && parent.style.overflow_x.is_some_and(OverflowMode::constrains);
+                            && parent
+                                .style
+                                .overflow_x
+                                .is_some_and(OverflowMode::constrains);
                         let constrained_y = overflow_y
-                            && parent.style.overflow_y.is_some_and(OverflowMode::constrains);
+                            && parent
+                                .style
+                                .overflow_y
+                                .is_some_and(OverflowMode::constrains);
                         let clipped = (overflow_x
                             && parent.style.overflow_x.is_some_and(OverflowMode::clips))
                             || (overflow_y
@@ -290,7 +297,8 @@ fn analyze_overflow(
             continue;
         }
         let constrained_x = viewport_x && has_constraining_ancestor(elements, index, element, true);
-        let constrained_y = viewport_y && has_constraining_ancestor(elements, index, element, false);
+        let constrained_y =
+            viewport_y && has_constraining_ancestor(elements, index, element, false);
         let uncontained_x = viewport_x && !constrained_x;
         let uncontained_y = viewport_y && !constrained_y;
         if !(uncontained_x || uncontained_y) || element.visibility.clipped == Some(true) {
@@ -346,7 +354,8 @@ fn analyze_occlusion(
                 confidence: 1.0,
                 class: LayoutIssueClass::Deterministic,
                 refs: vec![element.reference.clone(), blocker.reference.clone()],
-                message: "Interactive control center-point was observed behind another region".into(),
+                message: "Interactive control center-point was observed behind another region"
+                    .into(),
                 evidence: format!(
                     "sampled=true occluded_by={} blocker_position={:?} blocker_z_index={:?}",
                     blocker.reference, blocker.style.position, blocker.style.z_index
@@ -393,7 +402,9 @@ fn analyze_collisions(
                         confidence: 1.0,
                         class: LayoutIssueClass::Deterministic,
                         refs: vec![left.reference.clone(), right.reference.clone()],
-                        message: "Fixed/sticky overlap is corroborated by sampled occlusion evidence".into(),
+                        message:
+                            "Fixed/sticky overlap is corroborated by sampled occlusion evidence"
+                                .into(),
                         evidence: format!(
                             "overlap_ratio={overlap:.3} left_position={:?} right_position={:?} left_z_index={:?} right_z_index={:?}",
                             left.style.position,
@@ -406,7 +417,10 @@ fn analyze_collisions(
                 continue;
             }
 
-            if left.parent.is_some() && left.parent == right.parent && overlap >= SIBLING_OVERLAP_THRESHOLD {
+            if left.parent.is_some()
+                && left.parent == right.parent
+                && overlap >= SIBLING_OVERLAP_THRESHOLD
+            {
                 push_issue(
                     issues,
                     LayoutIssue {
@@ -430,7 +444,9 @@ fn analyze_collisions(
                         confidence: 0.78,
                         class: LayoutIssueClass::Heuristic,
                         refs: vec![left.reference.clone(), right.reference.clone()],
-                        message: "Unrelated visible regions overlap substantially; intent is not proven".into(),
+                        message:
+                            "Unrelated visible regions overlap substantially; intent is not proven"
+                                .into(),
                         evidence: format!("overlap_ratio={overlap:.3}"),
                     },
                 );
@@ -467,7 +483,9 @@ fn spacing_samples(
 
     let groups = children_by_parent(elements, valid);
     for (parent_ref, children) in groups {
-        let parent = index.get(&parent_ref).and_then(|position| elements.get(*position));
+        let parent = index
+            .get(&parent_ref)
+            .and_then(|position| elements.get(*position));
         if let Some(parent) = parent {
             for &child_position in &children {
                 let child = &elements[child_position];
@@ -576,7 +594,10 @@ fn push_spacing_family(samples: &[&SpacingSample], output: &mut Vec<SpacingFamil
         return;
     }
     let value = samples.iter().map(|sample| sample.value).sum::<f64>() / samples.len() as f64;
-    let mut sources = samples.iter().map(|sample| sample.source).collect::<Vec<_>>();
+    let mut sources = samples
+        .iter()
+        .map(|sample| sample.source)
+        .collect::<Vec<_>>();
     sources.sort_by_key(|source| match source {
         SpacingSource::SiblingGap => 0,
         SpacingSource::Padding => 1,
@@ -601,7 +622,10 @@ fn analyze_spacing_outliers(samples: &[SpacingSample], issues: &mut Vec<LayoutIs
             SpacingSource::Padding => 1,
             SpacingSource::EdgeDistance => 2,
         };
-        groups.entry((parent.clone(), source)).or_default().push(sample);
+        groups
+            .entry((parent.clone(), source))
+            .or_default()
+            .push(sample);
     }
 
     for ((parent, _), group) in groups {
@@ -636,7 +660,8 @@ fn analyze_spacing_outliers(samples: &[SpacingSample], issues: &mut Vec<LayoutIs
                     confidence: 0.82,
                     class: LayoutIssueClass::Heuristic,
                     refs,
-                    message: "Local spacing measurement deviates from a recurring inferred family".into(),
+                    message: "Local spacing measurement deviates from a recurring inferred family"
+                        .into(),
                     evidence: format!(
                         "inferred_family={expected:.3} measured={:.3} deviation={deviation:.3} threshold={threshold:.3} family_support={}",
                         sample.value,
@@ -677,7 +702,8 @@ fn analyze_alignment(elements: &[LayoutElement], valid: &[bool], issues: &mut Ve
             if family.len() < 2 {
                 continue;
             }
-            let expected = family.iter().map(|(_, value)| *value).sum::<f64>() / family.len() as f64;
+            let expected =
+                family.iter().map(|(_, value)| *value).sum::<f64>() / family.len() as f64;
             for (position, measured) in &values {
                 let deviation = (*measured - expected).abs();
                 if deviation <= ALIGNMENT_OUTLIER_THRESHOLD {
@@ -732,7 +758,10 @@ fn analyze_alignment(elements: &[LayoutElement], valid: &[bool], issues: &mut Ve
     }
 }
 
-fn children_by_parent(elements: &[LayoutElement], valid: &[bool]) -> BTreeMap<ElementRef, Vec<usize>> {
+fn children_by_parent(
+    elements: &[LayoutElement],
+    valid: &[bool],
+) -> BTreeMap<ElementRef, Vec<usize>> {
     let mut groups = BTreeMap::<ElementRef, Vec<usize>>::new();
     for (position, element) in elements.iter().enumerate() {
         if !valid[position] {
@@ -897,9 +926,9 @@ fn cluster_sample_refs<'a>(
     for sample in values {
         match clusters.last_mut() {
             Some(cluster)
-                if cluster.last().is_some_and(|previous| {
-                    (sample.value - previous.value).abs() <= epsilon
-                }) =>
+                if cluster
+                    .last()
+                    .is_some_and(|previous| (sample.value - previous.value).abs() <= epsilon) =>
             {
                 cluster.push(*sample);
             }

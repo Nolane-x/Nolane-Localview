@@ -42,13 +42,7 @@ pub fn analyze_layout_events(events: &[ObserverEvent]) -> LiveLayoutAnalysis {
     let mut elements = Vec::new();
     let mut projection_truncated = false;
     if let Some(root) = packet.get("semantic_tree") {
-        project_node(
-            root,
-            None,
-            0,
-            &mut elements,
-            &mut projection_truncated,
-        );
+        project_node(root, None, 0, &mut elements, &mut projection_truncated);
     }
 
     let mut analysis = analyze(&elements, viewport);
@@ -76,7 +70,10 @@ fn project_node(
         return;
     }
 
-    let reference = node.get("ref").and_then(Value::as_str).and_then(bounded_ref);
+    let reference = node
+        .get("ref")
+        .and_then(Value::as_str)
+        .and_then(bounded_ref);
     let rect = node.get("rect").and_then(parse_rect);
     let retained_reference = match (reference, rect) {
         (Some(reference), Some(rect)) => {
@@ -95,10 +92,7 @@ fn project_node(
                     .and_then(parse_css_px)
                     .filter(|value| *value > 0.0),
                 padding: node.get("style").and_then(parse_padding),
-                style: node
-                    .get("style")
-                    .map(parse_style)
-                    .unwrap_or_default(),
+                style: node.get("style").map(parse_style).unwrap_or_default(),
                 visibility: node
                     .get("visibility")
                     .map(parse_visibility)
@@ -116,13 +110,7 @@ fn project_node(
                 *truncated = true;
                 break;
             }
-            project_node(
-                child,
-                retained_reference,
-                depth + 1,
-                elements,
-                truncated,
-            );
+            project_node(child, retained_reference, depth + 1, elements, truncated);
         }
     }
 }
@@ -238,10 +226,7 @@ fn parse_visibility(value: &Value) -> VisibilityEvidence {
 
 fn parse_padding(value: &Value) -> Option<[f64; 4]> {
     let object = value.as_object()?;
-    let top = object
-        .get("paddingTop")?
-        .as_str()
-        .and_then(parse_css_px)?;
+    let top = object.get("paddingTop")?.as_str().and_then(parse_css_px)?;
     let right = object
         .get("paddingRight")?
         .as_str()
@@ -250,10 +235,7 @@ fn parse_padding(value: &Value) -> Option<[f64; 4]> {
         .get("paddingBottom")?
         .as_str()
         .and_then(parse_css_px)?;
-    let left = object
-        .get("paddingLeft")?
-        .as_str()
-        .and_then(parse_css_px)?;
+    let left = object.get("paddingLeft")?.as_str().and_then(parse_css_px)?;
     if [top, right, bottom, left]
         .iter()
         .any(|value| !value.is_finite() || *value < 0.0)

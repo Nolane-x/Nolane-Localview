@@ -264,9 +264,8 @@ pub fn diagnose_live(events: &[ObserverEvent]) -> LiveDiagnosis {
 
     let mut recommended_actions = Vec::new();
     if events.is_empty() {
-        recommended_actions.push(
-            "Open the native preview so LocalView can attach its secure observer".into(),
-        );
+        recommended_actions
+            .push("Open the native preview so LocalView can attach its secure observer".into());
     }
     if analysis.counts.semantic_snapshots == 0 {
         recommended_actions
@@ -363,7 +362,9 @@ fn console_entry(event: &ObserverEvent, runtime_error: bool) -> ConsoleEntry {
     };
     ConsoleEntry {
         level,
-        message: text(payload, "message").unwrap_or("runtime event").to_owned(),
+        message: text(payload, "message")
+            .unwrap_or("runtime event")
+            .to_owned(),
         stack: text(payload, "stack").map(str::to_owned),
         source: text(payload, "source").map(str::to_owned),
         action_ref: event.reference.clone(),
@@ -481,10 +482,12 @@ mod tests {
         assert_eq!(report.performance_lite.sampled_long_tasks_ms[0], 61);
         assert_eq!(report.performance_lite.sampled_long_tasks_ms[7], 54);
         assert_eq!(report.performance_lite.omitted_long_task_samples, 4);
-        assert!(report
-            .performance_lite
-            .cumulative_layout_shift
-            .is_some_and(|value| (value - 0.3).abs() < 1e-9));
+        assert!(
+            report
+                .performance_lite
+                .cumulative_layout_shift
+                .is_some_and(|value| (value - 0.3).abs() < 1e-9)
+        );
 
         let direct = performance_lite(&events);
         assert_eq!(direct, report.performance_lite);
@@ -542,19 +545,23 @@ mod tests {
             json!({"method":"GET","url":"http://localhost/api","status":500,"duration":10.0}),
         )]);
         assert!(!report.findings.is_empty());
-        assert!(report
-            .unknowns
-            .iter()
-            .any(|unknown| unknown.class == LiveUncertaintyClass::Cause));
+        assert!(
+            report
+                .unknowns
+                .iter()
+                .any(|unknown| unknown.class == LiveUncertaintyClass::Cause)
+        );
     }
 
     #[test]
     fn empty_stream_recommends_attaching_observer_instead_of_inventing_findings() {
         let report = diagnose_live(&[]);
         assert!(report.findings.is_empty());
-        assert!(report
-            .unknowns
-            .iter()
-            .any(|unknown| unknown.class == LiveUncertaintyClass::Identity));
+        assert!(
+            report
+                .unknowns
+                .iter()
+                .any(|unknown| unknown.class == LiveUncertaintyClass::Identity)
+        );
     }
 }

@@ -55,12 +55,14 @@ fn live_semantic_snapshot_is_projected_into_layout_analyzer() {
     assert_eq!(report.layout.snapshot_seq, Some(7));
     assert_eq!(report.layout.snapshot_version, Some(11));
     assert_eq!(report.layout.analysis.analyzed_nodes, 3);
-    assert!(report
-        .layout
-        .analysis
-        .facts
-        .iter()
-        .any(|fact| fact.code == "flex_container" && fact.refs == vec!["@row".to_string()]));
+    assert!(
+        report
+            .layout
+            .analysis
+            .facts
+            .iter()
+            .any(|fact| fact.code == "flex_container" && fact.refs == vec!["@row".to_string()])
+    );
     let overflow = report
         .layout
         .analysis
