@@ -754,7 +754,7 @@ const SCRIPT: &str = r#"
     if (file.startsWith('/')
         || /^[A-Za-z]:\//.test(file)
         || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(file)
-        || /[%?#]/.test(file)) {
+        || /[%?#:]/.test(file)) {
       return null;
     }
 
@@ -918,28 +918,40 @@ const SCRIPT: &str = r#"
     return null;
   };
 
-  const svelteSourceHint = (el, ownershipBudget) => {
-    if (!ownershipBudget || ownershipBudget.remaining <= 0) return null;
-
-    let descriptor;
+  const ownDataDescriptor = (object, key) => {
+    if (!object || (typeof object !== 'object' && typeof object !== 'function')) return null;
     try {
-      descriptor = Object.getOwnPropertyDescriptor(el, '__svelte_meta');
+      const descriptor = Object.getOwnPropertyDescriptor(object, key);
+      return descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+        ? descriptor
+        : null;
     } catch (_) {
       return null;
     }
-    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) return null;
+  };
+
+  const svelteSourceHint = (el, ownershipBudget) => {
+    if (!ownershipBudget || ownershipBudget.remaining <= 0) return null;
+
+    const descriptor = ownDataDescriptor(el, '__svelte_meta');
+    if (!descriptor) return null;
     ownershipBudget.remaining -= 1;
 
     const meta = descriptor.value;
-    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
-    const loc = meta.loc;
-    if (!loc || typeof loc !== 'object' || Array.isArray(loc)) return null;
+    const locDescriptor = ownDataDescriptor(meta, 'loc');
+    if (!locDescriptor) return null;
+    const loc = locDescriptor.value;
 
-    const file = boundedRelativeSourceFile(loc.file, MAX_SVELTE_SOURCE_FILE_BYTES);
+    const fileDescriptor = ownDataDescriptor(loc, 'file');
+    const lineDescriptor = ownDataDescriptor(loc, 'line');
+    const columnDescriptor = ownDataDescriptor(loc, 'column');
+    if (!fileDescriptor || !lineDescriptor || !columnDescriptor) return null;
+
+    const file = boundedRelativeSourceFile(fileDescriptor.value, MAX_SVELTE_SOURCE_FILE_BYTES);
     if (!file || !file.endsWith('.svelte')) return null;
 
-    const line = Number(loc.line);
-    const column = Number(loc.column);
+    const line = Number(lineDescriptor.value);
+    const column = Number(columnDescriptor.value);
     if (!Number.isInteger(line)
         || line < 1
         || line > MAX_SVELTE_SOURCE_LINE
