@@ -2,12 +2,10 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use localview_capture::{
-    resolve_progressive_targets, ProgressiveTargetError, ProgressiveTargetKind,
-    ProgressiveTargetProvenance,
+    ProgressiveTargetError, ProgressiveTargetKind, ProgressiveTargetProvenance,
+    resolve_progressive_targets,
 };
-use localview_protocol::{
-    ComponentOwnership, PageSnapshot, Rect, SemanticNode, SourceLocation,
-};
+use localview_protocol::{ComponentOwnership, PageSnapshot, Rect, SemanticNode, SourceLocation};
 
 fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
     Rect {
@@ -296,7 +294,10 @@ fn missing_ref_or_invalid_target_geometry_fails_closed() {
     );
     let error = resolve_progressive_targets(&snapshot(invalid_root), "@bad")
         .expect_err("non-finite geometry must fail");
-    assert!(matches!(error, ProgressiveTargetError::InvalidElementGeometry));
+    assert!(matches!(
+        error,
+        ProgressiveTargetError::InvalidElementGeometry
+    ));
 
     let offscreen = node(
         "@offscreen",
@@ -316,7 +317,10 @@ fn missing_ref_or_invalid_target_geometry_fails_closed() {
     );
     let error = resolve_progressive_targets(&snapshot(offscreen_root), "@offscreen")
         .expect_err("fully offscreen geometry must fail");
-    assert!(matches!(error, ProgressiveTargetError::InvalidElementGeometry));
+    assert!(matches!(
+        error,
+        ProgressiveTargetError::InvalidElementGeometry
+    ));
 }
 
 #[test]
@@ -338,7 +342,10 @@ fn infinite_and_zero_sized_target_geometry_fail_closed() {
         );
         let error = resolve_progressive_targets(&snapshot(root), "@bad")
             .expect_err("infinite or zero-sized geometry must fail");
-        assert!(matches!(error, ProgressiveTargetError::InvalidElementGeometry));
+        assert!(matches!(
+            error,
+            ProgressiveTargetError::InvalidElementGeometry
+        ));
     }
 }
 
@@ -363,7 +370,6 @@ fn zero_sized_snapshot_viewport_fails_closed_before_resolution() {
         .expect_err("zero-height viewport must fail closed");
     assert!(matches!(error, ProgressiveTargetError::InvalidViewport));
 }
-
 
 #[test]
 fn structured_component_ownership_resolves_without_source_coordinates() {

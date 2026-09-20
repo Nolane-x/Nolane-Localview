@@ -363,7 +363,8 @@ fn project_ownership(value: Option<&Value>) -> Option<Option<ComponentOwnership>
             let Some(signal_value) = value.get("signal") else {
                 return Some(None);
             };
-            let Some(signal) = bounded_required_string(signal_value, MAX_COMPONENT_SIGNAL_BYTES) else {
+            let Some(signal) = bounded_required_string(signal_value, MAX_COMPONENT_SIGNAL_BYTES)
+            else {
                 return Some(None);
             };
             if !matches!(signal.as_str(), "debug_source" | "debug_stack") {
@@ -383,7 +384,8 @@ fn project_ownership(value: Option<&Value>) -> Option<Option<ComponentOwnership>
             let Some(signal_value) = value.get("signal") else {
                 return Some(None);
             };
-            let Some(signal) = bounded_required_string(signal_value, MAX_COMPONENT_SIGNAL_BYTES) else {
+            let Some(signal) = bounded_required_string(signal_value, MAX_COMPONENT_SIGNAL_BYTES)
+            else {
                 return Some(None);
             };
             if signal != "element_meta" {
@@ -757,5 +759,4 @@ mod tests {
             );
         }
     }
-
 }
