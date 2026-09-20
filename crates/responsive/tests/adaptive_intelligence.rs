@@ -33,6 +33,7 @@ fn observation(width: u32, version: u64, nodes: Vec<ResponsiveNodeObservation>) 
         route: "http://127.0.0.1:3000/dashboard".to_string(),
         viewport: Viewport { width, height: 800 },
         snapshot_version: version,
+        complete: true,
         nodes,
     }
 }
