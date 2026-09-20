@@ -121,11 +121,21 @@ pub struct SemanticNode {
     pub interactive: bool,
     pub attributes: BTreeMap<String, String>,
     pub source: Option<SourceLocation>,
+    #[serde(default)]
+    pub ownership: Option<ComponentOwnership>,
     pub children: Vec<SemanticNode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SourceLocation { pub file: String, pub line: u32, pub column: Option<u32>, pub component: Option<String> }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ComponentOwnership {
+    pub framework: Option<String>,
+    pub file: String,
+    pub component: String,
+    pub signal: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PageSnapshot {
