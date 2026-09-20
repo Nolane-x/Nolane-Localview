@@ -723,7 +723,7 @@ const SCRIPT: &str = r#"
     return output;
   };
 
-  const MAX_REACT_OWNERSHIP_PROBES = 256;
+  const MAX_FRAMEWORK_OWNERSHIP_PROBES = 256;
   const MAX_REACT_HOST_KEYS = 64;
   const MAX_REACT_FIBER_DEPTH = 32;
   const MAX_REACT_COMPONENT_BYTES = 96;
@@ -734,12 +734,38 @@ const SCRIPT: &str = r#"
   const MAX_REACT_DEBUG_STACK_LINES = 24;
   const REACT_FIBER_PREFIXES = ['__reactFiber$', '__reactInternalInstance$'];
   const REACT_PROPS_PREFIX = '__reactProps$';
+  const MAX_SVELTE_COMPONENT_BYTES = 96;
+  const MAX_SVELTE_SOURCE_FILE_BYTES = 260;
+  const MAX_SVELTE_SOURCE_LINE = 1000000;
+  const MAX_SVELTE_SOURCE_COLUMN = 10000000;
 
   const boundedUtf8String = (value, maxBytes) => {
     if (typeof value !== 'string') return null;
     const normalized = redact(value).trim();
     if (!normalized || /[\u0000-\u001f\u007f]/.test(normalized)) return null;
     if (new TextEncoder().encode(normalized).length > maxBytes) return null;
+    return normalized;
+  };
+
+  const boundedRelativeSourceFile = (value, maxBytes) => {
+    const raw = boundedUtf8String(value, maxBytes);
+    if (!raw) return null;
+    const file = raw.replace(/\\/g, '/');
+    if (file.startsWith('/')
+        || /^[A-Za-z]:\//.test(file)
+        || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(file)
+        || /[%?#:]/.test(file)) {
+      return null;
+    }
+
+    const segments = [];
+    for (const segment of file.split('/')) {
+      if (!segment || segment === '.') continue;
+      if (segment === '..') return null;
+      segments.push(segment);
+    }
+    const normalized = segments.join('/');
+    if (!normalized || new TextEncoder().encode(normalized).length > maxBytes) return null;
     return normalized;
   };
 
@@ -843,7 +869,6 @@ const SCRIPT: &str = r#"
 
   const reactSourceHint = (el, ownershipBudget) => {
     if (!ownershipBudget || ownershipBudget.remaining <= 0) return null;
-    ownershipBudget.remaining -= 1;
 
     let keys;
     try {
@@ -855,6 +880,7 @@ const SCRIPT: &str = r#"
       REACT_FIBER_PREFIXES.some((prefix) => candidate.startsWith(prefix))
     );
     if (!key) return null;
+    ownershipBudget.remaining -= 1;
 
     const prefix = REACT_FIBER_PREFIXES.find((candidate) => key.startsWith(candidate));
     const suffix = prefix ? key.slice(prefix.length) : '';
@@ -892,6 +918,65 @@ const SCRIPT: &str = r#"
     return null;
   };
 
+  const ownDataDescriptor = (object, key) => {
+    if (!object || (typeof object !== 'object' && typeof object !== 'function')) return null;
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(object, key);
+      return descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+        ? descriptor
+        : null;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const svelteSourceHint = (el, ownershipBudget) => {
+    if (!ownershipBudget || ownershipBudget.remaining <= 0) return null;
+
+    const descriptor = ownDataDescriptor(el, '__svelte_meta');
+    if (!descriptor) return null;
+    ownershipBudget.remaining -= 1;
+
+    const meta = descriptor.value;
+    const locDescriptor = ownDataDescriptor(meta, 'loc');
+    if (!locDescriptor) return null;
+    const loc = locDescriptor.value;
+
+    const fileDescriptor = ownDataDescriptor(loc, 'file');
+    const lineDescriptor = ownDataDescriptor(loc, 'line');
+    const columnDescriptor = ownDataDescriptor(loc, 'column');
+    if (!fileDescriptor || !lineDescriptor || !columnDescriptor) return null;
+
+    const file = boundedRelativeSourceFile(fileDescriptor.value, MAX_SVELTE_SOURCE_FILE_BYTES);
+    if (!file || !file.endsWith('.svelte')) return null;
+
+    const line = Number(lineDescriptor.value);
+    const column = Number(columnDescriptor.value);
+    if (!Number.isInteger(line)
+        || line < 1
+        || line > MAX_SVELTE_SOURCE_LINE
+        || !Number.isInteger(column)
+        || column < 0
+        || column > MAX_SVELTE_SOURCE_COLUMN) {
+      return null;
+    }
+
+    const basename = file.split('/').pop();
+    const component = basename && basename.endsWith('.svelte')
+      ? boundedUtf8String(basename.slice(0, -'.svelte'.length), MAX_SVELTE_COMPONENT_BYTES)
+      : null;
+    if (!component) return null;
+
+    return {
+      origin: 'svelte-dev-meta',
+      file,
+      line,
+      column,
+      component,
+      signal: 'element_meta',
+    };
+  };
+
   const sourceHint = (el, ownershipBudget) => {
     for (const attribute of ['data-component-source', 'data-source']) {
       const raw = el.getAttribute?.(attribute);
@@ -906,7 +991,9 @@ const SCRIPT: &str = r#"
         column: match?.[3] ? Number(match[3]) : null,
       };
     }
-    return reactSourceHint(el, ownershipBudget);
+    const react = reactSourceHint(el, ownershipBudget);
+    if (react) return react;
+    return svelteSourceHint(el, ownershipBudget);
   };
 
   const STYLE_PROPERTIES = [
@@ -1080,7 +1167,7 @@ const SCRIPT: &str = r#"
   const snapshot = () => {
     snapshotVersion += 1;
     const occlusionBudget = { remaining: Math.max(0, Number(config.max_occlusion_samples) || 0) };
-    const ownershipBudget = { remaining: MAX_REACT_OWNERSHIP_PROBES };
+    const ownershipBudget = { remaining: MAX_FRAMEWORK_OWNERSHIP_PROBES };
     const semantic_tree = semanticTree(occlusionBudget, ownershipBudget);
     const packet = {
       version: snapshotVersion,
