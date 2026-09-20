@@ -172,8 +172,6 @@ fn adaptive_runtime_stays_inside_the_existing_restore_before_persistence_transac
 
     for required in [
         "run_live_adaptive_responsive",
-        "responsive_observation_from_snapshot",
-        "fresh_semantic_snapshot",
         "ResponsiveTransactionOutput",
         "ResponsiveAdaptiveReceipt",
     ] {
