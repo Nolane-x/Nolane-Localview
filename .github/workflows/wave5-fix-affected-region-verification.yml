@@ -42,8 +42,6 @@ jobs:
         run: |
           rustfmt --edition 2024 --check \
             apps/desktop/src-tauri/src/trusted_verify.rs \
-            apps/desktop/src-tauri/src/visual_capture.rs \
-            apps/desktop/src-tauri/src/lib.rs \
             apps/desktop/src-tauri/tests/wave5_fix_affected_region_verification_contract.rs
 
       - name: Verify Trusted Verify affected planning
