@@ -1120,7 +1120,7 @@ const SCRIPT: &str = r#"
       if (!boundedProperty || !boundedValue || (selector != null && !boundedSelector)) return;
       declarations.push({
         source_kind: sourceKind,
-        file,
+        stylesheet_path: file,
         selector: boundedSelector,
         property: boundedProperty,
         value: boundedValue,
