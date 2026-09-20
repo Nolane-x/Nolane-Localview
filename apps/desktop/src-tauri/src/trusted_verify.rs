@@ -7,8 +7,8 @@ use std::{
 use localview_native_capture::ViewportMeta;
 use localview_protocol::{PageSnapshot, Rect, SemanticNode, Session, SessionId};
 use localview_visual::{
-    ChangedRegionPlan, ChangedRegionPolicy, RgbaImage, decode_png_rgba,
-    pixel_diff, plan_changed_css_regions,
+    ChangedRegionPlan, ChangedRegionPolicy, RgbaImage, decode_png_rgba, pixel_diff,
+    plan_changed_css_regions,
 };
 use serde::Serialize;
 use uuid::Uuid;
@@ -1487,9 +1487,13 @@ mod trusted_verify_tests {
             css_height: 128,
             device_scale_factor: 1.0,
         };
-        let incompatible =
-            assess_visual_change(&before, &identical_png, &incompatible_viewport, Some(&target))
-                .unwrap();
+        let incompatible = assess_visual_change(
+            &before,
+            &identical_png,
+            &incompatible_viewport,
+            Some(&target),
+        )
+        .unwrap();
         assert!(incompatible.affected.is_none());
         assert_eq!(incompatible.facts.viewport_changed_ratio, None);
 
