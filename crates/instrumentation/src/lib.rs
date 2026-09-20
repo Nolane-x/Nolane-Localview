@@ -783,19 +783,17 @@ const SCRIPT: &str = r#"
     const overlay = document.createElement('div');
     overlay.setAttribute('data-localview-owned', 'point-select');
     overlay.setAttribute('aria-hidden', 'true');
-    overlay.style.cssText = [
-      'position:fixed',
-      'display:none',
-      'pointer-events:none',
-      'box-sizing:border-box',
-      'border:2px solid currentColor',
-      'outline:1px solid rgba(255,255,255,.9)',
-      'background:rgba(127,127,127,.12)',
-      'color:#2f81f7',
-      'z-index:2147483646',
-      'margin:0',
-      'padding:0',
-    ].join(';');
+    overlay.style.position = 'fixed';
+    overlay.style.display = 'none';
+    overlay.style.pointerEvents = 'none';
+    overlay.style.boxSizing = 'border-box';
+    overlay.style.border = '2px solid currentColor';
+    overlay.style.outline = '1px solid rgba(255,255,255,.9)';
+    overlay.style.background = 'rgba(127,127,127,.12)';
+    overlay.style.color = '#2f81f7';
+    overlay.style.zIndex = '2147483646';
+    overlay.style.margin = '0';
+    overlay.style.padding = '0';
     localViewOwnedElements.add(overlay);
     (document.body || root).appendChild(overlay);
 
