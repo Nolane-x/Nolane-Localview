@@ -24,7 +24,7 @@ The first slice connects:
 fresh element ref
   -> computed style packet
   -> bounded matching CSS declarations
-  -> same-origin project-relative stylesheet identity when available
+  -> bounded same-origin stylesheet URL-path identity when available
 ```
 
 This evidence remains independent of `SourceLocation` and `ComponentOwnership`.
@@ -40,7 +40,7 @@ Hard bounds:
 - at most 12 retained declarations per element;
 - selector <= 256 UTF-8 bytes;
 - CSS value <= 256 UTF-8 bytes;
-- stylesheet file <= 260 UTF-8 bytes;
+- stylesheet path hint <= 260 UTF-8 bytes;
 - fixed CSS property allowlist only.
 
 Inline element declarations are considered first.
@@ -55,7 +55,7 @@ Nested rule groups are traversed under the same global rule budget.
 
 CSS declaration values replace every `url(...)` payload with `url(<redacted>)` before retention.
 
-A stylesheet file identity is retained only when:
+A stylesheet path hint is retained only when:
 
 - `sheet.href` parses as a URL;
 - origin equals the managed page origin;
@@ -63,7 +63,7 @@ A stylesheet file identity is retained only when:
 - path has no encoded-percent form;
 - normalized identity is bounded project-relative syntax.
 
-Inline stylesheet rules remain identifiable as `inline_stylesheet` but do not invent a source file.
+Inline stylesheet rules remain identifiable as `inline_stylesheet` but do not invent a source path.
 
 No stylesheet text, source contents, remote URLs, cookies, tokens, absolute filesystem paths or arbitrary CSS custom properties are retained.
 
@@ -96,7 +96,7 @@ CssStyleTrace {
   declarations: [
     {
       source_kind,
-      file?,
+      stylesheet_path?,
       selector?,
       property,
       value,
@@ -142,7 +142,7 @@ Focused gates cover:
 - bounded instrumentation constants and CSSOM path;
 - separation from component ownership;
 - URL-value redaction;
-- same-origin and `/@fs/` path fencing;
+- same-origin and `/@fs/` path fencing without claiming filesystem/source-map ownership;
 - Rust projection of valid same-origin declaration evidence;
 - traversal/unsafe file rejection;
 - duplicate element-ref fail-closed behavior;
@@ -151,4 +151,4 @@ Focused gates cover:
 
 ## Completion definition
 
-This slice is complete when an authenticated client can request one fresh element ref and receive bounded computed CSS plus matching declaration evidence, while malformed, ambiguous, cross-authority and path-unsafe inputs fail closed and the existing semantic/component protocol remains unchanged.
+This slice is complete when an authenticated client can request one fresh element ref and receive bounded computed CSS plus matching declaration evidence, while same-origin stylesheet paths remain URL-path hints rather than source-file proof and malformed, ambiguous, cross-authority and path-unsafe inputs fail closed and the existing semantic/component protocol remains unchanged.
