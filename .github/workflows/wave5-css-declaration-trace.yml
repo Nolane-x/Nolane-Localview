@@ -5,6 +5,7 @@ on:
     paths:
       - "crates/instrumentation/**"
       - "crates/control/src/css_trace.rs"
+      - "crates/control/tests/css_trace.rs"
       - "crates/control/src/fresh_snapshot.rs"
       - "crates/control/src/lib.rs"
       - ".github/workflows/wave5-css-declaration-trace.yml"
@@ -15,6 +16,7 @@ on:
     paths:
       - "crates/instrumentation/**"
       - "crates/control/src/css_trace.rs"
+      - "crates/control/tests/css_trace.rs"
       - "crates/control/src/fresh_snapshot.rs"
       - "crates/control/src/lib.rs"
       - ".github/workflows/wave5-css-declaration-trace.yml"
@@ -48,6 +50,7 @@ jobs:
             crates/instrumentation/tests/visibility_source_contract.rs \
             crates/control/src/fresh_snapshot.rs \
             crates/control/src/css_trace.rs \
+            crates/control/tests/css_trace.rs \
             crates/control/src/lib.rs
 
       - name: Verify instrumentation contract
@@ -55,6 +58,9 @@ jobs:
 
       - name: Verify CSS trace projection
         run: cargo test -p localview-control css_trace -- --nocapture
+
+      - name: Verify fresh CSS trace HTTP contract
+        run: cargo test -p localview-control --test css_trace -- --nocapture
 
       - name: Check changed crates
         run: cargo check -p localview-instrumentation -p localview-control --all-targets
