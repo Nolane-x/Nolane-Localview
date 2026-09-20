@@ -479,55 +479,54 @@ pub fn bounded_adaptive_sweep(
         return Err(ResponsiveError::InvalidAdaptiveProbeCap);
     }
 
-    let mut widths = anchors
+    let candidates = adaptive_sweep(min, max, anchors);
+    let mut selected = anchors
         .iter()
         .copied()
         .filter(|width| *width >= min && *width <= max)
         .collect::<Vec<_>>();
-    widths.extend([min, max]);
-    widths.sort_unstable();
-    widths.dedup();
+    selected.extend([min, max]);
+    selected.sort_unstable();
+    selected.dedup();
 
-    if widths.len() > initial_cap {
-        let last = widths.len() - 1;
-        let mut selected = Vec::with_capacity(initial_cap);
-        for slot in 0..initial_cap {
-            let index = slot
-                .checked_mul(last)
-                .ok_or(ResponsiveError::InvalidAdaptiveProbeCap)?
-                / (initial_cap - 1);
-            selected.push(widths[index]);
-        }
+    if selected.len() > initial_cap {
+        let last = selected.len() - 1;
+        let source = selected;
+        selected = (0..initial_cap)
+            .map(|slot| {
+                let index = slot
+                    .checked_mul(last)
+                    .expect("validated adaptive probe cap cannot overflow usize")
+                    / (initial_cap - 1);
+                source[index]
+            })
+            .collect();
         selected.sort_unstable();
         selected.dedup();
-        widths = selected;
     }
 
-    while widths.len() < initial_cap {
-        let Some((_, midpoint)) = widths
-            .windows(2)
-            .filter_map(|pair| {
-                let gap = pair[1].saturating_sub(pair[0]);
-                if gap <= 1 {
-                    None
-                } else {
-                    Some((gap, pair[0] + gap / 2))
-                }
+    while selected.len() < initial_cap {
+        let Some(next) = candidates
+            .iter()
+            .copied()
+            .filter(|candidate| selected.binary_search(candidate).is_err())
+            .max_by_key(|candidate| {
+                let nearest = selected
+                    .iter()
+                    .map(|selected_width| selected_width.abs_diff(*candidate))
+                    .min()
+                    .unwrap_or(0);
+                (nearest, std::cmp::Reverse(*candidate))
             })
-            .max_by_key(|(gap, midpoint)| (*gap, std::cmp::Reverse(*midpoint)))
         else {
             break;
         };
-        if widths.binary_search(&midpoint).is_ok() {
-            break;
-        }
-        widths.push(midpoint);
-        widths.sort_unstable();
+        selected.push(next);
+        selected.sort_unstable();
     }
 
-    widths.sort_unstable();
-    widths.dedup();
-    Ok(widths)
+    selected.dedup();
+    Ok(selected)
 }
 
 fn issue_key(issue: &ResponsiveIssue) -> String {
