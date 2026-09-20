@@ -813,9 +813,12 @@ fn top_level_important_index(value: &str) -> Result<Option<usize>, CssParseError
             b'!' if paren == 0 && bracket == 0 => {
                 let rest = &value[cursor + 1..];
                 let trimmed = rest.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
-                if trimmed.len() >= "important".len()
-                    && trimmed[.."important".len()].eq_ignore_ascii_case("important")
-                    && trimmed["important".len()..].trim().is_empty()
+                if trimmed
+                    .get(.."important".len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("important"))
+                    && trimmed
+                        .get("important".len()..)
+                        .is_some_and(|suffix| suffix.trim().is_empty())
                 {
                     return Ok(Some(cursor));
                 }
@@ -835,36 +838,38 @@ fn strip_comments(value: &str) -> Result<String, CssParseError> {
     let bytes = value.as_bytes();
     let mut output = String::with_capacity(value.len());
     let mut cursor = 0_usize;
-    let mut quote = None;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
     while cursor < bytes.len() {
-        let byte = bytes[cursor];
-        if let Some(mark) = quote {
-            output.push(byte as char);
-            if byte == b'\\' && cursor + 1 < bytes.len() {
-                cursor += 1;
-                output.push(bytes[cursor] as char);
-            } else if byte == mark {
-                quote = None;
-            }
-            cursor += 1;
-            continue;
-        }
-        if byte == b'/' && cursor + 1 < bytes.len() && bytes[cursor + 1] == b'*' {
-            let end = skip_comment(value, cursor, bytes.len())?;
-            if !output.ends_with(char::is_whitespace) {
+        if quote.is_none()
+            && bytes[cursor] == b'/'
+            && cursor + 1 < bytes.len()
+            && bytes[cursor + 1] == b'*'
+        {
+            cursor = skip_comment(value, cursor, bytes.len())?;
+            if !output.chars().last().is_some_and(char::is_whitespace) {
                 output.push(' ');
             }
-            cursor = end;
             continue;
         }
-        if matches!(byte, b'\'' | b'"') {
-            quote = Some(byte);
-        }
+
         let ch = value[cursor..].chars().next().ok_or(CssParseError::Invalid)?;
         output.push(ch);
         cursor += ch.len_utf8();
+
+        if let Some(mark) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == mark {
+                quote = None;
+            }
+        } else if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        }
     }
-    if quote.is_some() {
+    if quote.is_some() || escaped {
         Err(CssParseError::Invalid)
     } else {
         Ok(output)
