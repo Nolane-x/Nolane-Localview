@@ -2649,6 +2649,13 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
           route: inspected.route ?? null,
         };
       }
+      case 'css_inspect': {
+        if (!queued.reference) throw new Error('css inspect requires an element reference');
+        const api = window.__LOCALVIEW__;
+        const inspected = api?.inspectCss?.(queued.reference) ?? null;
+        if (!inspected) throw new Error('css inspect element reference unavailable');
+        return inspected;
+      }
       case 'inspect': {
         if (!queued.reference) throw new Error('inspect requires an element reference');
         const api = window.__LOCALVIEW__;
