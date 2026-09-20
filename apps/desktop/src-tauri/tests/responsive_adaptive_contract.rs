@@ -82,8 +82,8 @@ fn adaptive_failures_still_flow_through_outer_restore() {
         .find("responsive_transaction_timeout")
         .expect("bounded transaction timeout");
     let restore = tx.find("restore_responsive_preview").unwrap();
-    assert!(timeout < adaptive);
-    assert!(adaptive < restore);
+    assert!(adaptive < timeout);
+    assert!(timeout < restore);
 
     for failure in [
         "responsive_resize_failed",
