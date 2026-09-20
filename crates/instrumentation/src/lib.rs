@@ -892,6 +892,7 @@ const SCRIPT: &str = r#"
     const listenerSpecs = [
       ['pointermove', onPointerMove],
       ['pointerdown', onPointerDown],
+      ['pointerup', suppress],
       ['mousedown', suppress],
       ['mouseup', suppress],
       ['click', onClick],
