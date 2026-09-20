@@ -63,6 +63,8 @@ export type VerifyStatus =
   | 'regression_signal'
   | 'inconclusive';
 
+export type VerifyVisualChangeMode = 'unchanged' | 'regions' | 'viewport';
+
 export interface HumanApplyFixReceipt {
   proposalId: string;
   reference: string;
@@ -89,6 +91,9 @@ export interface HumanVerifyChangeReceipt {
   regressionSignals: string[];
   viewportChangedRatio?: number | null;
   targetChangedRatio?: number | null;
+  visualChangeMode?: VerifyVisualChangeMode | null;
+  affectedRegions: MeasureRect[];
+  affectedVisualEvidenceIds: string[];
   visualDiffEvidenceId?: string | null;
   snapshotVersion: number;
   providerLabel?: string | null;
