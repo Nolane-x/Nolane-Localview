@@ -867,6 +867,7 @@ export default function LocalViewShell() {
 
   const toggleTool = useCallback((tool: ToolId) => {
     if (tool !== 'inspect') {
+      if (pointSelectActive) cancelPointSelect(false);
       togglePanel(tool);
       return;
     }
