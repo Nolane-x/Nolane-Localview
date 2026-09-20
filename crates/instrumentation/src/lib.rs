@@ -1017,6 +1017,319 @@ const SCRIPT: &str = r#"
     return packet;
   };
 
+  const MAX_CSS_TRACE_STYLESHEETS = 32;
+  const MAX_CSS_TRACE_RULES = 2048;
+  const MAX_CSS_TRACE_SELECTORS = 128;
+  const MAX_CSS_TRACE_DECLARATIONS = 256;
+  const MAX_CSS_TRACE_NESTING = 8;
+  const MAX_CSS_TRACE_SELECTOR_BYTES = 512;
+  const MAX_CSS_TRACE_VALUE_BYTES = 256;
+  const CSS_TRACE_PROPERTIES = STYLE_PROPERTIES.map((property) =>
+    property.replace(/[A-Z]/g, (match) => '-' + match.toLowerCase())
+  );
+  const CSS_TRACE_PROPERTY_SET = new Set(CSS_TRACE_PROPERTIES);
+
+  const boundedCssText = (value, maxBytes) => {
+    const bounded = redact(value).trim();
+    if (!bounded || /[\u0000-\u001f\u007f]/.test(bounded)) return null;
+    const bytes = new TextEncoder().encode(bounded);
+    return bytes.length <= maxBytes ? bounded : null;
+  };
+
+  const splitSelectorList = (value) => {
+    const raw = boundedCssText(value, MAX_CSS_TRACE_SELECTOR_BYTES);
+    if (!raw) return null;
+    const selectors = [];
+    let current = '';
+    let parens = 0;
+    let brackets = 0;
+    let quote = null;
+    let escaped = false;
+    for (const char of raw) {
+      if (escaped) {
+        current += char;
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        current += char;
+        escaped = true;
+        continue;
+      }
+      if (quote) {
+        current += char;
+        if (char === quote) quote = null;
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        current += char;
+        continue;
+      }
+      if (char === '(') parens += 1;
+      else if (char === ')') parens -= 1;
+      else if (char === '[') brackets += 1;
+      else if (char === ']') brackets -= 1;
+      if (parens < 0 || brackets < 0) return null;
+      if (char === ',' && parens === 0 && brackets === 0) {
+        const selector = current.trim();
+        if (selector) selectors.push(selector);
+        current = '';
+        continue;
+      }
+      current += char;
+    }
+    if (quote || parens !== 0 || brackets !== 0) return null;
+    const selector = current.trim();
+    if (selector) selectors.push(selector);
+    return selectors.length > 0 && selectors.length <= 64 ? selectors : null;
+  };
+
+  const conservativeCssSpecificity = (selector) => {
+    const raw = boundedCssText(selector, MAX_CSS_TRACE_SELECTOR_BYTES);
+    if (!raw
+        || raw.includes('\\')
+        || raw.includes('|')
+        || /:(?:is|not|has|where|nth-child|nth-last-child|host|host-context)\s*\(/i.test(raw)
+        || /::slotted\s*\(/i.test(raw)) {
+      return null;
+    }
+
+    let ids = 0;
+    let classes = 0;
+    let types = 0;
+    let index = 0;
+    let canStartType = true;
+
+    const isNameStart = (char) => /[A-Za-z_-]/.test(char || '');
+    const isName = (char) => /[A-Za-z0-9_-]/.test(char || '');
+
+    while (index < raw.length) {
+      const char = raw[index];
+      if (/\s/.test(char) || ['>', '+', '~', ','].includes(char)) {
+        canStartType = true;
+        index += 1;
+        continue;
+      }
+      if (char === '*') {
+        canStartType = false;
+        index += 1;
+        continue;
+      }
+      if (char === '#') {
+        index += 1;
+        if (!isNameStart(raw[index])) return null;
+        ids += 1;
+        while (index < raw.length && isName(raw[index])) index += 1;
+        canStartType = false;
+        continue;
+      }
+      if (char === '.') {
+        index += 1;
+        if (!isNameStart(raw[index])) return null;
+        classes += 1;
+        while (index < raw.length && isName(raw[index])) index += 1;
+        canStartType = false;
+        continue;
+      }
+      if (char === '[') {
+        let depth = 1;
+        let quote = null;
+        let escaped = false;
+        index += 1;
+        while (index < raw.length && depth > 0) {
+          const next = raw[index];
+          if (escaped) {
+            escaped = false;
+          } else if (next === '\\') {
+            escaped = true;
+          } else if (quote) {
+            if (next === quote) quote = null;
+          } else if (next === '"' || next === "'") {
+            quote = next;
+          } else if (next === '[') {
+            depth += 1;
+          } else if (next === ']') {
+            depth -= 1;
+          }
+          index += 1;
+        }
+        if (depth !== 0 || quote) return null;
+        classes += 1;
+        canStartType = false;
+        continue;
+      }
+      if (char === ':') {
+        const pseudoElement = raw[index + 1] === ':';
+        index += pseudoElement ? 2 : 1;
+        if (!isNameStart(raw[index])) return null;
+        while (index < raw.length && isName(raw[index])) index += 1;
+        if (raw[index] === '(') return null;
+        if (pseudoElement) types += 1;
+        else classes += 1;
+        canStartType = false;
+        continue;
+      }
+      if (isNameStart(char)) {
+        let end = index + 1;
+        while (end < raw.length && isName(raw[end])) end += 1;
+        if (canStartType) types += 1;
+        index = end;
+        canStartType = false;
+        continue;
+      }
+      return null;
+    }
+
+    return [ids, classes, types];
+  };
+
+  const cssTracePacket = (el) => {
+    const computedStyle = getComputedStyle(el);
+    const computed = {};
+    for (const property of CSS_TRACE_PROPERTIES) {
+      const value = boundedCssText(computedStyle.getPropertyValue(property), MAX_CSS_TRACE_VALUE_BYTES);
+      if (value) computed[property] = value;
+    }
+
+    const declarations = [];
+    let scannedRules = 0;
+    let matchedSelectors = 0;
+    let inaccessibleStylesheets = 0;
+    let skippedConditionalGroups = 0;
+    let truncated = false;
+
+    const retainDeclaration = (property, value, important, selector, specificity, origin, sheetIndex, ruleOrdinal) => {
+      if (declarations.length >= MAX_CSS_TRACE_DECLARATIONS) {
+        truncated = true;
+        return false;
+      }
+      if (!CSS_TRACE_PROPERTY_SET.has(property)) return true;
+      const boundedValue = boundedCssText(value, MAX_CSS_TRACE_VALUE_BYTES);
+      if (!boundedValue) return true;
+      declarations.push({
+        property,
+        value: boundedValue,
+        important: Boolean(important),
+        selector,
+        specificity,
+        origin,
+        stylesheetIndex: sheetIndex,
+        ruleOrdinal,
+      });
+      return true;
+    };
+
+    for (const property of CSS_TRACE_PROPERTIES) {
+      const value = el.style?.getPropertyValue?.(property);
+      if (!value) continue;
+      if (!retainDeclaration(
+        property,
+        value,
+        el.style.getPropertyPriority(property) === 'important',
+        null,
+        null,
+        'inline',
+        null,
+        null,
+      )) break;
+    }
+
+    const scanRules = (rules, sheetIndex, depth) => {
+      if (!rules || depth > MAX_CSS_TRACE_NESTING || truncated) return;
+      for (const rule of Array.from(rules)) {
+        if (scannedRules >= MAX_CSS_TRACE_RULES) {
+          truncated = true;
+          return;
+        }
+        scannedRules += 1;
+        const ruleOrdinal = scannedRules;
+
+        if (typeof CSSStyleRule !== 'undefined' && rule instanceof CSSStyleRule) {
+          const selectors = splitSelectorList(rule.selectorText);
+          if (!selectors) continue;
+          for (const selector of selectors) {
+            if (matchedSelectors >= MAX_CSS_TRACE_SELECTORS) {
+              truncated = true;
+              return;
+            }
+            let matches = false;
+            try { matches = el.matches(selector); } catch (_) { continue; }
+            if (!matches) continue;
+            matchedSelectors += 1;
+            const safeSelector = boundedCssText(selector, MAX_CSS_TRACE_SELECTOR_BYTES);
+            if (!safeSelector) continue;
+            const specificity = conservativeCssSpecificity(safeSelector);
+            for (const property of CSS_TRACE_PROPERTIES) {
+              const value = rule.style?.getPropertyValue?.(property);
+              if (!value) continue;
+              if (!retainDeclaration(
+                property,
+                value,
+                rule.style.getPropertyPriority(property) === 'important',
+                safeSelector,
+                specificity,
+                'author_stylesheet',
+                sheetIndex,
+                ruleOrdinal,
+              )) return;
+            }
+          }
+          continue;
+        }
+
+        if (!rule?.cssRules || depth >= MAX_CSS_TRACE_NESTING) continue;
+        const constructorName = String(rule.constructor?.name || '');
+        if (constructorName === 'CSSMediaRule') {
+          let active = false;
+          try { active = matchMedia(rule.conditionText).matches; } catch (_) {}
+          if (!active) {
+            skippedConditionalGroups += 1;
+            continue;
+          }
+        } else if (constructorName === 'CSSSupportsRule') {
+          let active = false;
+          try { active = Boolean(CSS?.supports?.(rule.conditionText)); } catch (_) {}
+          if (!active) {
+            skippedConditionalGroups += 1;
+            continue;
+          }
+        } else if (!['CSSLayerBlockRule'].includes(constructorName)) {
+          skippedConditionalGroups += 1;
+          continue;
+        }
+        scanRules(rule.cssRules, sheetIndex, depth + 1);
+        if (truncated) return;
+      }
+    };
+
+    const sheets = Array.from(document.styleSheets || []);
+    const scannedStylesheets = Math.min(sheets.length, MAX_CSS_TRACE_STYLESHEETS);
+    if (sheets.length > MAX_CSS_TRACE_STYLESHEETS) truncated = true;
+    for (let sheetIndex = 0; sheetIndex < scannedStylesheets && !truncated; sheetIndex += 1) {
+      let rules;
+      try {
+        rules = sheets[sheetIndex].cssRules;
+      } catch (_) {
+        inaccessibleStylesheets += 1;
+        continue;
+      }
+      scanRules(rules, sheetIndex, 0);
+    }
+
+    return {
+      version: 1,
+      computed,
+      declarations,
+      scannedStylesheets,
+      inaccessibleStylesheets,
+      scannedRules,
+      matchedSelectors,
+      skippedConditionalGroups,
+      truncated,
+    };
+  };
+
   const rectIntersects = (a, b) =>
     a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
 
@@ -1198,6 +1511,16 @@ const SCRIPT: &str = r#"
       if (refFor(element) === reference) return element;
     }
     return null;
+  };
+
+  const inspectCss = (reference) => {
+    const el = resolveRef(reference);
+    if (!el) return null;
+    return {
+      reference,
+      route: safeUrl(location.href),
+      trace: cssTracePacket(el),
+    };
   };
 
   const inspect = (reference) => {
@@ -1675,6 +1998,7 @@ const SCRIPT: &str = r#"
     version: '0.2.0',
     snapshot,
     inspect(reference) { return inspect(reference); },
+    inspectCss(reference) { return inspectCss(reference); },
     installNetworkFaultPlan,
     clearNetworkFaultPlan,
     networkFaultState,
