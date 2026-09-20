@@ -120,7 +120,10 @@ impl SourceMap {
             .source_root
             .as_deref()
             .is_some_and(|value| value.len() > MAX_STRING_BYTES)
-            || raw.sources.iter().any(|value| value.len() > MAX_STRING_BYTES)
+            || raw
+                .sources
+                .iter()
+                .any(|value| value.len() > MAX_STRING_BYTES)
             || raw.names.iter().any(|value| value.len() > MAX_STRING_BYTES)
         {
             return Err(SourceMapError::StringTooLong);
@@ -310,10 +313,8 @@ impl SourceMap {
 }
 
 pub fn parse_stack_locations(stack: &str) -> Vec<SourceLocation> {
-    let re = Regex::new(
-        r"(?m)(?:\(|\s|^)([^\s()]+\.(?:tsx?|jsx?|vue|svelte)):(\d+):(\d+)\)?",
-    )
-    .expect("static stack location regex");
+    let re = Regex::new(r"(?m)(?:\(|\s|^)([^\s()]+\.(?:tsx?|jsx?|vue|svelte)):(\d+):(\d+)\)?")
+        .expect("static stack location regex");
 
     re.captures_iter(stack)
         .filter_map(|captures| {
@@ -394,7 +395,9 @@ fn decode_vlq_segment(segment: &str) -> Result<Vec<i64>, SourceMapError> {
             if !continuation {
                 break;
             }
-            shift = shift.checked_add(5).ok_or(SourceMapError::IntegerOverflow)?;
+            shift = shift
+                .checked_add(5)
+                .ok_or(SourceMapError::IntegerOverflow)?;
             if shift >= 64 || cursor >= bytes.len() {
                 return Err(SourceMapError::TruncatedVlq);
             }
@@ -402,8 +405,7 @@ fn decode_vlq_segment(segment: &str) -> Result<Vec<i64>, SourceMapError> {
 
         let negative = accumulated & 1 == 1;
         let magnitude = accumulated >> 1;
-        let magnitude =
-            i64::try_from(magnitude).map_err(|_| SourceMapError::IntegerOverflow)?;
+        let magnitude = i64::try_from(magnitude).map_err(|_| SourceMapError::IntegerOverflow)?;
         values.push(if negative { -magnitude } else { magnitude });
     }
 
@@ -456,11 +458,7 @@ fn is_absolute_reference(value: &str) -> bool {
     }
 
     let bytes = value.as_bytes();
-    if bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && bytes[2] == b'/'
-    {
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
         return true;
     }
 
@@ -721,7 +719,11 @@ mod tests {
             "//cdn.example.test/src/Button.tsx"
         );
         assert_eq!(
-            SourceMap::parse(&unc).unwrap().resolve(1, 0).unwrap().source,
+            SourceMap::parse(&unc)
+                .unwrap()
+                .resolve(1, 0)
+                .unwrap()
+                .source,
             "//server/share/src/Button.tsx"
         );
     }
