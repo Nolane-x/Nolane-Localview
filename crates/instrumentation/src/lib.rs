@@ -863,12 +863,13 @@ const SCRIPT: &str = r#"
     }
     if (!fiber || typeof fiber !== 'object' || fiber.stateNode !== el) return null;
 
+    const hostSource = reactDebugSource(fiber);
     let cursor = fiber.return;
     for (let depth = 0; cursor && depth < MAX_REACT_FIBER_DEPTH; depth += 1, cursor = cursor.return) {
       if (typeof cursor !== 'object') break;
       const component = reactComponentName(cursor.type);
       if (!component) continue;
-      const source = reactDebugSource(cursor);
+      const source = hostSource || reactDebugSource(cursor);
       if (!source) continue;
 
       return {
