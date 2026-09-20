@@ -11,16 +11,46 @@ pub struct Viewport {
 }
 
 pub const DEFAULT_VIEWPORTS: &[Viewport] = &[
-    Viewport { width: 320, height: 568 },
-    Viewport { width: 360, height: 800 },
-    Viewport { width: 375, height: 812 },
-    Viewport { width: 390, height: 844 },
-    Viewport { width: 430, height: 932 },
-    Viewport { width: 768, height: 1024 },
-    Viewport { width: 1024, height: 768 },
-    Viewport { width: 1280, height: 720 },
-    Viewport { width: 1440, height: 900 },
-    Viewport { width: 1920, height: 1080 },
+    Viewport {
+        width: 320,
+        height: 568,
+    },
+    Viewport {
+        width: 360,
+        height: 800,
+    },
+    Viewport {
+        width: 375,
+        height: 812,
+    },
+    Viewport {
+        width: 390,
+        height: 844,
+    },
+    Viewport {
+        width: 430,
+        height: 932,
+    },
+    Viewport {
+        width: 768,
+        height: 1024,
+    },
+    Viewport {
+        width: 1024,
+        height: 768,
+    },
+    Viewport {
+        width: 1280,
+        height: 720,
+    },
+    Viewport {
+        width: 1440,
+        height: 900,
+    },
+    Viewport {
+        width: 1920,
+        height: 1080,
+    },
 ];
 
 pub const MAX_CANONICAL_SWEEP_PRESETS: usize = 4;
@@ -42,9 +72,7 @@ const DRAMATIC_CENTER_SHIFT_RATIO: f64 = 0.30;
 const DRAMATIC_AREA_RATIO: f64 = 3.0;
 const NEARBY_WIDTH_DELTA_PX: u32 = 96;
 
-#[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord,
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponsivePresetId {
     MobileS,
@@ -56,10 +84,22 @@ pub enum ResponsivePresetId {
 impl ResponsivePresetId {
     pub const fn viewport(self) -> Viewport {
         match self {
-            Self::MobileS => Viewport { width: 320, height: 568 },
-            Self::Mobile => Viewport { width: 390, height: 844 },
-            Self::Tablet => Viewport { width: 768, height: 1024 },
-            Self::Desktop => Viewport { width: 1440, height: 900 },
+            Self::MobileS => Viewport {
+                width: 320,
+                height: 568,
+            },
+            Self::Mobile => Viewport {
+                width: 390,
+                height: 844,
+            },
+            Self::Tablet => Viewport {
+                width: 768,
+                height: 1024,
+            },
+            Self::Desktop => Viewport {
+                width: 1440,
+                height: 900,
+            },
         }
     }
 
@@ -185,7 +225,11 @@ pub fn plan_canonical_sweep(
 
     let mut presets = requested.to_vec();
     presets.sort_by_key(|preset| preset.canonical_rank());
-    let viewports = presets.iter().copied().map(ResponsivePresetId::viewport).collect();
+    let viewports = presets
+        .iter()
+        .copied()
+        .map(ResponsivePresetId::viewport)
+        .collect();
 
     Ok(ResponsiveSweepPlan { presets, viewports })
 }
@@ -330,10 +374,7 @@ pub fn build_responsive_contact_sheet(
     Ok(ResponsiveContactSheet { geometry, rgba })
 }
 
-
-#[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord,
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponsiveDetectorState {
     Pass,
@@ -341,9 +382,7 @@ pub enum ResponsiveDetectorState {
     Inconclusive,
 }
 
-#[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord,
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponsiveIssueKind {
     HorizontalOverflow,
@@ -356,9 +395,7 @@ pub enum ResponsiveIssueKind {
     NearbyWidthInstability,
 }
 
-#[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord,
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponsiveIssueClass {
     Deterministic,
@@ -475,7 +512,7 @@ pub fn bounded_adaptive_sweep(
     if min == 0 || max == 0 || min > max {
         return Err(ResponsiveError::InvalidAdaptiveRange);
     }
-    if initial_cap < 2 || initial_cap > DEFAULT_ADAPTIVE_PROBE_CAP {
+    if !(2..=DEFAULT_ADAPTIVE_PROBE_CAP).contains(&initial_cap) {
         return Err(ResponsiveError::InvalidAdaptiveProbeCap);
     }
 
@@ -558,6 +595,8 @@ pub fn deduplicate_responsive_issues(issues: Vec<ResponsiveIssue>) -> Vec<Respon
     out
 }
 
+// This constructor mirrors the bounded persisted issue schema field-for-field.
+#[allow(clippy::too_many_arguments)]
 fn issue(
     observation: &ResponsiveObservation,
     kind: ResponsiveIssueKind,
@@ -827,8 +866,9 @@ fn append_nearby_responsive_issues(
             (node.rect.x + node.rect.width / 2.0) / f64::from(observation.viewport.width);
         let center_y =
             (node.rect.y + node.rect.height / 2.0) / f64::from(observation.viewport.height);
-        let center_shift =
-            (center_x - previous_center_x).abs().max((center_y - previous_center_y).abs());
+        let center_shift = (center_x - previous_center_x)
+            .abs()
+            .max((center_y - previous_center_y).abs());
         let old_area = previous_node.rect.area();
         let new_area = node.rect.area();
         let area_ratio = if old_area > new_area {
@@ -892,19 +932,9 @@ pub fn analyze_responsive_series(
             && middle.1.state != left.1.state
             && !matches!(
                 (left.1.state, middle.1.state, right.1.state),
-                (
-                    ResponsiveDetectorState::Inconclusive,
-                    _,
-                    _
-                ) | (
-                    _,
-                    ResponsiveDetectorState::Inconclusive,
-                    _
-                ) | (
-                    _,
-                    _,
-                    ResponsiveDetectorState::Inconclusive
-                )
+                (ResponsiveDetectorState::Inconclusive, _, _)
+                    | (_, ResponsiveDetectorState::Inconclusive, _)
+                    | (_, _, ResponsiveDetectorState::Inconclusive)
             )
         {
             issues.push(issue(
@@ -920,18 +950,8 @@ pub fn analyze_responsive_series(
                 Some(left.0.viewport.width),
                 Some(right.0.viewport.width),
             ));
-            if left
-                .0
-                .viewport
-                .width
-                .abs_diff(middle.0.viewport.width)
-                <= NEARBY_WIDTH_DELTA_PX
-                && middle
-                    .0
-                    .viewport
-                    .width
-                    .abs_diff(right.0.viewport.width)
-                    <= NEARBY_WIDTH_DELTA_PX
+            if left.0.viewport.width.abs_diff(middle.0.viewport.width) <= NEARBY_WIDTH_DELTA_PX
+                && middle.0.viewport.width.abs_diff(right.0.viewport.width) <= NEARBY_WIDTH_DELTA_PX
             {
                 issues.push(issue(
                     middle.0,
@@ -1096,11 +1116,8 @@ mod tests {
 
     #[test]
     fn contact_sheet_copies_exact_rows_and_keeps_opaque_gutters() {
-        let plan = plan_canonical_sweep(&[
-            ResponsivePresetId::MobileS,
-            ResponsivePresetId::Mobile,
-        ])
-        .unwrap();
+        let plan = plan_canonical_sweep(&[ResponsivePresetId::MobileS, ResponsivePresetId::Mobile])
+            .unwrap();
         let policy = ContactSheetPolicy {
             gutter_px: 1,
             max_rgba_bytes: 1024,
