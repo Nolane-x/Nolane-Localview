@@ -245,7 +245,9 @@ fn project_declarations(
     declarations.iter().map(project_declaration).collect()
 }
 
-fn project_author_cascade(value: Option<&Value>) -> Result<Option<CssAuthorCascade>, CssTraceError> {
+fn project_author_cascade(
+    value: Option<&Value>,
+) -> Result<Option<CssAuthorCascade>, CssTraceError> {
     let Some(style_trace) = value else {
         return Ok(None);
     };
@@ -260,8 +262,7 @@ fn project_author_cascade(value: Option<&Value>) -> Result<Option<CssAuthorCasca
     }
 
     let object = cascade.as_object().ok_or(CssTraceError::InvalidSnapshot)?;
-    let scope =
-        bounded_string(object.get("scope"), 64).ok_or(CssTraceError::InvalidSnapshot)?;
+    let scope = bounded_string(object.get("scope"), 64).ok_or(CssTraceError::InvalidSnapshot)?;
     if scope != "supported_author_subset" {
         return Err(CssTraceError::InvalidSnapshot);
     }
@@ -367,8 +368,7 @@ fn project_cascade_winner(value: &Value) -> Result<CssCascadeWinner, CssTraceErr
         if value > MAX_CSS_SPECIFICITY_UNIT {
             return Err(CssTraceError::InvalidSnapshot);
         }
-        specificity[index] =
-            u16::try_from(value).map_err(|_| CssTraceError::InvalidSnapshot)?;
+        specificity[index] = u16::try_from(value).map_err(|_| CssTraceError::InvalidSnapshot)?;
     }
 
     let source_order = object
@@ -378,8 +378,7 @@ fn project_cascade_winner(value: &Value) -> Result<CssCascadeWinner, CssTraceErr
     if source_order > MAX_CSS_SOURCE_ORDER {
         return Err(CssTraceError::InvalidSnapshot);
     }
-    let source_order =
-        u32::try_from(source_order).map_err(|_| CssTraceError::InvalidSnapshot)?;
+    let source_order = u32::try_from(source_order).map_err(|_| CssTraceError::InvalidSnapshot)?;
 
     match source_kind {
         "inline_element" => {
@@ -771,10 +770,7 @@ mod tests {
             })),
             "@save",
         );
-        assert_eq!(
-            incomplete_with_winner,
-            Err(CssTraceError::InvalidSnapshot)
-        );
+        assert_eq!(incomplete_with_winner, Err(CssTraceError::InvalidSnapshot));
 
         let unresolved_winner = project_style_trace(
             &payload(serde_json::json!({
@@ -826,10 +822,6 @@ mod tests {
             })),
             "@save",
         );
-        assert_eq!(
-            bad_inline_specificity,
-            Err(CssTraceError::InvalidSnapshot)
-        );
+        assert_eq!(bad_inline_specificity, Err(CssTraceError::InvalidSnapshot));
     }
-
 }
