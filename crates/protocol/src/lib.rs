@@ -121,7 +121,7 @@ pub struct SemanticNode {
     pub interactive: bool,
     pub attributes: BTreeMap<String, String>,
     pub source: Option<SourceLocation>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ownership: Option<ComponentOwnership>,
     pub children: Vec<SemanticNode>,
 }
