@@ -1,0 +1,63 @@
+name: Wave 4 live layout intelligence
+
+on:
+  pull_request:
+    paths:
+      - "crates/layout/**"
+      - "crates/live-analysis/**"
+      - "crates/diagnostics/**"
+      - ".github/workflows/wave4-layout-intelligence.yml"
+      - "docs/superpowers/specs/2026-09-20-wave4-live-layout-intelligence-design.md"
+  push:
+    branches:
+      - "feat/wave4-layout-live-intelligence"
+    paths:
+      - "crates/layout/**"
+      - "crates/live-analysis/**"
+      - "crates/diagnostics/**"
+      - ".github/workflows/wave4-layout-intelligence.yml"
+      - "docs/superpowers/specs/2026-09-20-wave4-live-layout-intelligence-design.md"
+
+concurrency:
+  group: wave4-layout-intelligence-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  focused-layout-intelligence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify focused formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            crates/layout/src/lib.rs \
+            crates/layout/src/model.rs \
+            crates/layout/src/analysis.rs \
+            crates/layout/tests/live_layout_intelligence.rs \
+            crates/live-analysis/src/lib.rs \
+            crates/live-analysis/src/layout.rs \
+            crates/live-analysis/tests/layout_live_integration.rs \
+            crates/diagnostics/src/lib.rs
+
+      - name: Check affected crates
+        run: cargo check -p localview-layout -p localview-live-analysis -p localview-diagnostics --all-targets
+
+      - name: Clippy affected crates
+        run: cargo clippy -p localview-layout -p localview-live-analysis -p localview-diagnostics --all-targets --no-deps -- -D warnings
+
+      - name: Test layout algorithms and adversarial cases
+        run: cargo test -p localview-layout -- --nocapture
+
+      - name: Test live layout evidence integration
+        run: cargo test -p localview-live-analysis -- --nocapture
+
+      - name: Test diagnostic class preservation
+        run: cargo test -p localview-diagnostics -- --nocapture

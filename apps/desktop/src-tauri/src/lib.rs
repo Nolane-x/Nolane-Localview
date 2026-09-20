@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod native_executor_worker;
+mod point_select;
 mod trusted_ai;
 mod trusted_fix;
 mod trusted_verify;
@@ -2838,6 +2839,21 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         });
       }
 
+      const pointSelectCompletions = api?.takePointSelectCompletions?.(4) || [];
+      for (const completion of pointSelectCompletions) {
+        await invoke('preview_complete_point_select', {
+          sessionId,
+          completion: {
+            requestToken: String(completion?.requestToken || ''),
+            route: String(completion?.route || ''),
+            status: String(completion?.status || ''),
+            reference: typeof completion?.reference === 'string' ? completion.reference : null,
+            reason: typeof completion?.reason === 'string' ? completion.reason : null,
+            bridgeGeneration: generation,
+          },
+        });
+      }
+
       if (pendingNetworkFaultControls.size === 0) {
         const controls = await invoke('preview_take_network_fault_controls', { sessionId });
         rememberTakenNetworkFaultControls(controls);
@@ -2884,6 +2900,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let _ = app.manage(visual_capture::VisualCaptureState::default());
+            let _ = app.manage(point_select::PointSelectState::default());
             let _ = app.manage(trusted_fix::FixProposalStore::default());
             let _ = app.manage(trusted_verify::VerificationStore::default());
             let _ = app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
@@ -2932,6 +2949,9 @@ pub fn run() {
             verify_fix_change,
             open_source_for_selection,
             measure_current_selection,
+            point_select::point_select_begin,
+            point_select::point_select_status,
+            point_select::point_select_cancel,
             pause_runtime,
             resume_runtime,
             open_preview,
@@ -2942,6 +2962,7 @@ pub fn run() {
             preview_action_cancellation,
             preview_ack_action_cancellation,
             preview_complete_action,
+            point_select::preview_complete_point_select,
             visual_capture::capture_responsive_sweep,
             visual_capture::capture_full_page,
             visual_capture::capture_viewport,

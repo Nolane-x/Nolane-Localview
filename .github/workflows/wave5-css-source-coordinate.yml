@@ -1,0 +1,73 @@
+name: Wave 5 CSS source coordinate authority
+
+on:
+  pull_request:
+    paths:
+      - "crates/control/src/css_trace.rs"
+      - "crates/control/src/css_source_coordinate.rs"
+      - "crates/control/tests/css_trace.rs"
+      - "crates/control/src/source_map_runtime.rs"
+      - "crates/source-map/**"
+      - ".github/workflows/wave5-css-source-coordinate.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-css-source-coordinate-authority-design.md"
+  push:
+    branches:
+      - "feat/wave5-css-source-coordinates"
+    paths:
+      - "crates/control/src/css_trace.rs"
+      - "crates/control/src/css_source_coordinate.rs"
+      - "crates/control/tests/css_trace.rs"
+      - "crates/control/src/source_map_runtime.rs"
+      - "crates/source-map/**"
+      - ".github/workflows/wave5-css-source-coordinate.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-css-source-coordinate-authority-design.md"
+
+concurrency:
+  group: wave5-css-source-coordinate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  focused-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify focused formatting
+        run: |
+          rustfmt --edition 2024 --check crates/control/src/css_trace.rs crates/control/src/css_source_coordinate.rs crates/control/tests/css_trace.rs crates/source-map/src/lib.rs
+
+      - name: Verify CSS source parser and projection
+        run: cargo test -p localview-control css_source_coordinate -- --nocapture
+
+      - name: Verify live CSS source HTTP contract
+        run: cargo test -p localview-control --test css_trace -- --nocapture
+
+      - name: Verify existing project Source Map runtime
+        run: cargo test -p localview-control --test project_source_map_runtime -- --nocapture
+
+      - name: Check control and Source Map crates
+        run: cargo check -p localview-control -p localview-source-map --all-targets
+
+  workspace-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check complete workspace
+        run: cargo check --workspace --all-targets

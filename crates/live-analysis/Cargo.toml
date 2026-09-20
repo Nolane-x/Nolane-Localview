@@ -7,9 +7,11 @@ license.workspace = true
 
 [dependencies]
 localview-console = { path = "../console" }
+localview-layout = { path = "../layout" }
 localview-live-bridge = { path = "../live-bridge" }
 localview-network = { path = "../network" }
 localview-performance = { path = "../performance" }
+localview-protocol = { path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true
 

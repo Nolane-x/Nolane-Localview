@@ -121,11 +121,12 @@ async fn ingest(state: &ControlState, session_id: uuid::Uuid, events: Vec<Observ
         .await;
 }
 
-async fn complete_next_snapshot(
+async fn complete_next_snapshot_with_recent_events(
     state: ControlState,
     session_id: uuid::Uuid,
     ok: bool,
     payload: Value,
+    recent_kinds: Vec<ObserverEventKind>,
 ) {
     for _ in 0..100 {
         let actions = state.live.take_actions(session_id, 8).await;
@@ -138,6 +139,17 @@ async fn complete_next_snapshot(
                 .claim_action(session_id, action.id)
                 .await
                 .expect("snapshot action must be inflight before completion");
+
+            if !recent_kinds.is_empty() {
+                let captured_at = Utc::now();
+                let events = recent_kinds
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, kind)| event(index as u64 + 1, kind, captured_at))
+                    .collect();
+                ingest(&state, session_id, events).await;
+            }
+
             state
                 .live
                 .complete_action(
@@ -156,6 +168,15 @@ async fn complete_next_snapshot(
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     panic!("capture settle did not enqueue a snapshot action");
+}
+
+async fn complete_next_snapshot(
+    state: ControlState,
+    session_id: uuid::Uuid,
+    ok: bool,
+    payload: Value,
+) {
+    complete_next_snapshot_with_recent_events(state, session_id, ok, payload, Vec::new()).await;
 }
 
 async fn get_settle(
@@ -190,6 +211,28 @@ async fn get_settle_with_snapshot(
     let executor_state = state.clone();
     let executor = tokio::spawn(async move {
         complete_next_snapshot(executor_state, session_id, ok, payload).await;
+    });
+    let response = get_settle(state, session_id, true).await;
+    executor.await.expect("snapshot executor task");
+    response
+}
+
+async fn get_settle_with_snapshot_and_recent_events(
+    state: ControlState,
+    session_id: uuid::Uuid,
+    payload: Value,
+    recent_kinds: Vec<ObserverEventKind>,
+) -> (StatusCode, Value) {
+    let executor_state = state.clone();
+    let executor = tokio::spawn(async move {
+        complete_next_snapshot_with_recent_events(
+            executor_state,
+            session_id,
+            true,
+            payload,
+            recent_kinds,
+        )
+        .await;
     });
     let response = get_settle(state, session_id, true).await;
     executor.await.expect("snapshot executor task");
@@ -271,23 +314,20 @@ async fn capture_settle_fresh_snapshot_overrides_stale_ready_observer_snapshot()
 #[tokio::test]
 async fn capture_settle_reports_recent_hmr_layout_and_network_independently() {
     let (state, session_id) = test_state().await;
-    let now = Utc::now();
-    ingest(
-        &state,
-        session_id,
-        vec![
-            event(1, ObserverEventKind::Hmr, now),
-            event(2, ObserverEventKind::Layout, now),
-            event(3, ObserverEventKind::Network, now),
-        ],
-    )
-    .await;
 
-    let (status, body) = get_settle_with_snapshot(
+    // Stamp the observer activity only after the endpoint has enqueued and claimed
+    // its fresh snapshot action. Slow CI runners can otherwise age a genuinely
+    // "recent" event past the 200–300 ms production quiet windows before settle
+    // evaluation begins, turning this integration assertion into a wall-clock race.
+    let (status, body) = get_settle_with_snapshot_and_recent_events(
         state,
         session_id,
-        true,
         snapshot_payload("complete", "loaded", 0),
+        vec![
+            ObserverEventKind::Hmr,
+            ObserverEventKind::Layout,
+            ObserverEventKind::Network,
+        ],
     )
     .await;
     assert_eq!(status, StatusCode::OK);
