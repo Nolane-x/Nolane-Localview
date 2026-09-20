@@ -111,7 +111,7 @@ fn svelte_ownership_is_exact_element_bounded_and_never_reads_parent_runtime_stat
         .find("const react = reactSourceHint(el, ownershipBudget)")
         .expect("React precedence");
     let svelte_index = script
-        .find("return svelteSourceHint(el, ownershipBudget)")
+        .find("const svelte = svelteSourceHint(el, ownershipBudget)")
         .expect("Svelte fallback");
     assert!(
         explicit_index < react_index && react_index < svelte_index,
