@@ -138,7 +138,7 @@ async fn resolve_runtime_source_inner(
         .ok_or(RuntimeSourceError::RuntimeSourceMissing)?;
 
     let raw_location = source
-        .split(|character| character == '?' || character == '#')
+        .split(['?', '#'])
         .next()
         .unwrap_or(source);
     if raw_location.contains('%') {
