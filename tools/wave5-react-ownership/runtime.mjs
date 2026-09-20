@@ -176,15 +176,41 @@ try {
     });
     document.body.appendChild(fake);
 
+    const wrongAnchor = document.createElement('div');
+    wrongAnchor.id = 'wrong-anchor-react-target';
+    wrongAnchor.textContent = 'Wrong React state node';
+    const wrongSuffix = 'wrong-anchor';
+    Object.defineProperty(wrongAnchor, `__reactFiber${wrongSuffix}`, {
+      configurable: true,
+      value: {
+        stateNode: document.body,
+        return: {
+          type: function WrongAnchorComponent() {},
+          _debugSource: {
+            fileName: 'src/WrongAnchor.tsx',
+            lineNumber: 1,
+            columnNumber: 1,
+          },
+        },
+      },
+    });
+    Object.defineProperty(wrongAnchor, `__reactProps${wrongSuffix}`, {
+      configurable: true,
+      value: {},
+    });
+    document.body.appendChild(wrongAnchor);
+
     const snapshot = window.__LOCALVIEW__.snapshot();
     return {
       plain: walk(snapshot.semantic_tree, 'plain-target')?.sourceHint ?? null,
       fake: walk(snapshot.semantic_tree, 'fake-react-target')?.sourceHint ?? null,
+      wrongAnchor: walk(snapshot.semantic_tree, 'wrong-anchor-react-target')?.sourceHint ?? null,
     };
   });
 
   invariant(nonReact.plain === null, 'plain DOM node fabricated React ownership', nonReact);
   invariant(nonReact.fake === null, 'unpaired React-shaped property fabricated ownership', nonReact);
+  invariant(nonReact.wrongAnchor === null, 'paired fake fiber with wrong stateNode fabricated ownership', nonReact);
 
   process.stdout.write(JSON.stringify({
     ok: true,
@@ -194,6 +220,7 @@ try {
     explicitPrecedence: true,
     plainDomIgnored: true,
     fakeFiberRejected: true,
+    stateNodeAnchorProven: true,
     propsPrivate: true,
   }) + '\n');
 } finally {
