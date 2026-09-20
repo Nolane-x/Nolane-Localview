@@ -49,6 +49,11 @@ fn adaptive_planner_hard_caps_deduplicates_and_preserves_bounds() {
     assert_eq!(widths.first(), Some(&320));
     assert_eq!(widths.last(), Some(&1440));
     assert!(widths.windows(2).all(|pair| pair[0] < pair[1]));
+    let primitive = localview_responsive::adaptive_sweep(320, 1440, &anchors);
+    assert!(
+        widths.iter().all(|width| primitive.contains(width)),
+        "bounded planner must select only candidates from the existing adaptive_sweep primitive"
+    );
 }
 
 #[test]
