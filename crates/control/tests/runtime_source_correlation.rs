@@ -1,26 +1,24 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
 };
 use chrono::Utc;
-use localview_control::{router, ControlState};
+use localview_control::{ControlState, router};
 use localview_evidence::EvidenceStore;
-use localview_live_bridge::{
-    LiveBridge, ObserverBatch, ObserverEvent, ObserverEventKind,
-};
+use localview_live_bridge::{LiveBridge, ObserverBatch, ObserverEvent, ObserverEventKind};
 use localview_observation::ObservationBus;
 use localview_protocol::{
     Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
 };
 use localview_sessions::SessionManager;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -198,13 +196,7 @@ async fn resolves_retained_runtime_error_without_leaking_observer_payload() {
     )
     .await;
 
-    let (status, value) = post(
-        state,
-        session_id,
-        true,
-        json!({ "event_seq": 7 }),
-    )
-    .await;
+    let (status, value) = post(state, session_id, true, json!({ "event_seq": 7 })).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["event_seq"], 7);
     assert_eq!(value["resolution"]["generated_file"], "dist/app.js");
@@ -236,13 +228,7 @@ async fn requires_auth_known_session_exact_event_and_non_authoritative_request()
     let project = TempProject::new();
     let (state, session_id) = test_state(&project).await;
 
-    let (status, value) = post(
-        state.clone(),
-        session_id,
-        false,
-        json!({ "event_seq": 1 }),
-    )
-    .await;
+    let (status, value) = post(state.clone(), session_id, false, json!({ "event_seq": 1 })).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_error(&value, "unauthorized");
 
@@ -268,13 +254,7 @@ async fn requires_auth_known_session_exact_event_and_non_authoritative_request()
         )],
     )
     .await;
-    let (status, value) = post(
-        state.clone(),
-        session_id,
-        true,
-        json!({ "event_seq": 5 }),
-    )
-    .await;
+    let (status, value) = post(state.clone(), session_id, true, json!({ "event_seq": 5 })).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_error(&value, "runtime_event_not_found");
 
@@ -291,13 +271,7 @@ async fn requires_auth_known_session_exact_event_and_non_authoritative_request()
         }],
     )
     .await;
-    let (status, value) = post(
-        state.clone(),
-        session_id,
-        true,
-        json!({ "event_seq": 6 }),
-    )
-    .await;
+    let (status, value) = post(state.clone(), session_id, true, json!({ "event_seq": 6 })).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_error(&value, "runtime_event_kind_unsupported");
 
@@ -372,24 +346,13 @@ async fn rejects_remote_mismatched_encoded_and_invalid_runtime_positions() {
     .await;
 
     for seq in [20_u64, 21, 22] {
-        let (status, value) = post(
-            state.clone(),
-            session_id,
-            true,
-            json!({ "event_seq": seq }),
-        )
-        .await;
+        let (status, value) =
+            post(state.clone(), session_id, true, json!({ "event_seq": seq })).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_error(&value, "runtime_source_authority_mismatch");
     }
 
-    let (status, value) = post(
-        state.clone(),
-        session_id,
-        true,
-        json!({ "event_seq": 23 }),
-    )
-    .await;
+    let (status, value) = post(state.clone(), session_id, true, json!({ "event_seq": 23 })).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_error(&value, "runtime_source_unsupported");
 
