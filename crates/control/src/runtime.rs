@@ -24,7 +24,7 @@ use localview_evidence::{
 use localview_live_analysis::{FindingClass, analyze_live, diagnose_live, performance_lite};
 use localview_live_bridge::{
     BridgeAction, BridgeActionKind, BridgeActionResult, LiveBridge, ObserverBatch, ObserverEvent,
-    ObserverEventKind,
+    ObserverEventKind, sanitize_public_action_result,
 };
 use localview_observation::ObservationBus;
 use localview_project_state::{ProjectRevision, inspect_git};
@@ -704,6 +704,18 @@ async fn queue_action(
         )
             .into_response();
     }
+    if matches!(&request.action, BridgeActionKind::StyleInspect)
+        && !valid_measure_reference(request.reference.as_deref())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "style_inspect_reference_required",
+                "message": "StyleInspect requires a bounded LocalView element reference"
+            })),
+        )
+            .into_response();
+    }
     if request.action.is_internal_capture_action() {
         return (
             StatusCode::BAD_REQUEST,
@@ -715,7 +727,9 @@ async fn queue_action(
     }
     if !matches!(
         &request.action,
-        BridgeActionKind::Snapshot | BridgeActionKind::Measure
+        BridgeActionKind::Snapshot
+            | BridgeActionKind::Measure
+            | BridgeActionKind::StyleInspect
     ) {
         return (
             StatusCode::CONFLICT,
@@ -783,6 +797,10 @@ async fn complete_action(
             project_root.as_deref().map(std::path::Path::new),
         )
         .await;
+    }
+
+    if matches!(action.action, BridgeActionKind::StyleInspect) {
+        sanitize_public_action_result(&action, &mut result);
     }
 
     let revision = if let Some(root) = project_root {
@@ -861,6 +879,28 @@ async fn complete_action(
                     .await;
             }
         }
+    }
+
+    if matches!(action.action, BridgeActionKind::StyleInspect) && result.ok {
+        state
+            .evidence
+            .insert(EvidenceDraft {
+                kind: EvidenceKind::Source,
+                session_id: id,
+                region: action.reference.clone(),
+                payload: result.payload.clone(),
+                provenance: Provenance {
+                    source: "managed-preview-style-inspect".into(),
+                    engine: Some("native-webview".into()),
+                    revision: revision.clone(),
+                    parent_ids: Vec::new(),
+                    captured_at: result.completed_at,
+                },
+                confidence: 1.0,
+                uncertainty: UncertaintyClass::Observed,
+                secret_taint: false,
+            })
+            .await;
     }
 
     state.live.complete_action(id, result).await;
@@ -969,6 +1009,7 @@ fn sanitize_action_result(action: &BridgeAction, result: &BridgeActionResult) ->
             "completed_at": result.completed_at,
         }),
         BridgeActionKind::Measure => action_summary(action, result, "measure", error),
+        BridgeActionKind::StyleInspect => action_summary(action, result, "style_inspect", error),
         BridgeActionKind::Click => action_summary(action, result, "click", error),
         BridgeActionKind::Key { .. } => action_summary(action, result, "key", error),
         BridgeActionKind::Scroll { .. } => action_summary(action, result, "scroll", error),
