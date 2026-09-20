@@ -392,6 +392,38 @@ mod tests {
     }
 
     #[test]
+    fn react_component_identity_is_stable_across_host_jsx_lines() {
+        let first = serde_json::json!({
+            "origin": "react-dev-fiber",
+            "file": "src/SettingsCard.tsx",
+            "line": 17,
+            "column": 5,
+            "component": "SettingsCard"
+        });
+        let second = serde_json::json!({
+            "origin": "react-dev-fiber",
+            "file": "src/SettingsCard.tsx",
+            "line": 29,
+            "column": 9,
+            "component": "SettingsCard"
+        });
+
+        let first = project_source(Some(&first))
+            .expect("valid first React source")
+            .expect("first source location");
+        let second = project_source(Some(&second))
+            .expect("valid second React source")
+            .expect("second source location");
+
+        assert_eq!(first.component, second.component);
+        assert_ne!(first.line, second.line);
+        assert_eq!(
+            first.component.as_deref(),
+            Some("react:src/SettingsCard.tsx:SettingsCard")
+        );
+    }
+
+    #[test]
     fn react_dev_fiber_hint_fails_closed_without_valid_identity() {
         for source in [
             serde_json::json!({
