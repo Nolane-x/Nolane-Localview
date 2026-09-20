@@ -1339,6 +1339,7 @@ mod trusted_source_validation_tests {
             interactive: true,
             attributes: BTreeMap::new(),
             source,
+            ownership: None,
             children,
         }
     }
