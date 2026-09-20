@@ -185,3 +185,26 @@ fn adaptive_runtime_stays_inside_the_existing_restore_before_persistence_transac
     assert!(adaptive < restore, "adaptive probes must finish before exact preview restoration");
     assert!(restore < persist, "adaptive integration must preserve restore-before-persistence");
 }
+
+
+#[test]
+fn responsive_persistence_fails_closed_through_existing_retained_resource_ledger() {
+    let source = include_str!("../src/visual_capture.rs");
+    let persist = between(
+        source,
+        "async fn persist_responsive_contact_sheet_and_register(",
+        "#[tauri::command]\npub async fn capture_full_page(",
+    );
+
+    let synchronize = persist
+        .find("retained_resources\n            .synchronize")
+        .expect("existing retained-resource synchronization must remain");
+    let admit = persist
+        .find("retained_resources\n            .admit_projected")
+        .expect("existing retained-resource admission must remain");
+    let put = persist
+        .find("artifacts.put(")
+        .expect("contact sheet artifact write must remain");
+    assert!(synchronize < admit && admit < put);
+    assert!(persist.contains("responsive_memory_budget_exceeded"));
+}
