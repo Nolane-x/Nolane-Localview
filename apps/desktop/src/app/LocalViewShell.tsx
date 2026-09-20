@@ -66,6 +66,20 @@ const fallback: DashboardState = {
 
 const emptyLive: LiveSessionState = { observer: [], action_results: [] };
 const TOGGLE_TARGET_BAR_SHORTCUT = 'Ctrl+Shift+T';
+const STABLE_ELEMENT_REFERENCE = /^@e[0-9a-f]+$/i;
+
+function isStableElementReference(reference: unknown): reference is string {
+  return typeof reference === 'string'
+    && reference.length <= 64
+    && STABLE_ELEMENT_REFERENCE.test(reference);
+}
+
+function createPointSelectToken(): string {
+  if (typeof crypto.randomUUID === 'function') return `point-${crypto.randomUUID()}`;
+  const entropy = new Uint32Array(4);
+  crypto.getRandomValues(entropy);
+  return `point-${Array.from(entropy, (value) => value.toString(16).padStart(8, '0')).join('')}`;
+}
 
 const unavailableAiProvider: AiProviderCapability = {
   available: false,
@@ -407,6 +421,8 @@ export default function LocalViewShell() {
   const [fixCapability, setFixCapability] = useState<AiFixCapability>(unavailableFixCapability);
   const [fixState, setFixState] = useState<HumanFixState>({ status: 'idle' });
   const [verifyState, setVerifyState] = useState<HumanVerifyState>({ status: 'idle' });
+  const [pointSelectedReference, setPointSelectedReference] = useState<string>();
+  const [pointSelectActive, setPointSelectActive] = useState(false);
   const responsiveInFlight = useRef(false);
   const responsiveGeneration = useRef(0);
   const captureInFlight = useRef(false);
@@ -426,6 +442,10 @@ export default function LocalViewShell() {
   const fixProposalIdRef = useRef<string | undefined>(undefined);
   const selectedReferenceRef = useRef<string | undefined>(undefined);
   const currentSessionIdRef = useRef<string | undefined>(undefined);
+  const pointSelectGeneration = useRef(0);
+  const pointSelectTokenRef = useRef<string | undefined>(undefined);
+  const pointSelectionRouteSequenceRef = useRef(0);
+  const latestRouteSequenceRef = useRef(0);
 
   const patchPreferences = useCallback((patch: Partial<LocalViewPreferences>) => {
     setPreferences((current) => persistPreferences(current, patch));
@@ -544,18 +564,28 @@ export default function LocalViewShell() {
     [state.sessions, selected],
   );
 
-  const selectedReference = useMemo(
+  const latestRouteSequence = useMemo(
+    () => live.observer.reduce(
+      (latest, event) => event.kind === 'route' ? Math.max(latest, Number(event.seq) || 0) : latest,
+      0,
+    ),
+    [live.observer],
+  );
+
+  const focusSelectedReference = useMemo(
     () => [...live.observer]
       .reverse()
       .find(
         (event) =>
           event.kind === 'focus'
-          && typeof event.reference === 'string'
-          && /^@e[0-9a-f]+$/i.test(event.reference),
+          && (Number(event.seq) || 0) > latestRouteSequence
+          && isStableElementReference(event.reference),
       )
       ?.reference,
-    [live.observer],
+    [latestRouteSequence, live.observer],
   );
+
+  const selectedReference = pointSelectedReference ?? focusSelectedReference;
 
   useEffect(() => {
     selectedReferenceRef.current = selectedReference;
@@ -581,6 +611,16 @@ export default function LocalViewShell() {
   }, [selectedReference]);
 
   useEffect(() => {
+    const previousSessionId = currentSessionIdRef.current;
+    const stalePointToken = pointSelectTokenRef.current;
+    if (previousSessionId && stalePointToken && previousSessionId !== current?.id) {
+      void api.cancelPointSelect(previousSessionId, stalePointToken).catch(() => undefined);
+    }
+    pointSelectGeneration.current += 1;
+    pointSelectTokenRef.current = undefined;
+    pointSelectionRouteSequenceRef.current = 0;
+    setPointSelectActive(false);
+    setPointSelectedReference(undefined);
     currentSessionIdRef.current = current?.id;
     responsiveGeneration.current += 1;
     responsiveInFlight.current = false;
@@ -634,6 +674,31 @@ export default function LocalViewShell() {
     };
   }, [current?.id]);
 
+  useEffect(() => {
+    latestRouteSequenceRef.current = latestRouteSequence;
+    if (latestRouteSequence <= pointSelectionRouteSequenceRef.current) return;
+
+    setPointSelectedReference(undefined);
+    pointSelectionRouteSequenceRef.current = latestRouteSequence;
+    const requestToken = pointSelectTokenRef.current;
+    const requestSessionId = currentSessionIdRef.current;
+    if (requestToken && requestSessionId) {
+      pointSelectGeneration.current += 1;
+      pointSelectTokenRef.current = undefined;
+      setPointSelectActive(false);
+      void api.cancelPointSelect(requestSessionId, requestToken).catch(() => undefined);
+    }
+  }, [latestRouteSequence]);
+
+  useEffect(() => () => {
+    const requestToken = pointSelectTokenRef.current;
+    const requestSessionId = currentSessionIdRef.current;
+    pointSelectGeneration.current += 1;
+    if (requestToken && requestSessionId) {
+      void api.cancelPointSelect(requestSessionId, requestToken).catch(() => undefined);
+    }
+  }, []);
+
   const latestActionId = live.action_results.at(-1)?.action_id;
 
   useEffect(() => {
@@ -678,7 +743,7 @@ export default function LocalViewShell() {
     ? `${current.endpoint.scheme}://${current.endpoint.host}:${current.endpoint.port}/`
     : undefined;
 
-  const toggleTool = useCallback((tool: ToolId) => {
+  const togglePanel = useCallback((tool: ToolId) => {
     setActiveTool((active) => active === tool ? undefined : tool);
   }, []);
 
@@ -703,6 +768,109 @@ export default function LocalViewShell() {
       setError(String(cause));
     }
   }, [current]);
+
+  const cancelPointSelect = useCallback((closeInspector = false) => {
+    const requestToken = pointSelectTokenRef.current;
+    const requestSessionId = currentSessionIdRef.current;
+    pointSelectGeneration.current += 1;
+    pointSelectTokenRef.current = undefined;
+    setPointSelectActive(false);
+    if (requestToken && requestSessionId) {
+      void api.cancelPointSelect(requestSessionId, requestToken).catch(() => undefined);
+    }
+    if (closeInspector) setActiveTool(undefined);
+  }, []);
+
+  const beginPointSelect = useCallback(async () => {
+    const session = current;
+    if (!session) return;
+
+    const previousToken = pointSelectTokenRef.current;
+    const previousSessionId = currentSessionIdRef.current;
+    if (previousToken && previousSessionId) {
+      void api.cancelPointSelect(previousSessionId, previousToken).catch(() => undefined);
+    }
+
+    const generation = ++pointSelectGeneration.current;
+    const requestSessionId = session.id;
+    const requestToken = createPointSelectToken();
+    pointSelectTokenRef.current = requestToken;
+    currentSessionIdRef.current = requestSessionId;
+    pointSelectionRouteSequenceRef.current = latestRouteSequenceRef.current;
+    setPointSelectActive(true);
+    setActiveTool('inspect');
+    setError(undefined);
+
+    const stillOwnsRequest = () =>
+      generation === pointSelectGeneration.current
+      && pointSelectTokenRef.current === requestToken
+      && currentSessionIdRef.current === requestSessionId;
+
+    try {
+      let status;
+      try {
+        status = await api.beginPointSelect(requestSessionId, requestToken);
+      } catch (cause) {
+        const detail = String(cause);
+        if (
+          !detail.includes('point_select_managed_surface_unavailable')
+          && !detail.includes('managed surface unavailable')
+        ) {
+          throw cause;
+        }
+        await api.openPreview(
+          requestSessionId,
+          `${session.endpoint.scheme}://${session.endpoint.host}:${session.endpoint.port}/`,
+          session.project.display_name,
+        );
+        if (!stillOwnsRequest()) return;
+        status = await api.beginPointSelect(requestSessionId, requestToken);
+      }
+
+      while (stillOwnsRequest() && status.state === 'pending') {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+        if (!stillOwnsRequest()) return;
+        status = await api.pointSelectStatus(requestSessionId, requestToken);
+      }
+      if (!stillOwnsRequest()) return;
+      if (status.requestToken !== requestToken || status.sessionId !== requestSessionId) return;
+
+      if (status.state === 'selected') {
+        if (!isStableElementReference(status.reference)) {
+          throw new Error('point_select_invalid_stable_reference');
+        }
+        pointSelectionRouteSequenceRef.current = latestRouteSequenceRef.current;
+        setPointSelectedReference(status.reference);
+      } else if (status.state === 'failed') {
+        if (status.reason === 'route_changed') setPointSelectedReference(undefined);
+        setError(`Point selection failed: ${status.reason ?? 'failed'}`);
+      }
+
+      if (status.state !== 'pending') {
+        pointSelectTokenRef.current = undefined;
+        setPointSelectActive(false);
+      }
+    } catch (cause) {
+      if (!stillOwnsRequest()) return;
+      pointSelectTokenRef.current = undefined;
+      setPointSelectActive(false);
+      void api.cancelPointSelect(requestSessionId, requestToken).catch(() => undefined);
+      setError(String(cause));
+    }
+  }, [current]);
+
+  const toggleTool = useCallback((tool: ToolId) => {
+    if (tool !== 'inspect') {
+      togglePanel(tool);
+      return;
+    }
+    if (pointSelectActive) {
+      cancelPointSelect(true);
+      return;
+    }
+    setActiveTool('inspect');
+    void beginPointSelect();
+  }, [beginPointSelect, cancelPointSelect, pointSelectActive, togglePanel]);
 
   const captureResponsiveSweep = useCallback(async (presets: ResponsivePresetId[]) => {
     const session = current;
@@ -1313,7 +1481,10 @@ export default function LocalViewShell() {
   }, [executeCommand, toggleTool]);
 
   return (
-    <div className={`localview ${immersive ? 'is-immersive' : ''} ${preferences.reducedMotion === 'reduce' ? 'is-reduced-motion' : ''}`}>
+    <div
+      className={`localview ${immersive ? 'is-immersive' : ''} ${pointSelectActive ? 'is-point-selecting' : ''} ${preferences.reducedMotion === 'reduce' ? 'is-reduced-motion' : ''}`}
+      data-point-select-active={pointSelectActive || undefined}
+    >
       <WorkspaceSurface current={current} url={currentUrl} support={state.workspace_surface} locale={preferences.locale} />
       <div className="chrome-layer" aria-label={translate(preferences.locale, 'aria.localViewControls')}>
         {preferences.showTargetBar && (
@@ -1350,7 +1521,10 @@ export default function LocalViewShell() {
             url={currentUrl}
             locale={preferences.locale}
             preferences={preferences}
-            onClose={() => setActiveTool(undefined)}
+            onClose={() => {
+              if (pointSelectActive && activeTool === 'inspect') cancelPointSelect(false);
+              setActiveTool(undefined);
+            }}
             onSelect={setSelected}
             onOpenNative={() => void openNative()}
             responsiveState={responsiveState}
