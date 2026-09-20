@@ -191,6 +191,7 @@ export type HumanVerifyState =
       regressionSignals: string[];
       viewportChangedRatio?: number | null;
       targetChangedRatio?: number | null;
+      affectedRegionChangedRatio?: number | null;
       providerLabel?: string | null;
       advisorySummary?: string | null;
     }
