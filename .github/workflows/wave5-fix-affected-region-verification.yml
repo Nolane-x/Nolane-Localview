@@ -1,0 +1,80 @@
+name: Wave 5 fix affected-region verification
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/src-tauri/src/trusted_verify.rs"
+      - "apps/desktop/src-tauri/src/visual_capture.rs"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src/api.ts"
+      - "apps/desktop/src-tauri/tests/wave5_fix_affected_region_verification_contract.rs"
+      - "apps/desktop/src-tauri/tests/human_first_trusted_verify_v26_contract.rs"
+      - "apps/desktop/src-tauri/tests/changed_region_schedule_contract.rs"
+      - "apps/desktop/src-tauri/tests/changed_visual_diff_publication_contract.rs"
+      - ".github/workflows/wave5-fix-affected-region-verification.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-fix-affected-region-verification-design.md"
+  push:
+    branches:
+      - "feat/wave5-fix-affected-region-verification"
+
+concurrency:
+  group: wave5-fix-affected-region-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  focused-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify focused formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            apps/desktop/src-tauri/src/trusted_verify.rs \
+            apps/desktop/src-tauri/src/visual_capture.rs \
+            apps/desktop/src-tauri/src/lib.rs \
+            apps/desktop/src-tauri/tests/wave5_fix_affected_region_verification_contract.rs
+
+      - name: Verify Trusted Verify affected planning
+        run: cargo test -p localview-desktop --lib trusted_verify_tests -- --nocapture
+
+      - name: Verify affected-region integration contract
+        run: cargo test -p localview-desktop --test wave5_fix_affected_region_verification_contract -- --nocapture
+
+      - name: Preserve Trusted Verify V2.6 boundary
+        run: cargo test -p localview-desktop --test human_first_trusted_verify_v26_contract -- --nocapture
+
+      - name: Preserve changed-region scheduler
+        run: cargo test -p localview-desktop --test changed_region_schedule_contract -- --nocapture
+
+      - name: Preserve visual diff evidence publication
+        run: cargo test -p localview-desktop --test changed_visual_diff_publication_contract -- --nocapture
+
+      - name: Check desktop crate
+        run: cargo check -p localview-desktop --all-targets
+
+  frontend-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build typed frontend
+        run: npm run build
