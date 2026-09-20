@@ -498,8 +498,6 @@ pub async fn capture_responsive_sweep(
 
     let work = tokio::time::timeout_at(work_deadline, async {
         let mut captured = Vec::with_capacity(plan.presets.len());
-        let mut seed_probes = Vec::with_capacity(plan.presets.len());
-
         for preset in plan.presets.iter().copied() {
             let viewport = preset.viewport();
             window
@@ -552,24 +550,6 @@ pub async fn capture_responsive_sweep(
             )
             .await?;
 
-            let snapshot = fresh_semantic_snapshot(session_id)
-                .await
-                .map_err(|_| "responsive_evidence_capture_failed".to_string())?;
-            let observation = responsive_observation_from_snapshot(
-                session_id,
-                &canonical_route,
-                viewport,
-                &snapshot,
-            )?;
-            let previous = seed_probes
-                .last()
-                .map(|probe: &LiveResponsiveProbe| &probe.observation);
-            let evaluation = evaluate_responsive_observation(previous, &observation)
-                .map_err(|_| "responsive_detector_failed".to_string())?;
-            seed_probes.push(LiveResponsiveProbe {
-                observation,
-                evaluation,
-            });
 
             let image = decode_png_rgba(&frame.png)
                 .map_err(|_| "responsive_redaction_failed".to_string())?;
@@ -599,7 +579,6 @@ pub async fn capture_responsive_sweep(
             &canonical_route,
             initial_css_width,
             initial_css_height,
-            seed_probes,
             work_deadline,
         )
         .await?;
@@ -743,6 +722,47 @@ fn responsive_text_or_control(node: &SemanticNode) -> bool {
     })
 }
 
+const MAX_RESPONSIVE_STATE_FINGERPRINT_NODES: usize = 1024;
+const RESPONSIVE_STATE_FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const RESPONSIVE_STATE_FNV_PRIME: u64 = 0x100000001b3;
+
+fn responsive_state_hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(RESPONSIVE_STATE_FNV_PRIME);
+    }
+    hash
+}
+
+fn responsive_semantic_state_fingerprint(snapshot: &PageSnapshot) -> (u64, bool) {
+    let mut hash = RESPONSIVE_STATE_FNV_OFFSET;
+    let mut visited = 0usize;
+    let mut stack = vec![&snapshot.root];
+
+    while let Some(node) = stack.pop() {
+        if visited >= MAX_RESPONSIVE_STATE_FINGERPRINT_NODES {
+            return (hash, false);
+        }
+        visited += 1;
+
+        hash = responsive_state_hash_bytes(hash, node.reference.as_bytes());
+        hash = responsive_state_hash_bytes(hash, &[0xff]);
+        hash = responsive_state_hash_bytes(hash, node.tag.as_bytes());
+        hash = responsive_state_hash_bytes(hash, &[0xfe]);
+        if let Some(role) = node.role.as_deref() {
+            hash = responsive_state_hash_bytes(hash, role.as_bytes());
+        }
+        hash = responsive_state_hash_bytes(hash, &[u8::from(node.interactive)]);
+        hash = responsive_state_hash_bytes(hash, &node.children.len().to_le_bytes());
+
+        for child in node.children.iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    (hash, true)
+}
+
 fn responsive_observation_from_snapshot(
     session_id: SessionId,
     expected_route: &str,
@@ -797,11 +817,16 @@ fn responsive_observation_from_snapshot(
         });
     }
 
+    let (state_fingerprint, state_fingerprint_complete) =
+        responsive_semantic_state_fingerprint(snapshot);
+
     Ok(ResponsiveObservation {
         session: session_id.to_string(),
         route,
         viewport,
         snapshot_version: snapshot.version,
+        state_fingerprint,
+        state_fingerprint_complete,
         complete,
         nodes,
     })
@@ -952,27 +977,8 @@ async fn run_live_adaptive_responsive(
     expected_route: &str,
     initial_css_width: u32,
     css_height: u32,
-    seed_probes: Vec<LiveResponsiveProbe>,
     deadline: tokio::time::Instant,
 ) -> Result<ResponsiveAdaptiveReceipt, String> {
-    let mut probes = BTreeMap::new();
-    let mut attempted_widths = BTreeSet::new();
-    for seed in seed_probes {
-        let width = seed.observation.viewport.width;
-        if !(DEFAULT_ADAPTIVE_MIN_WIDTH..=DEFAULT_ADAPTIVE_MAX_WIDTH).contains(&width) {
-            continue;
-        }
-        attempted_widths.insert(width);
-        if let Some(existing) = probes.insert(width, seed.clone()) {
-            if existing.evaluation.state != seed.evaluation.state {
-                return Err("responsive_same_width_instability".into());
-            }
-        }
-    }
-    if attempted_widths.len() > DEFAULT_ADAPTIVE_PROBE_CAP {
-        return Err("responsive_probe_cap_exceeded".into());
-    }
-
     let probe = LiveResponsiveLayoutProbe {
         window,
         registry,
@@ -983,8 +989,8 @@ async fn run_live_adaptive_responsive(
         deadline,
         probe_cap: DEFAULT_ADAPTIVE_PROBE_CAP,
         state: Mutex::new(LiveResponsiveProbeState {
-            probes,
-            attempted_widths,
+            probes: BTreeMap::new(),
+            attempted_widths: BTreeSet::new(),
             failure: None,
         }),
     };
@@ -1061,11 +1067,43 @@ async fn run_live_adaptive_responsive(
             state: probe.evaluation.state,
         })
         .collect::<Vec<_>>();
-    let transition = resolve_observed_transition(
-        &samples,
-        DEFAULT_BREAKPOINT_TOLERANCE_PX,
-        "responsive_geometry_v1",
-    );
+    let state_fingerprints_complete = final_probes
+        .iter()
+        .all(|probe| probe.observation.state_fingerprint_complete);
+    let same_semantic_state = final_probes
+        .first()
+        .map(|first| {
+            final_probes.iter().all(|probe| {
+                probe.observation.state_fingerprint == first.observation.state_fingerprint
+            })
+        })
+        .unwrap_or(false);
+    let fixed_height = final_probes
+        .iter()
+        .all(|probe| probe.observation.viewport.height == css_height);
+
+    let transition = if !state_fingerprints_complete {
+        ObservedTransitionResolution::Inconclusive {
+            detector: "responsive_geometry_v1".to_string(),
+            reason: "semantic_state_fingerprint_incomplete".to_string(),
+        }
+    } else if !same_semantic_state {
+        ObservedTransitionResolution::Inconclusive {
+            detector: "responsive_geometry_v1".to_string(),
+            reason: "semantic_state_drift".to_string(),
+        }
+    } else if !fixed_height {
+        ObservedTransitionResolution::Inconclusive {
+            detector: "responsive_geometry_v1".to_string(),
+            reason: "adaptive_height_drift".to_string(),
+        }
+    } else {
+        resolve_observed_transition(
+            &samples,
+            DEFAULT_BREAKPOINT_TOLERANCE_PX,
+            "responsive_geometry_v1",
+        )
+    };
 
     let observations = final_probes
         .iter()
