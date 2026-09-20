@@ -702,7 +702,7 @@ const SCRIPT: &str = r#"
     if (!state) return null;
     pointSelectState = null;
     for (const [type, listener] of state.listeners) {
-      addEventListener === undefined || removeEventListener(type, listener, true);
+      removeEventListener(type, listener, true);
     }
     try { state.freezeObserver?.disconnect(); } catch (_) {}
     try { state.overlay?.remove(); } catch (_) {}
