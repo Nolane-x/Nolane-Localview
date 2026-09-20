@@ -1,0 +1,91 @@
+name: Wave 5 human point selection
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/src/app/LocalViewShell.tsx"
+      - "apps/desktop/src/api.ts"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/src/point_select.rs"
+      - "apps/desktop/src-tauri/permissions/localview.toml"
+      - "apps/desktop/src-tauri/tests/wave5_human_point_select_contract.rs"
+      - "crates/instrumentation/**"
+      - "tools/wave5-point-select/**"
+      - ".github/workflows/wave5-human-point-select.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-human-point-select-source-design.md"
+  push:
+    branches:
+      - "feat/wave5-point-select-source"
+
+concurrency:
+  group: wave5-human-point-select-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Verify Rust formatting
+        run: |
+          rustfmt --edition 2024 --check             crates/instrumentation/src/lib.rs             crates/instrumentation/examples/point_select_bootstrap.rs             apps/desktop/src-tauri/src/point_select.rs             apps/desktop/src-tauri/tests/wave5_human_point_select_contract.rs
+
+      - name: Verify instrumentation point-select contracts
+        run: cargo test -p localview-instrumentation -- --nocapture
+
+      - name: Verify desktop point-select authority
+        run: |
+          cargo test -p localview-desktop point_select --lib -- --nocapture
+          cargo test -p localview-desktop --test wave5_human_point_select_contract -- --nocapture
+
+      - name: Verify desktop TypeScript
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Check desktop targets
+        run: cargo check -p localview-desktop --all-targets
+
+  browser-proof:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize exact LocalView point-select bootstrap
+        run: cargo run -p localview-instrumentation --example point_select_bootstrap > /tmp/localview-point-select-bootstrap.js
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install browser proof dependencies
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove direct human point selection in Chromium
+        working-directory: apps/desktop
+        run: |
+          cp ../../tools/wave5-point-select/runtime.mjs ./wave5-point-select-runtime.mjs
+          node ./wave5-point-select-runtime.mjs
+          rm ./wave5-point-select-runtime.mjs
