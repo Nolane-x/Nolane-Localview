@@ -677,6 +677,433 @@ pub async fn capture_responsive_sweep(
     .map_err(|_| "responsive_transaction_timeout".to_string())?
 }
 
+fn validate_responsive_preview_authority(
+    registry: &workspace_surface::surface_registry::DesktopSurfaceRegistry,
+    window: &tauri::WebviewWindow,
+    session_id: SessionId,
+    preview_label: &str,
+    error_code: &str,
+) -> Result<(), String> {
+    use workspace_surface::surface_registry::DesktopSurfaceKind;
+
+    let current = registry
+        .current(
+            session_id,
+            DesktopSurfaceKind::PreviewWindow,
+            preview_label,
+        )
+        .ok_or_else(|| error_code.to_string())?;
+    if current.identity.label != preview_label
+        || current.identity.session_id != session_id
+        || current.identity.owner_instance_id != registry.owner_instance_id()
+        || window.label() != preview_label
+        || !bridge_surface_label_allowed(window.label(), session_id)
+    {
+        return Err(error_code.to_string());
+    }
+    Ok(())
+}
+
+fn responsive_text_or_control(node: &SemanticNode) -> bool {
+    if node.interactive
+        || node
+            .name
+            .as_deref()
+            .is_some_and(|name| !name.trim().is_empty())
+    {
+        return true;
+    }
+
+    let tag = node.tag.as_str();
+    if [
+        "a", "button", "input", "label", "option", "select", "textarea", "p", "span", "h1",
+        "h2", "h3", "h4", "h5", "h6",
+    ]
+    .iter()
+    .any(|candidate| tag.eq_ignore_ascii_case(candidate))
+    {
+        return true;
+    }
+
+    node.role.as_deref().is_some_and(|role| {
+        [
+            "button",
+            "link",
+            "textbox",
+            "combobox",
+            "checkbox",
+            "radio",
+            "switch",
+            "menuitem",
+            "tab",
+            "heading",
+        ]
+        .iter()
+        .any(|candidate| role.eq_ignore_ascii_case(candidate))
+    })
+}
+
+fn responsive_observation_from_snapshot(
+    session_id: SessionId,
+    expected_route: &str,
+    viewport: localview_responsive::Viewport,
+    snapshot: &PageSnapshot,
+) -> Result<ResponsiveObservation, String> {
+    if snapshot.viewport != (viewport.width, viewport.height) {
+        return Err("responsive_viewport_mismatch".into());
+    }
+    let route = canonical_visual_diff_route(&snapshot.route)
+        .map_err(|_| "responsive_route_drift".to_string())?;
+    if route != expected_route {
+        return Err("responsive_route_drift".into());
+    }
+
+    let mut nodes = Vec::new();
+    let mut complete = true;
+    let mut stack = vec![(&snapshot.root, None::<String>)];
+    while let Some((node, parent_reference)) = stack.pop() {
+        for child in node.children.iter().rev() {
+            stack.push((child, Some(node.reference.clone())));
+        }
+
+        let Some(rect) = node.rect.as_ref() else {
+            continue;
+        };
+        if !rect.x.is_finite()
+            || !rect.y.is_finite()
+            || !rect.width.is_finite()
+            || !rect.height.is_finite()
+            || rect.width <= 0.0
+            || rect.height <= 0.0
+        {
+            return Err("responsive_invalid_observation".into());
+        }
+        if nodes.len() >= MAX_RESPONSIVE_OBSERVATION_NODES {
+            complete = false;
+            break;
+        }
+
+        nodes.push(ResponsiveNodeObservation {
+            reference: node.reference.clone(),
+            parent_reference,
+            rect: ResponsiveRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+            },
+            interactive: node.interactive,
+            text_or_control: responsive_text_or_control(node),
+        });
+    }
+
+    Ok(ResponsiveObservation {
+        session: session_id.to_string(),
+        route,
+        viewport,
+        snapshot_version: snapshot.version,
+        complete,
+        nodes,
+    })
+}
+
+impl LiveResponsiveLayoutProbe<'_> {
+    async fn probe_width(&self, width: u32) -> Result<LiveResponsiveProbe, String> {
+        if !(DEFAULT_ADAPTIVE_MIN_WIDTH..=DEFAULT_ADAPTIVE_MAX_WIDTH).contains(&width) {
+            return Err("responsive_probe_width_out_of_bounds".into());
+        }
+
+        {
+            let mut state = self.state.lock().await;
+            if let Some(failure) = state.failure.clone() {
+                return Err(failure);
+            }
+            if let Some(probe) = state.probes.get(&width) {
+                return Ok(probe.clone());
+            }
+            if state.attempted_widths.len() >= self.probe_cap {
+                let error = "responsive_probe_cap_exceeded".to_string();
+                state.failure = Some(error.clone());
+                return Err(error);
+            }
+            state.attempted_widths.insert(width);
+        }
+
+        let result = async {
+            if tokio::time::Instant::now() >= self.deadline {
+                return Err("responsive_transaction_timeout".to_string());
+            }
+            validate_responsive_preview_authority(
+                self.registry,
+                self.window,
+                self.session_id,
+                self.preview_label,
+                "responsive_session_drift",
+            )?;
+            self.window
+                .set_size(tauri::LogicalSize::new(
+                    f64::from(width),
+                    f64::from(self.css_height),
+                ))
+                .map_err(|_| "responsive_resize_failed".to_string())?;
+            wait_for_responsive_size_convergence(
+                self.window,
+                width,
+                self.css_height,
+                self.deadline,
+            )
+            .await?;
+            validate_responsive_preview_authority(
+                self.registry,
+                self.window,
+                self.session_id,
+                self.preview_label,
+                "responsive_session_drift",
+            )?;
+
+            let route = self
+                .window
+                .url()
+                .map_err(|_| "responsive_preview_unavailable".to_string())?;
+            let route = canonical_visual_diff_route(route.as_str())
+                .map_err(|_| "responsive_route_drift".to_string())?;
+            if route != self.expected_route {
+                return Err("responsive_route_drift".to_string());
+            }
+
+            wait_for_capture_settle(self.session_id)
+                .await
+                .map_err(|_| "responsive_settle_failed".to_string())?;
+            validate_responsive_preview_authority(
+                self.registry,
+                self.window,
+                self.session_id,
+                self.preview_label,
+                "responsive_session_drift",
+            )?;
+            let snapshot = fresh_semantic_snapshot(self.session_id)
+                .await
+                .map_err(|_| "responsive_evidence_capture_failed".to_string())?;
+            let observation = responsive_observation_from_snapshot(
+                self.session_id,
+                self.expected_route,
+                localview_responsive::Viewport {
+                    width,
+                    height: self.css_height,
+                },
+                &snapshot,
+            )?;
+
+            let previous = {
+                let state = self.state.lock().await;
+                state
+                    .probes
+                    .values()
+                    .min_by_key(|probe| probe.observation.viewport.width.abs_diff(width))
+                    .map(|probe| probe.observation.clone())
+            };
+            let evaluation =
+                evaluate_responsive_observation(previous.as_ref(), &observation)
+                    .map_err(|_| "responsive_detector_failed".to_string())?;
+
+            Ok::<LiveResponsiveProbe, String>(LiveResponsiveProbe {
+                observation,
+                evaluation,
+            })
+        }
+        .await;
+
+        let mut state = self.state.lock().await;
+        match result {
+            Ok(probe) => {
+                state.probes.insert(width, probe.clone());
+                Ok(probe)
+            }
+            Err(error) => {
+                state.failure = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    async fn snapshot(&self) -> (Vec<LiveResponsiveProbe>, Option<String>) {
+        let state = self.state.lock().await;
+        (
+            state.probes.values().cloned().collect(),
+            state.failure.clone(),
+        )
+    }
+}
+
+impl LayoutProbe for LiveResponsiveLayoutProbe<'_> {
+    async fn fails_at(&self, width: u32) -> bool {
+        match self.probe_width(width).await {
+            Ok(probe) => probe.evaluation.state == ResponsiveDetectorState::Fail,
+            Err(_) => false,
+        }
+    }
+}
+
+async fn run_live_adaptive_responsive(
+    window: &tauri::WebviewWindow,
+    registry: &workspace_surface::surface_registry::DesktopSurfaceRegistry,
+    session_id: SessionId,
+    preview_label: &str,
+    expected_route: &str,
+    initial_css_width: u32,
+    css_height: u32,
+    seed_probes: Vec<LiveResponsiveProbe>,
+    deadline: tokio::time::Instant,
+) -> Result<ResponsiveAdaptiveReceipt, String> {
+    let mut probes = BTreeMap::new();
+    let mut attempted_widths = BTreeSet::new();
+    for seed in seed_probes {
+        let width = seed.observation.viewport.width;
+        if !(DEFAULT_ADAPTIVE_MIN_WIDTH..=DEFAULT_ADAPTIVE_MAX_WIDTH).contains(&width) {
+            continue;
+        }
+        attempted_widths.insert(width);
+        if let Some(existing) = probes.insert(width, seed.clone()) {
+            if existing.evaluation.state != seed.evaluation.state {
+                return Err("responsive_same_width_instability".into());
+            }
+        }
+    }
+    if attempted_widths.len() > DEFAULT_ADAPTIVE_PROBE_CAP {
+        return Err("responsive_probe_cap_exceeded".into());
+    }
+
+    let probe = LiveResponsiveLayoutProbe {
+        window,
+        registry,
+        session_id,
+        preview_label,
+        expected_route,
+        css_height,
+        deadline,
+        probe_cap: DEFAULT_ADAPTIVE_PROBE_CAP,
+        state: Mutex::new(LiveResponsiveProbeState {
+            probes,
+            attempted_widths,
+            failure: None,
+        }),
+    };
+
+    let initial_width = initial_css_width.clamp(
+        DEFAULT_ADAPTIVE_MIN_WIDTH,
+        DEFAULT_ADAPTIVE_MAX_WIDTH,
+    );
+    let initial_widths = bounded_adaptive_sweep(
+        DEFAULT_ADAPTIVE_MIN_WIDTH,
+        DEFAULT_ADAPTIVE_MAX_WIDTH,
+        &[
+            ResponsivePresetId::MobileS.viewport().width,
+            ResponsivePresetId::Mobile.viewport().width,
+            ResponsivePresetId::Tablet.viewport().width,
+            ResponsivePresetId::Desktop.viewport().width,
+            initial_width,
+        ],
+        DEFAULT_ADAPTIVE_INITIAL_PROBE_CAP,
+    )
+    .map_err(|_| "responsive_adaptive_plan_failed".to_string())?;
+
+    for width in initial_widths {
+        probe.probe_width(width).await?;
+    }
+
+    let (initial_probes, failure) = probe.snapshot().await;
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
+    let initial_samples = initial_probes
+        .iter()
+        .map(|probe| ResponsiveProbeSample {
+            width: probe.observation.viewport.width,
+            state: probe.evaluation.state,
+        })
+        .collect::<Vec<_>>();
+    let all_concrete = initial_samples
+        .iter()
+        .all(|sample| sample.state != ResponsiveDetectorState::Inconclusive);
+    let transition_pairs = initial_samples
+        .windows(2)
+        .filter(|pair| pair[0].state != pair[1].state)
+        .collect::<Vec<_>>();
+
+    if all_concrete && transition_pairs.len() == 1 {
+        let pair = transition_pairs[0];
+        let (known_good, known_bad) = if pair[0].state == ResponsiveDetectorState::Pass {
+            (pair[0].width, pair[1].width)
+        } else {
+            (pair[1].width, pair[0].width)
+        };
+        let _ = discover_breakpoint(
+            &probe,
+            known_good,
+            known_bad,
+            DEFAULT_BREAKPOINT_TOLERANCE_PX,
+        )
+        .await;
+    }
+
+    let (final_probes, failure) = probe.snapshot().await;
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
+    if final_probes.len() > DEFAULT_ADAPTIVE_PROBE_CAP {
+        return Err("responsive_probe_cap_exceeded".into());
+    }
+
+    let samples = final_probes
+        .iter()
+        .map(|probe| ResponsiveProbeSample {
+            width: probe.observation.viewport.width,
+            state: probe.evaluation.state,
+        })
+        .collect::<Vec<_>>();
+    let transition = resolve_observed_transition(
+        &samples,
+        DEFAULT_BREAKPOINT_TOLERANCE_PX,
+        "responsive_geometry_v1",
+    );
+
+    let observations = final_probes
+        .iter()
+        .map(|probe| probe.observation.clone())
+        .collect::<Vec<_>>();
+    let evaluations = final_probes
+        .iter()
+        .map(|probe| probe.evaluation.clone())
+        .collect::<Vec<_>>();
+    let mut issues = evaluations
+        .iter()
+        .flat_map(|evaluation| evaluation.issues.clone())
+        .collect::<Vec<_>>();
+    let series_issues = analyze_responsive_series(&observations, &evaluations)
+        .map_err(|_| "responsive_detector_failed".to_string())?;
+    issues.extend(series_issues);
+    let issues = deduplicate_responsive_issues(issues);
+
+    let probes = final_probes
+        .into_iter()
+        .map(|probe| ResponsiveAdaptiveProbeReceipt {
+            css_width: probe.observation.viewport.width,
+            css_height: probe.observation.viewport.height,
+            snapshot_version: probe.observation.snapshot_version,
+            state: probe.evaluation.state,
+            issue_count: probe.evaluation.issues.len(),
+        })
+        .collect();
+
+    Ok(ResponsiveAdaptiveReceipt {
+        detector: "responsive_geometry_v1".to_string(),
+        probe_cap: DEFAULT_ADAPTIVE_PROBE_CAP,
+        probes,
+        transition,
+        issues,
+    })
+}
+
 async fn wait_for_responsive_size_convergence(
     window: &tauri::WebviewWindow,
     css_width: u32,
