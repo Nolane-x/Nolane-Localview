@@ -137,10 +137,7 @@ async fn resolve_runtime_source_inner(
         .filter(|value| !value.is_empty() && value.len() <= MAX_RUNTIME_SOURCE_URL_BYTES)
         .ok_or(RuntimeSourceError::RuntimeSourceMissing)?;
 
-    let raw_location = source
-        .split(['?', '#'])
-        .next()
-        .unwrap_or(source);
+    let raw_location = source.split(['?', '#']).next().unwrap_or(source);
     if raw_location.contains('%') {
         return Err(RuntimeSourceError::RuntimeSourceUnsupported);
     }
