@@ -120,7 +120,10 @@ impl SourceMap {
             .source_root
             .as_deref()
             .is_some_and(|value| value.len() > MAX_STRING_BYTES)
-            || raw.sources.iter().any(|value| value.len() > MAX_STRING_BYTES)
+            || raw
+                .sources
+                .iter()
+                .any(|value| value.len() > MAX_STRING_BYTES)
             || raw.names.iter().any(|value| value.len() > MAX_STRING_BYTES)
         {
             return Err(SourceMapError::StringTooLong);
@@ -265,6 +268,27 @@ impl SourceMap {
             .iter()
             .take_while(|segment| segment.generated_column <= generated_column)
             .last()?;
+        self.resolve_segment(segment)
+    }
+
+    /// Resolve only when the requested generated coordinate is itself a mapped
+    /// Source Map segment. This is stricter than `resolve`, which intentionally
+    /// implements nearest-preceding-segment lookup for ordinary runtime stacks.
+    pub fn resolve_exact(
+        &self,
+        generated_line: u32,
+        generated_column: u32,
+    ) -> Option<ResolvedSourceLocation> {
+        let line_index = usize::try_from(generated_line.checked_sub(1)?).ok()?;
+        let segment = self
+            .lines
+            .get(line_index)?
+            .iter()
+            .find(|segment| segment.generated_column == generated_column)?;
+        self.resolve_segment(segment)
+    }
+
+    fn resolve_segment(&self, segment: &MappingSegment) -> Option<ResolvedSourceLocation> {
         let original = segment.original.as_ref()?;
         let source = self
             .sources
@@ -289,10 +313,8 @@ impl SourceMap {
 }
 
 pub fn parse_stack_locations(stack: &str) -> Vec<SourceLocation> {
-    let re = Regex::new(
-        r"(?m)(?:\(|\s|^)([^\s()]+\.(?:tsx?|jsx?|vue|svelte)):(\d+):(\d+)\)?",
-    )
-    .expect("static stack location regex");
+    let re = Regex::new(r"(?m)(?:\(|\s|^)([^\s()]+\.(?:tsx?|jsx?|vue|svelte)):(\d+):(\d+)\)?")
+        .expect("static stack location regex");
 
     re.captures_iter(stack)
         .filter_map(|captures| {
@@ -373,7 +395,9 @@ fn decode_vlq_segment(segment: &str) -> Result<Vec<i64>, SourceMapError> {
             if !continuation {
                 break;
             }
-            shift = shift.checked_add(5).ok_or(SourceMapError::IntegerOverflow)?;
+            shift = shift
+                .checked_add(5)
+                .ok_or(SourceMapError::IntegerOverflow)?;
             if shift >= 64 || cursor >= bytes.len() {
                 return Err(SourceMapError::TruncatedVlq);
             }
@@ -381,8 +405,7 @@ fn decode_vlq_segment(segment: &str) -> Result<Vec<i64>, SourceMapError> {
 
         let negative = accumulated & 1 == 1;
         let magnitude = accumulated >> 1;
-        let magnitude =
-            i64::try_from(magnitude).map_err(|_| SourceMapError::IntegerOverflow)?;
+        let magnitude = i64::try_from(magnitude).map_err(|_| SourceMapError::IntegerOverflow)?;
         values.push(if negative { -magnitude } else { magnitude });
     }
 
@@ -435,11 +458,7 @@ fn is_absolute_reference(value: &str) -> bool {
     }
 
     let bytes = value.as_bytes();
-    if bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && bytes[2] == b'/'
-    {
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
         return true;
     }
 
@@ -573,6 +592,16 @@ mod tests {
     }
 
     #[test]
+    fn exact_lookup_requires_a_segment_at_the_requested_generated_column() {
+        let map = SourceMap::parse(&map_json("AAAA,MAAA")).unwrap();
+
+        assert!(map.resolve_exact(1, 0).is_some());
+        assert!(map.resolve_exact(1, 6).is_some());
+        assert_eq!(map.resolve_exact(1, 7), None);
+        assert!(map.resolve(1, 7).is_some());
+    }
+
+    #[test]
     fn unmapped_segment_fails_closed_until_another_mapping_exists() {
         let map = SourceMap::parse(&map_json("AAAA,K")).unwrap();
 
@@ -690,7 +719,11 @@ mod tests {
             "//cdn.example.test/src/Button.tsx"
         );
         assert_eq!(
-            SourceMap::parse(&unc).unwrap().resolve(1, 0).unwrap().source,
+            SourceMap::parse(&unc)
+                .unwrap()
+                .resolve(1, 0)
+                .unwrap()
+                .source,
             "//server/share/src/Button.tsx"
         );
     }

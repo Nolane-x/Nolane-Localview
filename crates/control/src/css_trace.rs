@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+#[path = "css_source_coordinate.rs"]
+mod css_source_coordinate;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -15,6 +18,7 @@ use crate::{
     ControlState,
     fresh_snapshot::{FreshSnapshotError, acquire_fresh_snapshot_result},
 };
+use css_source_coordinate::CssSourceAuthority;
 
 const MAX_REFERENCE_BYTES: usize = 256;
 const MAX_TREE_DEPTH: usize = 12;
@@ -41,6 +45,7 @@ pub(crate) struct CssDeclarationEvidence {
     pub property: String,
     pub value: String,
     pub important: bool,
+    pub source_authority: CssSourceAuthority,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -55,6 +60,7 @@ pub(crate) struct CssCascadeWinner {
     pub important: bool,
     pub specificity: [u16; 4],
     pub source_order: u32,
+    pub source_authority: CssSourceAuthority,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -121,7 +127,11 @@ async fn session_style_trace(
     };
 
     match project_style_trace(&result.payload, &reference) {
-        Ok(trace) => Json(trace).into_response(),
+        Ok(mut trace) => {
+            css_source_coordinate::enrich_style_trace_source_authority(&state, id, &mut trace)
+                .await;
+            Json(trace).into_response()
+        }
         Err(CssTraceError::InvalidReference) => {
             bounded_error(StatusCode::BAD_REQUEST, "invalid_element_reference")
         }
@@ -323,6 +333,7 @@ fn project_author_cascade(
 
 fn project_cascade_winner(value: &Value) -> Result<CssCascadeWinner, CssTraceError> {
     let object = value.as_object().ok_or(CssTraceError::InvalidSnapshot)?;
+    validate_runtime_relevance_markers(object)?;
     let source_kind = bounded_string(object.get("source_kind"), MAX_CSS_SOURCE_KIND_BYTES)
         .ok_or(CssTraceError::InvalidSnapshot)?;
     if !matches!(
@@ -420,11 +431,13 @@ fn project_cascade_winner(value: &Value) -> Result<CssCascadeWinner, CssTraceErr
         important,
         specificity,
         source_order,
+        source_authority: CssSourceAuthority::initial(source_kind),
     })
 }
 
 fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTraceError> {
     let object = value.as_object().ok_or(CssTraceError::InvalidSnapshot)?;
+    validate_runtime_relevance_markers(object)?;
     let source_kind = bounded_string(object.get("source_kind"), MAX_CSS_SOURCE_KIND_BYTES)
         .ok_or(CssTraceError::InvalidSnapshot)?;
     if !matches!(
@@ -476,7 +489,24 @@ fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTrace
         property: property.to_owned(),
         value,
         important,
+        source_authority: CssSourceAuthority::initial(source_kind),
     })
+}
+
+fn validate_runtime_relevance_markers(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), CssTraceError> {
+    if let Some(active) = object.get("active") {
+        if active.as_bool() != Some(true) {
+            return Err(CssTraceError::InvalidSnapshot);
+        }
+    }
+    if let Some(disabled) = object.get("disabled") {
+        if disabled.as_bool() != Some(false) {
+            return Err(CssTraceError::InvalidSnapshot);
+        }
+    }
+    Ok(())
 }
 
 fn valid_css_author_cascade_property(property: &str) -> bool {
@@ -823,5 +853,56 @@ mod tests {
             "@save",
         );
         assert_eq!(bad_inline_specificity, Err(CssTraceError::InvalidSnapshot));
+    }
+
+    #[test]
+    fn rejects_remote_encoded_traversal_and_explicitly_inactive_css_evidence() {
+        for declaration in [
+            serde_json::json!({
+                "source_kind": "same_origin_stylesheet",
+                "stylesheet_path": "src/%2e%2e/private.css",
+                "selector": ".save",
+                "property": "color",
+                "value": "red",
+                "important": false
+            }),
+            serde_json::json!({
+                "source_kind": "cross_origin_stylesheet",
+                "stylesheet_path": "remote.css",
+                "selector": ".save",
+                "property": "color",
+                "value": "red",
+                "important": false
+            }),
+            serde_json::json!({
+                "source_kind": "same_origin_stylesheet",
+                "stylesheet_path": "src/button.css",
+                "selector": ".save",
+                "property": "color",
+                "value": "red",
+                "important": false,
+                "active": false
+            }),
+            serde_json::json!({
+                "source_kind": "same_origin_stylesheet",
+                "stylesheet_path": "src/button.css",
+                "selector": ".save",
+                "property": "color",
+                "value": "red",
+                "important": false,
+                "disabled": true
+            }),
+        ] {
+            let result = project_style_trace(
+                &payload(serde_json::json!({
+                    "ref": "@save",
+                    "style": {"color": "red"},
+                    "styleTrace": {"declarations": [declaration]},
+                    "children": []
+                })),
+                "@save",
+            );
+            assert_eq!(result, Err(CssTraceError::InvalidSnapshot));
+        }
     }
 }
