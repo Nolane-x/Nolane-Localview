@@ -806,6 +806,7 @@ const SCRIPT: &str = r#"
       hoveredElement: null,
       hoveredReference: null,
       pointerDownElement: null,
+      pendingFailure: null,
       listeners: [],
       freezeObserver: null,
     };
@@ -838,15 +839,33 @@ const SCRIPT: &str = r#"
         return;
       }
       const target = pointTargetAt(event.clientX, event.clientY);
+      const hovered = state.hoveredElement;
+      if (!target) {
+        state.pointerDownElement = null;
+        state.pendingFailure = 'target_unavailable';
+        return;
+      }
+      if (hovered && (!hovered.isConnected || target !== hovered)) {
+        state.pointerDownElement = target;
+        state.pendingFailure = 'target_changed';
+        return;
+      }
+      state.pendingFailure = null;
       state.pointerDownElement = target;
-      if (target) updatePointSelectHighlight(state, target);
+      updatePointSelectHighlight(state, target);
     };
 
     const onClick = (event) => {
       if (pointSelectState !== state) return;
       suppress(event);
+      const pendingFailure = state.pendingFailure;
       const downTarget = state.pointerDownElement;
       state.pointerDownElement = null;
+      state.pendingFailure = null;
+      if (pendingFailure) {
+        finishPointSelect('failed', pendingFailure);
+        return;
+      }
       if (!downTarget || !downTarget.isConnected) {
         finishPointSelect('failed', 'target_unavailable');
         return;
