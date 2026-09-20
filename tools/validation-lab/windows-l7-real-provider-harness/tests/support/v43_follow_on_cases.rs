@@ -518,6 +518,12 @@ pub fn run_w05(
     );
     let window_handle = truth_u64(&initial_truth, "window_handle");
     let command_timeout = Duration::from_millis(350);
+    // The hostile-provider proof intentionally uses the tight command budget above.
+    // Fresh recovery is a different assertion: it must regain observation after
+    // poison quarantine, not prove another 350 ms timeout boundary. The combined
+    // eleven-seed campaign runs under materially higher Windows/UIA load than the
+    // isolated W05 test, so give only the fresh worker a separate bounded budget.
+    let recovery_timeout = Duration::from_millis(1_500);
 
     let worker_a = WindowsUiaWorker::spawn(worker_config(command_timeout))
         .expect("spawn W05 provider worker A");
@@ -576,7 +582,7 @@ pub fn run_w05(
 
     let release_truth = seed.release_provider_hang();
     drop(worker_a);
-    let worker_b = WindowsUiaWorker::spawn(worker_config(command_timeout))
+    let worker_b = WindowsUiaWorker::spawn(worker_config(recovery_timeout))
         .expect("spawn W05 fresh provider worker B");
     let attachment_b = worker_b
         .attach(selection(seed.process_id(), window_handle))
