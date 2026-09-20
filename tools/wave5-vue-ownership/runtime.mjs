@@ -133,8 +133,19 @@ try {
     result.diagnostic,
   );
   invariant(
-    result.hint === null,
-    'absolute Vue compiler paths must fail closed in page instrumentation',
+    result.hint?.origin === 'vue-dev-instance',
+    'real Vue absolute compiler path should be transported only as bounded raw ownership evidence',
+    result.hint,
+  );
+  invariant(
+    result.hint?.file === result.diagnostic.upstreamFile,
+    'raw Vue ownership must preserve the exact compiler file for backend authority',
+    result,
+  );
+  invariant(
+    !Object.prototype.hasOwnProperty.call(result.hint, 'line') &&
+      !Object.prototype.hasOwnProperty.call(result.hint, 'column'),
+    'raw Vue absolute ownership must not fabricate source coordinates',
     result.hint,
   );
   invariant(!result.serialized.includes('MUST-NOT-LEAK-VUE-PROP'), 'Vue prop leaked into semantic snapshot');
@@ -302,7 +313,8 @@ try {
   invariant(adversarial.instanceAccessor === null && adversarial.instanceGetterCalls === 0, 'Vue element accessor was invoked', adversarial);
   invariant(adversarial.typeAccessor === null && adversarial.typeGetterCalls === 0, 'Vue instance.type accessor was invoked', adversarial);
   invariant(adversarial.fileAccessor === null && adversarial.fileGetterCalls === 0, 'Vue type.__file accessor was invoked', adversarial);
-  invariant(adversarial.absolute === null, 'absolute Vue path escaped privacy boundary', adversarial);
+  invariant(adversarial.absolute?.origin === 'vue-dev-instance', 'absolute Vue candidate should reach backend authority', adversarial);
+  invariant(adversarial.absolute?.file === '/private/Absolute.vue', 'absolute Vue candidate changed before backend authority', adversarial);
   invariant(adversarial.traversal === null, 'traversal Vue path escaped privacy boundary', adversarial);
   invariant(adversarial.encoded === null, 'encoded Vue path escaped privacy boundary', adversarial);
   invariant(adversarial.wrongExtension === null, 'non-Vue file fabricated Vue ownership', adversarial);
@@ -318,6 +330,7 @@ try {
     noFabricatedCoordinates: true,
     accessorNotInvoked: true,
     unsafePathsRejected: true,
+    absolutePathRequiresBackendAuthority: true,
   }) + '\n');
 } finally {
   await browser.close();

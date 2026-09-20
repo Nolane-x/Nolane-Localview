@@ -1,9 +1,9 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use chrono::{TimeZone, Utc};
 use localview_evidence::{EvidenceDraft, EvidenceKind, UncertaintyClass};
@@ -105,10 +105,7 @@ fn valid_output_bounds(request: &FullPageVisualEvidenceRequest) -> bool {
         .is_some_and(|bytes| bytes <= MAX_FULL_PAGE_OUTPUT_RGBA_BYTES)
 }
 
-fn expected_scroll_offsets(
-    document_css_height: f64,
-    viewport_css_height: f64,
-) -> Option<Vec<f64>> {
+fn expected_scroll_offsets(document_css_height: f64, viewport_css_height: f64) -> Option<Vec<f64>> {
     let max_scroll_y = (document_css_height - viewport_css_height).max(0.0);
     let mut offsets = vec![0.0];
     if max_scroll_y > 0.0 {
@@ -204,7 +201,10 @@ async fn ingest_full_page_visual_evidence(
             .into_response();
     }
 
-    let Some(captured_at) = Utc.timestamp_millis_opt(request.captured_at_unix_ms).single() else {
+    let Some(captured_at) = Utc
+        .timestamp_millis_opt(request.captured_at_unix_ms)
+        .single()
+    else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "invalid_capture_timestamp"})),

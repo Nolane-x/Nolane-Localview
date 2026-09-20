@@ -740,6 +740,7 @@ const SCRIPT: &str = r#"
   const MAX_SVELTE_SOURCE_COLUMN = 10000000;
   const MAX_VUE_COMPONENT_BYTES = 96;
   const MAX_VUE_SOURCE_FILE_BYTES = 260;
+  const MAX_VUE_ABSOLUTE_SOURCE_FILE_BYTES = 1024;
 
   const boundedUtf8String = (value, maxBytes) => {
     if (typeof value !== 'string') return null;
@@ -769,6 +770,19 @@ const SCRIPT: &str = r#"
     const normalized = segments.join('/');
     if (!normalized || new TextEncoder().encode(normalized).length > maxBytes) return null;
     return normalized;
+  };
+
+  const boundedVueSourceFile = (value) => {
+    const raw = boundedUtf8String(value, MAX_VUE_ABSOLUTE_SOURCE_FILE_BYTES);
+    if (!raw) return null;
+    const file = raw.replace(/\\/g, '/');
+    if (file.startsWith('//') || /[%?#]/.test(file)) return null;
+
+    const driveAbsolute = /^[A-Za-z]:\//.test(file);
+    const posixAbsolute = file.startsWith('/');
+    if (driveAbsolute || posixAbsolute) return file;
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(file)) return null;
+    return boundedRelativeSourceFile(file, MAX_VUE_SOURCE_FILE_BYTES);
   };
 
   const reactComponentName = (type) => {
@@ -993,7 +1007,7 @@ const SCRIPT: &str = r#"
     const fileDescriptor = ownDataDescriptor(componentType, '__file');
     if (!fileDescriptor) return null;
 
-    const file = boundedRelativeSourceFile(fileDescriptor.value, MAX_VUE_SOURCE_FILE_BYTES);
+    const file = boundedVueSourceFile(fileDescriptor.value);
     if (!file || !file.endsWith('.vue')) return null;
 
     const basename = file.split('/').pop();

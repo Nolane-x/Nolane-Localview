@@ -4,14 +4,22 @@ on:
   pull_request:
     paths:
       - "crates/instrumentation/**"
+      - "crates/control/src/vue_snapshot_authority.rs"
+      - "crates/control/tests/vue_snapshot_authority.rs"
+      - "crates/control/src/runtime.rs"
+      - "crates/control/src/lib.rs"
       - "tools/wave5-vue-ownership/**"
       - ".github/workflows/wave5-vue-live-ownership.yml"
       - "docs/superpowers/specs/2026-09-20-wave5-vue-live-ownership-foundation-design.md"
   push:
     branches:
-      - "feat/wave5-vue-ownership-reconciled"
+      - "feat/wave5-vue-absolute-path-authority"
     paths:
       - "crates/instrumentation/**"
+      - "crates/control/src/vue_snapshot_authority.rs"
+      - "crates/control/tests/vue_snapshot_authority.rs"
+      - "crates/control/src/runtime.rs"
+      - "crates/control/src/lib.rs"
       - "tools/wave5-vue-ownership/**"
       - ".github/workflows/wave5-vue-live-ownership.yml"
       - "docs/superpowers/specs/2026-09-20-wave5-vue-live-ownership-foundation-design.md"
@@ -38,10 +46,19 @@ jobs:
           rustfmt --edition 2024 --check \
             crates/instrumentation/src/lib.rs \
             crates/instrumentation/examples/vue_ownership_bootstrap.rs \
-            crates/instrumentation/tests/visibility_source_contract.rs
+            crates/instrumentation/tests/visibility_source_contract.rs \
+            crates/control/src/vue_snapshot_authority.rs \
+            crates/control/tests/vue_snapshot_authority.rs \
+            crates/control/src/runtime.rs \
+            crates/control/src/lib.rs
 
       - name: Verify bounded framework instrumentation contract
         run: cargo test -p localview-instrumentation -- --nocapture
+
+      - name: Verify backend-safe Vue absolute-path authority
+        run: |
+          cargo test -p localview-control --lib vue_snapshot_authority -- --nocapture
+          cargo test -p localview-control --test vue_snapshot_authority -- --nocapture
 
       - name: Verify fresh Vue ownership projection on landed protocol
         run: cargo test -p localview-control --test fresh_semantic_snapshot -- --nocapture

@@ -1,21 +1,21 @@
 use std::time::Duration;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use chrono::Utc;
-use localview_capture::{evaluate_settle, SettleObservation, StableCapturePolicy};
+use localview_capture::{SettleObservation, StableCapturePolicy, evaluate_settle};
 use localview_live_bridge::{
     BridgeActionKind, BridgeActionResult, ObserverEvent, ObserverEventKind,
 };
 use localview_protocol::SessionId;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
 use crate::ControlState;
@@ -210,7 +210,6 @@ async fn session_capture_freeze(
     .into_response()
 }
 
-
 async fn session_capture_freeze_full_page(
     State(state): State<ControlState>,
     headers: HeaderMap,
@@ -289,7 +288,10 @@ async fn session_capture_freeze_full_page(
         && document_css_height.is_some_and(valid_positive_document_height);
 
     if !valid {
-        return bounded_error(StatusCode::BAD_GATEWAY, "invalid_full_page_visual_freeze_ack");
+        return bounded_error(
+            StatusCode::BAD_GATEWAY,
+            "invalid_full_page_visual_freeze_ack",
+        );
     }
 
     let viewport_css_width = viewport_css_width.expect("validated above");
@@ -299,11 +301,11 @@ async fn session_capture_freeze_full_page(
     let scroll_x = scroll_x.expect("validated above");
     let scroll_y = scroll_y.expect("validated above");
     let max_scroll_y = (document_css_height - viewport_css_height).max(0.0);
-    if document_css_width != viewport_css_width
-        || scroll_x > 0.5
-        || scroll_y > max_scroll_y + 0.5
-    {
-        return bounded_error(StatusCode::BAD_GATEWAY, "invalid_full_page_visual_freeze_ack");
+    if document_css_width != viewport_css_width || scroll_x > 0.5 || scroll_y > max_scroll_y + 0.5 {
+        return bounded_error(
+            StatusCode::BAD_GATEWAY,
+            "invalid_full_page_visual_freeze_ack",
+        );
     }
 
     Json(serde_json::json!({
@@ -469,7 +471,10 @@ async fn session_capture_tile_probe(
     )
     .await
     else {
-        return bounded_error(StatusCode::GATEWAY_TIMEOUT, "capture_tile_probe_ack_timeout");
+        return bounded_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "capture_tile_probe_ack_timeout",
+        );
     };
     if !result.ok {
         return bounded_error(StatusCode::BAD_GATEWAY, "capture_tile_probe_failed");
@@ -528,10 +533,7 @@ async fn session_capture_tile_probe(
     let viewport_css_width = viewport_css_width.expect("validated above");
     let viewport_css_height = viewport_css_height.expect("validated above");
     let max_scroll_y = (document_css_height - viewport_css_height).max(0.0);
-    if document_css_width != viewport_css_width
-        || scroll_x > 0.5
-        || scroll_y > max_scroll_y + 0.5
-    {
+    if document_css_width != viewport_css_width || scroll_x > 0.5 || scroll_y > max_scroll_y + 0.5 {
         return bounded_error(StatusCode::BAD_GATEWAY, "invalid_capture_tile_probe_ack");
     }
 
@@ -744,7 +746,9 @@ fn settle_observation(
                 update_latest(&mut latest_dom_mutation_at_unix_ms, captured_at)
             }
             ObserverEventKind::Layout => update_latest(&mut latest_layout_at_unix_ms, captured_at),
-            ObserverEventKind::Network => update_latest(&mut latest_network_at_unix_ms, captured_at),
+            ObserverEventKind::Network => {
+                update_latest(&mut latest_network_at_unix_ms, captured_at)
+            }
             ObserverEventKind::SemanticSnapshot
             | ObserverEventKind::Route
             | ObserverEventKind::Focus
