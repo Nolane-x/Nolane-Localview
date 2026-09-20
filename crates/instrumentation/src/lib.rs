@@ -1155,6 +1155,7 @@ const SCRIPT: &str = r#"
         continue;
       }
       const sourceFile = stylesheetSourceFile(sheet);
+      if (sheet?.href && !sourceFile) continue;
       const sourceKind = sourceFile ? 'same_origin_stylesheet' : 'inline_stylesheet';
       const stack = rules.slice().reverse();
       while (stack.length
