@@ -1,6 +1,11 @@
 #![forbid(unsafe_code)]
 
+mod layout;
+
+pub use layout::LiveLayoutAnalysis;
+
 use localview_console::{ConsoleEntry, ConsoleGroup, ConsoleLevel};
+use localview_layout::{LayoutIssueClass, Severity as LayoutSeverity};
 use localview_live_bridge::{ObserverEvent, ObserverEventKind};
 use localview_network::{NetworkFinding, NetworkIssueKind, NetworkPolicy, RequestRecord};
 use localview_performance::{
@@ -15,6 +20,8 @@ pub struct LiveAnalysis {
     pub performance: Vec<PerformanceFinding>,
     #[serde(default)]
     pub performance_lite: PerformanceLitePacket,
+    #[serde(default)]
+    pub layout: LiveLayoutAnalysis,
     pub counts: LiveEventCounts,
 }
 
@@ -111,12 +118,14 @@ pub fn analyze_live(events: &[ObserverEvent]) -> LiveAnalysis {
 
     let performance_lite =
         localview_performance::lite_packet(&performance, PerformanceLiteBudget::default());
+    let layout = layout::analyze_layout_events(events);
 
     LiveAnalysis {
         network: localview_network::analyze(&network_records, &NetworkPolicy::default()),
         console: localview_console::group(&console_entries),
         performance: localview_performance::analyze(&performance),
         performance_lite,
+        layout,
         counts,
     }
 }
@@ -185,6 +194,24 @@ pub fn diagnose_live(events: &[ObserverEvent]) -> LiveDiagnosis {
         });
     }
 
+    for issue in &analysis.layout.analysis.issues {
+        findings.push(DiagnosisFinding {
+            category: "layout".into(),
+            code: issue.code.clone(),
+            message: issue.message.clone(),
+            severity: match issue.severity {
+                LayoutSeverity::Info => 1,
+                LayoutSeverity::Warning => 2,
+                LayoutSeverity::Error => 3,
+            },
+            confidence: (issue.confidence.clamp(0.0, 1.0) * 100.0).round() as u8,
+            class: match issue.class {
+                LayoutIssueClass::Deterministic => FindingClass::Deterministic,
+                LayoutIssueClass::Heuristic => FindingClass::Heuristic,
+            },
+        });
+    }
+
     findings.sort_by(|left, right| {
         right
             .severity
@@ -194,9 +221,18 @@ pub fn diagnose_live(events: &[ObserverEvent]) -> LiveDiagnosis {
     });
 
     let mut unknowns = Vec::new();
-    let has_layout = events
-        .iter()
-        .any(|event| event.kind == ObserverEventKind::Layout);
+    let valid_layout_projection = analysis.layout.snapshot_seq.is_some()
+        && analysis.layout.analysis.analyzed_nodes > 0
+        && !analysis
+            .layout
+            .analysis
+            .issues
+            .iter()
+            .any(|issue| issue.code == "invalid_viewport_geometry");
+    let has_layout = valid_layout_projection
+        || events
+            .iter()
+            .any(|event| event.kind == ObserverEventKind::Layout);
     if events.is_empty() {
         unknowns.push(LiveUncertainty {
             class: LiveUncertaintyClass::Identity,
