@@ -43,6 +43,14 @@ Input, textarea, select/option, code/pre/kbd/samp, contenteditable, aria-hidden 
 
 The command never crawls arbitrary routes and never creates permanent Chromium ownership.
 
+## Session serialization authority
+
+The whole four-profile transaction owns the existing per-session visual capture gate from baseline acquisition through final restoration proof.
+
+This prevents Responsive, Capture, changed-region verification or another content-stress transaction from observing or persisting the temporary pseudo-content as ordinary application state.
+
+The content-stress path does not create a second lock or screenshot authority; it reuses the existing `VisualCaptureState` session gate.
+
 ## Restoration authority
 
 For every mutated text node LocalView keeps, in page memory only:
