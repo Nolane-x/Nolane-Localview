@@ -43,7 +43,7 @@ jobs:
 
       - name: Verify Rust formatting
         run: |
-          rustfmt --edition 2024 --check             crates/instrumentation/src/lib.rs             crates/instrumentation/examples/point_select_bootstrap.rs             apps/desktop/src-tauri/src/point_select.rs             apps/desktop/src-tauri/tests/wave5_human_point_select_contract.rs
+          rustfmt --edition 2024 --check             crates/instrumentation/src/lib.rs             crates/instrumentation/examples/point_select_bootstrap.rs             crates/instrumentation/tests/point_select_contract.rs             apps/desktop/src-tauri/src/point_select.rs             apps/desktop/src-tauri/tests/wave5_human_point_select_contract.rs
 
       - name: Verify instrumentation point-select contracts
         run: cargo test -p localview-instrumentation -- --nocapture
