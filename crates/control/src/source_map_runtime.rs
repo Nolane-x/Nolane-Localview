@@ -4,11 +4,11 @@ use std::{
 };
 
 use axum::{
+    Json, Router,
     extract::{Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use localview_protocol::SessionId;
 use localview_source_map::{ResolvedSourceLocation, SourceMap};
@@ -204,8 +204,8 @@ async fn resolve_project_source_map_inner(
         return Err(ProjectSourceMapError::GeneratedFileUnavailable);
     }
 
-    let map_candidate = sibling_map_path(&generated)
-        .ok_or(ProjectSourceMapError::SourceMapUnavailable)?;
+    let map_candidate =
+        sibling_map_path(&generated).ok_or(ProjectSourceMapError::SourceMapUnavailable)?;
     let map_path = fs::canonicalize(map_candidate)
         .await
         .map_err(|_| ProjectSourceMapError::SourceMapUnavailable)?;
@@ -226,8 +226,8 @@ async fn resolve_project_source_map_inner(
     if u64::try_from(map_bytes.len()).unwrap_or(u64::MAX) > MAX_SOURCE_MAP_BYTES {
         return Err(ProjectSourceMapError::SourceMapTooLarge);
     }
-    let map_json = std::str::from_utf8(&map_bytes)
-        .map_err(|_| ProjectSourceMapError::InvalidSourceMap)?;
+    let map_json =
+        std::str::from_utf8(&map_bytes).map_err(|_| ProjectSourceMapError::InvalidSourceMap)?;
     let source_map =
         SourceMap::parse(map_json).map_err(|_| ProjectSourceMapError::InvalidSourceMap)?;
     let resolved = source_map
