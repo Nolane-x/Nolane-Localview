@@ -761,6 +761,12 @@ fn append_nearby_responsive_issues(
     if previous.session != observation.session || previous.route != observation.route {
         return Err(ResponsiveError::InvalidResponsiveObservation);
     }
+    if !previous.state_fingerprint_complete
+        || !observation.state_fingerprint_complete
+        || previous.state_fingerprint != observation.state_fingerprint
+    {
+        return Ok(());
+    }
     let width_delta = previous.viewport.width.abs_diff(observation.viewport.width);
     if width_delta > NEARBY_WIDTH_DELTA_PX {
         return Ok(());
@@ -877,7 +883,13 @@ pub fn analyze_responsive_series(
         let left = triple[0];
         let middle = triple[1];
         let right = triple[2];
-        if left.1.state == right.1.state
+        let same_state = left.0.state_fingerprint_complete
+            && middle.0.state_fingerprint_complete
+            && right.0.state_fingerprint_complete
+            && left.0.state_fingerprint == middle.0.state_fingerprint
+            && middle.0.state_fingerprint == right.0.state_fingerprint;
+        if same_state
+            && left.1.state == right.1.state
             && middle.1.state != left.1.state
             && !matches!(
                 (left.1.state, middle.1.state, right.1.state),
