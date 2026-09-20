@@ -45,7 +45,8 @@ jobs:
             crates/instrumentation/src/lib.rs \
             crates/instrumentation/examples/svelte_ownership_bootstrap.rs \
             crates/instrumentation/tests/visibility_source_contract.rs \
-            crates/control/src/fresh_snapshot.rs
+            crates/control/src/fresh_snapshot.rs \
+            crates/control/tests/fresh_semantic_snapshot.rs
 
       - name: Verify bounded framework instrumentation contract
         run: cargo test -p localview-instrumentation -- --nocapture
