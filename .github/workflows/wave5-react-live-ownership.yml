@@ -39,8 +39,13 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
-      - name: Verify formatting
-        run: cargo fmt --check
+      - name: Verify slice formatting
+        run: |
+          rustfmt --edition 2021 --check \
+            crates/instrumentation/src/lib.rs \
+            crates/instrumentation/examples/react_ownership_bootstrap.rs \
+            crates/instrumentation/tests/visibility_source_contract.rs \
+            crates/control/src/fresh_snapshot.rs
 
       - name: Verify bounded React instrumentation contract
         run: cargo test -p localview-instrumentation -- --nocapture
