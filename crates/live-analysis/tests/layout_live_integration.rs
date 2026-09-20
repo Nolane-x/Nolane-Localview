@@ -135,3 +135,38 @@ fn arbitrary_style_fields_and_private_text_are_not_retained_in_layout_output() {
     assert!(!serialized.contains("customSecret"));
     assert!(serialized.contains("grid_container"));
 }
+
+
+#[test]
+fn missing_or_invalid_live_viewport_is_unknown_not_a_critical_layout_finding() {
+    for snapshot in [
+        json!({"version": 21}),
+        json!({
+            "version": 22,
+            "viewport": {"width": 0, "height": 720},
+            "semantic_tree": {
+                "ref": "@root",
+                "rect": {"x":0.0,"y":0.0,"width":400.0,"height":300.0},
+                "children": []
+            }
+        }),
+    ] {
+        let report = analyze_live(&[snapshot_event(21, snapshot)]);
+        assert_eq!(report.layout.snapshot_seq, Some(21));
+        assert_eq!(report.layout.analysis.analyzed_nodes, 0);
+        assert!(report.layout.analysis.issues.is_empty());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.code == "invalid_viewport_geometry"),
+            "unverified live viewport must not become an application defect"
+        );
+        assert!(
+            report
+                .unknowns
+                .iter()
+                .any(|unknown| unknown.statement == "Current layout geometry has not been verified")
+        );
+    }
+}
