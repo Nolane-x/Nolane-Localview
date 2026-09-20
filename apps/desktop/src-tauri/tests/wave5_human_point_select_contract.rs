@@ -16,7 +16,10 @@ fn point_select_uses_stable_instrumentation_authority_and_not_selectors() {
         "failPointSelectForRouteDrift",
         "data-localview-visual-freeze",
     ] {
-        assert!(instrumentation.contains(required), "missing point-select authority: {required}");
+        assert!(
+            instrumentation.contains(required),
+            "missing point-select authority: {required}"
+        );
     }
 
     let point_slice = instrumentation
@@ -27,8 +30,18 @@ fn point_select_uses_stable_instrumentation_authority_and_not_selectors() {
         .split("const rectOf")
         .next()
         .expect("bounded point-select slice");
-    for forbidden in ["querySelector(", "nth-child", "css selector", "DOM path", "innerHTML", "textContent:"] {
-        assert!(!point_slice.contains(forbidden), "point selection must not invent selector/value authority: {forbidden}");
+    for forbidden in [
+        "querySelector(",
+        "nth-child",
+        "css selector",
+        "DOM path",
+        "innerHTML",
+        "textContent:",
+    ] {
+        assert!(
+            !point_slice.contains(forbidden),
+            "point selection must not invent selector/value authority: {forbidden}"
+        );
     }
 }
 
@@ -51,7 +64,10 @@ fn shell_point_selection_precedes_focus_without_rewriting_existing_actions() {
         "onMeasure={(reference) => void measureCurrentSelection(reference)}",
         "onAskAi={(question) => void askAiAboutSelection(question)}",
     ] {
-        assert!(shell.contains(required), "missing shell point-select wiring: {required}");
+        assert!(
+            shell.contains(required),
+            "missing shell point-select wiring: {required}"
+        );
     }
 
     for required in [
@@ -59,7 +75,10 @@ fn shell_point_selection_precedes_focus_without_rewriting_existing_actions() {
         "'point_select_status'",
         "'point_select_cancel'",
     ] {
-        assert!(api.contains(required), "missing API point-select command: {required}");
+        assert!(
+            api.contains(required),
+            "missing API point-select command: {required}"
+        );
     }
 }
 
@@ -74,7 +93,10 @@ fn open_source_still_consumes_the_selected_stable_reference() {
     ];
 
     for required in source_request {
-        assert!(shell.contains(required), "existing source authority lost selected ref binding: {required}");
+        assert!(
+            shell.contains(required),
+            "existing source authority lost selected ref binding: {required}"
+        );
     }
     assert!(
         shell.contains("setPointSelectedReference(status.reference)"),
@@ -94,7 +116,10 @@ fn bridge_receipt_is_bounded_and_generation_bound() {
         "bridgeGeneration: generation",
         "takePointSelectCompletions",
     ] {
-        assert!(desktop.contains(required), "missing exact bridge binding: {required}");
+        assert!(
+            desktop.contains(required),
+            "missing exact bridge binding: {required}"
+        );
     }
 
     for required in [
@@ -107,7 +132,10 @@ fn bridge_receipt_is_bounded_and_generation_bound() {
         "stale_request",
         "deny_unknown_fields",
     ] {
-        assert!(authority.contains(required), "missing desktop race/privacy authority: {required}");
+        assert!(
+            authority.contains(required),
+            "missing desktop race/privacy authority: {required}"
+        );
     }
 
     let transport_authority = authority
@@ -146,7 +174,10 @@ fn error_cancel_and_route_cleanup_are_explicit() {
         "api.cancelPointSelect",
         "setPointSelectedReference(undefined)",
     ] {
-        assert!(shell.contains(required), "missing shell cleanup: {required}");
+        assert!(
+            shell.contains(required),
+            "missing shell cleanup: {required}"
+        );
     }
 
     for required in [
@@ -155,6 +186,9 @@ fn error_cancel_and_route_cleanup_are_explicit() {
         "freezeObserver?.disconnect()",
         "state.overlay?.remove()",
     ] {
-        assert!(instrumentation.contains(required), "missing exact instrumentation cleanup: {required}");
+        assert!(
+            instrumentation.contains(required),
+            "missing exact instrumentation cleanup: {required}"
+        );
     }
 }
