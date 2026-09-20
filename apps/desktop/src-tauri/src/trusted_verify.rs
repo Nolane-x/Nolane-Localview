@@ -1029,6 +1029,7 @@ mod trusted_verify_tests {
             &VisualVerificationFacts {
                 viewport_changed_ratio: None,
                 target_changed_ratio: None,
+                affected_region_changed_ratio: None,
             },
             VerificationScope::SemanticVisual,
             true,
@@ -1038,6 +1039,90 @@ mod trusted_verify_tests {
             comparison.deterministic_status,
             DeterministicVerificationStatus::Inconclusive
         );
+    }
+
+    #[test]
+    fn trusted_verify_affected_region_diff_is_distinct_from_viewport_and_exact_target() {
+        let viewport = ViewportMeta {
+            css_width: 100,
+            css_height: 100,
+            device_scale_factor: 1.0,
+        };
+        let target = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let capture_region = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 50.0,
+            height: 50.0,
+        };
+        let before_image = solid_image(50, 50, [255, 255, 255, 255]);
+        let mut after_image = before_image.clone();
+        set_pixel(&mut after_image, 1, 1, [0, 0, 0, 255]);
+
+        let mut before = visual_baseline(&before_image, viewport.clone(), Some(target.clone()));
+        before.capture_region = Some(capture_region);
+        let after_png = localview_visual::encode_png_rgba(&after_image).unwrap();
+        let facts =
+            compare_visual_facts(&before, &after_png, &viewport, Some(&target)).unwrap();
+
+        assert_eq!(facts.viewport_changed_ratio, None);
+        assert_eq!(facts.target_changed_ratio, None);
+        assert!(facts.affected_region_changed_ratio.is_some_and(|ratio| ratio > 0.0));
+
+        let comparison = classify_verification_status(
+            Vec::new(),
+            Vec::new(),
+            &facts,
+            VerificationScope::SemanticVisual,
+            true,
+            true,
+        );
+        assert_eq!(
+            comparison.deterministic_status,
+            DeterministicVerificationStatus::ChangeObserved
+        );
+    }
+
+    #[test]
+    fn trusted_verify_affected_region_refuses_visual_claim_when_target_escapes_region() {
+        let viewport = ViewportMeta {
+            css_width: 100,
+            css_height: 100,
+            device_scale_factor: 1.0,
+        };
+        let before_target = Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let after_target = Rect {
+            x: 80.0,
+            y: 80.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let image = solid_image(40, 40, [255, 255, 255, 255]);
+        let mut before =
+            visual_baseline(&image, viewport.clone(), Some(before_target));
+        before.capture_region = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 40.0,
+        });
+        let after_png = localview_visual::encode_png_rgba(&image).unwrap();
+        let facts =
+            compare_visual_facts(&before, &after_png, &viewport, Some(&after_target)).unwrap();
+
+        assert_eq!(facts.viewport_changed_ratio, None);
+        assert_eq!(facts.target_changed_ratio, None);
+        assert_eq!(facts.affected_region_changed_ratio, None);
     }
 
     #[test]
@@ -1068,6 +1153,7 @@ mod trusted_verify_tests {
             &VisualVerificationFacts {
                 viewport_changed_ratio: Some(0.2),
                 target_changed_ratio: Some(0.1),
+                affected_region_changed_ratio: None,
             },
             VerificationScope::SemanticVisual,
             true,
@@ -1084,6 +1170,7 @@ mod trusted_verify_tests {
             &VisualVerificationFacts {
                 viewport_changed_ratio: Some(0.0),
                 target_changed_ratio: Some(0.0),
+                affected_region_changed_ratio: None,
             },
             VerificationScope::SemanticVisual,
             true,
@@ -1100,6 +1187,7 @@ mod trusted_verify_tests {
             &VisualVerificationFacts {
                 viewport_changed_ratio: Some(0.3),
                 target_changed_ratio: Some(0.0),
+                affected_region_changed_ratio: None,
             },
             VerificationScope::SemanticVisual,
             true,
@@ -1116,6 +1204,7 @@ mod trusted_verify_tests {
             &VisualVerificationFacts {
                 viewport_changed_ratio: None,
                 target_changed_ratio: None,
+                affected_region_changed_ratio: None,
             },
             VerificationScope::SemanticOnly,
             true,
@@ -1413,6 +1502,7 @@ mod trusted_verify_tests {
             &VisualVerificationFacts {
                 viewport_changed_ratio: Some(0.0),
                 target_changed_ratio: Some(0.0),
+                affected_region_changed_ratio: None,
             },
             VerificationScope::SemanticVisual,
             true,
@@ -1429,6 +1519,7 @@ mod trusted_verify_tests {
             &VisualVerificationFacts {
                 viewport_changed_ratio: None,
                 target_changed_ratio: None,
+                affected_region_changed_ratio: None,
             },
             VerificationScope::SemanticOnly,
             true,
