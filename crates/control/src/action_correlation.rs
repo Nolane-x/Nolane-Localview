@@ -1,16 +1,16 @@
 #![forbid(unsafe_code)]
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
     routing::get,
-    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use localview_causal::{
-    correlate_action_request_ui, ActionCorrelationWindow, ActionRequestUiPolicy, RuntimeSignal,
-    RuntimeSignalKind,
+    ActionCorrelationWindow, ActionRequestUiPolicy, RuntimeSignal, RuntimeSignalKind,
+    correlate_action_request_ui,
 };
 use localview_evidence::{
     EvidenceDraft, EvidenceKind, EvidenceObject, Provenance, UncertaintyClass,
@@ -60,13 +60,21 @@ fn timestamp_millis(value: DateTime<Utc>) -> u64 {
 }
 
 fn signal_kind(evidence: &EvidenceObject) -> Option<RuntimeSignalKind> {
-    match evidence.payload.get("kind").and_then(|value| value.as_str()) {
-        Some("network") if evidence.kind == EvidenceKind::Network => Some(RuntimeSignalKind::Network),
+    match evidence
+        .payload
+        .get("kind")
+        .and_then(|value| value.as_str())
+    {
+        Some("network") if evidence.kind == EvidenceKind::Network => {
+            Some(RuntimeSignalKind::Network)
+        }
         Some("dom_mutation") if evidence.kind == EvidenceKind::Semantic => {
             Some(RuntimeSignalKind::DomMutation)
         }
         Some("layout") if evidence.kind == EvidenceKind::Layout => Some(RuntimeSignalKind::Layout),
-        Some("route") if evidence.kind == EvidenceKind::Interaction => Some(RuntimeSignalKind::Route),
+        Some("route") if evidence.kind == EvidenceKind::Interaction => {
+            Some(RuntimeSignalKind::Route)
+        }
         _ => None,
     }
 }
@@ -85,10 +93,7 @@ fn runtime_signal(evidence: &EvidenceObject) -> Option<RuntimeSignal> {
     })
 }
 
-fn action_parent(
-    evidence: &[EvidenceObject],
-    action_id: Uuid,
-) -> Option<&EvidenceObject> {
+fn action_parent(evidence: &[EvidenceObject], action_id: Uuid) -> Option<&EvidenceObject> {
     let expected = action_id.to_string();
     evidence.iter().rev().find(|item| {
         item.kind == EvidenceKind::Interaction
@@ -147,7 +152,10 @@ async fn action_correlation(
             .into_response();
     };
 
-    let signals = evidence.iter().filter_map(runtime_signal).collect::<Vec<_>>();
+    let signals = evidence
+        .iter()
+        .filter_map(runtime_signal)
+        .collect::<Vec<_>>();
     let window = ActionCorrelationWindow {
         action_id: action_id.to_string(),
         started_ms,
@@ -258,11 +266,7 @@ mod tests {
                 .map(|signal| signal.kind),
             Some(RuntimeSignalKind::DomMutation)
         );
-        assert!(
-            runtime_signal(&evidence(EvidenceKind::Console, "console", "c1", now)).is_none()
-        );
-        assert!(
-            runtime_signal(&evidence(EvidenceKind::Interaction, "focus", "f1", now)).is_none()
-        );
+        assert!(runtime_signal(&evidence(EvidenceKind::Console, "console", "c1", now)).is_none());
+        assert!(runtime_signal(&evidence(EvidenceKind::Interaction, "focus", "f1", now)).is_none());
     }
 }

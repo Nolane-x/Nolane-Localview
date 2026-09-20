@@ -1,15 +1,15 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use chrono::{TimeZone, Utc};
 use localview_evidence::{EvidenceDraft, EvidenceKind, UncertaintyClass};
 use localview_protocol::SessionId;
 use localview_responsive::{
-    plan_canonical_sweep, project_contact_sheet, ContactSheetPolicy, ResponsivePresetId,
+    ContactSheetPolicy, ResponsivePresetId, plan_canonical_sweep, project_contact_sheet,
 };
 use serde::{Deserialize, Serialize};
 
@@ -211,7 +211,10 @@ async fn ingest_responsive_visual_evidence(
             .into_response();
     }
 
-    let Some(captured_at) = Utc.timestamp_millis_opt(request.captured_at_unix_ms).single() else {
+    let Some(captured_at) = Utc
+        .timestamp_millis_opt(request.captured_at_unix_ms)
+        .single()
+    else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "invalid_capture_timestamp"})),

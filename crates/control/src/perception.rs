@@ -1,21 +1,21 @@
 #![forbid(unsafe_code)]
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use localview_engine::{
-    choose_engine_authorized, EngineAdmissionError, EngineDecision, EngineNeeds,
+    EngineAdmissionError, EngineDecision, EngineNeeds, choose_engine_authorized,
 };
 use localview_evidence::{EvidenceKind, EvidenceObject, UncertaintyClass};
-use localview_live_analysis::{diagnose_live, LiveDiagnosis, LiveUncertaintyClass};
+use localview_live_analysis::{LiveDiagnosis, LiveUncertaintyClass, diagnose_live};
 use localview_live_bridge::{ObserverEvent, ObserverEventKind};
 use localview_planner::{
-    plan_budgeted_perception_cycle_with_usage, BudgetedPerceptionCandidate, BudgetedPerceptionPlan,
-    PerceptionActionKind, PerceptionCandidate, PerceptionCycleSignals,
+    BudgetedPerceptionCandidate, BudgetedPerceptionPlan, PerceptionActionKind, PerceptionCandidate,
+    PerceptionCycleSignals, plan_budgeted_perception_cycle_with_usage,
 };
 use localview_protocol::{SessionId, ViewportMeta};
 use localview_resource_governor::{ResourceAdmissionDenial, ResourceWorkKind};
@@ -23,9 +23,11 @@ use localview_token_budget::{PerceptionBudgetContract, PerceptionBudgetUsage};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    chromium_runtime::canonical_chromium_route_identity,
-    resource_runtime::{denial_response as resource_denial_response, governor as resource_governor},
     ControlState,
+    chromium_runtime::canonical_chromium_route_identity,
+    resource_runtime::{
+        denial_response as resource_denial_response, governor as resource_governor,
+    },
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,10 +105,8 @@ pub(crate) async fn build_live_perception_plan_with_usage(
     request: &LivePerceptionPlanRequest,
     spent: &PerceptionBudgetUsage,
 ) -> Result<LivePerceptionPlanResponse, LivePerceptionPlanError> {
-    build_live_perception_plan_with_usage_and_visual_satisfaction(
-        state, id, request, spent, false,
-    )
-    .await
+    build_live_perception_plan_with_usage_and_visual_satisfaction(state, id, request, spent, false)
+        .await
 }
 
 pub(crate) async fn build_live_perception_plan_with_usage_and_visual_satisfaction(
@@ -145,15 +145,13 @@ pub(crate) async fn build_live_perception_plan_with_usage_and_visual_satisfactio
         request.target.as_deref(),
         visual_satisfied,
     );
-    let plan = plan_budgeted_perception_cycle_with_usage(
-        &candidates,
-        &request.budget,
-        spent,
-        &signals,
-    );
-    if plan.actions.first().is_some_and(|selected| {
-        selected.action.kind == PerceptionActionKind::ChromiumEscalation
-    }) {
+    let plan =
+        plan_budgeted_perception_cycle_with_usage(&candidates, &request.budget, spent, &signals);
+    if plan
+        .actions
+        .first()
+        .is_some_and(|selected| selected.action.kind == PerceptionActionKind::ChromiumEscalation)
+    {
         resource_governor(state)
             .check(ResourceWorkKind::Chromium)
             .map_err(LivePerceptionPlanError::ResourceGovernor)?;

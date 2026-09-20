@@ -24,6 +24,7 @@ mod visual_full_page;
 mod visual_region;
 mod visual_responsive;
 mod visual_verify;
+mod vue_snapshot_authority;
 mod windows_consequential;
 mod windows_observe;
 

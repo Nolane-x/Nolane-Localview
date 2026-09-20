@@ -112,7 +112,7 @@ Rules:
 - no explicit `..` segment;
 - mandatory `.vue` extension.
 
-Absolute compiler filenames are rejected. Page instrumentation does not own project-root canonicalization and must not guess a filesystem prefix.
+Project-relative identities are retained directly. A bounded absolute compiler filename may transit only inside the authenticated Snapshot completion path so the control plane can reconcile it against the exact session project root. Before any evidence or action-result persistence, the control plane canonicalizes the candidate, requires a real regular `.vue` file contained by canonical `git_root`/`cwd`, rewrites it to project-relative form, or scrubs the ownership hint fail-closed. Agent-facing storage must never retain the absolute project path. Filesystem authority is bounded by a 150 ms total I/O budget per Snapshot; when that budget is exhausted, unresolved candidates are scrubbed rather than delaying the broader fresh-snapshot deadline. Sanitization applies to successful and failed Snapshot results before live result history is retained. If bounded node/depth traversal cannot prove complete tree coverage, the semantic tree is dropped fail-closed rather than persisting an unsanitized remainder. Absolute-path canonicalization itself is capped to a bounded number of unique candidates; additional absolute Vue candidates are scrubbed individually rather than dropping an otherwise valid tree.
 
 ## Component identity
 
@@ -170,15 +170,17 @@ Use a pinned Vue 3 SFC/compiler/runtime + Vite + Chromium fixture.
 Prove:
 
 1. a real Vue-rendered element has an own `__vueParentComponent` data descriptor;
-2. the real plugin-vue development fixture exposes an absolute `__file` and page instrumentation rejects it fail-closed;
-3. after that rejection is proven, the fixture rewrites only the genuine Vue component type's `__file` field to a bounded project-relative fixture identity and the same real Vue element/instance is admitted as component/file ownership evidence;
-4. explicit `data-component-source` outranks Vue introspection;
-5. no secret prop/setup-state value appears in serialized semantic evidence;
-6. plain DOM does not fabricate Vue ownership;
-7. accessor-backed `__vueParentComponent`, `type` and `__file` are never invoked;
-8. absolute/traversal/encoded/non-`.vue` file identities fail closed;
-9. the adapter does not read `instance.parent`;
-10. no line/column is fabricated.
+2. the real plugin-vue development fixture exposes an absolute `__file` and page instrumentation transports it only as bounded raw ownership evidence without source coordinates;
+3. backend authority canonicalizes an in-project absolute `.vue` file to project-relative identity before persistence and scrubs outside-project/unavailable candidates;
+4. the fixture can still rewrite only the genuine Vue component type's `__file` field to a bounded project-relative identity and the same real Vue element/instance is admitted directly;
+5. explicit `data-component-source` outranks Vue introspection;
+6. no secret prop/setup-state value appears in serialized semantic evidence;
+7. plain DOM does not fabricate Vue ownership;
+8. accessor-backed `__vueParentComponent`, `type` and `__file` are never invoked;
+9. traversal/encoded/non-`.vue` identities fail closed before or during backend authority;
+10. the adapter does not read `instance.parent`;
+11. no line/column is fabricated;
+12. absolute filesystem paths never survive into retained evidence/action results.
 
 ## Verification gates
 
@@ -210,4 +212,11 @@ This slice does not claim:
 
 The foundation is complete when a real pinned Vue 3 SFC development fixture proves the genuine exact-element runtime marker and the current absolute `__file` truth boundary, while page instrumentation rejects that absolute identity fail-closed; after that proof, the fixture may normalize only the genuine component type's `__file` field to a bounded project-relative fixture identity and the same real Vue element/instance must be admitted under the shared framework probe budget, with explicit-source precedence, no getter invocation, no state leakage, strict path fencing and no fabricated source coordinates.
 
-With the dedicated component-ownership protocol now landed, this reconciliation closes the bounded Vue runtime-evidence → fresh ownership → progressive component-targeting contract for project-relative `.vue` identities. Backend-safe reconciliation of upstream absolute compiler filenames remains a separate follow-up.
+With the dedicated component-ownership protocol now landed, this reconciliation closes the bounded Vue runtime-evidence → fresh ownership → progressive component-targeting contract for project-relative `.vue` identities. Backend-safe reconciliation of upstream absolute compiler filenames is part of this closure: raw absolute identity is temporary transport only, while retained ownership is project-relative or absent.
+
+
+## Exact-head closure verification
+
+The absolute-path authority branch was retargeted directly to `main@a7e0ba22d42c67e8d3f582d85d95d5797f3aaea2` after the reconciled Vue ownership slice landed.
+
+A one-shot repository formatter closed the Rust formatting gate at `e0b40d630acb2f4a1dc761a4e0013611aa71bbfa`; the temporary workflow self-removed in the same commit. This formatting closure changes no authority or privacy claim. The exact post-format branch head must still pass the focused Vue browser/authority contracts, React/Svelte regressions, workspace check and full repository CI before merge.
