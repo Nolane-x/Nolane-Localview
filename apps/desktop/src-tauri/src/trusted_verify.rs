@@ -1429,6 +1429,105 @@ mod trusted_verify_tests {
     }
 
     #[test]
+    fn trusted_verify_affected_region_plan_is_threshold_aligned_and_fail_closed() {
+        let viewport = ViewportMeta {
+            css_width: 128,
+            css_height: 128,
+            device_scale_factor: 1.0,
+        };
+        let target = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 32.0,
+        };
+        let before_image = solid_image(128, 128, [0, 0, 0, 255]);
+        let before = visual_baseline(&before_image, viewport.clone(), Some(target.clone()));
+        let identical_png = localview_visual::encode_png_rgba(&before_image).unwrap();
+
+        let unchanged =
+            assess_visual_change(&before, &identical_png, &viewport, Some(&target)).unwrap();
+        let unchanged_plan = unchanged.affected.expect("compatible unchanged plan");
+        assert_eq!(unchanged_plan.mode, VerificationVisualChangeMode::Unchanged);
+        assert_eq!(unchanged_plan.changed_ratio, 0.0);
+        assert!(unchanged_plan.regions.is_empty());
+
+        let mut local_image = before_image.clone();
+        for y in 4..12 {
+            for x in 4..12 {
+                set_pixel(&mut local_image, x, y, [255, 255, 255, 255]);
+            }
+        }
+        let local_png = localview_visual::encode_png_rgba(&local_image).unwrap();
+        let local = assess_visual_change(&before, &local_png, &viewport, Some(&target)).unwrap();
+        let local_plan = local.affected.expect("compatible local plan");
+        assert_eq!(local_plan.mode, VerificationVisualChangeMode::Regions);
+        assert!(!local_plan.regions.is_empty());
+        assert!(local_plan.regions.len() <= ChangedRegionPolicy::default().max_regions);
+        assert!(local_plan.changed_ratio > 0.0);
+        assert!(local.facts.target_changed_ratio.unwrap() > 0.0);
+
+        let broad_image = solid_image(128, 128, [255, 255, 255, 255]);
+        let broad_png = localview_visual::encode_png_rgba(&broad_image).unwrap();
+        let broad = assess_visual_change(&before, &broad_png, &viewport, Some(&target)).unwrap();
+        let broad_plan = broad.affected.expect("compatible broad plan");
+        assert_eq!(broad_plan.mode, VerificationVisualChangeMode::Viewport);
+        assert_eq!(
+            broad_plan.regions,
+            vec![Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 128.0,
+                height: 128.0,
+            }]
+        );
+
+        let incompatible_viewport = ViewportMeta {
+            css_width: 127,
+            css_height: 128,
+            device_scale_factor: 1.0,
+        };
+        let incompatible =
+            assess_visual_change(&before, &identical_png, &incompatible_viewport, Some(&target))
+                .unwrap();
+        assert!(incompatible.affected.is_none());
+        assert_eq!(incompatible.facts.viewport_changed_ratio, None);
+
+        let mut threshold_equal_image = before_image.clone();
+        set_pixel(
+            &mut threshold_equal_image,
+            4,
+            4,
+            [VERIFY_PIXEL_THRESHOLD, 0, 0, 255],
+        );
+        let threshold_equal_png =
+            localview_visual::encode_png_rgba(&threshold_equal_image).unwrap();
+        let threshold_equal =
+            assess_visual_change(&before, &threshold_equal_png, &viewport, Some(&target)).unwrap();
+        assert_eq!(
+            threshold_equal.affected.unwrap().mode,
+            VerificationVisualChangeMode::Unchanged
+        );
+
+        let mut threshold_exceeded_image = before_image.clone();
+        set_pixel(
+            &mut threshold_exceeded_image,
+            4,
+            4,
+            [VERIFY_PIXEL_THRESHOLD.saturating_add(1), 0, 0, 255],
+        );
+        let threshold_exceeded_png =
+            localview_visual::encode_png_rgba(&threshold_exceeded_image).unwrap();
+        let threshold_exceeded =
+            assess_visual_change(&before, &threshold_exceeded_png, &viewport, Some(&target))
+                .unwrap();
+        assert_eq!(
+            threshold_exceeded.affected.unwrap().mode,
+            VerificationVisualChangeMode::Regions
+        );
+    }
+
+    #[test]
     fn trusted_verify_status_covers_semantic_only_change_and_visual_no_change() {
         let visual_no_change = classify_verification_status(
             Vec::new(),
