@@ -78,6 +78,7 @@ impl CanonicalActionOperation {
             BridgeActionKind::Focus => Some(Self::Focus),
             BridgeActionKind::Snapshot => Some(Self::Snapshot),
             BridgeActionKind::Measure
+            | BridgeActionKind::StyleInspect
             | BridgeActionKind::FreezeVisuals
             | BridgeActionKind::RestoreVisuals { .. }
             | BridgeActionKind::CaptureScrollTo { .. }
