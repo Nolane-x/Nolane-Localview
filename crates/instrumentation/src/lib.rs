@@ -807,6 +807,8 @@ const SCRIPT: &str = r#"
       hoveredReference: null,
       pointerDownElement: null,
       pendingFailure: null,
+      lastPointerX: null,
+      lastPointerY: null,
       listeners: [],
       freezeObserver: null,
     };
@@ -821,13 +823,35 @@ const SCRIPT: &str = r#"
 
     const onPointerMove = (event) => {
       if (pointSelectState !== state) return;
-      const target = pointTargetAt(event.clientX, event.clientY);
-      if (!target) {
-        state.hoveredElement = null;
-        state.hoveredReference = null;
+      const clientX = Number(event.clientX);
+      const clientY = Number(event.clientY);
+      const target = pointTargetAt(clientX, clientY);
+      const stationary =
+        state.lastPointerX !== null &&
+        state.lastPointerY !== null &&
+        Math.abs(clientX - state.lastPointerX) < 0.5 &&
+        Math.abs(clientY - state.lastPointerY) < 0.5;
+      const priorTarget = state.hoveredElement;
+      state.lastPointerX = clientX;
+      state.lastPointerY = clientY;
+
+      if (
+        stationary &&
+        priorTarget &&
+        (!priorTarget.isConnected || (target && target !== priorTarget))
+      ) {
+        state.pendingFailure = 'target_changed';
         state.overlay.style.display = 'none';
         return;
       }
+      if (!target) {
+        state.hoveredElement = null;
+        state.hoveredReference = null;
+        state.pendingFailure = 'target_unavailable';
+        state.overlay.style.display = 'none';
+        return;
+      }
+      state.pendingFailure = null;
       updatePointSelectHighlight(state, target);
     };
 
