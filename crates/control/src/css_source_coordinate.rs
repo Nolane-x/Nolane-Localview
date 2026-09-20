@@ -1,17 +1,20 @@
-use std::path::{Component, Path, PathBuf};
+use std::{
+    ffi::OsString,
+    path::{Component, Path, PathBuf},
+};
 
 use localview_protocol::SessionId;
+use localview_source_map::{ResolvedSourceLocation, SourceMap};
 use serde::Serialize;
 use tokio::fs;
+use url::Url;
 
-use crate::{
-    ControlState,
-    source_map_runtime::resolve_project_source_position,
-};
+use crate::ControlState;
 
 use super::{CssCascadeWinner, CssDeclarationEvidence, CssStyleTrace};
 
 const MAX_CSS_FILE_BYTES: u64 = 512 * 1024;
+const MAX_CSS_SOURCE_MAP_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PARSED_RULES: usize = 512;
 const MAX_PARSED_DECLARATIONS: usize = 4_096;
 const MAX_PARSE_DEPTH: usize = 12;
@@ -171,20 +174,18 @@ pub(crate) async fn enrich_style_trace_source_authority(
 
     for declaration in &mut trace.declarations {
         let query = CssEvidenceQuery::declaration(declaration);
-        declaration.source_authority = resolve_query(state, id, &context, query).await;
+        declaration.source_authority = resolve_query(&context, query).await;
     }
 
     if let Some(cascade) = &mut trace.author_cascade {
         for winner in &mut cascade.winners {
             let query = CssEvidenceQuery::winner(winner);
-            winner.source_authority = resolve_query(state, id, &context, query).await;
+            winner.source_authority = resolve_query(&context, query).await;
         }
     }
 }
 
 async fn resolve_query(
-    state: &ControlState,
-    id: SessionId,
     context: &ProjectCssContext,
     query: CssEvidenceQuery,
 ) -> CssSourceAuthority {
@@ -272,9 +273,8 @@ async fn resolve_query(
     );
 
     mapped_source_authority(
-        state,
-        id,
-        &verified_file,
+        context,
+        &canonical,
         location.line,
         location.source_map_column,
     )
@@ -283,42 +283,81 @@ async fn resolve_query(
 }
 
 async fn mapped_source_authority(
-    state: &ControlState,
-    id: SessionId,
-    generated_file: &str,
+    context: &ProjectCssContext,
+    generated: &Path,
     generated_line: u32,
     generated_column: u32,
 ) -> Option<CssSourceAuthority> {
-    let resolution = resolve_project_source_position(
-        state,
-        id,
-        generated_file.to_owned(),
-        generated_line,
-        generated_column,
-    )
-    .await
-    .ok()?;
-    let value = serde_json::to_value(resolution).ok()?;
-    if value.get("generated_file")?.as_str()? != generated_file {
+    let map_candidate = sibling_map_path(generated)?;
+    let map_path = fs::canonicalize(map_candidate).await.ok()?;
+    if !map_path.starts_with(&context.root) {
         return None;
     }
 
-    let source = value.get("source")?.as_object()?;
-    let file = source.get("file")?.as_str()?;
-    bounded_project_relative_path(file)?;
-    let line = u32::try_from(source.get("line")?.as_u64()?).ok()?;
-    let column = u32::try_from(source.get("column")?.as_u64()?).ok()?;
-    if line == 0 {
+    let metadata = fs::metadata(&map_path).await.ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_CSS_SOURCE_MAP_BYTES {
         return None;
     }
+
+    let bytes = fs::read(&map_path).await.ok()?;
+    if u64::try_from(bytes.len()).ok()? > MAX_CSS_SOURCE_MAP_BYTES {
+        return None;
+    }
+    let map_json = std::str::from_utf8(&bytes).ok()?;
+    let source_map = SourceMap::parse(map_json).ok()?;
+
+    // CSS exact-source authority requires an actual mapping segment at the
+    // declaration coordinate. Nearest-preceding Source Map lookup is useful
+    // for runtime stacks, but is insufficient proof for this lane.
+    let resolved = source_map.resolve_exact(generated_line, generated_column)?;
+    let source_path =
+        resolve_original_source_path(&context.root, &map_path, &resolved).await?;
+    let file = project_relative_display(&context.root, &source_path)?;
 
     Some(CssSourceAuthority::exact(
-        file.to_owned(),
-        line,
-        column,
+        file,
+        resolved.line,
+        resolved.column,
         "project_source_map",
         "source_map_v3_original_line_1_based_column_0_based",
     ))
+}
+
+fn sibling_map_path(generated: &Path) -> Option<PathBuf> {
+    let file_name = generated.file_name()?;
+    let mut map_name = OsString::from(file_name);
+    map_name.push(".map");
+    Some(generated.with_file_name(map_name))
+}
+
+async fn resolve_original_source_path(
+    project_root: &Path,
+    map_path: &Path,
+    resolved: &ResolvedSourceLocation,
+) -> Option<PathBuf> {
+    let reference = resolved.source.as_str();
+    if reference.is_empty() || reference.len() > MAX_PATH_BYTES || reference.starts_with("//") {
+        return None;
+    }
+
+    let direct = PathBuf::from(reference);
+    let candidate = if direct.is_absolute() {
+        direct
+    } else if let Ok(url) = Url::parse(reference) {
+        if url.scheme() != "file" {
+            return None;
+        }
+        url.to_file_path().ok()?
+    } else {
+        map_path.parent()?.join(direct)
+    };
+
+    let canonical = fs::canonicalize(candidate).await.ok()?;
+    if !canonical.starts_with(project_root) {
+        return None;
+    }
+    let metadata = fs::metadata(&canonical).await.ok()?;
+    metadata.is_file().then_some(canonical)
 }
 
 fn bounded_project_relative_path(value: &str) -> Option<PathBuf> {
