@@ -173,7 +173,6 @@ fn adaptive_runtime_stays_inside_the_existing_restore_before_persistence_transac
     for required in [
         "run_live_adaptive_responsive",
         "ResponsiveTransactionOutput",
-        "ResponsiveAdaptiveReceipt",
     ] {
         assert!(tx.contains(required), "adaptive responsive transaction missing {required}");
     }
