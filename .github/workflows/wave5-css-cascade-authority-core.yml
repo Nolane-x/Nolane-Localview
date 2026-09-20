@@ -1,0 +1,34 @@
+name: Wave 5 CSS cascade authority core
+
+on:
+  pull_request:
+    paths:
+      - "crates/inspector/**"
+      - ".github/workflows/wave5-css-cascade-authority-core.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-css-cascade-authority-core-design.md"
+  push:
+    branches:
+      - "feat/wave5-css-cascade-authority-core"
+    paths:
+      - "crates/inspector/**"
+      - ".github/workflows/wave5-css-cascade-authority-core.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-css-cascade-authority-core-design.md"
+
+concurrency:
+  group: wave5-css-cascade-authority-core-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  inspector-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify inspector cascade contracts
+        run: cargo test -p localview-inspector -- --nocapture
+      - name: Check inspector crate
+        run: cargo check -p localview-inspector --all-targets
