@@ -265,6 +265,27 @@ impl SourceMap {
             .iter()
             .take_while(|segment| segment.generated_column <= generated_column)
             .last()?;
+        self.resolve_segment(segment)
+    }
+
+    /// Resolve only when the requested generated coordinate is itself a mapped
+    /// Source Map segment. This is stricter than `resolve`, which intentionally
+    /// implements nearest-preceding-segment lookup for ordinary runtime stacks.
+    pub fn resolve_exact(
+        &self,
+        generated_line: u32,
+        generated_column: u32,
+    ) -> Option<ResolvedSourceLocation> {
+        let line_index = usize::try_from(generated_line.checked_sub(1)?).ok()?;
+        let segment = self
+            .lines
+            .get(line_index)?
+            .iter()
+            .find(|segment| segment.generated_column == generated_column)?;
+        self.resolve_segment(segment)
+    }
+
+    fn resolve_segment(&self, segment: &MappingSegment) -> Option<ResolvedSourceLocation> {
         let original = segment.original.as_ref()?;
         let source = self
             .sources
@@ -570,6 +591,16 @@ mod tests {
             })
         );
         assert_eq!(map.generated_line_count(), 2);
+    }
+
+    #[test]
+    fn exact_lookup_requires_a_segment_at_the_requested_generated_column() {
+        let map = SourceMap::parse(&map_json("AAAA,MAAA")).unwrap();
+
+        assert!(map.resolve_exact(1, 0).is_some());
+        assert!(map.resolve_exact(1, 6).is_some());
+        assert_eq!(map.resolve_exact(1, 7), None);
+        assert!(map.resolve(1, 7).is_some());
     }
 
     #[test]
