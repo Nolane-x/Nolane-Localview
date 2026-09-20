@@ -54,3 +54,30 @@ fn deep_semantic_names_do_not_force_inner_text_layout_scans() {
     assert!(script.contains("boundedText"));
     assert!(script.contains("el.textContent"));
 }
+
+
+#[test]
+fn css_declaration_evidence_is_on_demand_and_hard_bounded() {
+    let script = bootstrap_script(&InstrumentationConfig::default());
+
+    for marker in [
+        "inspectCss(reference)",
+        "cssDeclarationEvidence",
+        "MAX_CSS_TRACE_STYLESHEETS = 64",
+        "MAX_CSS_TRACE_RULES = 512",
+        "MAX_CSS_TRACE_MATCHED_RULES = 64",
+        "MAX_CSS_TRACE_DECLARATIONS = 128",
+        "CSS_TRACE_PROPERTIES",
+        "opaque_stylesheets",
+        "conditional_rules_omitted",
+    ] {
+        assert!(script.contains(marker), "missing CSS evidence marker: {marker}");
+    }
+
+    assert!(script.contains("sheet.cssRules"));
+    assert!(script.contains("el.matches(rule.selectorText)"));
+    assert!(script.contains("url.origin !== location.origin"));
+    assert!(script.contains("url.pathname"));
+    assert!(!script.contains("getPropertyValue('--"));
+    assert!(!script.contains("rule.cssText"));
+}
