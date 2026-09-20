@@ -301,6 +301,11 @@ const SCRIPT: &str = r#"
   let inflightNetworkRequests = 0;
   let networkFaultLease = null;
   const changedRefs = new Set();
+  const localViewOwnedElements = new WeakSet();
+  const pointSelectCompletions = [];
+  let pointSelectState = null;
+
+  const isLocalViewOwned = (element) => !!element && localViewOwnedElements.has(element);
 
   const beginNetworkRequest = () => {
     if (inflightNetworkRequests < Number.MAX_SAFE_INTEGER) inflightNetworkRequests += 1;
@@ -657,6 +662,255 @@ const SCRIPT: &str = r#"
     refs.set(el, ref);
     if (elementsByRef.size < config.max_semantic_nodes * 2) elementsByRef.set(ref, el);
     return ref;
+  };
+
+  const pointSelectCanonicalRoute = () => {
+    try {
+      const route = new URL(location.href);
+      route.search = '';
+      route.hash = '';
+      return route.toString();
+    } catch (_) {
+      return '';
+    }
+  };
+
+  const validPointSelectToken = (token) =>
+    typeof token === 'string' &&
+    token.length > 0 &&
+    token.length <= 128 &&
+    /^[A-Za-z0-9._:-]+$/.test(token);
+
+  const validStableReference = (reference) =>
+    typeof reference === 'string' &&
+    reference.length <= 64 &&
+    /^@e[0-9a-f]+$/i.test(reference);
+
+  const queuePointSelectCompletion = (completion) => {
+    pointSelectCompletions.push(Object.freeze({
+      requestToken: completion.requestToken,
+      route: completion.route,
+      status: completion.status,
+      reference: completion.reference || null,
+      reason: completion.reason || null,
+    }));
+    while (pointSelectCompletions.length > 4) pointSelectCompletions.shift();
+  };
+
+  const cleanupPointSelect = () => {
+    const state = pointSelectState;
+    if (!state) return null;
+    pointSelectState = null;
+    for (const [type, listener] of state.listeners) {
+      addEventListener === undefined || removeEventListener(type, listener, true);
+    }
+    try { state.freezeObserver?.disconnect(); } catch (_) {}
+    try { state.overlay?.remove(); } catch (_) {}
+    return state;
+  };
+
+  const finishPointSelect = (status, reason = null, reference = null) => {
+    const state = cleanupPointSelect();
+    if (!state) return false;
+    queuePointSelectCompletion({
+      requestToken: state.requestToken,
+      route: pointSelectCanonicalRoute(),
+      status,
+      reference: validStableReference(reference) ? reference : null,
+      reason,
+    });
+    return true;
+  };
+
+  const refreshPointSelectOverlayVisibility = (state) => {
+    if (!state?.overlay?.isConnected) return;
+    const frozen = document.documentElement?.hasAttribute('data-localview-visual-freeze');
+    state.overlay.style.visibility = frozen ? 'hidden' : 'visible';
+  };
+
+  const updatePointSelectHighlight = (state, target) => {
+    if (!state || pointSelectState !== state || !target || isLocalViewOwned(target)) return false;
+    if (!target.isConnected) return false;
+    const rect = target.getBoundingClientRect();
+    const left = Math.max(0, Math.min(innerWidth, Number(rect.left)));
+    const top = Math.max(0, Math.min(innerHeight, Number(rect.top)));
+    const right = Math.max(0, Math.min(innerWidth, Number(rect.right)));
+    const bottom = Math.max(0, Math.min(innerHeight, Number(rect.bottom)));
+    if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) {
+      state.hoveredElement = null;
+      state.hoveredReference = null;
+      state.overlay.style.display = 'none';
+      return false;
+    }
+    const reference = refFor(target);
+    if (!validStableReference(reference)) {
+      state.hoveredElement = null;
+      state.hoveredReference = null;
+      state.overlay.style.display = 'none';
+      return false;
+    }
+    state.hoveredElement = target;
+    state.hoveredReference = reference;
+    state.overlay.style.display = 'block';
+    state.overlay.style.left = `${left}px`;
+    state.overlay.style.top = `${top}px`;
+    state.overlay.style.width = `${right - left}px`;
+    state.overlay.style.height = `${bottom - top}px`;
+    refreshPointSelectOverlayVisibility(state);
+    return true;
+  };
+
+  const pointTargetAt = (x, y) => {
+    const clientX = Number(x);
+    const clientY = Number(y);
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    if (clientX < 0 || clientY < 0 || clientX >= innerWidth || clientY >= innerHeight) return null;
+    const target = document.elementFromPoint(clientX, clientY);
+    if (!target || target.nodeType !== Node.ELEMENT_NODE || isLocalViewOwned(target)) return null;
+    return target;
+  };
+
+  const beginPointSelect = (request) => {
+    const requestToken = String(request?.requestToken || '');
+    const expectedRoute = String(request?.route || '');
+    if (!validPointSelectToken(requestToken)) return false;
+    if (!expectedRoute || expectedRoute !== pointSelectCanonicalRoute()) return false;
+
+    if (pointSelectState) finishPointSelect('cancelled', 'cancelled');
+
+    const root = document.documentElement;
+    if (!root) return false;
+    const overlay = document.createElement('div');
+    overlay.setAttribute('data-localview-owned', 'point-select');
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.style.cssText = [
+      'position:fixed',
+      'display:none',
+      'pointer-events:none',
+      'box-sizing:border-box',
+      'border:2px solid currentColor',
+      'outline:1px solid rgba(255,255,255,.9)',
+      'background:rgba(127,127,127,.12)',
+      'color:#2f81f7',
+      'z-index:2147483646',
+      'margin:0',
+      'padding:0',
+    ].join(';');
+    localViewOwnedElements.add(overlay);
+    (document.body || root).appendChild(overlay);
+
+    const state = {
+      requestToken,
+      expectedRoute,
+      overlay,
+      hoveredElement: null,
+      hoveredReference: null,
+      pointerDownElement: null,
+      listeners: [],
+      freezeObserver: null,
+    };
+    pointSelectState = state;
+
+    const suppress = (event) => {
+      if (pointSelectState !== state) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+    };
+
+    const onPointerMove = (event) => {
+      if (pointSelectState !== state) return;
+      const target = pointTargetAt(event.clientX, event.clientY);
+      if (!target) {
+        state.hoveredElement = null;
+        state.hoveredReference = null;
+        state.overlay.style.display = 'none';
+        return;
+      }
+      updatePointSelectHighlight(state, target);
+    };
+
+    const onPointerDown = (event) => {
+      if (pointSelectState !== state) return;
+      suppress(event);
+      if (event.button !== 0) {
+        state.pointerDownElement = null;
+        return;
+      }
+      const target = pointTargetAt(event.clientX, event.clientY);
+      state.pointerDownElement = target;
+      if (target) updatePointSelectHighlight(state, target);
+    };
+
+    const onClick = (event) => {
+      if (pointSelectState !== state) return;
+      suppress(event);
+      const downTarget = state.pointerDownElement;
+      state.pointerDownElement = null;
+      if (!downTarget || !downTarget.isConnected) {
+        finishPointSelect('failed', 'target_unavailable');
+        return;
+      }
+      const freshTarget = pointTargetAt(event.clientX, event.clientY);
+      if (!freshTarget || freshTarget !== downTarget || freshTarget !== state.hoveredElement) {
+        finishPointSelect('failed', 'target_changed');
+        return;
+      }
+      const reference = refFor(freshTarget);
+      if (!validStableReference(reference) || !resolveRefForPointSelect(freshTarget, reference)) {
+        finishPointSelect('failed', 'invalid_reference');
+        return;
+      }
+      finishPointSelect('selected', null, reference);
+    };
+
+    const onKeyDown = (event) => {
+      if (pointSelectState !== state || event.key !== 'Escape') return;
+      suppress(event);
+      finishPointSelect('cancelled', 'escape');
+    };
+
+    const listenerSpecs = [
+      ['pointermove', onPointerMove],
+      ['pointerdown', onPointerDown],
+      ['mousedown', suppress],
+      ['mouseup', suppress],
+      ['click', onClick],
+      ['auxclick', suppress],
+      ['contextmenu', suppress],
+      ['keydown', onKeyDown],
+    ];
+    for (const [type, listener] of listenerSpecs) {
+      addEventListener(type, listener, true);
+      state.listeners.push([type, listener]);
+    }
+
+    if (typeof MutationObserver === 'function') {
+      state.freezeObserver = new MutationObserver(() => refreshPointSelectOverlayVisibility(state));
+      state.freezeObserver.observe(root, {
+        attributes: true,
+        attributeFilter: ['data-localview-visual-freeze'],
+      });
+    }
+    refreshPointSelectOverlayVisibility(state);
+    return true;
+  };
+
+  const resolveRefForPointSelect = (element, reference) =>
+    !!element?.isConnected && refFor(element) === reference;
+
+  const cancelPointSelect = (requestToken, reason = 'cancelled') => {
+    if (!pointSelectState || pointSelectState.requestToken !== String(requestToken || '')) return false;
+    return finishPointSelect('cancelled', reason === 'escape' ? 'escape' : 'cancelled');
+  };
+
+  const takePointSelectCompletions = (max = 4) => {
+    const count = Math.max(0, Math.min(Number(max) || 0, 4, pointSelectCompletions.length));
+    return pointSelectCompletions.splice(0, count);
+  };
+
+  const failPointSelectForRouteDrift = () => {
+    if (pointSelectState) finishPointSelect('failed', 'route_changed');
   };
 
   const rectOf = (el) => {
@@ -1650,6 +1904,7 @@ const SCRIPT: &str = r#"
       const y = Math.max(0, Math.min(innerHeight - 1, rect.top + rect.height / 2));
       const stack = typeof document.elementsFromPoint === 'function' ? document.elementsFromPoint(x, y) : [];
       const blocker = stack.find(candidate =>
+        !isLocalViewOwned(candidate) &&
         candidate !== el && !el.contains(candidate) && !candidate.contains?.(el)
       );
       if (blocker) {
@@ -1690,7 +1945,7 @@ const SCRIPT: &str = r#"
     let styled = 0;
 
     const visit = (el, depth) => {
-      if (!el || el.nodeType !== Node.ELEMENT_NODE || SKIP_TAGS.has(el.tagName)) return null;
+      if (!el || el.nodeType !== Node.ELEMENT_NODE || isLocalViewOwned(el) || SKIP_TAGS.has(el.tagName)) return null;
       if (nodes >= config.max_semantic_nodes || depth > config.max_tree_depth) return null;
       nodes += 1;
       const includeStyle = styled < config.max_style_nodes && (isInteractive(el) || depth <= 3);
@@ -1759,6 +2014,7 @@ const SCRIPT: &str = r#"
   };
 
   const interactiveSnapshot = (occlusionBudget, ownershipBudget) => Array.from(document.querySelectorAll(interactiveSelector))
+    .filter((el) => !isLocalViewOwned(el))
     .slice(0, config.max_interactive_nodes)
     .map((el) => compactSemanticNode(el, false, occlusionBudget, ownershipBudget));
 
@@ -1793,6 +2049,7 @@ const SCRIPT: &str = r#"
     const cached = elementsByRef.get(reference);
     if (cached?.isConnected) return cached;
     for (const element of Array.from(document.querySelectorAll('*')).slice(0, config.max_semantic_nodes * 2)) {
+      if (isLocalViewOwned(element)) continue;
       if (refFor(element) === reference) return element;
     }
     return null;
@@ -1890,6 +2147,7 @@ const SCRIPT: &str = r#"
   };
 
   const announceRoute = (source) => {
+    failPointSelectForRouteDrift();
     push('route_changed', { source, href: safeUrl(location.href) });
     scheduleRouteSnapshot();
   };
@@ -2272,6 +2530,9 @@ const SCRIPT: &str = r#"
   window.__LOCALVIEW__ = Object.freeze({
     version: '0.2.0',
     snapshot,
+    beginPointSelect,
+    cancelPointSelect,
+    takePointSelectCompletions,
     inspect(reference) { return inspect(reference); },
     installNetworkFaultPlan,
     clearNetworkFaultPlan,
