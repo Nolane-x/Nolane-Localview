@@ -195,7 +195,9 @@ fn project_computed(value: Option<&Value>) -> Result<BTreeMap<String, String>, C
     Ok(output)
 }
 
-fn project_declarations(value: Option<&Value>) -> Result<Vec<CssDeclarationEvidence>, CssTraceError> {
+fn project_declarations(
+    value: Option<&Value>,
+) -> Result<Vec<CssDeclarationEvidence>, CssTraceError> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
@@ -225,7 +227,10 @@ fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTrace
     }
 
     let file = optional_bounded_string(object.get("stylesheet_path"), MAX_CSS_SOURCE_FILE_BYTES)?;
-    if file.as_deref().is_some_and(|file| !valid_relative_file(file)) {
+    if file
+        .as_deref()
+        .is_some_and(|file| !valid_relative_file(file))
+    {
         return Err(CssTraceError::InvalidSnapshot);
     }
     if source_kind == "same_origin_stylesheet" && file.is_none() {
@@ -429,9 +434,15 @@ mod tests {
         .expect("bounded CSS trace");
 
         assert_eq!(trace.reference, "@save");
-        assert_eq!(trace.computed.get("paddingTop").map(String::as_str), Some("16px"));
+        assert_eq!(
+            trace.computed.get("paddingTop").map(String::as_str),
+            Some("16px")
+        );
         assert_eq!(trace.declarations.len(), 1);
-        assert_eq!(trace.declarations[0].stylesheet_path.as_deref(), Some("src/button.css"));
+        assert_eq!(
+            trace.declarations[0].stylesheet_path.as_deref(),
+            Some("src/button.css")
+        );
     }
 
     #[test]
