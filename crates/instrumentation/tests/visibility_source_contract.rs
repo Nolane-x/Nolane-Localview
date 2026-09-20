@@ -53,7 +53,7 @@ fn react_ownership_is_bounded_read_only_and_lower_priority_than_explicit_sources
         .find("for (const attribute of ['data-component-source', 'data-source'])")
         .expect("explicit source precedence");
     let react_fallback_index = script
-        .find("return reactSourceHint(el, ownershipBudget)")
+        .find("const react = reactSourceHint(el, ownershipBudget)")
         .expect("React fallback");
     assert!(
         explicit_index < react_fallback_index,
