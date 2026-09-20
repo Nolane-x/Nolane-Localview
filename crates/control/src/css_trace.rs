@@ -128,7 +128,8 @@ async fn session_style_trace(
 
     match project_style_trace(&result.payload, &reference) {
         Ok(mut trace) => {
-            css_source_coordinate::enrich_style_trace_source_authority(&state, id, &mut trace).await;
+            css_source_coordinate::enrich_style_trace_source_authority(&state, id, &mut trace)
+                .await;
             Json(trace).into_response()
         }
         Err(CssTraceError::InvalidReference) => {
@@ -904,5 +905,4 @@ mod tests {
             assert_eq!(result, Err(CssTraceError::InvalidSnapshot));
         }
     }
-
 }
