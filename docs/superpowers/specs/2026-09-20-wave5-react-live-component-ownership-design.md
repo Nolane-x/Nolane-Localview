@@ -116,7 +116,7 @@ For this origin:
 
 - file and positive line are mandatory;
 - component is mandatory and bounded;
-- a deterministic component ownership identity is formed from framework + file + line + component name;
+- a deterministic component ownership identity is formed from framework + source file + component name; source line/column remain location evidence and do not split one component into separate ownership identities across JSX lines;
 - generic `data-source` still never becomes component ownership;
 - explicit `data-component-source` retains its existing authority unchanged.
 
