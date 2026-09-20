@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
