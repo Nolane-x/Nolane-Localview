@@ -207,6 +207,7 @@ fn css_declaration_trace_is_bounded_privacy_safe_and_separate_from_component_own
         "value.replace(/url\\([^)]*\\)/gi, 'url(<redacted>)')",
         "Array.from(document.styleSheets || []).slice(0, MAX_CSS_TRACE_STYLESHEETS)",
         "rules = Array.from(sheet.cssRules || [])",
+        "if (sheet?.href && !sourceFile) continue;",
         "matches = el.matches(selector)",
         "styleTrace: includeStyle ? cssDeclarationTrace(el) : null",
     ] {
