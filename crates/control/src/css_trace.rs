@@ -31,7 +31,7 @@ const MAX_CSS_SELECTOR_BYTES: usize = 256;
 pub(crate) struct CssDeclarationEvidence {
     pub source_kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
+    pub stylesheet_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
     pub property: String,
@@ -224,7 +224,7 @@ fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTrace
         return Err(CssTraceError::InvalidSnapshot);
     }
 
-    let file = optional_bounded_string(object.get("file"), MAX_CSS_SOURCE_FILE_BYTES)?;
+    let file = optional_bounded_string(object.get("stylesheet_path"), MAX_CSS_SOURCE_FILE_BYTES)?;
     if file.as_deref().is_some_and(|file| !valid_relative_file(file)) {
         return Err(CssTraceError::InvalidSnapshot);
     }
@@ -258,7 +258,7 @@ fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTrace
 
     Ok(CssDeclarationEvidence {
         source_kind: source_kind.to_owned(),
-        file,
+        stylesheet_path: file,
         selector,
         property: property.to_owned(),
         value,
@@ -415,7 +415,7 @@ mod tests {
                 "styleTrace": {
                     "declarations": [{
                         "source_kind": "same_origin_stylesheet",
-                        "file": "src/button.css",
+                        "stylesheet_path": "src/button.css",
                         "selector": ".save",
                         "property": "padding-top",
                         "value": "16px",
@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(trace.reference, "@save");
         assert_eq!(trace.computed.get("paddingTop").map(String::as_str), Some("16px"));
         assert_eq!(trace.declarations.len(), 1);
-        assert_eq!(trace.declarations[0].file.as_deref(), Some("src/button.css"));
+        assert_eq!(trace.declarations[0].stylesheet_path.as_deref(), Some("src/button.css"));
     }
 
     #[test]
@@ -443,7 +443,7 @@ mod tests {
                 "styleTrace": {
                     "declarations": [{
                         "source_kind": "same_origin_stylesheet",
-                        "file": "../private.css",
+                        "stylesheet_path": "../private.css",
                         "selector": ".save",
                         "property": "display",
                         "value": "block",
