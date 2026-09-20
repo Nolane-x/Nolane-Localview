@@ -45,7 +45,7 @@ jobs:
 
       - name: Verify focused formatting
         run: |
-          rustfmt --edition 2024 --check             crates/control/src/css_trace.rs             crates/control/src/css_source_coordinate.rs             crates/control/tests/css_trace.rs
+          rustfmt --edition 2024 --check crates/control/src/css_trace.rs crates/control/src/css_source_coordinate.rs crates/control/tests/css_trace.rs crates/source-map/src/lib.rs
 
       - name: Verify CSS source parser and projection
         run: cargo test -p localview-control css_source_coordinate -- --nocapture
