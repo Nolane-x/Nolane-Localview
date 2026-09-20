@@ -170,6 +170,23 @@ try {
     });
     root.appendChild(accessor);
 
+    let nestedGetterCalls = 0;
+    const nestedAccessor = document.createElement('div');
+    nestedAccessor.id = 'svelte-nested-accessor-target';
+    const nestedMeta = {};
+    Object.defineProperty(nestedMeta, 'loc', {
+      configurable: true,
+      get() {
+        nestedGetterCalls += 1;
+        return { file: 'src/NestedAccessor.svelte', line: 1, column: 0 };
+      },
+    });
+    Object.defineProperty(nestedAccessor, '__svelte_meta', {
+      configurable: true,
+      value: nestedMeta,
+    });
+    root.appendChild(nestedAccessor);
+
     const absolute = document.createElement('div');
     absolute.id = 'svelte-absolute-target';
     Object.defineProperty(absolute, '__svelte_meta', {
@@ -207,16 +224,20 @@ try {
     return {
       plain: walk(snapshot.semantic_tree, 'plain-target')?.sourceHint ?? null,
       accessor: walk(snapshot.semantic_tree, 'svelte-accessor-target')?.sourceHint ?? null,
+      nestedAccessor: walk(snapshot.semantic_tree, 'svelte-nested-accessor-target')?.sourceHint ?? null,
       absolute: walk(snapshot.semantic_tree, 'svelte-absolute-target')?.sourceHint ?? null,
       traversal: walk(snapshot.semantic_tree, 'svelte-traversal-target')?.sourceHint ?? null,
       wrongExtension: walk(snapshot.semantic_tree, 'svelte-extension-target')?.sourceHint ?? null,
       getterCalls,
+      nestedGetterCalls,
     };
   });
 
   invariant(adversarial.plain === null, 'plain DOM fabricated Svelte ownership', adversarial);
   invariant(adversarial.accessor === null, 'accessor-backed Svelte marker fabricated ownership', adversarial);
   invariant(adversarial.getterCalls === 0, 'LocalView invoked a Svelte metadata getter', adversarial);
+  invariant(adversarial.nestedAccessor === null, 'nested accessor-backed Svelte metadata fabricated ownership', adversarial);
+  invariant(adversarial.nestedGetterCalls === 0, 'LocalView invoked a nested Svelte metadata getter', adversarial);
   invariant(adversarial.absolute === null, 'absolute Svelte source escaped privacy boundary', adversarial);
   invariant(adversarial.traversal === null, 'traversal Svelte source escaped privacy boundary', adversarial);
   invariant(adversarial.wrongExtension === null, 'non-Svelte file fabricated ownership', adversarial);
@@ -231,6 +252,7 @@ try {
     explicitPrecedence: true,
     propsPrivate: true,
     accessorNotInvoked: true,
+    nestedAccessorNotInvoked: true,
     unsafePathsRejected: true,
   }) + '\n');
 } finally {
