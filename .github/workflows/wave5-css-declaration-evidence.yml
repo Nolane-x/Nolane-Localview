@@ -1,0 +1,102 @@
+name: Wave 5 CSS declaration evidence
+
+on:
+  pull_request:
+    paths:
+      - "crates/instrumentation/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "tools/wave5-css-declaration-evidence/**"
+      - ".github/workflows/wave5-css-declaration-evidence.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-css-declaration-evidence-design.md"
+  push:
+    branches:
+      - "feat/wave5-css-declaration-evidence"
+    paths:
+      - "crates/instrumentation/**"
+      - "crates/live-bridge/**"
+      - "crates/control/**"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "tools/wave5-css-declaration-evidence/**"
+      - ".github/workflows/wave5-css-declaration-evidence.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-css-declaration-evidence-design.md"
+
+concurrency:
+  group: wave5-css-declaration-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify focused formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            crates/instrumentation/src/lib.rs \
+            crates/instrumentation/examples/css_declaration_evidence_bootstrap.rs \
+            crates/instrumentation/tests/live_semantic_contract.rs \
+            crates/live-bridge/src/lib.rs \
+            crates/live-bridge/src/action_envelope.rs \
+            crates/control/src/runtime.rs \
+            crates/control/tests/public_action_authority.rs \
+            apps/desktop/src-tauri/src/lib.rs
+
+      - name: Verify instrumentation contracts
+        run: cargo test -p localview-instrumentation -- --nocapture
+
+      - name: Verify bridge sanitizer and authority contracts
+        run: cargo test -p localview-live-bridge -- --nocapture
+
+      - name: Verify public read-only queue authority
+        run: cargo test -p localview-control --test public_action_authority -- --nocapture
+
+  browser-cssom:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize exact LocalView CSS evidence bootstrap
+        run: cargo run -p localview-instrumentation --example css_declaration_evidence_bootstrap > /tmp/localview-css-declaration-bootstrap.js
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install browser proof dependencies
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove bounded CSS declaration evidence in Chromium
+        working-directory: apps/desktop
+        run: |
+          cp ../../tools/wave5-css-declaration-evidence/runtime.mjs ./wave5-css-declaration-runtime.mjs
+          node ./wave5-css-declaration-runtime.mjs
+          rm ./wave5-css-declaration-runtime.mjs
+
+  workspace-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check complete workspace
+        run: cargo check --workspace --all-targets
