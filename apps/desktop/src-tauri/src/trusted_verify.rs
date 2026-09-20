@@ -743,6 +743,7 @@ mod trusted_verify_tests {
                 column: Some(3),
                 component: Some("App".into()),
             }),
+            ownership: None,
             children: Vec::new(),
         }
     }
@@ -793,6 +794,7 @@ mod trusted_verify_tests {
                 interactive: false,
                 attributes: BTreeMap::new(),
                 source: None,
+                ownership: None,
                 children: vec![selected],
             },
             console_errors: vec![ConsoleIssue {
