@@ -196,6 +196,24 @@ impl PointSelectState {
             return Ok(());
         }
 
+        if completion.status == "armed" {
+            if completion.reference.is_some() {
+                entry.fail("invalid_completion");
+                return Ok(());
+            }
+            match entry.bridge_generation {
+                None => entry.bridge_generation = Some(completion.bridge_generation),
+                Some(generation) if generation == completion.bridge_generation => {}
+                Some(_) => entry.fail("generation_changed"),
+            }
+            return Ok(());
+        }
+
+        if entry.bridge_generation != Some(completion.bridge_generation) {
+            entry.fail("generation_changed");
+            return Ok(());
+        }
+
         match completion.status.as_str() {
             "selected" => {
                 let reference = completion
@@ -330,6 +348,13 @@ fn cancel_script(request_token: &str) -> Result<String, String> {
     ))
 }
 
+fn probe_script(request_token: &str) -> Result<String, String> {
+    let token = serde_json::to_string(request_token).map_err(|_| "point_select_token_invalid")?;
+    Ok(format!(
+        "window.__LOCALVIEW__?.probePointSelect?.({token});"
+    ))
+}
+
 #[tauri::command]
 pub async fn point_select_begin(
     app: tauri::AppHandle,
@@ -368,6 +393,8 @@ pub async fn point_select_status(
         .await;
     if status.state == HumanPointSelectPhase::Failed {
         let _ = managed_point_select_eval(&app, session_id, &cancel_script(&request_token)?);
+    } else if status.state == HumanPointSelectPhase::Pending {
+        let _ = managed_point_select_eval(&app, session_id, &probe_script(&request_token)?);
     }
     Ok(status)
 }
@@ -413,6 +440,23 @@ mod tests {
 
     fn session(seed: u128) -> SessionId {
         uuid::Uuid::from_u128(seed)
+    }
+
+    fn completion(
+        token: &str,
+        route: &str,
+        status: &str,
+        reference: Option<&str>,
+        generation: u64,
+    ) -> PreviewPointSelectCompletion {
+        PreviewPointSelectCompletion {
+            request_token: token.to_owned(),
+            route: route.to_owned(),
+            status: status.to_owned(),
+            reference: reference.map(str::to_owned),
+            reason: None,
+            bridge_generation: generation,
+        }
     }
 
     fn selected(
@@ -486,6 +530,14 @@ mod tests {
             .complete(
                 session_id,
                 &route,
+                completion("point-A", &route, "armed", None, 10),
+            )
+            .await
+            .unwrap();
+        state
+            .complete(
+                session_id,
+                &route,
                 selected("point-A", &route, "@eaaaa", 10),
             )
             .await
@@ -496,6 +548,14 @@ mod tests {
         assert_eq!(status.request_token, "point-B");
         assert!(status.reference.is_none());
 
+        state
+            .complete(
+                session_id,
+                &route,
+                completion("point-B", &route, "armed", None, 11),
+            )
+            .await
+            .unwrap();
         state
             .complete(
                 session_id,
@@ -533,6 +593,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bridge_generation_drift_cannot_complete_same_route_request() {
+        let state = PointSelectState::default();
+        let session_id = session(5);
+        let route = "http://127.0.0.1:5173/".to_string();
+        state
+            .begin(session_id, "point-generation".into(), route.clone())
+            .await
+            .unwrap();
+        state
+            .complete(
+                session_id,
+                &route,
+                completion("point-generation", &route, "armed", None, 20),
+            )
+            .await
+            .unwrap();
+        state
+            .complete(
+                session_id,
+                &route,
+                selected("point-generation", &route, "@eabcd", 21),
+            )
+            .await
+            .unwrap();
+
+        let status = state
+            .status(session_id, "point-generation", Ok(route))
+            .await;
+        assert_eq!(status.state, HumanPointSelectPhase::Failed);
+        assert_eq!(status.reason, Some("generation_changed"));
+        assert!(status.reference.is_none());
+    }
+
+    #[tokio::test]
     async fn invalid_reference_never_becomes_selection_authority() {
         let state = PointSelectState::default();
         let session_id = session(4);
@@ -542,6 +636,14 @@ mod tests {
             .await
             .unwrap();
 
+        state
+            .complete(
+                session_id,
+                &route,
+                completion("point-invalid", &route, "armed", None, 12),
+            )
+            .await
+            .unwrap();
         state
             .complete(
                 session_id,
