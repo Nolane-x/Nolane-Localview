@@ -131,7 +131,7 @@ This does **not** make the entire V3 Active Perception/diagnose-fix system compl
 
 The strongest remaining capture/perception gates are:
 
-1. deeper source/runtime ownership correlation (live runtime-position extraction/correlation over the now-landed project-owned Source Map runtime, then React/Vue/Svelte ownership adapters) and interactive point-and-select inspector wiring;
+1. deeper framework ownership correlation now starts at React component ownership over the landed project-owned Source Map + trusted live RuntimeError position path, followed by Vue/Svelte ownership adapters and interactive point-and-select inspector wiring;
 2. adaptive/binary responsive breakpoint execution, content/locale stress and deeper responsive issue intelligence over the now-landed canonical preset/contact-sheet authority;
 3. native workspace composition/focus/DPI/crash safety gates before promoting the child WebView surface from feature-gated to default;
 4. add analysis-concurrency authority only when a concrete concurrent analysis owner exists rather than introducing a synthetic counter.
