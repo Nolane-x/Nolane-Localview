@@ -412,6 +412,7 @@ pub struct ResponsiveObservation {
     pub route: String,
     pub viewport: Viewport,
     pub snapshot_version: u64,
+    pub complete: bool,
     pub nodes: Vec<ResponsiveNodeObservation>,
 }
 
@@ -805,7 +806,9 @@ pub fn evaluate_responsive_observation(
 
     let issues = deduplicate_responsive_issues(issues);
     Ok(ResponsiveProbeEvaluation {
-        state: if hard_failure {
+        state: if !observation.complete {
+            ResponsiveDetectorState::Inconclusive
+        } else if hard_failure {
             ResponsiveDetectorState::Fail
         } else {
             ResponsiveDetectorState::Pass
