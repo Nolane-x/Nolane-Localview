@@ -360,9 +360,14 @@ fn project_ownership(value: Option<&Value>) -> Option<Option<ComponentOwnership>
             let source = project_source(Some(value))??;
             let component =
                 bounded_required_string(value.get("component")?, MAX_REACT_COMPONENT_BYTES)?;
-            let signal = bounded_required_string(value.get("signal")?, MAX_COMPONENT_SIGNAL_BYTES)?;
+            let Some(signal_value) = value.get("signal") else {
+                return Some(None);
+            };
+            let Some(signal) = bounded_required_string(signal_value, MAX_COMPONENT_SIGNAL_BYTES) else {
+                return Some(None);
+            };
             if !matches!(signal.as_str(), "debug_source" | "debug_stack") {
-                return None;
+                return Some(None);
             }
             Some(Some(ComponentOwnership {
                 framework: Some("react".into()),
@@ -375,9 +380,14 @@ fn project_ownership(value: Option<&Value>) -> Option<Option<ComponentOwnership>
             let source = project_source(Some(value))??;
             let component =
                 bounded_required_string(value.get("component")?, MAX_SVELTE_COMPONENT_BYTES)?;
-            let signal = bounded_required_string(value.get("signal")?, MAX_COMPONENT_SIGNAL_BYTES)?;
+            let Some(signal_value) = value.get("signal") else {
+                return Some(None);
+            };
+            let Some(signal) = bounded_required_string(signal_value, MAX_COMPONENT_SIGNAL_BYTES) else {
+                return Some(None);
+            };
             if signal != "element_meta" {
-                return None;
+                return Some(None);
             }
             Some(Some(ComponentOwnership {
                 framework: Some("svelte".into()),
@@ -387,15 +397,29 @@ fn project_ownership(value: Option<&Value>) -> Option<Option<ComponentOwnership>
             }))
         }
         "vue-dev-instance" => {
-            let file = bounded_required_string(value.get("file")?, MAX_SOURCE_FILE_BYTES)?;
+            let Some(file) = value
+                .get("file")
+                .and_then(|value| bounded_required_string(value, MAX_SOURCE_FILE_BYTES))
+            else {
+                return Some(None);
+            };
             if !valid_vue_relative_file(&file) {
-                return None;
+                return Some(None);
             }
-            let component =
-                bounded_required_string(value.get("component")?, MAX_VUE_COMPONENT_BYTES)?;
-            let signal = bounded_required_string(value.get("signal")?, MAX_COMPONENT_SIGNAL_BYTES)?;
+            let Some(component) = value
+                .get("component")
+                .and_then(|value| bounded_required_string(value, MAX_VUE_COMPONENT_BYTES))
+            else {
+                return Some(None);
+            };
+            let Some(signal) = value
+                .get("signal")
+                .and_then(|value| bounded_required_string(value, MAX_COMPONENT_SIGNAL_BYTES))
+            else {
+                return Some(None);
+            };
             if signal != "element_parent_component" {
-                return None;
+                return Some(None);
             }
             Some(Some(ComponentOwnership {
                 framework: Some("vue".into()),
