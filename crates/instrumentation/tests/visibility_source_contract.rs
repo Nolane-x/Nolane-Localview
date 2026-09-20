@@ -191,7 +191,6 @@ fn vue_ownership_is_exact_element_bounded_and_does_not_fabricate_source_coordina
     }
 }
 
-
 #[test]
 fn css_declaration_trace_is_bounded_privacy_safe_and_separate_from_component_ownership() {
     let script = bootstrap_script(&InstrumentationConfig::default());
@@ -218,8 +217,12 @@ fn css_declaration_trace_is_bounded_privacy_safe_and_separate_from_component_own
     }
 
     assert!(
-        script.find("sourceHint: sourceHint(el, ownershipBudget)").unwrap()
-            < script.find("styleTrace: includeStyle ? cssDeclarationTrace(el) : null").unwrap(),
+        script
+            .find("sourceHint: sourceHint(el, ownershipBudget)")
+            .unwrap()
+            < script
+                .find("styleTrace: includeStyle ? cssDeclarationTrace(el) : null")
+                .unwrap(),
         "CSS declaration evidence must remain separate from component/source ownership"
     );
     assert!(
