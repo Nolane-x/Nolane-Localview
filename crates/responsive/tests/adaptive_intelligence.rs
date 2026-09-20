@@ -266,3 +266,55 @@ fn responsive_issue_dedup_is_bounded_and_stable() {
     let deduped = deduplicate_responsive_issues(vec![issue.clone(), issue]);
     assert_eq!(deduped.len(), 1);
 }
+
+
+#[test]
+fn truncated_responsive_projection_is_inconclusive_not_pass() {
+    let mut current = observation(
+        640,
+        20,
+        vec![node("@root", None, rect(0.0, 0.0, 640.0, 800.0), false, false)],
+    );
+    current.complete = false;
+
+    let evaluation = evaluate_responsive_observation(None, &current).unwrap();
+    assert_eq!(evaluation.state, ResponsiveDetectorState::Inconclusive);
+}
+
+#[test]
+fn state_drift_suppresses_cross_width_regression_claims() {
+    let left = observation(
+        320,
+        30,
+        vec![node("@root", None, rect(0.0, 0.0, 320.0, 800.0), false, false)],
+    );
+    let mut middle = observation(
+        360,
+        31,
+        vec![node("@root", None, rect(0.0, 0.0, 360.0, 800.0), false, false)],
+    );
+    let right = observation(
+        390,
+        32,
+        vec![node("@root", None, rect(0.0, 0.0, 390.0, 800.0), false, false)],
+    );
+    middle.state_fingerprint = 0x9999;
+
+    let issues = analyze_responsive_series(
+        &[left, middle, right],
+        &[
+            ResponsiveProbeEvaluation { state: ResponsiveDetectorState::Fail, issues: vec![] },
+            ResponsiveProbeEvaluation { state: ResponsiveDetectorState::Pass, issues: vec![] },
+            ResponsiveProbeEvaluation { state: ResponsiveDetectorState::Fail, issues: vec![] },
+        ],
+    )
+    .unwrap();
+
+    assert!(!issues.iter().any(|issue| {
+        matches!(
+            issue.kind,
+            ResponsiveIssueKind::BreakpointLocalRegression
+                | ResponsiveIssueKind::NearbyWidthInstability
+        )
+    }));
+}
