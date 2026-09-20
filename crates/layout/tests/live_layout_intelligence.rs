@@ -361,6 +361,46 @@ fn invalid_geometry_fails_closed_before_relational_checks() {
 }
 
 #[test]
+fn normal_document_height_beyond_viewport_is_not_viewport_overflow() {
+    let page = element("@page", rect(0.0, 0.0, 400.0, 1400.0), None);
+
+    let report = analyze(&[page], (400.0, 300.0));
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "viewport_overflow")
+    );
+}
+
+#[test]
+fn horizontal_escape_from_viewport_is_reported() {
+    let wide = element("@wide", rect(390.0, 20.0, 40.0, 40.0), None);
+
+    let report = analyze(&[wide], (400.0, 300.0));
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "viewport_overflow")
+    );
+}
+
+#[test]
+fn fixed_vertical_escape_from_viewport_is_reported() {
+    let mut fixed = element("@fixed", rect(20.0, 280.0, 120.0, 40.0), None);
+    fixed.style.position = Some(PositionMode::Fixed);
+
+    let report = analyze(&[fixed], (400.0, 300.0));
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "viewport_overflow")
+    );
+}
+
+#[test]
 fn node_retention_is_hard_bounded() {
     let elements = (0..600)
         .map(|index| {
