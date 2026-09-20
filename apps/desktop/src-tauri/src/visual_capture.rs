@@ -2423,6 +2423,14 @@ pub(crate) async fn wait_for_verification_settle(
         .map_err(|_| "trusted Verify settle failed".to_string())
 }
 
+pub(crate) async fn wait_for_content_stress_settle(
+    session_id: SessionId,
+) -> Result<(), String> {
+    wait_for_capture_settle(session_id)
+        .await
+        .map_err(|_| "content stress settle failed".to_string())
+}
+
 async fn wait_for_capture_settle(session_id: SessionId) -> Result<(), String> {
     let policy = StableCapturePolicy::default();
     let last_reasons = Arc::new(Mutex::new(Vec::<SettleReason>::new()));
@@ -2860,7 +2868,7 @@ pub async fn capture_progressive_target(
     })
 }
 
-async fn fresh_semantic_snapshot(session_id: SessionId) -> Result<PageSnapshot, String> {
+pub(crate) async fn fresh_semantic_snapshot(session_id: SessionId) -> Result<PageSnapshot, String> {
     let token = read_token().await?;
     control_client()?
         .get(format!(
