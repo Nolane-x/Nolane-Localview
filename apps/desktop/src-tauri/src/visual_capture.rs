@@ -9,33 +9,31 @@ use std::{
 use localview_artifacts::ArtifactStore;
 use localview_capture::{CaptureTarget, SettleDecision, SettleReason, StableCapturePolicy};
 use localview_native_capture::{
-    capture_webview, CaptureRequest, CapturedFrame, NativeCaptureBackend, NativeCaptureError,
-    ViewportMeta,
+    CaptureRequest, CapturedFrame, NativeCaptureBackend, NativeCaptureError, ViewportMeta,
+    capture_webview,
 };
 use localview_protocol::{ElementRef, PageSnapshot, Rect, SemanticNode, SessionId};
 use localview_resource_governor::{
-    RetainedResourceBudget, RetainedResourceKind, RetainedResourceLedger,
-    RetainedResourceViolation,
+    RetainedResourceBudget, RetainedResourceKind, RetainedResourceLedger, RetainedResourceViolation,
 };
 use localview_responsive::{
-    analyze_responsive_series, bounded_adaptive_sweep, build_responsive_contact_sheet,
-    deduplicate_responsive_issues, discover_breakpoint, evaluate_responsive_observation,
-    plan_canonical_sweep, resolve_observed_transition, ContactSheetPolicy, LayoutProbe,
-    ObservedTransitionResolution, ResponsiveDetectorState, ResponsiveFrame, ResponsiveIssue,
-    ResponsiveNodeObservation, ResponsiveObservation, ResponsivePresetId, ResponsiveProbeEvaluation,
-    ResponsiveProbeSample, ResponsiveRect, ResponsiveSweepPlan, DEFAULT_ADAPTIVE_INITIAL_PROBE_CAP,
-    DEFAULT_ADAPTIVE_MAX_WIDTH, DEFAULT_ADAPTIVE_MIN_WIDTH, DEFAULT_ADAPTIVE_PROBE_CAP,
-    DEFAULT_BREAKPOINT_TOLERANCE_PX, MAX_RESPONSIVE_OBSERVATION_NODES,
+    ContactSheetPolicy, DEFAULT_ADAPTIVE_INITIAL_PROBE_CAP, DEFAULT_ADAPTIVE_MAX_WIDTH,
+    DEFAULT_ADAPTIVE_MIN_WIDTH, DEFAULT_ADAPTIVE_PROBE_CAP, DEFAULT_BREAKPOINT_TOLERANCE_PX,
+    LayoutProbe, MAX_RESPONSIVE_OBSERVATION_NODES, ObservedTransitionResolution,
+    ResponsiveDetectorState, ResponsiveFrame, ResponsiveIssue, ResponsiveNodeObservation,
+    ResponsiveObservation, ResponsivePresetId, ResponsiveProbeEvaluation, ResponsiveProbeSample,
+    ResponsiveRect, ResponsiveSweepPlan, analyze_responsive_series, bounded_adaptive_sweep,
+    build_responsive_contact_sheet, deduplicate_responsive_issues, discover_breakpoint,
+    evaluate_responsive_observation, plan_canonical_sweep, resolve_observed_transition,
 };
 use localview_visual::{
-    decode_png_rgba, encode_png_rgba, plan_changed_css_regions, plan_full_page,
-    project_full_page_output, stitch_full_page_tile, ChangedRegionPlan, ChangedRegionPolicy,
-    FullPageError, FullPagePlan, FullPagePolicy, RgbaImage, VisualBaselineCache,
-    VisualBaselineContext,
+    ChangedRegionPlan, ChangedRegionPolicy, FullPageError, FullPagePlan, FullPagePolicy, RgbaImage,
+    VisualBaselineCache, VisualBaselineContext, decode_png_rgba, encode_png_rgba,
+    plan_changed_css_regions, plan_full_page, project_full_page_output, stitch_full_page_tile,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 use crate::{control_client, err, read_token, state_dir, workspace_surface};
 use workspace_surface::{bridge_surface_label_allowed, workspace_navigation_allowed};
@@ -408,8 +406,8 @@ pub async fn capture_responsive_sweep(
 ) -> Result<ResponsiveSweepReceipt, String> {
     use workspace_surface::surface_registry::DesktopSurfaceKind;
 
-    let plan = plan_canonical_sweep(&presets)
-        .map_err(|_| "responsive_invalid_presets".to_string())?;
+    let plan =
+        plan_canonical_sweep(&presets).map_err(|_| "responsive_invalid_presets".to_string())?;
     let preview_label = workspace_surface::preview_surface_label(session_id);
     let window = app
         .get_webview_window(&preview_label)
@@ -446,8 +444,8 @@ pub async fn capture_responsive_sweep(
         .await
         .map_err(|_| "responsive_preview_unavailable".to_string())?;
     let _capture_guard = capture_gate.lock().await;
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_millis(RESPONSIVE_TRANSACTION_TIMEOUT_MS);
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_millis(RESPONSIVE_TRANSACTION_TIMEOUT_MS);
     let work_deadline = deadline - Duration::from_millis(RESPONSIVE_CLEANUP_RESERVE_MS);
 
     validate_responsive_preview_authority(
@@ -476,11 +474,9 @@ pub async fn capture_responsive_sweep(
         .map_err(|_| "responsive_preview_unavailable".to_string())?;
     validate_trusted_scale_factor(initial_scale)
         .map_err(|_| "responsive_viewport_mismatch".to_string())?;
-    let initial_css_width = trusted_css_dimension(
-        (f64::from(original.width) / initial_scale).round(),
-        "width",
-    )
-    .map_err(|_| "responsive_viewport_mismatch".to_string())?;
+    let initial_css_width =
+        trusted_css_dimension((f64::from(original.width) / initial_scale).round(), "width")
+            .map_err(|_| "responsive_viewport_mismatch".to_string())?;
     let initial_css_height = trusted_css_dimension(
         (f64::from(original.height) / initial_scale).round(),
         "height",
@@ -612,18 +608,15 @@ pub async fn capture_responsive_sweep(
         .iter()
         .map(|entry| entry.responsive_frame.clone())
         .collect::<Vec<_>>();
-    let contact_sheet = build_responsive_contact_sheet(
-        &plan,
-        &responsive_frames,
-        ContactSheetPolicy::default(),
-    )
-    .map_err(|error| match error {
-        localview_responsive::ResponsiveError::FrameMemoryBudgetExceeded
-        | localview_responsive::ResponsiveError::ContactSheetMemoryBudgetExceeded => {
-            "responsive_memory_budget_exceeded".to_string()
-        }
-        _ => "responsive_contact_sheet_failed".to_string(),
-    })?;
+    let contact_sheet =
+        build_responsive_contact_sheet(&plan, &responsive_frames, ContactSheetPolicy::default())
+            .map_err(|error| match error {
+                localview_responsive::ResponsiveError::FrameMemoryBudgetExceeded
+                | localview_responsive::ResponsiveError::ContactSheetMemoryBudgetExceeded => {
+                    "responsive_memory_budget_exceeded".to_string()
+                }
+                _ => "responsive_contact_sheet_failed".to_string(),
+            })?;
     let image = RgbaImage {
         width: contact_sheet.geometry.pixel_width,
         height: contact_sheet.geometry.pixel_height,
@@ -632,8 +625,7 @@ pub async fn capture_responsive_sweep(
     image
         .validate()
         .map_err(|_| "responsive_contact_sheet_failed".to_string())?;
-    let png = encode_png_rgba(&image)
-        .map_err(|_| "responsive_contact_sheet_failed".to_string())?;
+    let png = encode_png_rgba(&image).map_err(|_| "responsive_contact_sheet_failed".to_string())?;
 
     if tokio::time::Instant::now() >= deadline {
         return Err("responsive_transaction_timeout".into());
@@ -665,11 +657,7 @@ fn validate_responsive_preview_authority(
     use workspace_surface::surface_registry::DesktopSurfaceKind;
 
     let current = registry
-        .current(
-            session_id,
-            DesktopSurfaceKind::PreviewWindow,
-            preview_label,
-        )
+        .current(session_id, DesktopSurfaceKind::PreviewWindow, preview_label)
         .ok_or_else(|| error_code.to_string())?;
     if current.identity.label != preview_label
         || current.identity.session_id != session_id
@@ -694,8 +682,8 @@ fn responsive_text_or_control(node: &SemanticNode) -> bool {
 
     let tag = node.tag.as_str();
     if [
-        "a", "button", "input", "label", "option", "select", "textarea", "p", "span", "h1",
-        "h2", "h3", "h4", "h5", "h6",
+        "a", "button", "input", "label", "option", "select", "textarea", "p", "span", "h1", "h2",
+        "h3", "h4", "h5", "h6",
     ]
     .iter()
     .any(|candidate| tag.eq_ignore_ascii_case(candidate))
@@ -705,16 +693,8 @@ fn responsive_text_or_control(node: &SemanticNode) -> bool {
 
     node.role.as_deref().is_some_and(|role| {
         [
-            "button",
-            "link",
-            "textbox",
-            "combobox",
-            "checkbox",
-            "radio",
-            "switch",
-            "menuitem",
-            "tab",
-            "heading",
+            "button", "link", "textbox", "combobox", "checkbox", "radio", "switch", "menuitem",
+            "tab", "heading",
         ]
         .iter()
         .any(|candidate| role.eq_ignore_ascii_case(candidate))
@@ -926,9 +906,8 @@ impl LiveResponsiveLayoutProbe<'_> {
                     .min_by_key(|probe| probe.observation.viewport.width.abs_diff(width))
                     .map(|probe| probe.observation.clone())
             };
-            let evaluation =
-                evaluate_responsive_observation(previous.as_ref(), &observation)
-                    .map_err(|_| "responsive_detector_failed".to_string())?;
+            let evaluation = evaluate_responsive_observation(previous.as_ref(), &observation)
+                .map_err(|_| "responsive_detector_failed".to_string())?;
 
             Ok::<LiveResponsiveProbe, String>(LiveResponsiveProbe {
                 observation,
@@ -994,10 +973,8 @@ async fn run_live_adaptive_responsive(
         }),
     };
 
-    let initial_width = initial_css_width.clamp(
-        DEFAULT_ADAPTIVE_MIN_WIDTH,
-        DEFAULT_ADAPTIVE_MAX_WIDTH,
-    );
+    let initial_width =
+        initial_css_width.clamp(DEFAULT_ADAPTIVE_MIN_WIDTH, DEFAULT_ADAPTIVE_MAX_WIDTH);
     let initial_widths = bounded_adaptive_sweep(
         DEFAULT_ADAPTIVE_MIN_WIDTH,
         DEFAULT_ADAPTIVE_MAX_WIDTH,
@@ -1174,8 +1151,7 @@ async fn wait_for_responsive_size_convergence(
         let scale = window
             .scale_factor()
             .map_err(|_| "responsive_resize_failed".to_string())?;
-        validate_trusted_scale_factor(scale)
-            .map_err(|_| "responsive_resize_failed".to_string())?;
+        validate_trusted_scale_factor(scale).map_err(|_| "responsive_resize_failed".to_string())?;
         let size = window
             .inner_size()
             .map_err(|_| "responsive_resize_failed".to_string())?;
@@ -1207,20 +1183,15 @@ async fn capture_responsive_viewport_after_resize(
         .await
         .map_err(|_| "responsive_freeze_failed".to_string())?;
     if trusted_css_dimension(freeze.viewport_css_width, "width").ok() != Some(viewport.css_width)
-        || trusted_css_dimension(freeze.viewport_css_height, "height").ok() != Some(viewport.css_height)
+        || trusted_css_dimension(freeze.viewport_css_height, "height").ok()
+            != Some(viewport.css_height)
     {
         let _ = restore_visual_state(session_id, &freeze.token).await;
         return Err("responsive_viewport_mismatch".into());
     }
 
-    let native_result = capture_managed_surface_preview_only(
-        app,
-        window,
-        session_id,
-        viewport.clone(),
-        None,
-    )
-    .await;
+    let native_result =
+        capture_managed_surface_preview_only(app, window, session_id, viewport.clone(), None).await;
     let restore_result = restore_visual_state(session_id, &freeze.token).await;
     let frame = match (native_result, restore_result) {
         (Ok(frame), Ok(())) => frame,
@@ -1370,7 +1341,10 @@ async fn persist_responsive_contact_sheet_and_register(
         return Err("responsive_contact_sheet_failed".into());
     }
     let revision = captured.first().and_then(|entry| entry.revision.clone());
-    if captured.iter().any(|entry| entry.revision != revision || entry.route != route) {
+    if captured
+        .iter()
+        .any(|entry| entry.revision != revision || entry.route != route)
+    {
         return Err("responsive_route_drift".into());
     }
     let captured_at_unix_ms = captured
@@ -1464,8 +1438,8 @@ pub async fn capture_full_page(
         .await
         .map_err(|_| "full_page_capture_gate_unavailable".to_string())?;
     let _capture_guard = capture_gate.lock().await;
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_millis(FULL_PAGE_TRANSACTION_TIMEOUT_MS);
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_millis(FULL_PAGE_TRANSACTION_TIMEOUT_MS);
 
     full_page_capture_after_gate(app, &state, session_id, viewport, revision, deadline).await
 }
@@ -1480,8 +1454,7 @@ async fn full_page_capture_after_gate(
 ) -> Result<FullPageCaptureReceipt, String> {
     let expected_route = managed_surface_canonical_route(&app, session_id)
         .map_err(|_| "full_page_route_drift".to_string())?;
-    let work_deadline =
-        deadline - Duration::from_millis(FULL_PAGE_CLEANUP_RESERVE_MS);
+    let work_deadline = deadline - Duration::from_millis(FULL_PAGE_CLEANUP_RESERVE_MS);
 
     tokio::time::timeout_at(work_deadline, wait_for_capture_settle(session_id))
         .await
@@ -1521,8 +1494,7 @@ async fn full_page_capture_after_gate(
     .await
     .unwrap_or_else(|_| Err("full_page_transaction_timeout".to_string()));
 
-    let cleanup =
-        cleanup_full_page_state(session_id, &viewport, &freeze, deadline).await;
+    let cleanup = cleanup_full_page_state(session_id, &viewport, &freeze, deadline).await;
 
     let transaction = match (work, cleanup) {
         (Ok(transaction), Ok(())) => transaction,
@@ -1590,14 +1562,9 @@ async fn capture_full_page_tiles(
             return Err("full_page_fixed_or_sticky_unsupported".into());
         }
 
-        let frame = capture_managed_surface(
-            app,
-            session_id,
-            viewport.clone(),
-            revision.clone(),
-        )
-        .await
-        .map_err(|_| "full_page_native_capture_failed".to_string())?;
+        let frame = capture_managed_surface(app, session_id, viewport.clone(), revision.clone())
+            .await
+            .map_err(|_| "full_page_native_capture_failed".to_string())?;
 
         let canonical_route = canonical_visual_diff_route(&frame.route)
             .map_err(|_| "full_page_route_drift".to_string())?;
@@ -1653,13 +1620,9 @@ async fn capture_full_page_tiles(
         }
 
         if output.is_none() {
-            let geometry = project_full_page_output(
-                plan,
-                tile.width,
-                tile.height,
-                FullPagePolicy::default(),
-            )
-            .map_err(full_page_plan_error)?;
+            let geometry =
+                project_full_page_output(plan, tile.width, tile.height, FullPagePolicy::default())
+                    .map_err(full_page_plan_error)?;
             let mut data = Vec::new();
             data.try_reserve_exact(geometry.rgba_bytes)
                 .map_err(|_| "full_page_output_memory_budget_exceeded".to_string())?;
@@ -1706,13 +1669,9 @@ async fn cleanup_full_page_state(
     )
     .await
     {
-        Ok(Ok(receipt)) => validate_capture_scroll_receipt(
-            &receipt,
-            freeze,
-            viewport,
-            original_scroll_y,
-        )
-        .is_ok(),
+        Ok(Ok(receipt)) => {
+            validate_capture_scroll_receipt(&receipt, freeze, viewport, original_scroll_y).is_ok()
+        }
         _ => false,
     };
 
@@ -1768,8 +1727,8 @@ async fn persist_full_page_and_register(
 
         let put_result = artifacts.put("visual/png", &png).await;
         let actual_bytes = artifacts.used_bytes();
-        let reconcile_result = retained_resources
-            .synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
+        let reconcile_result =
+            retained_resources.synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
 
         let artifact = put_result.map_err(|_| "full_page_artifact_persist_failed".to_string())?;
         reconcile_result.map_err(|_| "full_page_artifact_budget_denied".to_string())?;
@@ -2008,9 +1967,7 @@ fn validate_capture_tile_probe(
         probe.viewport_css_width,
         probe.viewport_css_height,
     ];
-    if values.iter().any(|value| !value.is_finite())
-        || probe.scroll_x < 0.0
-        || probe.scroll_y < 0.0
+    if values.iter().any(|value| !value.is_finite()) || probe.scroll_x < 0.0 || probe.scroll_y < 0.0
     {
         return Err("full_page_scroll_mismatch".into());
     }
@@ -2384,13 +2341,7 @@ pub async fn capture_current_viewport(
     revision: Option<String>,
 ) -> Result<VisualCaptureReceipt, String> {
     let frame = capture_current_redacted_frame(app, &state, session_id, revision).await?;
-    persist_and_register(
-        &state,
-        session_id,
-        frame,
-        &RequestedCaptureTarget::Viewport,
-    )
-    .await
+    persist_and_register(&state, session_id, frame, &RequestedCaptureTarget::Viewport).await
 }
 
 #[tauri::command]
@@ -2450,9 +2401,7 @@ pub async fn capture_changed_regions(
             ChangedRegionPolicy::default(),
         )
         .map_err(|_| "changed-region visual planning failed; pixels discarded".to_string())?,
-        None => ChangedRegionPlan::Viewport {
-            changed_ratio: 1.0,
-        },
+        None => ChangedRegionPlan::Viewport { changed_ratio: 1.0 },
     };
 
     if let ChangedRegionPlan::Unchanged = &plan {
@@ -2585,14 +2534,16 @@ async fn compatible_changed_baseline(
         .expect("visual baseline cache initialized above");
     let retained_resources = &state.retained_resources;
 
-    let current_bytes = u64::try_from(baselines.used_bytes())
-        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
+    let current_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
+        "visual baseline retained usage exceeds supported accounting range".to_string()
+    })?;
     retained_resources
         .synchronize(RetainedResourceKind::Cache, current_bytes)
         .map_err(retained_resource_error)?;
     let compatible = baselines.get_compatible(session_id, context);
-    let actual_bytes = u64::try_from(baselines.used_bytes())
-        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
+    let actual_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
+        "visual baseline retained usage exceeds supported accounting range".to_string()
+    })?;
     retained_resources
         .synchronize(RetainedResourceKind::Cache, actual_bytes)
         .map_err(retained_resource_error)?;
@@ -2617,8 +2568,9 @@ async fn commit_changed_baseline(
         .expect("visual baseline cache initialized above");
     let retained_resources = &state.retained_resources;
 
-    let current_bytes = u64::try_from(baselines.used_bytes())
-        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
+    let current_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
+        "visual baseline retained usage exceeds supported accounting range".to_string()
+    })?;
     retained_resources
         .synchronize(RetainedResourceKind::Cache, current_bytes)
         .map_err(retained_resource_error)?;
@@ -2635,16 +2587,19 @@ async fn commit_changed_baseline(
     else {
         return Ok(false);
     };
-    let projected_bytes = u64::try_from(projected_bytes)
-        .map_err(|_| "visual baseline retained projection exceeds supported accounting range".to_string())?;
+    let projected_bytes = u64::try_from(projected_bytes).map_err(|_| {
+        "visual baseline retained projection exceeds supported accounting range".to_string()
+    })?;
     retained_resources
         .admit_projected(RetainedResourceKind::Cache, projected_bytes)
         .map_err(retained_resource_error)?;
 
     let insert_result = baselines.insert(session_id, context, image);
-    let actual_bytes = u64::try_from(baselines.used_bytes())
-        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
-    let reconcile_result = retained_resources.synchronize(RetainedResourceKind::Cache, actual_bytes);
+    let actual_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
+        "visual baseline retained usage exceeds supported accounting range".to_string()
+    })?;
+    let reconcile_result =
+        retained_resources.synchronize(RetainedResourceKind::Cache, actual_bytes);
 
     let cached = insert_result
         .map_err(|_| "visual baseline cache rejected the captured frame".to_string())?;
@@ -2735,9 +2690,8 @@ async fn emit_changed_capture_plan(
                     captured_at_unix_ms,
                 };
                 let target = RequestedCaptureTarget::Region(rect.clone());
-                receipts.push(
-                    persist_and_register(state, session_id, region_frame, &target).await?,
-                );
+                receipts
+                    .push(persist_and_register(state, session_id, region_frame, &target).await?);
             }
 
             Ok(ChangedCaptureEmission {
@@ -2810,8 +2764,8 @@ async fn register_visual_diff_evidence(
 }
 
 pub(crate) fn canonical_visual_diff_route(route: &str) -> Result<String, String> {
-    let mut route = url::Url::parse(route)
-        .map_err(|_| "visual diff route is not a valid URL".to_string())?;
+    let mut route =
+        url::Url::parse(route).map_err(|_| "visual diff route is not a valid URL".to_string())?;
     route.set_query(None);
     route.set_fragment(None);
     Ok(route.to_string())
@@ -2850,11 +2804,10 @@ fn validate_viewport(viewport: &ViewportMeta) -> Result<(), String> {
 }
 
 fn trusted_css_dimension(value: f64, axis: &str) -> Result<u32, String> {
-    if !value.is_finite()
-        || value <= 0.0
-        || value > MAX_CSS_VIEWPORT_DIMENSION
-    {
-        return Err(format!("trusted viewport {axis} is outside the safety range"));
+    if !value.is_finite() || value <= 0.0 || value > MAX_CSS_VIEWPORT_DIMENSION {
+        return Err(format!(
+            "trusted viewport {axis} is outside the safety range"
+        ));
     }
 
     let rounded = value.round();
@@ -2946,17 +2899,26 @@ fn validate_trusted_current_viewport(
     let css_width = trusted_css_dimension(freeze.viewport_css_width, "width")?;
     let css_height = trusted_css_dimension(freeze.viewport_css_height, "height")?;
     if frame.viewport.css_width != css_width || frame.viewport.css_height != css_height {
-        return Err("trusted current viewport geometry drifted during capture; pixels discarded".into());
+        return Err(
+            "trusted current viewport geometry drifted during capture; pixels discarded".into(),
+        );
     }
     if frame.viewport.device_scale_factor != expected_scale_factor {
-        return Err("trusted current viewport scale factor metadata mismatch; pixels discarded".into());
+        return Err(
+            "trusted current viewport scale factor metadata mismatch; pixels discarded".into(),
+        );
     }
     let current_scale_factor = managed_surface_scale_factor(app, session_id)?;
     if (current_scale_factor - expected_scale_factor).abs() > f64::EPSILON {
-        return Err("trusted current viewport device scale factor changed during capture; pixels discarded".into());
+        return Err(
+            "trusted current viewport device scale factor changed during capture; pixels discarded"
+                .into(),
+        );
     }
     if frame.pixel_width == 0 || frame.pixel_height == 0 {
-        return Err("trusted current viewport native pixel dimensions are invalid; pixels discarded".into());
+        return Err(
+            "trusted current viewport native pixel dimensions are invalid; pixels discarded".into(),
+        );
     }
     Ok(())
 }
@@ -2995,7 +2957,9 @@ fn validate_live_target_viewport(
         && (frame.viewport.css_width as f64 != freeze.viewport_css_width
             || frame.viewport.css_height as f64 != freeze.viewport_css_height)
     {
-        return Err("native visual region viewport changed during capture; pixels discarded".into());
+        return Err(
+            "native visual region viewport changed during capture; pixels discarded".into(),
+        );
     }
     Ok(())
 }
@@ -3031,9 +2995,7 @@ fn preflight_managed_surface(app: &tauri::AppHandle, session_id: SessionId) -> R
     Err("no LocalView-managed native surface is open for this session".into())
 }
 
-pub(crate) async fn wait_for_verification_settle(
-    session_id: SessionId,
-) -> Result<(), String> {
+pub(crate) async fn wait_for_verification_settle(session_id: SessionId) -> Result<(), String> {
     wait_for_capture_settle(session_id)
         .await
         .map_err(|_| "trusted Verify settle failed".to_string())
@@ -3074,17 +3036,11 @@ async fn wait_for_capture_settle(session_id: SessionId) -> Result<(), String> {
         }
     };
 
-    match tokio::time::timeout(
-        Duration::from_millis(policy.timeout_ms),
-        settle_transaction,
-    )
-    .await
-    {
+    match tokio::time::timeout(Duration::from_millis(policy.timeout_ms), settle_transaction).await {
         Ok(result) => result,
         Err(_) => {
             let reasons = last_reasons.lock().await;
-            let reason_names =
-                serde_json::to_string(&*reasons).unwrap_or_else(|_| "[]".to_owned());
+            let reason_names = serde_json::to_string(&*reasons).unwrap_or_else(|_| "[]".to_owned());
             Err(format!(
                 "stable capture settle timed out after {} ms; last_reasons={reason_names}",
                 policy.timeout_ms
@@ -3182,11 +3138,7 @@ fn apply_capture_target(
         return Ok(frame);
     };
 
-    validate_region(
-        rect,
-        freeze.viewport_css_width,
-        freeze.viewport_css_height,
-    )?;
+    validate_region(rect, freeze.viewport_css_width, freeze.viewport_css_height)?;
     let cropped = localview_visual::crop_png_css_rect(
         &frame.png,
         (frame.pixel_width, frame.pixel_height),
@@ -3194,8 +3146,9 @@ fn apply_capture_target(
         rect,
     )
     .map_err(|_| "native visual region crop failed; pixels discarded".to_string())?;
-    let decoded = localview_visual::decode_png_rgba(&cropped)
-        .map_err(|_| "native visual region crop verification failed; pixels discarded".to_string())?;
+    let decoded = localview_visual::decode_png_rgba(&cropped).map_err(|_| {
+        "native visual region crop verification failed; pixels discarded".to_string()
+    })?;
 
     frame.png = cropped;
     frame.pixel_width = decoded.width;
@@ -3340,8 +3293,8 @@ async fn persist_and_register(
 
         let put_result = artifacts.put("visual/png", &png).await;
         let actual_bytes = artifacts.used_bytes();
-        let reconcile_result = retained_resources
-            .synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
+        let reconcile_result =
+            retained_resources.synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
 
         let artifact = put_result.map_err(err)?;
         reconcile_result.map_err(retained_resource_error)?;
@@ -3405,15 +3358,13 @@ fn retained_resource_error(violation: RetainedResourceViolation) -> String {
     };
     format!(
         "retained resource denied: kind={kind} current={} projected_or_observed={} limit={}",
-        violation.current_bytes,
-        violation.projected_or_observed_bytes,
-        violation.limit_bytes
+        violation.current_bytes, violation.projected_or_observed_bytes, violation.limit_bytes
     )
 }
 
 use localview_capture::{
-    resolve_progressive_targets, ProgressiveTargetError, ProgressiveTargetKind,
-    ProgressiveTargetProvenance,
+    ProgressiveTargetError, ProgressiveTargetKind, ProgressiveTargetProvenance,
+    resolve_progressive_targets,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -3443,7 +3394,8 @@ pub async fn capture_progressive_target(
     let _capture_guard = capture_gate.lock().await;
 
     let snapshot = fresh_semantic_snapshot(session_id).await?;
-    let plan = resolve_progressive_targets(&snapshot, &reference).map_err(progressive_target_error)?;
+    let plan =
+        resolve_progressive_targets(&snapshot, &reference).map_err(progressive_target_error)?;
     if snapshot.viewport != (viewport.css_width, viewport.css_height) {
         return Err("progressive target viewport does not match fresh semantic snapshot".into());
     }
@@ -3534,7 +3486,16 @@ fn validate_progressive_live_state(
 
 fn progressive_route_signature(
     route: &str,
-) -> Result<(String, Option<String>, Option<u16>, String, Vec<(String, String)>), String> {
+) -> Result<
+    (
+        String,
+        Option<String>,
+        Option<u16>,
+        String,
+        Vec<(String, String)>,
+    ),
+    String,
+> {
     let url = url::Url::parse(route)
         .map_err(|_| "progressive target route is not a valid URL".to_string())?;
     let mut query = Vec::new();
