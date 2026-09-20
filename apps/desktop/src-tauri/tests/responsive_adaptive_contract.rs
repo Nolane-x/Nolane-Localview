@@ -30,7 +30,10 @@ fn live_adaptive_probe_reuses_exact_preview_settle_and_fresh_snapshot_authority(
         "resolve_observed_transition",
         "analyze_responsive_series",
     ] {
-        assert!(adaptive.contains(required), "adaptive runtime missing {required}");
+        assert!(
+            adaptive.contains(required),
+            "adaptive runtime missing {required}"
+        );
     }
 
     assert!(
@@ -93,7 +96,10 @@ fn adaptive_failures_still_flow_through_outer_restore() {
         "responsive_evidence_capture_failed",
         "responsive_probe_cap_exceeded",
     ] {
-        assert!(source.contains(failure), "missing fail-closed class {failure}");
+        assert!(
+            source.contains(failure),
+            "missing fail-closed class {failure}"
+        );
     }
 
     for canonical_failure in [
@@ -145,7 +151,10 @@ fn deeper_issue_model_is_deterministic_bounded_and_non_aesthetic() {
         "BreakpointLocalRegression",
         "NearbyWidthInstability",
     ] {
-        assert!(responsive.contains(issue), "responsive issue kind missing {issue}");
+        assert!(
+            responsive.contains(issue),
+            "responsive issue kind missing {issue}"
+        );
     }
 
     for evidence_field in [
@@ -160,7 +169,10 @@ fn deeper_issue_model_is_deterministic_bounded_and_non_aesthetic() {
         "before_width:",
         "after_width:",
     ] {
-        assert!(responsive.contains(evidence_field), "issue evidence missing {evidence_field}");
+        assert!(
+            responsive.contains(evidence_field),
+            "issue evidence missing {evidence_field}"
+        );
     }
 
     let lower = responsive.to_ascii_lowercase();
