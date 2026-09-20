@@ -738,6 +738,8 @@ const SCRIPT: &str = r#"
   const MAX_SVELTE_SOURCE_FILE_BYTES = 260;
   const MAX_SVELTE_SOURCE_LINE = 1000000;
   const MAX_SVELTE_SOURCE_COLUMN = 10000000;
+  const MAX_VUE_COMPONENT_BYTES = 96;
+  const MAX_VUE_SOURCE_FILE_BYTES = 260;
 
   const boundedUtf8String = (value, maxBytes) => {
     if (typeof value !== 'string') return null;
@@ -977,6 +979,37 @@ const SCRIPT: &str = r#"
     };
   };
 
+  const vueSourceHint = (el, ownershipBudget) => {
+    if (!ownershipBudget || ownershipBudget.remaining <= 0) return null;
+
+    const instanceDescriptor = ownDataDescriptor(el, '__vueParentComponent');
+    if (!instanceDescriptor) return null;
+    ownershipBudget.remaining -= 1;
+
+    const instance = instanceDescriptor.value;
+    const typeDescriptor = ownDataDescriptor(instance, 'type');
+    if (!typeDescriptor) return null;
+    const componentType = typeDescriptor.value;
+    const fileDescriptor = ownDataDescriptor(componentType, '__file');
+    if (!fileDescriptor) return null;
+
+    const file = boundedRelativeSourceFile(fileDescriptor.value, MAX_VUE_SOURCE_FILE_BYTES);
+    if (!file || !file.endsWith('.vue')) return null;
+
+    const basename = file.split('/').pop();
+    const component = basename && basename.endsWith('.vue')
+      ? boundedUtf8String(basename.slice(0, -'.vue'.length), MAX_VUE_COMPONENT_BYTES)
+      : null;
+    if (!component) return null;
+
+    return {
+      origin: 'vue-dev-instance',
+      file,
+      component,
+      signal: 'element_parent_component',
+    };
+  };
+
   const sourceHint = (el, ownershipBudget) => {
     for (const attribute of ['data-component-source', 'data-source']) {
       const raw = el.getAttribute?.(attribute);
@@ -993,7 +1026,9 @@ const SCRIPT: &str = r#"
     }
     const react = reactSourceHint(el, ownershipBudget);
     if (react) return react;
-    return svelteSourceHint(el, ownershipBudget);
+    const svelte = svelteSourceHint(el, ownershipBudget);
+    if (svelte) return svelte;
+    return vueSourceHint(el, ownershipBudget);
   };
 
   const STYLE_PROPERTIES = [
