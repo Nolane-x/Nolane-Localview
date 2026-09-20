@@ -130,21 +130,25 @@ Source order remains cascade evidence and is not fabricated from the source pars
 
 ## Source Maps
 
-After a unique direct CSS declaration is located, LocalView may ask the existing exact-session project-owned Source Map runtime to remap that generated line/column.
+After a unique direct CSS declaration is located, LocalView may reuse the existing bounded Source Map v3 consumer under the same exact-session project-owned containment rules.
 
-This reuses the already-landed authority:
+CSS source-position authority is stricter than ordinary runtime stack lookup. The Source Map consumer therefore exposes an additive `resolve_exact` lookup for this lane: a remap is accepted only when the declaration's generated line/column is itself a mapped segment. The ordinary nearest-preceding `resolve` behavior remains unchanged for runtime stack consumers and is **not** sufficient proof for an exact CSS declaration coordinate.
+
+The CSS mapping path requires:
 
 - sibling project-owned `.map`;
+- canonical map containment under the exact session root;
 - map-size cap before parse;
-- bounded Source Map v3 consumer;
+- bounded Source Map v3 parsing;
+- an exact generated mapping segment;
 - no remote map loading;
 - no `sourcesContent` retention or response;
 - canonical original-source containment;
 - no absolute-source leakage.
 
-A successful safe mapping upgrades the returned exact coordinate to the original project-owned source.
+A successful exact safe mapping upgrades the returned coordinate to the original project-owned source.
 
-If the map is absent, invalid, unsupported, remote, oversized, or resolves outside the project, the map is ignored and the proven direct generated-CSS coordinate remains authoritative.
+If the map is absent, invalid, unsupported, remote, oversized, lacks an exact segment at the declaration coordinate, or resolves outside the project, the map is ignored and the proven direct generated-CSS coordinate remains authoritative.
 
 No filename-pattern heuristic is used to claim SCSS/Sass/Less/PostCSS ownership.
 
@@ -201,7 +205,8 @@ Focused tests cover:
 - minified one-line CSS;
 - CRLF line counting;
 - UTF-8 column counting;
-- safe project-owned Source Map upgrade;
+- safe project-owned Source Map upgrade from an exact generated segment;
+- nearest-preceding Source Map segment rejection;
 - Source Map escape rejection with direct-CSS fallback;
 - no absolute path or `sourcesContent` leakage.
 
