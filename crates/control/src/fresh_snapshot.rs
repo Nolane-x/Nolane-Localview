@@ -87,10 +87,10 @@ async fn session_fresh_semantic_snapshot(
     }
 }
 
-pub(crate) async fn acquire_fresh_semantic_snapshot(
+pub(crate) async fn acquire_fresh_snapshot_result(
     state: &ControlState,
     id: SessionId,
-) -> Result<PageSnapshot, FreshSnapshotError> {
+) -> Result<BridgeActionResult, FreshSnapshotError> {
     if state.sessions.get(id).await.is_none() {
         return Err(FreshSnapshotError::SessionNotFound);
     }
@@ -105,7 +105,14 @@ pub(crate) async fn acquire_fresh_semantic_snapshot(
     if !result.ok {
         return Err(FreshSnapshotError::Failed);
     }
+    Ok(result)
+}
 
+pub(crate) async fn acquire_fresh_semantic_snapshot(
+    state: &ControlState,
+    id: SessionId,
+) -> Result<PageSnapshot, FreshSnapshotError> {
+    let result = acquire_fresh_snapshot_result(state, id).await?;
     project_snapshot(&result.payload, result.completed_at).ok_or(FreshSnapshotError::Invalid)
 }
 

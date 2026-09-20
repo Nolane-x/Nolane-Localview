@@ -190,3 +190,47 @@ fn vue_ownership_is_exact_element_bounded_and_does_not_fabricate_source_coordina
         );
     }
 }
+
+#[test]
+fn css_declaration_trace_is_bounded_privacy_safe_and_separate_from_component_ownership() {
+    let script = bootstrap_script(&InstrumentationConfig::default());
+
+    for required in [
+        "CSS_TRACE_PROPERTIES",
+        "MAX_CSS_TRACE_STYLESHEETS = 96",
+        "MAX_CSS_TRACE_RULES = 512",
+        "MAX_CSS_TRACE_DECLARATIONS = 12",
+        "MAX_CSS_SELECTOR_BYTES = 256",
+        "MAX_CSS_VALUE_BYTES = 256",
+        "MAX_CSS_SOURCE_FILE_BYTES = 260",
+        "value.replace(/url\\([^)]*\\)/gi, 'url(<redacted>)')",
+        "Array.from(document.styleSheets || []).slice(0, MAX_CSS_TRACE_STYLESHEETS)",
+        "rules = Array.from(sheet.cssRules || [])",
+        "if (sheet?.href && !sourceFile) continue;",
+        "matches = el.matches(selector)",
+        "styleTrace: includeStyle ? cssDeclarationTrace(el) : null",
+    ] {
+        assert!(
+            script.contains(required),
+            "missing bounded CSS trace contract: {required}"
+        );
+    }
+
+    assert!(
+        script
+            .find("sourceHint: sourceHint(el, ownershipBudget)")
+            .unwrap()
+            < script
+                .find("styleTrace: includeStyle ? cssDeclarationTrace(el) : null")
+                .unwrap(),
+        "CSS declaration evidence must remain separate from component/source ownership"
+    );
+    assert!(
+        script.contains("url.origin !== location.origin"),
+        "stylesheet file identity must stay same-origin"
+    );
+    assert!(
+        script.contains("url.pathname.startsWith('/@fs/')"),
+        "filesystem-backed browser paths must not become retained CSS file identity"
+    );
+}

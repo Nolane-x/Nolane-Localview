@@ -4,6 +4,7 @@ mod action_cancellation;
 mod action_correlation;
 mod capture_settle;
 mod chromium_runtime;
+mod css_trace;
 mod fresh_snapshot;
 mod native_cancellation;
 mod native_executor;
@@ -66,6 +67,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(action_cancellation::router(state.clone()))
         .merge(action_correlation::router(state.clone()))
         .merge(capture_settle::router(state.clone()))
+        .merge(css_trace::router(state.clone()))
         .merge(fresh_snapshot::router(state.clone()))
         .merge(native_cancellation::router(state.clone()))
         .merge(native_executor::router(state.clone()))
