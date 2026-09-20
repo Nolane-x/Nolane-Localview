@@ -32,8 +32,8 @@ fn desktop_registers_bounded_content_stress_authority() {
 
     assert!(api.contains("captureContentLocaleStress"));
     assert!(api.contains("ContentStressReceipt"));
-    assert!(permissions.contains(""capture_content_locale_stress""));
-    assert!(permissions.contains(""preview_complete_content_stress""));
+    assert!(permissions.contains("\"capture_content_locale_stress\""));
+    assert!(permissions.contains("\"preview_complete_content_stress\""));
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn content_stress_receipt_is_synthetic_and_does_not_claim_translation_authority(
 
 #[test]
 fn stress_restore_conflicts_fail_closed_instead_of_overwriting_app_state() {
-    let instrumentation = include_str!("../../../crates/instrumentation/src/lib.rs");
+    let instrumentation = include_str!("../../../../crates/instrumentation/src/lib.rs");
     assert!(instrumentation.contains("node.nodeValue === entry.stressed"));
     assert!(instrumentation.contains("node.nodeValue === entry.original"));
     assert!(instrumentation.contains("conflictNodes += 1"));
