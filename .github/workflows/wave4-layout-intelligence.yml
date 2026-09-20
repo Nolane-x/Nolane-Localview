@@ -7,7 +7,6 @@ on:
       - "crates/live-analysis/**"
       - "crates/diagnostics/**"
       - ".github/workflows/wave4-layout-intelligence.yml"
-      - ".github/workflows/ci.yml"
       - "docs/superpowers/specs/2026-09-20-wave4-live-layout-intelligence-design.md"
   push:
     branches:
@@ -17,7 +16,6 @@ on:
       - "crates/live-analysis/**"
       - "crates/diagnostics/**"
       - ".github/workflows/wave4-layout-intelligence.yml"
-      - ".github/workflows/ci.yml"
       - "docs/superpowers/specs/2026-09-20-wave4-live-layout-intelligence-design.md"
 
 concurrency:
