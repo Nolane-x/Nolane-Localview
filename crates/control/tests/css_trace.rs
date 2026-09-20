@@ -194,10 +194,7 @@ async fn fresh_style_trace_returns_only_selected_bounded_css_evidence() {
     assert_eq!(body["computed"]["display"], "flex");
     assert_eq!(body["computed"]["paddingTop"], "16px");
     assert_eq!(body["declarations"].as_array().map(Vec::len), Some(2));
-    assert_eq!(
-        body["declarations"][1]["stylesheet_path"],
-        "src/button.css"
-    );
+    assert_eq!(body["declarations"][1]["stylesheet_path"], "src/button.css");
     assert_eq!(body["declarations"][1]["selector"], ".save");
     assert!(body.get("semantic_tree").is_none());
 }
