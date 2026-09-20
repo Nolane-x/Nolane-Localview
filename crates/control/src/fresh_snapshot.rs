@@ -285,7 +285,7 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
             }
             let component_name =
                 bounded_required_string(value.get("component")?, MAX_REACT_COMPONENT_BYTES)?;
-            let identity = format!("react:{file}:{line}:{component_name}");
+            let identity = format!("react:{file}:{component_name}");
             if identity.len() > MAX_REACT_COMPONENT_ID_BYTES {
                 return None;
             }
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(projected.column, Some(5));
         assert_eq!(
             projected.component.as_deref(),
-            Some("react:src/SettingsCard.tsx:17:SettingsCard")
+            Some("react:src/SettingsCard.tsx:SettingsCard")
         );
     }
 
