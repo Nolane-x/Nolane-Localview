@@ -4,11 +4,11 @@ use std::{
 };
 
 use axum::{
+    Json, Router,
     extract::{Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use localview_protocol::SessionId;
 use localview_source_map::{ResolvedSourceLocation, SourceMap};
@@ -32,7 +32,7 @@ struct ProjectSourceMapRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct ProjectSourceMapResponse {
+pub(crate) struct ProjectSourceMapResponse {
     generated_file: String,
     map_file: String,
     generated_line: u32,
@@ -50,7 +50,7 @@ struct ProjectResolvedSource {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ProjectSourceMapError {
+pub(crate) enum ProjectSourceMapError {
     Unauthorized,
     SessionNotFound,
     ProjectRootUnavailable,
@@ -103,7 +103,7 @@ impl ProjectSourceMapError {
         }
     }
 
-    fn into_response(self) -> axum::response::Response {
+    pub(crate) fn into_response(self) -> axum::response::Response {
         (
             self.status(),
             Json(serde_json::json!({ "error": self.code() })),
@@ -135,6 +135,25 @@ async fn resolve_project_source_map(
         Ok(response) => Json(response).into_response(),
         Err(error) => error.into_response(),
     }
+}
+
+pub(crate) async fn resolve_project_source_position(
+    state: &ControlState,
+    id: SessionId,
+    generated_file: String,
+    generated_line: u32,
+    generated_column: u32,
+) -> Result<ProjectSourceMapResponse, ProjectSourceMapError> {
+    resolve_project_source_map_inner(
+        state,
+        id,
+        ProjectSourceMapRequest {
+            generated_file,
+            generated_line,
+            generated_column,
+        },
+    )
+    .await
 }
 
 async fn resolve_project_source_map_inner(
@@ -185,8 +204,8 @@ async fn resolve_project_source_map_inner(
         return Err(ProjectSourceMapError::GeneratedFileUnavailable);
     }
 
-    let map_candidate = sibling_map_path(&generated)
-        .ok_or(ProjectSourceMapError::SourceMapUnavailable)?;
+    let map_candidate =
+        sibling_map_path(&generated).ok_or(ProjectSourceMapError::SourceMapUnavailable)?;
     let map_path = fs::canonicalize(map_candidate)
         .await
         .map_err(|_| ProjectSourceMapError::SourceMapUnavailable)?;
@@ -207,8 +226,8 @@ async fn resolve_project_source_map_inner(
     if u64::try_from(map_bytes.len()).unwrap_or(u64::MAX) > MAX_SOURCE_MAP_BYTES {
         return Err(ProjectSourceMapError::SourceMapTooLarge);
     }
-    let map_json = std::str::from_utf8(&map_bytes)
-        .map_err(|_| ProjectSourceMapError::InvalidSourceMap)?;
+    let map_json =
+        std::str::from_utf8(&map_bytes).map_err(|_| ProjectSourceMapError::InvalidSourceMap)?;
     let source_map =
         SourceMap::parse(map_json).map_err(|_| ProjectSourceMapError::InvalidSourceMap)?;
     let resolved = source_map
