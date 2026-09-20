@@ -394,6 +394,28 @@ fn resolve_component_ancestor<'a>(
     viewport: (u32, u32),
 ) -> Option<(&'a SemanticNode, Rect, String)> {
     let target = *path.last()?;
+
+    if let Some(target_owner) = target.ownership.as_ref() {
+        return path[..path.len().saturating_sub(1)]
+            .iter()
+            .rev()
+            .copied()
+            .find_map(|ancestor| {
+                let ancestor_owner = ancestor.ownership.as_ref()?;
+                if ancestor_owner.framework != target_owner.framework
+                    || ancestor_owner.file != target_owner.file
+                    || ancestor_owner.component != target_owner.component
+                {
+                    return None;
+                }
+                let rect = validate_and_clip(ancestor.rect.as_ref()?, viewport)?;
+                if !contains_rect(&rect, element) {
+                    return None;
+                }
+                Some((ancestor, rect, target_owner.component.clone()))
+            });
+    }
+
     let component_name = target.source.as_ref()?.component.as_deref()?;
     path[..path.len().saturating_sub(1)]
         .iter()
