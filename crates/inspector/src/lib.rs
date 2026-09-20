@@ -127,13 +127,17 @@ pub struct AuthorCascadeCandidate {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthorCascadeDomainProof {
     pub relevance_proven: bool,
+    pub single_encapsulation_context: bool,
     pub unlayered_only: bool,
     pub unscoped_only: bool,
 }
 
 impl AuthorCascadeDomainProof {
     pub fn authoritative(self) -> bool {
-        self.relevance_proven && self.unlayered_only && self.unscoped_only
+        self.relevance_proven
+            && self.single_encapsulation_context
+            && self.unlayered_only
+            && self.unscoped_only
     }
 }
 
@@ -252,6 +256,7 @@ mod tests {
     fn author_proof() -> AuthorCascadeDomainProof {
         AuthorCascadeDomainProof {
             relevance_proven: true,
+            single_encapsulation_context: true,
             unlayered_only: true,
             unscoped_only: true,
         }
@@ -330,6 +335,10 @@ mod tests {
         for proof in [
             AuthorCascadeDomainProof {
                 relevance_proven: false,
+                ..author_proof()
+            },
+            AuthorCascadeDomainProof {
+                single_encapsulation_context: false,
                 ..author_proof()
             },
             AuthorCascadeDomainProof {
