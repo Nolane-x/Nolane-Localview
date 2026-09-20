@@ -26,6 +26,9 @@ fn desktop_registers_bounded_content_stress_authority() {
         "content_stress_restore_validation_failed",
         "wait_for_content_stress_settle",
         "fresh_semantic_snapshot",
+        "session_capture_gate",
+        "_capture_guard",
+        "best_effort_restore",
     ] {
         assert!(module.contains(required), "missing content-stress authority: {required}");
     }
