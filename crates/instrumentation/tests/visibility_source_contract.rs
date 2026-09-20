@@ -22,7 +22,6 @@ fn semantic_nodes_preserve_explicit_dev_source_hints_without_scanning_source_fil
     assert!(!script.contains("sourceMappingURL"));
 }
 
-
 #[test]
 fn react_ownership_is_bounded_read_only_and_lower_priority_than_explicit_sources() {
     let script = bootstrap_script(&InstrumentationConfig::default());
@@ -35,6 +34,8 @@ fn react_ownership_is_bounded_read_only_and_lower_priority_than_explicit_sources
         "MAX_REACT_DEBUG_STACK_LINES = 24",
         "__reactFiber$",
         "__reactInternalInstance$",
+        "__reactProps$",
+        "Object.getOwnPropertyDescriptor(el, key)",
         "fiber.stateNode !== el",
         "fiber?._debugSource",
         "fiber?._debugStack",
