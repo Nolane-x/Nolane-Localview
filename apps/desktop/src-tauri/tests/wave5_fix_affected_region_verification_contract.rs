@@ -78,9 +78,9 @@ fn affected_visual_evidence_persists_crops_without_second_capture() {
     );
 
     for required in [
-        ""unchanged" =>",
-        ""regions" =>",
-        ""viewport" =>",
+        "\"unchanged\" =>",
+        "\"regions\" =>",
+        "\"viewport\" =>",
         "decode_png_rgba(&frame.png)",
         "crop_css_rect(",
         "encode_png_rgba(&cropped)",
@@ -108,7 +108,7 @@ fn affected_visual_evidence_persists_crops_without_second_capture() {
         );
     }
 
-    let unchanged = between(helper, ""unchanged" =>", ""regions" =>");
+    let unchanged = between(helper, "\"unchanged\" =>", "\"regions\" =>");
     assert!(!unchanged.contains("persist_and_register("));
     assert!(!unchanged.contains("encode_png_rgba("));
 }
