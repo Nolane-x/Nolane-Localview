@@ -1085,7 +1085,7 @@ const SCRIPT: &str = r#"
 
   const boundedCssValue = (value) => {
     if (typeof value !== 'string') return null;
-    const withoutUrls = value.replace(/url\\([^)]*\\)/gi, 'url(<redacted>)');
+    const withoutUrls = value.replace(/url\([^)]*\)/gi, 'url(<redacted>)');
     return boundedUtf8String(withoutUrls, MAX_CSS_VALUE_BYTES);
   };
 
@@ -1100,7 +1100,7 @@ const SCRIPT: &str = r#"
         return null;
       }
       return boundedRelativeSourceFile(
-        url.pathname.replace(/^\\/+/, ''),
+        url.pathname.replace(/^\/+/, ''),
         MAX_CSS_SOURCE_FILE_BYTES
       );
     } catch (_) {
