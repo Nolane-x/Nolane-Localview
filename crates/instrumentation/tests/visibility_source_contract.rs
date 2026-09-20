@@ -204,10 +204,12 @@ fn css_declaration_trace_is_bounded_privacy_safe_and_separate_from_component_own
         "MAX_CSS_VALUE_BYTES = 256",
         "MAX_CSS_SOURCE_FILE_BYTES = 260",
         "value.replace(/url\\([^)]*\\)/gi, 'url(<redacted>)')",
-        "Array.from(document.styleSheets || []).slice(0, MAX_CSS_TRACE_STYLESHEETS)",
+        "allSheets = Array.from(document.styleSheets || [])",
         "rules = Array.from(sheet.cssRules || [])",
-        "if (sheet?.href && !sourceFile) continue;",
-        "matches = el.matches(selector)",
+        "if (sheet?.href && !sourceFile) {",
+        "armMatches = el.matches(arm)",
+        "if (sheet?.disabled) continue;",
+        "window.matchMedia(sheetMedia).matches",
         "styleTrace: includeStyle ? cssDeclarationTrace(el) : null",
     ] {
         assert!(
