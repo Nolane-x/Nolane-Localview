@@ -1,0 +1,95 @@
+name: Wave 5 React live ownership authority
+
+on:
+  pull_request:
+    paths:
+      - "crates/instrumentation/**"
+      - "crates/control/src/fresh_snapshot.rs"
+      - "crates/control/tests/fresh_semantic_snapshot.rs"
+      - "crates/capture/tests/progressive_target_resolution.rs"
+      - "tools/wave5-react-ownership/**"
+      - ".github/workflows/wave5-react-live-ownership.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-react-live-component-ownership-design.md"
+  push:
+    branches:
+      - "feat/wave5-react-live-ownership"
+    paths:
+      - "crates/instrumentation/**"
+      - "crates/control/src/fresh_snapshot.rs"
+      - "crates/control/tests/fresh_semantic_snapshot.rs"
+      - "crates/capture/tests/progressive_target_resolution.rs"
+      - "tools/wave5-react-ownership/**"
+      - ".github/workflows/wave5-react-live-ownership.yml"
+      - "docs/superpowers/specs/2026-09-20-wave5-react-live-component-ownership-design.md"
+
+concurrency:
+  group: wave5-react-live-ownership-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify formatting
+        run: cargo fmt --check
+
+      - name: Verify bounded React instrumentation contract
+        run: cargo test -p localview-instrumentation -- --nocapture
+
+      - name: Verify fresh snapshot React ownership projection
+        run: cargo test -p localview-control --lib -- --nocapture
+
+      - name: Preserve fresh semantic snapshot integration
+        run: cargo test -p localview-control --test fresh_semantic_snapshot -- --nocapture
+
+      - name: Preserve progressive component targeting
+        run: cargo test -p localview-capture --test progressive_target_resolution -- --nocapture
+
+      - name: Check control crate
+        run: cargo check -p localview-control --all-targets
+
+  browser-react19:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize exact LocalView ownership bootstrap
+        run: cargo run -p localview-instrumentation --example react_ownership_bootstrap > /tmp/localview-react-ownership-bootstrap.js
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install React 19 fixture and browser proof dependencies
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove React 19 ownership privacy and isolation in Chromium
+        working-directory: apps/desktop
+        run: |
+          cp ../../tools/wave5-react-ownership/runtime.mjs ./wave5-react-ownership-runtime.mjs
+          node ./wave5-react-ownership-runtime.mjs
+          rm ./wave5-react-ownership-runtime.mjs
+
+  workspace-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check complete workspace
+        run: cargo check --workspace --all-targets
