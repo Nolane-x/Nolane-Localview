@@ -115,6 +115,10 @@ Required focused gates:
 - workspace all-target check;
 - full repository CI.
 
+Formatting closure note:
+- the exact Rust surfaces named by the ownership-focused, React and Svelte gates were normalized with canonical `rustfmt --edition 2024` before final exact-head verification;
+- formatting changes are non-semantic and exist only to unblock the focused contract matrix.
+
 ## Explicit non-claims
 
 This slice does not claim:
