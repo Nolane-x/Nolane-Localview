@@ -679,7 +679,8 @@ fn analyze_alignment(elements: &[LayoutElement], valid: &[bool], issues: &mut Ve
         if children.len() < 3 {
             continue;
         }
-        let dimensions: [(&str, fn(&Rect) -> f64); 5] = [
+        type AlignmentMeasure = fn(&Rect) -> f64;
+        let dimensions: [(&str, AlignmentMeasure); 5] = [
             ("left_edge", |rect| rect.x),
             ("right_edge", rect_right),
             ("horizontal_center", |rect| rect.x + rect.width / 2.0),
