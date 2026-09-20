@@ -730,7 +730,175 @@ const SCRIPT: &str = r#"
   const MAX_REACT_SOURCE_FILE_BYTES = 260;
   const MAX_REACT_SOURCE_LINE = 1000000;
   const MAX_REACT_SOURCE_COLUMN = 10000001;
-  const REACT_FIBER_PREFIXES = ['__reactFiber
+  const MAX_REACT_DEBUG_STACK_BYTES = 16384;
+  const MAX_REACT_DEBUG_STACK_LINES = 24;
+  const REACT_FIBER_PREFIXES = ['__reactFiber$', '__reactInternalInstance$'];
+
+  const boundedUtf8String = (value, maxBytes) => {
+    if (typeof value !== 'string') return null;
+    const normalized = redact(value).trim();
+    if (!normalized || /[\u0000-\u001f\u007f]/.test(normalized)) return null;
+    if (new TextEncoder().encode(normalized).length > maxBytes) return null;
+    return normalized;
+  };
+
+  const reactComponentName = (type) => {
+    const candidates = [type, type?.render, type?.type].slice(0, 3);
+    for (const candidate of candidates) {
+      if (!candidate || (typeof candidate !== 'function' && typeof candidate !== 'object')) continue;
+      const name = boundedUtf8String(
+        candidate.displayName || candidate.name,
+        MAX_REACT_COMPONENT_BYTES
+      );
+      if (name) return name;
+    }
+    return null;
+  };
+
+  const reactDebugStackSource = (debugStack) => {
+    let raw;
+    try {
+      raw = typeof debugStack === 'string' ? debugStack : debugStack?.stack;
+    } catch (_) {
+      return null;
+    }
+    if (typeof raw !== 'string'
+        || new TextEncoder().encode(raw).length > MAX_REACT_DEBUG_STACK_BYTES) {
+      return null;
+    }
+
+    const lines = raw.split('\n').slice(0, MAX_REACT_DEBUG_STACK_LINES);
+    for (const line of lines) {
+      if (!line
+          || /node_modules|react(?:-dom)?|jsx-dev-runtime|jsxDEV|createElement|vite\/dist|\/@vite\//i.test(line)) {
+        continue;
+      }
+      const match = line.match(/(https?:\/\/[^\s()]+):(\d+):(\d+)\)?$/);
+      if (!match) continue;
+
+      let url;
+      try {
+        url = new URL(match[1]);
+      } catch (_) {
+        continue;
+      }
+      if (url.origin !== location.origin
+          || url.pathname.startsWith('/@fs/')
+          || url.pathname.startsWith('//')
+          || url.pathname.includes('%')
+          || url.pathname.split('/').includes('..')) {
+        continue;
+      }
+
+      const file = boundedUtf8String(
+        url.pathname.replace(/^\/+/, ''),
+        MAX_REACT_SOURCE_FILE_BYTES
+      );
+      const sourceLine = Number(match[2]);
+      const sourceColumn = Number(match[3]);
+      if (!file
+          || !Number.isInteger(sourceLine)
+          || sourceLine < 1
+          || sourceLine > MAX_REACT_SOURCE_LINE
+          || !Number.isInteger(sourceColumn)
+          || sourceColumn < 1
+          || sourceColumn > MAX_REACT_SOURCE_COLUMN) {
+        continue;
+      }
+      return {
+        file,
+        line: sourceLine,
+        column: sourceColumn,
+        signal: 'debug_stack',
+      };
+    }
+    return null;
+  };
+
+  const reactDebugSource = (fiber) => {
+    const debugSource = fiber?._debugSource;
+    if (debugSource && typeof debugSource === 'object') {
+      const file = boundedUtf8String(debugSource.fileName, MAX_REACT_SOURCE_FILE_BYTES);
+      const sourceLine = Number(debugSource.lineNumber);
+      const sourceColumn = debugSource.columnNumber == null ? null : Number(debugSource.columnNumber);
+      if (file
+          && Number.isInteger(sourceLine)
+          && sourceLine >= 1
+          && sourceLine <= MAX_REACT_SOURCE_LINE
+          && (sourceColumn === null
+            || (Number.isInteger(sourceColumn)
+              && sourceColumn >= 1
+              && sourceColumn <= MAX_REACT_SOURCE_COLUMN))) {
+        return {
+          file,
+          line: sourceLine,
+          column: sourceColumn,
+          signal: 'debug_source',
+        };
+      }
+    }
+    return reactDebugStackSource(fiber?._debugStack);
+  };
+
+  const reactSourceHint = (el, ownershipBudget) => {
+    if (!ownershipBudget || ownershipBudget.remaining <= 0) return null;
+    ownershipBudget.remaining -= 1;
+
+    let keys;
+    try {
+      keys = Object.getOwnPropertyNames(el).slice(0, MAX_REACT_HOST_KEYS);
+    } catch (_) {
+      return null;
+    }
+    const key = keys.find((candidate) =>
+      REACT_FIBER_PREFIXES.some((prefix) => candidate.startsWith(prefix))
+    );
+    if (!key) return null;
+
+    let fiber;
+    try {
+      fiber = el[key];
+    } catch (_) {
+      return null;
+    }
+    if (!fiber || typeof fiber !== 'object' || fiber.stateNode !== el) return null;
+
+    let cursor = fiber.return;
+    for (let depth = 0; cursor && depth < MAX_REACT_FIBER_DEPTH; depth += 1, cursor = cursor.return) {
+      if (typeof cursor !== 'object') break;
+      const component = reactComponentName(cursor.type);
+      if (!component) continue;
+      const source = reactDebugSource(cursor);
+      if (!source) continue;
+
+      return {
+        origin: 'react-dev-fiber',
+        file: source.file,
+        line: source.line,
+        column: source.column,
+        component,
+        signal: source.signal,
+      };
+    }
+    return null;
+  };
+
+  const sourceHint = (el, ownershipBudget) => {
+    for (const attribute of ['data-component-source', 'data-source']) {
+      const raw = el.getAttribute?.(attribute);
+      if (!raw) continue;
+      const value = redact(raw).trim().slice(0, 320);
+      if (!value) continue;
+      const match = value.match(/^(.*?)(?::(\d+))?(?::(\d+))?$/);
+      return {
+        origin: attribute,
+        file: (match?.[1] || value).slice(0, 260),
+        line: match?.[2] ? Number(match[2]) : null,
+        column: match?.[3] ? Number(match[3]) : null,
+      };
+    }
+    return reactSourceHint(el, ownershipBudget);
+  };
 
   const STYLE_PROPERTIES = [
     'display', 'position', 'overflowX', 'overflowY', 'boxSizing', 'zIndex',
