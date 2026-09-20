@@ -842,7 +842,13 @@ export default function LocalViewShell() {
         pointSelectionRouteSequenceRef.current = latestRouteSequenceRef.current;
         setPointSelectedReference(status.reference);
       } else if (status.state === 'failed') {
-        if (status.reason === 'route_changed') setPointSelectedReference(undefined);
+        if (
+          status.reason === 'route_changed'
+          || status.reason === 'generation_changed'
+          || status.reason === 'managed_surface_unavailable'
+        ) {
+          setPointSelectedReference(undefined);
+        }
         setError(`Point selection failed: ${status.reason ?? 'failed'}`);
       }
 
