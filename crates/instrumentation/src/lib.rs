@@ -304,6 +304,8 @@ const SCRIPT: &str = r#"
   const localViewOwnedElements = new WeakSet();
   const pointSelectCompletions = [];
   let pointSelectState = null;
+  const contentStressCompletions = [];
+  let contentStressState = null;
 
   const isLocalViewOwned = (element) => !!element && localViewOwnedElements.has(element);
 
@@ -685,6 +687,202 @@ const SCRIPT: &str = r#"
     typeof reference === 'string' &&
     reference.length <= 64 &&
     /^@e[0-9a-f]+$/i.test(reference);
+
+  const CONTENT_STRESS_MAX_NODES = 160;
+  const CONTENT_STRESS_MAX_SOURCE_CHARS = 512;
+  const CONTENT_STRESS_MAX_STRESSED_CHARS = 768;
+  const CONTENT_STRESS_PROFILES = Object.freeze({
+    expanded_130: Object.freeze({ factor: 1.30, kind: 'latin', lang: 'en-XA', dir: 'ltr' }),
+    expanded_180: Object.freeze({ factor: 1.80, kind: 'latin', lang: 'en-XA', dir: 'ltr' }),
+    dense_cjk: Object.freeze({ factor: 1.25, kind: 'cjk', lang: 'ja', dir: 'ltr' }),
+    rtl_pseudo: Object.freeze({ factor: 1.30, kind: 'rtl', lang: 'ar-XB', dir: 'rtl' }),
+  });
+
+  const validContentStressToken = (token) => validPointSelectToken(token);
+
+  const queueContentStressCompletion = (completion) => {
+    contentStressCompletions.push(Object.freeze({
+      requestToken: completion.requestToken,
+      route: completion.route,
+      status: completion.status,
+      profile: completion.profile,
+      mutatedNodes: Number(completion.mutatedNodes) || 0,
+      restoredNodes: Number(completion.restoredNodes) || 0,
+      conflictNodes: Number(completion.conflictNodes) || 0,
+    }));
+    while (contentStressCompletions.length > 8) contentStressCompletions.shift();
+  };
+
+  const contentStressEligibleParent = (parent) => {
+    if (!parent || parent.nodeType !== Node.ELEMENT_NODE || isLocalViewOwned(parent)) return false;
+    if (parent.closest?.('[data-localview-owned]')) return false;
+    if (parent.closest?.('script,style,noscript,template,input,textarea,select,option,pre,code,kbd,samp')) return false;
+    if (parent.closest?.('[contenteditable="true"],[data-localview-private],[data-private],[data-sensitive]')) return false;
+    if (parent.closest?.('[aria-hidden="true"]')) return false;
+    try {
+      const style = getComputedStyle(parent);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    } catch (_) {
+      return false;
+    }
+    return true;
+  };
+
+  const pseudoContent = (source, profile) => {
+    const match = /^(\s*)([\s\S]*?)(\s*)$/.exec(String(source ?? ''));
+    if (!match) return null;
+    const leading = match[1];
+    const core = match[2];
+    const trailing = match[3];
+    if (!/\S/.test(core)) return null;
+    const characters = Array.from(core);
+    if (characters.length === 0 || characters.length > CONTENT_STRESS_MAX_SOURCE_CHARS) return null;
+    const target = Math.min(
+      CONTENT_STRESS_MAX_STRESSED_CHARS,
+      Math.max(characters.length + 1, Math.ceil(characters.length * profile.factor))
+    );
+    let unit = 'WWW ';
+    if (profile.kind === 'cjk') unit = '界';
+    if (profile.kind === 'rtl') unit = 'אבג ';
+    let generated = '';
+    while (Array.from(generated).length < target) generated += unit;
+    generated = Array.from(generated).slice(0, target).join('').trimEnd();
+    return leading + generated + trailing;
+  };
+
+  const restoreRootStressAttribute = (root, name, original, applied) => {
+    if (!root) return 0;
+    const current = root.getAttribute(name);
+    if (current === applied) {
+      if (original === null) root.removeAttribute(name);
+      else root.setAttribute(name, original);
+      return 0;
+    }
+    if (current === original) return 0;
+    return 1;
+  };
+
+  const restoreContentStress = (requestToken) => {
+    const state = contentStressState;
+    if (!state || state.requestToken !== requestToken) return false;
+    contentStressState = null;
+    let restoredNodes = 0;
+    let conflictNodes = 0;
+
+    for (const entry of state.entries) {
+      const node = entry.node;
+      if (!node?.isConnected) {
+        conflictNodes += 1;
+        continue;
+      }
+      if (node.nodeValue === entry.stressed) {
+        node.nodeValue = entry.original;
+        restoredNodes += 1;
+      } else if (node.nodeValue === entry.original) {
+        restoredNodes += 1;
+      } else {
+        conflictNodes += 1;
+      }
+    }
+
+    conflictNodes += restoreRootStressAttribute(
+      state.root,
+      'lang',
+      state.originalLang,
+      state.appliedLang
+    );
+    conflictNodes += restoreRootStressAttribute(
+      state.root,
+      'dir',
+      state.originalDir,
+      state.appliedDir
+    );
+
+    queueContentStressCompletion({
+      requestToken: state.requestToken,
+      route: pointSelectCanonicalRoute(),
+      status: conflictNodes === 0 ? 'restored' : 'restore_conflict',
+      profile: state.profileName,
+      mutatedNodes: state.entries.length,
+      restoredNodes,
+      conflictNodes,
+    });
+    return conflictNodes === 0;
+  };
+
+  const beginContentStress = (request) => {
+    const requestToken = String(request?.requestToken || '');
+    const expectedRoute = String(request?.route || '');
+    const profileName = String(request?.profile || '');
+    const profile = CONTENT_STRESS_PROFILES[profileName];
+    if (!validContentStressToken(requestToken) || !profile) return false;
+    if (!expectedRoute || expectedRoute !== pointSelectCanonicalRoute()) return false;
+    if (contentStressState) return false;
+
+    const root = document.documentElement;
+    const scope = document.body || root;
+    if (!root || !scope) return false;
+
+    const entries = [];
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node && entries.length < CONTENT_STRESS_MAX_NODES) {
+      const next = walker.nextNode();
+      const parent = node.parentElement;
+      if (contentStressEligibleParent(parent)) {
+        const original = String(node.nodeValue ?? '');
+        const stressed = pseudoContent(original, profile);
+        if (stressed && stressed !== original) {
+          entries.push({ node, original, stressed });
+        }
+      }
+      node = next;
+    }
+
+    const originalLang = root.hasAttribute('lang') ? root.getAttribute('lang') : null;
+    const originalDir = root.hasAttribute('dir') ? root.getAttribute('dir') : null;
+    contentStressState = {
+      requestToken,
+      expectedRoute,
+      profileName,
+      entries,
+      root,
+      originalLang,
+      originalDir,
+      appliedLang: profile.lang,
+      appliedDir: profile.dir,
+    };
+
+    for (const entry of entries) entry.node.nodeValue = entry.stressed;
+    root.setAttribute('lang', profile.lang);
+    root.setAttribute('dir', profile.dir);
+
+    queueContentStressCompletion({
+      requestToken,
+      route: pointSelectCanonicalRoute(),
+      status: 'applied',
+      profile: profileName,
+      mutatedNodes: entries.length,
+      restoredNodes: 0,
+      conflictNodes: 0,
+    });
+    return true;
+  };
+
+  const probeContentStress = (requestToken) => {
+    const state = contentStressState;
+    if (!state || state.requestToken !== requestToken) return false;
+    if (state.expectedRoute !== pointSelectCanonicalRoute()) {
+      restoreContentStress(requestToken);
+      return false;
+    }
+    return true;
+  };
+
+  const takeContentStressCompletions = (max = 8) => {
+    const count = Math.max(0, Math.min(Number(max) || 0, 8, contentStressCompletions.length));
+    return contentStressCompletions.splice(0, count);
+  };
 
   const queuePointSelectCompletion = (completion) => {
     pointSelectCompletions.push(Object.freeze({
@@ -2597,6 +2795,10 @@ const SCRIPT: &str = r#"
     probePointSelect,
     cancelPointSelect,
     takePointSelectCompletions,
+    beginContentStress,
+    probeContentStress,
+    restoreContentStress,
+    takeContentStressCompletions,
     inspect(reference) { return inspect(reference); },
     installNetworkFaultPlan,
     clearNetworkFaultPlan,
