@@ -34,6 +34,10 @@ const MAX_REACT_COMPONENT_BYTES: usize = 96;
 const MAX_REACT_COMPONENT_ID_BYTES: usize = 384;
 const MAX_REACT_SOURCE_LINE: u32 = 1_000_000;
 const MAX_REACT_SOURCE_COLUMN: u32 = 10_000_001;
+const MAX_SVELTE_COMPONENT_BYTES: usize = 96;
+const MAX_SVELTE_COMPONENT_ID_BYTES: usize = 384;
+const MAX_SVELTE_SOURCE_LINE: u32 = 1_000_000;
+const MAX_SVELTE_SOURCE_COLUMN: u32 = 10_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FreshSnapshotError {
@@ -258,7 +262,7 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
     let origin = bounded_required_string(value.get("origin")?, 64)?;
     if !matches!(
         origin.as_str(),
-        "data-component-source" | "data-source" | "react-dev-fiber"
+        "data-component-source" | "data-source" | "react-dev-fiber" | "svelte-dev-meta"
     ) {
         return None;
     }
@@ -290,6 +294,22 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
             }
             Some(identity)
         }
+        "svelte-dev-meta" => {
+            if !valid_svelte_relative_file(&file)
+                || line == 0
+                || line > MAX_SVELTE_SOURCE_LINE
+                || column.is_none_or(|value| value > MAX_SVELTE_SOURCE_COLUMN)
+            {
+                return None;
+            }
+            let component_name =
+                bounded_required_string(value.get("component")?, MAX_SVELTE_COMPONENT_BYTES)?;
+            let identity = format!("svelte:{file}:{component_name}");
+            if identity.len() > MAX_SVELTE_COMPONENT_ID_BYTES {
+                return None;
+            }
+            Some(identity)
+        }
         "data-source" => None,
         _ => unreachable!("source origin was validated above"),
     };
@@ -300,6 +320,26 @@ fn project_source(value: Option<&Value>) -> Option<Option<SourceLocation>> {
         column,
         component,
     }))
+}
+
+fn valid_svelte_relative_file(file: &str) -> bool {
+    if !file.ends_with(".svelte")
+        || file.starts_with('/')
+        || file.contains('\\')
+        || file.contains(['%', '?', '#', ':'])
+        || file.chars().any(char::is_control)
+    {
+        return false;
+    }
+
+    let mut saw_segment = false;
+    for segment in file.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return false;
+        }
+        saw_segment = true;
+    }
+    saw_segment
 }
 
 fn bounded_required_string(value: &Value, max_bytes: usize) -> Option<String> {
@@ -420,6 +460,110 @@ mod tests {
             first.component.as_deref(),
             Some("react:src/SettingsCard.tsx:SettingsCard")
         );
+    }
+
+    #[test]
+    fn svelte_dev_meta_hint_preserves_real_zero_based_source_coordinates() {
+        let source = serde_json::json!({
+            "origin": "svelte-dev-meta",
+            "file": "src/SvelteCard.svelte",
+            "line": 17,
+            "column": 0,
+            "component": "SvelteCard"
+        });
+        let projected = project_source(Some(&source))
+            .expect("valid Svelte source hint")
+            .expect("source location");
+        assert_eq!(projected.file, "src/SvelteCard.svelte");
+        assert_eq!(projected.line, 17);
+        assert_eq!(projected.column, Some(0));
+        assert_eq!(
+            projected.component.as_deref(),
+            Some("svelte:src/SvelteCard.svelte:SvelteCard")
+        );
+    }
+
+    #[test]
+    fn svelte_component_identity_is_stable_across_element_locations() {
+        let first = serde_json::json!({
+            "origin": "svelte-dev-meta",
+            "file": "src/SvelteCard.svelte",
+            "line": 7,
+            "column": 0,
+            "component": "SvelteCard"
+        });
+        let second = serde_json::json!({
+            "origin": "svelte-dev-meta",
+            "file": "src/SvelteCard.svelte",
+            "line": 23,
+            "column": 4,
+            "component": "SvelteCard"
+        });
+
+        let first = project_source(Some(&first))
+            .expect("valid first Svelte source")
+            .expect("first source location");
+        let second = project_source(Some(&second))
+            .expect("valid second Svelte source")
+            .expect("second source location");
+
+        assert_eq!(first.component, second.component);
+        assert_ne!(first.line, second.line);
+        assert_eq!(
+            first.component.as_deref(),
+            Some("svelte:src/SvelteCard.svelte:SvelteCard")
+        );
+    }
+
+    #[test]
+    fn svelte_dev_meta_hint_fails_closed_for_unsafe_or_incomplete_identity() {
+        for source in [
+            serde_json::json!({
+                "origin": "svelte-dev-meta",
+                "file": "/private/SvelteCard.svelte",
+                "line": 1,
+                "column": 0,
+                "component": "SvelteCard"
+            }),
+            serde_json::json!({
+                "origin": "svelte-dev-meta",
+                "file": "src/../SvelteCard.svelte",
+                "line": 1,
+                "column": 0,
+                "component": "SvelteCard"
+            }),
+            serde_json::json!({
+                "origin": "svelte-dev-meta",
+                "file": "src/SvelteCard.svelte",
+                "line": 0,
+                "column": 0,
+                "component": "SvelteCard"
+            }),
+            serde_json::json!({
+                "origin": "svelte-dev-meta",
+                "file": "src/SvelteCard.svelte",
+                "line": 1,
+                "component": "SvelteCard"
+            }),
+            serde_json::json!({
+                "origin": "svelte-dev-meta",
+                "file": "src/SvelteCard.svelte",
+                "line": 1,
+                "column": 10_000_001,
+                "component": "SvelteCard"
+            }),
+            serde_json::json!({
+                "origin": "svelte-dev-meta",
+                "file": "src/SvelteCard.svelte",
+                "line": 1,
+                "column": 0
+            }),
+        ] {
+            assert!(
+                project_source(Some(&source)).is_none(),
+                "invalid Svelte ownership must fail closed"
+            );
+        }
     }
 
     #[test]
