@@ -492,15 +492,15 @@ pub fn bounded_adaptive_sweep(
     if selected.len() > initial_cap {
         let last = selected.len() - 1;
         let source = selected;
-        selected = (0..initial_cap)
-            .map(|slot| {
-                let index = slot
-                    .checked_mul(last)
-                    .expect("validated adaptive probe cap cannot overflow usize")
-                    / (initial_cap - 1);
-                source[index]
-            })
-            .collect();
+        let mut bounded = Vec::with_capacity(initial_cap);
+        for slot in 0..initial_cap {
+            let index = slot
+                .checked_mul(last)
+                .ok_or(ResponsiveError::InvalidAdaptiveProbeCap)?
+                / (initial_cap - 1);
+            bounded.push(source[index]);
+        }
+        selected = bounded;
         selected.sort_unstable();
         selected.dedup();
     }
