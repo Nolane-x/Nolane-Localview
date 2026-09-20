@@ -357,13 +357,8 @@ async fn rejects_remote_mismatched_encoded_and_invalid_runtime_positions() {
     assert_error(&value, "runtime_source_unsupported");
 
     for seq in [24_u64, 25] {
-        let (status, value) = post(
-            state.clone(),
-            session_id,
-            true,
-            json!({ "event_seq": seq }),
-        )
-        .await;
+        let (status, value) =
+            post(state.clone(), session_id, true, json!({ "event_seq": seq })).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_error(&value, "runtime_position_invalid");
     }
