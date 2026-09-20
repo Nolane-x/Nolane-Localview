@@ -70,13 +70,12 @@ A Svelte candidate is accepted only when all of the following hold:
 2. that descriptor is a data property with its own `value`; accessors/getters are never invoked;
 3. the value is a plain runtime object containing a bounded `loc` object;
 4. `loc.file`, `loc.line` and `loc.column` pass the source rules below;
-5. `meta.parent` is traversed only through bounded `parent` links;
-6. the nearest admissible entry with `type === "component"` is used;
-7. the component entry's normalized file must equal the element location file;
-8. a bounded component identity is derived from `componentTag` when present, otherwise from the component `.svelte` filename basename;
-9. parent traversal is capped at 32 entries.
+5. the normalized source file must end in `.svelte`;
+6. a bounded component identity is derived only from that source file's basename.
 
-The adapter never enumerates arbitrary Svelte runtime state and never installs a Svelte DevTools hook.
+Although current Svelte metadata also carries a `parent` development stack, LocalView deliberately does **not** traverse or retain it in this slice. Upstream Svelte runtime tests show root component elements may legitimately have `parent = null`, while nested parent entries describe block/call context rather than a universal owner record. Source-file identity is therefore the smaller and more reliable ownership authority.
+
+The adapter never enumerates arbitrary Svelte runtime state, never reads `meta.parent`, and never installs a Svelte DevTools hook.
 
 ## Framework probe budget
 
@@ -84,7 +83,7 @@ Semantic snapshots share one framework-ownership probe budget:
 
 - at most 256 marker-bearing framework probes per snapshot;
 - React spends a probe only after an exact React host marker is found;
-- Svelte spends a probe only after an own `__svelte_meta` descriptor exists;
+- Svelte spends a probe only after an own `__svelte_meta` data descriptor exists;
 - invalid/fake marker shapes still consume the probe once identified;
 - exhausting the budget yields no framework source hint for later nodes rather than failing the whole semantic snapshot.
 
@@ -121,12 +120,9 @@ No synthetic line or column may be created.
 
 ## Component identity
 
-The nearest bounded `type === "component"` parent entry must refer to the same normalized source file as the element location.
+A valid Svelte element source file must end in `.svelte`. The component identity is the basename of that same normalized source file with the `.svelte` extension removed.
 
-Component identity is chosen in this order:
-
-1. bounded `componentTag`, if present;
-2. the basename of the same `.svelte` file with the extension removed.
+This deliberately avoids `meta.parent` and `componentTag`: a root component can have no parent stack, while nested component entries represent invocation/block context. The source file that Svelte itself attached to the exact element is the direct source-backed authority.
 
 The component name is capped at 96 UTF-8 bytes and must not contain control characters.
 
@@ -148,7 +144,7 @@ The adapter does not retain:
 - context;
 - reactive values/signals;
 - component instances;
-- arbitrary dev-stack fields;
+- the Svelte parent/dev stack;
 - rendered text as ownership evidence;
 - source contents;
 - absolute project paths.
@@ -202,8 +198,8 @@ It proves:
 5. explicit `data-component-source` outranks Svelte introspection;
 6. plain DOM does not fabricate Svelte ownership;
 7. an accessor-backed fake `__svelte_meta` is never invoked;
-8. absolute/traversal-like fake Svelte files fail closed;
-9. metadata without a valid component parent fails closed.
+8. absolute/traversal-like/non-`.svelte` fake source files fail closed;
+9. root-component metadata with `parent = null` remains valid because LocalView does not depend on the parent stack.
 
 ## Verification gates
 
@@ -214,10 +210,10 @@ Prove:
 - one shared 256 framework marker budget;
 - exact own-data-descriptor Svelte access;
 - no getter invocation;
-- 32-entry parent cap;
-- relative-path privacy fencing;
+- no Svelte parent-stack traversal;
+- relative-path privacy fencing plus mandatory `.svelte` identity;
 - real line/zero-based-column validation;
-- same-file component-parent anchoring;
+- component identity derived only from the exact element's source file;
 - explicit-source and React precedence;
 - no Svelte state/props/context collection.
 
@@ -272,4 +268,4 @@ This slice does not claim:
 
 ## Completion definition
 
-The slice is complete when a real Svelte 5 development component can attach bounded read-only source/component ownership to its exact semantic node only from admissible compiler/runtime metadata, with true coordinates, explicit-source precedence, no secret/runtime-state retention, deterministic hard bounds and fail-closed behavior for absolute, malformed, synthetic or ambiguous metadata.
+The slice is complete when a real Svelte 5 development component can attach bounded read-only source/component ownership to its exact semantic node only from admissible compiler/runtime metadata, with true coordinates, exact source-file-backed component identity, explicit-source precedence, no parent-stack or secret/runtime-state retention, deterministic hard bounds and fail-closed behavior for absolute, malformed, synthetic or ambiguous metadata.
