@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+#[path = "css_source_coordinate.rs"]
+mod css_source_coordinate;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -15,6 +18,7 @@ use crate::{
     ControlState,
     fresh_snapshot::{FreshSnapshotError, acquire_fresh_snapshot_result},
 };
+use css_source_coordinate::CssSourceAuthority;
 
 const MAX_REFERENCE_BYTES: usize = 256;
 const MAX_TREE_DEPTH: usize = 12;
@@ -41,6 +45,7 @@ pub(crate) struct CssDeclarationEvidence {
     pub property: String,
     pub value: String,
     pub important: bool,
+    pub source_authority: CssSourceAuthority,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -55,6 +60,7 @@ pub(crate) struct CssCascadeWinner {
     pub important: bool,
     pub specificity: [u16; 4],
     pub source_order: u32,
+    pub source_authority: CssSourceAuthority,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -121,7 +127,10 @@ async fn session_style_trace(
     };
 
     match project_style_trace(&result.payload, &reference) {
-        Ok(trace) => Json(trace).into_response(),
+        Ok(mut trace) => {
+            css_source_coordinate::enrich_style_trace_source_authority(&state, id, &mut trace).await;
+            Json(trace).into_response()
+        }
         Err(CssTraceError::InvalidReference) => {
             bounded_error(StatusCode::BAD_REQUEST, "invalid_element_reference")
         }
@@ -420,6 +429,7 @@ fn project_cascade_winner(value: &Value) -> Result<CssCascadeWinner, CssTraceErr
         important,
         specificity,
         source_order,
+        source_authority: CssSourceAuthority::initial(source_kind),
     })
 }
 
@@ -476,6 +486,7 @@ fn project_declaration(value: &Value) -> Result<CssDeclarationEvidence, CssTrace
         property: property.to_owned(),
         value,
         important,
+        source_authority: CssSourceAuthority::initial(source_kind),
     })
 }
 
