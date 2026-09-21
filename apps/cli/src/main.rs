@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod headless;
+
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -21,6 +23,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Headless(headless::HeadlessArgs),
     Status,
     Sessions,
     Show { session: SessionId },
@@ -83,6 +86,23 @@ async fn main() -> Result<()> {
     let client = Client::new();
 
     match cli.command {
+        Command::Headless(args) => {
+            let token = match read_token().await {
+                Ok(token) => token,
+                Err(error) => {
+                    eprintln!("LocalView headless infrastructure error: {error:#}");
+                    std::process::exit(headless::EXIT_INFRASTRUCTURE);
+                }
+            };
+            let code = match headless::run(&client, &cli.control, &token, args).await {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("LocalView headless infrastructure error: {error:#}");
+                    headless::EXIT_INFRASTRUCTURE
+                }
+            };
+            std::process::exit(code);
+        }
         Command::Status => {
             let health: Health = client
                 .get(format!("{}/health", cli.control))
