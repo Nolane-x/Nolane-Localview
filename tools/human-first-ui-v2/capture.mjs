@@ -4500,7 +4500,7 @@ await shot(page, '170-vi-narrow-fix-review.png', 'ui-audit-vi-narrow-fix');
 await page.close();
 
 page = await pageFor(browser, { width: 390, height: 844 }, 'zh-CN');
-await page.locator('.floating-rail .rail-button').filter({ has: page.locator('svg') }).nth(5).click();
+await page.locator('.floating-rail').getByRole('button', { name: '设置' }).click();
 await page.waitForTimeout(100);
 await assertVisible(page, '.panel-settings', 'ui-audit-zh-narrow-settings');
 await assertNoHorizontalOverflow(page, 'ui-audit-zh-narrow-settings');
