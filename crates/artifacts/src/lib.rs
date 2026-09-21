@@ -18,6 +18,12 @@ pub struct ArtifactMeta {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalArtifactMeta {
+    pub physical: ArtifactMeta,
+    pub canonical_hash: String,
+}
+
 pub struct ArtifactStore {
     root: PathBuf,
     max_bytes: u64,
@@ -44,6 +50,32 @@ impl ArtifactStore {
 
     pub fn used_bytes(&self) -> u64 {
         self.used
+    }
+
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes
+    }
+
+    pub async fn put_canonical(
+        &mut self,
+        kind: &str,
+        canonical_hash: &str,
+        bytes: &[u8],
+    ) -> Result<CanonicalArtifactMeta> {
+        if !valid_canonical_hash(canonical_hash) {
+            anyhow::bail!("canonical artifact hash must be a sha256:<64 hex> digest");
+        }
+        let physical = self.put(kind, bytes).await?;
+        let retained = tokio::fs::read(&physical.path).await?;
+        if retained != bytes {
+            anyhow::bail!(
+                "physical artifact id collision detected; canonical artifact was not retained"
+            );
+        }
+        Ok(CanonicalArtifactMeta {
+            physical,
+            canonical_hash: canonical_hash.to_owned(),
+        })
     }
 
     pub fn projected_used_bytes_after_put(&self, bytes: &[u8]) -> Result<u64> {
@@ -129,11 +161,7 @@ impl ArtifactStore {
             restored.push((modified, id, meta));
         }
 
-        restored.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.cmp(&right.1))
-        });
+        restored.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
         for (_, id, meta) in restored {
             self.used = self.used.saturating_add(meta.bytes);
             self.lru.push_back(id.clone());
@@ -163,6 +191,13 @@ impl ArtifactStore {
         }
         Ok(())
     }
+}
+
+fn valid_canonical_hash(value: &str) -> bool {
+    let Some(digest) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn is_content_id(value: &str) -> bool {
@@ -208,6 +243,21 @@ mod tests {
         let a = store.put("text", b"same").await.unwrap();
         let b = store.put("text", b"same").await.unwrap();
         assert_eq!(a.id, b.id);
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn canonical_hash_and_physical_storage_id_remain_distinct() {
+        let dir = test_dir("canonical");
+        let mut store = ArtifactStore::open(&dir, 1024).await.unwrap();
+        let canonical = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let retained = store
+            .put_canonical("baseline/json", canonical, b"baseline")
+            .await
+            .unwrap();
+        assert!(retained.physical.id.starts_with("lv-"));
+        assert_eq!(retained.canonical_hash, canonical);
+        assert_ne!(retained.physical.id, retained.canonical_hash);
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
