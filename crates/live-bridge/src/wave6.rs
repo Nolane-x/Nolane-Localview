@@ -92,15 +92,10 @@ impl LiveBridge {
         let action = match step.action {
             InteractionActionKind::Click => BridgeActionKind::Click,
             InteractionActionKind::Focus => BridgeActionKind::Focus,
-            InteractionActionKind::Tab => BridgeActionKind::Key {
-                key: "Tab".into(),
-                modifiers: Vec::new(),
-            },
-            InteractionActionKind::ShiftTab => BridgeActionKind::Key {
-                key: "Tab".into(),
-                modifiers: vec!["Shift".into()],
-            },
-            InteractionActionKind::Key | InteractionActionKind::Scroll => {
+            InteractionActionKind::Tab
+            | InteractionActionKind::ShiftTab
+            | InteractionActionKind::Key
+            | InteractionActionKind::Scroll => {
                 return Err(Wave6ReplayAdmissionError::UnsupportedReplayPayload);
             }
         };
@@ -246,13 +241,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generic_key_or_scroll_replay_never_invents_missing_payload() {
+    async fn keyboard_or_scroll_replay_never_invents_missing_authority() {
         let bridge = LiveBridge::new(32, 8);
         let session = uuid::Uuid::new_v4();
         let error = bridge
             .enqueue_wave6_replay_step(
                 session,
-                &step(InteractionActionKind::Key),
+                &step(InteractionActionKind::Tab),
                 &state("before"),
                 SafetyClass::ExplicitlySafe,
                 true,
