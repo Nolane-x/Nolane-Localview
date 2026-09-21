@@ -161,11 +161,7 @@ impl ArtifactStore {
             restored.push((modified, id, meta));
         }
 
-        restored.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.cmp(&right.1))
-        });
+        restored.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
         for (_, id, meta) in restored {
             self.used = self.used.saturating_add(meta.bytes);
             self.lru.push_back(id.clone());
@@ -254,8 +250,7 @@ mod tests {
     async fn canonical_hash_and_physical_storage_id_remain_distinct() {
         let dir = test_dir("canonical");
         let mut store = ArtifactStore::open(&dir, 1024).await.unwrap();
-        let canonical =
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let canonical = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let retained = store
             .put_canonical("baseline/json", canonical, b"baseline")
             .await
