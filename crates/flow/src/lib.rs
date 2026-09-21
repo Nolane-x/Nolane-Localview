@@ -734,6 +734,46 @@ mod tests {
     }
 
     #[test]
+    fn hidden_and_document_focus_are_reported_explicitly() {
+        let initial = FocusObservation {
+            transition_index: 0,
+            reference: Some("@e1".into()),
+            route: "/".into(),
+            document_generation: 1,
+            tabindex: Some(0),
+            hidden_or_offscreen: false,
+            is_body_or_document: false,
+        };
+        let transitions = vec![
+            FocusObservation {
+                transition_index: 1,
+                reference: Some("@e2".into()),
+                route: "/".into(),
+                document_generation: 1,
+                tabindex: Some(0),
+                hidden_or_offscreen: true,
+                is_body_or_document: false,
+            },
+            FocusObservation {
+                transition_index: 2,
+                reference: None,
+                route: "/".into(),
+                document_generation: 1,
+                tabindex: None,
+                hidden_or_offscreen: false,
+                is_body_or_document: true,
+            },
+        ];
+        let result = analyze_keyboard_journey(initial, transitions, 64);
+        assert!(result.issues.iter().any(|issue| {
+            issue.kind == FocusIssueKind::HiddenOrOffscreenFocused
+        }));
+        assert!(result.issues.iter().any(|issue| {
+            issue.kind == FocusIssueKind::LostToDocument
+        }));
+    }
+
+    #[test]
     fn focus_loop_is_distinct_from_immediate_repeat() {
         let initial = FocusObservation {
             transition_index: 0,
