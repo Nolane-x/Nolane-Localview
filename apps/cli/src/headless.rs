@@ -1491,7 +1491,8 @@ fn revalidate_canonical_directory(path: &Path, label: &str) -> Result<()> {
         .with_context(|| format!("{label} is unavailable: {}", path.display()))?;
     if metadata.file_type().is_symlink()
         || metadata_is_reparse_point(&metadata)
-        || !metadata.is_dir() {
+        || !metadata.is_dir()
+    {
         bail!("{label} must be a real directory");
     }
     let canonical = fs::canonicalize(path)
@@ -1534,8 +1535,9 @@ async fn ensure_project_directory(project_root: &Path, requested: &Path) -> Resu
         match tokio::fs::symlink_metadata(&next).await {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink()
-        || metadata_is_reparse_point(&metadata)
-        || !metadata.is_dir() {
+                    || metadata_is_reparse_point(&metadata)
+                    || !metadata.is_dir()
+                {
                     bail!("project-contained directory component is not a real directory");
                 }
             }
@@ -1550,8 +1552,9 @@ async fn ensure_project_directory(project_root: &Path, requested: &Path) -> Resu
         }
         let metadata = tokio::fs::symlink_metadata(&next).await?;
         if metadata.file_type().is_symlink()
-        || metadata_is_reparse_point(&metadata)
-        || !metadata.is_dir() {
+            || metadata_is_reparse_point(&metadata)
+            || !metadata.is_dir()
+        {
             bail!("project-contained directory component changed during creation");
         }
         let canonical = tokio::fs::canonicalize(&next).await?;
@@ -1575,7 +1578,8 @@ fn read_optional_regular_leaf(path: &Path, max_bytes: u64) -> Result<Option<Vec<
     };
     if before.file_type().is_symlink()
         || metadata_is_reparse_point(&before)
-        || !before.is_file() {
+        || !before.is_file()
+    {
         bail!("persistence leaf must be a regular file");
     }
     if before.len() > max_bytes {
