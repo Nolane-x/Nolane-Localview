@@ -7,7 +7,9 @@ fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 
 #[test]
 fn canonical_spec_locks_responsive_authority_and_restore_before_persistence() {
-    let spec = include_str!("../../../../docs/superpowers/specs/2026-09-19-trusted-responsive-sweep-contact-sheet-design.md");
+    let spec = include_str!(
+        "../../../../docs/superpowers/specs/2026-09-19-trusted-responsive-sweep-contact-sheet-design.md"
+    );
     let normalized = spec.to_ascii_lowercase();
     for required in [
         "frontend must never send arbitrary width/height authority",
@@ -34,11 +36,21 @@ fn desktop_responsive_request_is_preset_id_only() {
 
     let request = between(api, "ResponsiveSweepRequest", "ResponsiveSweepReceipt");
     for required in ["sessionId", "presets"] {
-        assert!(request.contains(required), "responsive request missing {required}");
+        assert!(
+            request.contains(required),
+            "responsive request missing {required}"
+        );
     }
     for forbidden in [
-        "width:", "height:", "viewport:", "deviceScaleFactor", "route:",
-        "artifactId", "mask", "pixelWidth", "pixelHeight",
+        "width:",
+        "height:",
+        "viewport:",
+        "deviceScaleFactor",
+        "route:",
+        "artifactId",
+        "mask",
+        "pixelWidth",
+        "pixelHeight",
     ] {
         assert!(
             !request.contains(forbidden),
@@ -60,7 +72,7 @@ fn responsive_transaction_uses_exact_preview_and_restores_before_persistence() {
     for required in [
         "preview_surface_label",
         "DesktopSurfaceKind::PreviewWindow",
-        "registry.current",
+        "validate_responsive_preview_authority",
         "session_capture_gate",
         "set_min_size",
         "set_size",
@@ -73,7 +85,10 @@ fn responsive_transaction_uses_exact_preview_and_restores_before_persistence() {
         "build_responsive_contact_sheet",
         "persist_responsive_contact_sheet_and_register",
     ] {
-        assert!(tx.contains(required), "responsive transaction missing {required}");
+        assert!(
+            tx.contains(required),
+            "responsive transaction missing {required}"
+        );
     }
 
     assert!(
@@ -81,9 +96,26 @@ fn responsive_transaction_uses_exact_preview_and_restores_before_persistence() {
         "first responsive slice must not silently fall back to workspace/iframe authority"
     );
 
+    let authority = between(
+        source,
+        "fn validate_responsive_preview_authority(",
+        "fn responsive_text_or_control(",
+    );
+    assert!(
+        authority.contains(".current(")
+            && authority.contains("DesktopSurfaceKind::PreviewWindow")
+            && authority.contains("owner_instance_id"),
+        "responsive preview authority must remain registry-owned and exact-session bound"
+    );
+
     let restore = tx.find("restore_responsive_preview").unwrap();
-    let persist = tx.find("persist_responsive_contact_sheet_and_register").unwrap();
-    assert!(restore < persist, "preview restoration must happen before persistence");
+    let persist = tx
+        .find("persist_responsive_contact_sheet_and_register")
+        .unwrap();
+    assert!(
+        restore < persist,
+        "preview restoration must happen before persistence"
+    );
 
     let restore_fn = between(
         source,
@@ -119,10 +151,17 @@ fn responsive_ui_is_real_but_bounded_to_canonical_presets() {
 
     let responsive = between(tools, "function ResponsivePanel(", "function ConsolePanel(");
     for required in [
-        "mobile_s", "mobile", "tablet", "desktop",
-        "onRunResponsiveSweep", "responsiveState",
+        "mobile_s",
+        "mobile",
+        "tablet",
+        "desktop",
+        "onRunResponsiveSweep",
+        "responsiveState",
     ] {
-        assert!(responsive.contains(required), "Responsive panel missing {required}");
+        assert!(
+            responsive.contains(required),
+            "Responsive panel missing {required}"
+        );
     }
     assert!(!responsive.contains("disabled aria-disabled=\"true\""));
     assert!(!responsive.contains("type=\"number\""));
@@ -137,7 +176,10 @@ fn responsive_ui_is_real_but_bounded_to_canonical_presets() {
         "responsive.previewRequired",
         "responsive.retry",
     ] {
-        assert!(i18n.contains(&format!("'{key}'")), "missing responsive localization {key}");
+        assert!(
+            i18n.contains(&format!("'{key}'")),
+            "missing responsive localization {key}"
+        );
     }
 }
 
@@ -152,10 +194,72 @@ fn responsive_evidence_is_dedicated_and_contact_sheet_only() {
     assert!(control.contains("deny_unknown_fields"));
     assert!(control.contains("ResponsivePresetId"));
 
-    for forbidden in ["freeze_token", "selectors", "cookies", "local_storage", "dom_text"] {
+    for forbidden in [
+        "freeze_token",
+        "selectors",
+        "cookies",
+        "local_storage",
+        "dom_text",
+    ] {
         assert!(
             !control.contains(forbidden),
             "responsive evidence must not retain private authority/content: {forbidden}"
         );
     }
+}
+
+#[test]
+fn adaptive_runtime_stays_inside_the_existing_restore_before_persistence_transaction() {
+    let source = include_str!("../src/visual_capture.rs");
+    let tx = between(
+        source,
+        "pub async fn capture_responsive_sweep(",
+        "async fn wait_for_responsive_size_convergence(",
+    );
+
+    for required in [
+        "run_live_adaptive_responsive",
+        "ResponsiveTransactionOutput",
+    ] {
+        assert!(
+            tx.contains(required),
+            "adaptive responsive transaction missing {required}"
+        );
+    }
+
+    let adaptive = tx.find("run_live_adaptive_responsive").unwrap();
+    let restore = tx.find("restore_responsive_preview").unwrap();
+    let persist = tx
+        .find("persist_responsive_contact_sheet_and_register")
+        .unwrap();
+    assert!(
+        adaptive < restore,
+        "adaptive probes must finish before exact preview restoration"
+    );
+    assert!(
+        restore < persist,
+        "adaptive integration must preserve restore-before-persistence"
+    );
+}
+
+#[test]
+fn responsive_persistence_fails_closed_through_existing_retained_resource_ledger() {
+    let source = include_str!("../src/visual_capture.rs");
+    let persist = between(
+        source,
+        "async fn persist_responsive_contact_sheet_and_register(",
+        "#[tauri::command]\npub async fn capture_full_page(",
+    );
+
+    let synchronize = persist
+        .find("retained_resources\n            .synchronize")
+        .expect("existing retained-resource synchronization must remain");
+    let admit = persist
+        .find("retained_resources\n            .admit_projected")
+        .expect("existing retained-resource admission must remain");
+    let put = persist
+        .find("artifacts.put(")
+        .expect("contact sheet artifact write must remain");
+    assert!(synchronize < admit && admit < put);
+    assert!(persist.contains("responsive_memory_budget_exceeded"));
 }

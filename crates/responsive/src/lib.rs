@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -12,26 +11,68 @@ pub struct Viewport {
 }
 
 pub const DEFAULT_VIEWPORTS: &[Viewport] = &[
-    Viewport { width: 320, height: 568 },
-    Viewport { width: 360, height: 800 },
-    Viewport { width: 375, height: 812 },
-    Viewport { width: 390, height: 844 },
-    Viewport { width: 430, height: 932 },
-    Viewport { width: 768, height: 1024 },
-    Viewport { width: 1024, height: 768 },
-    Viewport { width: 1280, height: 720 },
-    Viewport { width: 1440, height: 900 },
-    Viewport { width: 1920, height: 1080 },
+    Viewport {
+        width: 320,
+        height: 568,
+    },
+    Viewport {
+        width: 360,
+        height: 800,
+    },
+    Viewport {
+        width: 375,
+        height: 812,
+    },
+    Viewport {
+        width: 390,
+        height: 844,
+    },
+    Viewport {
+        width: 430,
+        height: 932,
+    },
+    Viewport {
+        width: 768,
+        height: 1024,
+    },
+    Viewport {
+        width: 1024,
+        height: 768,
+    },
+    Viewport {
+        width: 1280,
+        height: 720,
+    },
+    Viewport {
+        width: 1440,
+        height: 900,
+    },
+    Viewport {
+        width: 1920,
+        height: 1080,
+    },
 ];
 
 pub const MAX_CANONICAL_SWEEP_PRESETS: usize = 4;
 pub const DEFAULT_CONTACT_SHEET_GUTTER_PX: u32 = 16;
 pub const DEFAULT_MAX_CONTACT_SHEET_RGBA_BYTES: usize = 96 * 1024 * 1024;
 pub const DEFAULT_MAX_RESPONSIVE_FRAME_RGBA_BYTES: usize = 64 * 1024 * 1024;
+pub const DEFAULT_ADAPTIVE_PROBE_CAP: usize = 12;
+pub const DEFAULT_ADAPTIVE_INITIAL_PROBE_CAP: usize = 6;
+pub const DEFAULT_BREAKPOINT_TOLERANCE_PX: u32 = 16;
+pub const DEFAULT_ADAPTIVE_MIN_WIDTH: u32 = 320;
+pub const DEFAULT_ADAPTIVE_MAX_WIDTH: u32 = 1440;
+pub const MAX_RESPONSIVE_OBSERVATION_NODES: usize = 256;
+pub const MAX_RESPONSIVE_ISSUES: usize = 64;
+const MAX_COLLISION_NODES: usize = 64;
+const VIEWPORT_EDGE_TOLERANCE_PX: f64 = 1.0;
+const PARENT_OVERFLOW_TOLERANCE_PX: f64 = 2.0;
+const CONTROL_COLLISION_RATIO: f64 = 0.25;
+const DRAMATIC_CENTER_SHIFT_RATIO: f64 = 0.30;
+const DRAMATIC_AREA_RATIO: f64 = 3.0;
+const NEARBY_WIDTH_DELTA_PX: u32 = 96;
 
-#[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord,
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponsivePresetId {
     MobileS,
@@ -43,10 +84,22 @@ pub enum ResponsivePresetId {
 impl ResponsivePresetId {
     pub const fn viewport(self) -> Viewport {
         match self {
-            Self::MobileS => Viewport { width: 320, height: 568 },
-            Self::Mobile => Viewport { width: 390, height: 844 },
-            Self::Tablet => Viewport { width: 768, height: 1024 },
-            Self::Desktop => Viewport { width: 1440, height: 900 },
+            Self::MobileS => Viewport {
+                width: 320,
+                height: 568,
+            },
+            Self::Mobile => Viewport {
+                width: 390,
+                height: 844,
+            },
+            Self::Tablet => Viewport {
+                width: 768,
+                height: 1024,
+            },
+            Self::Desktop => Viewport {
+                width: 1440,
+                height: 900,
+            },
         }
     }
 
@@ -129,6 +182,9 @@ pub enum ResponsiveError {
     FrameBufferLengthMismatch,
     FrameMemoryBudgetExceeded,
     ContactSheetMemoryBudgetExceeded,
+    InvalidAdaptiveRange,
+    InvalidAdaptiveProbeCap,
+    InvalidResponsiveObservation,
 }
 
 impl fmt::Display for ResponsiveError {
@@ -145,6 +201,9 @@ impl fmt::Display for ResponsiveError {
             Self::ContactSheetMemoryBudgetExceeded => {
                 "responsive_contact_sheet_memory_budget_exceeded"
             }
+            Self::InvalidAdaptiveRange => "responsive_invalid_adaptive_range",
+            Self::InvalidAdaptiveProbeCap => "responsive_invalid_adaptive_probe_cap",
+            Self::InvalidResponsiveObservation => "responsive_invalid_observation",
         };
         f.write_str(code)
     }
@@ -166,7 +225,11 @@ pub fn plan_canonical_sweep(
 
     let mut presets = requested.to_vec();
     presets.sort_by_key(|preset| preset.canonical_rank());
-    let viewports = presets.iter().copied().map(ResponsivePresetId::viewport).collect();
+    let viewports = presets
+        .iter()
+        .copied()
+        .map(ResponsivePresetId::viewport)
+        .collect();
 
     Ok(ResponsiveSweepPlan { presets, viewports })
 }
@@ -311,8 +374,673 @@ pub fn build_responsive_contact_sheet(
     Ok(ResponsiveContactSheet { geometry, rgba })
 }
 
-#[async_trait]
-pub trait LayoutProbe: Send + Sync {
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsiveDetectorState {
+    Pass,
+    Fail,
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsiveIssueKind {
+    HorizontalOverflow,
+    Clipping,
+    UnexpectedDisappearance,
+    ControlCollision,
+    DramaticLayoutJump,
+    TextOrControlOutsideViewport,
+    BreakpointLocalRegression,
+    NearbyWidthInstability,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsiveIssueClass {
+    Deterministic,
+    Suspected,
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResponsiveRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl ResponsiveRect {
+    fn right(&self) -> f64 {
+        self.x + self.width
+    }
+
+    fn bottom(&self) -> f64 {
+        self.y + self.height
+    }
+
+    fn area(&self) -> f64 {
+        self.width * self.height
+    }
+
+    fn valid(&self) -> bool {
+        self.x.is_finite()
+            && self.y.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
+            && self.width > 0.0
+            && self.height > 0.0
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResponsiveNodeObservation {
+    pub reference: String,
+    pub parent_reference: Option<String>,
+    pub rect: ResponsiveRect,
+    pub interactive: bool,
+    pub text_or_control: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResponsiveObservation {
+    pub session: String,
+    pub route: String,
+    pub viewport: Viewport,
+    pub snapshot_version: u64,
+    pub state_fingerprint: u64,
+    pub state_fingerprint_complete: bool,
+    pub complete: bool,
+    pub nodes: Vec<ResponsiveNodeObservation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResponsiveIssue {
+    pub kind: ResponsiveIssueKind,
+    pub session: String,
+    pub route: String,
+    pub viewport: Viewport,
+    pub refs: Vec<String>,
+    pub detector: String,
+    pub evidence: Vec<String>,
+    pub confidence_milli: u16,
+    pub class: ResponsiveIssueClass,
+    pub before_width: Option<u32>,
+    pub after_width: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResponsiveProbeEvaluation {
+    pub state: ResponsiveDetectorState,
+    pub issues: Vec<ResponsiveIssue>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResponsiveProbeSample {
+    pub width: u32,
+    pub state: ResponsiveDetectorState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ObservedTransitionResolution {
+    Resolved {
+        detector: String,
+        claim: String,
+        lower_width: u32,
+        upper_width: u32,
+        lower_state: ResponsiveDetectorState,
+        upper_state: ResponsiveDetectorState,
+        tolerance_px: u32,
+    },
+    NoTransition {
+        detector: String,
+    },
+    Inconclusive {
+        detector: String,
+        reason: String,
+    },
+}
+
+pub fn bounded_adaptive_sweep(
+    min: u32,
+    max: u32,
+    anchors: &[u32],
+    initial_cap: usize,
+) -> Result<Vec<u32>, ResponsiveError> {
+    if min == 0 || max == 0 || min > max {
+        return Err(ResponsiveError::InvalidAdaptiveRange);
+    }
+    if !(2..=DEFAULT_ADAPTIVE_PROBE_CAP).contains(&initial_cap) {
+        return Err(ResponsiveError::InvalidAdaptiveProbeCap);
+    }
+
+    let candidates = adaptive_sweep(min, max, anchors);
+    let mut selected = anchors
+        .iter()
+        .copied()
+        .filter(|width| *width >= min && *width <= max)
+        .collect::<Vec<_>>();
+    selected.extend([min, max]);
+    selected.sort_unstable();
+    selected.dedup();
+
+    if selected.len() > initial_cap {
+        let last = selected.len() - 1;
+        let source = selected;
+        let mut bounded = Vec::with_capacity(initial_cap);
+        for slot in 0..initial_cap {
+            let index = slot
+                .checked_mul(last)
+                .ok_or(ResponsiveError::InvalidAdaptiveProbeCap)?
+                / (initial_cap - 1);
+            bounded.push(source[index]);
+        }
+        selected = bounded;
+        selected.sort_unstable();
+        selected.dedup();
+    }
+
+    while selected.len() < initial_cap {
+        let Some(next) = candidates
+            .iter()
+            .copied()
+            .filter(|candidate| selected.binary_search(candidate).is_err())
+            .max_by_key(|candidate| {
+                let nearest = selected
+                    .iter()
+                    .map(|selected_width| selected_width.abs_diff(*candidate))
+                    .min()
+                    .unwrap_or(0);
+                (nearest, std::cmp::Reverse(*candidate))
+            })
+        else {
+            break;
+        };
+        selected.push(next);
+        selected.sort_unstable();
+    }
+
+    selected.dedup();
+    Ok(selected)
+}
+
+fn issue_key(issue: &ResponsiveIssue) -> String {
+    let mut refs = issue.refs.clone();
+    refs.sort();
+    format!(
+        "{:?}|{}|{}|{}|{}|{:?}|{:?}",
+        issue.kind,
+        issue.session,
+        issue.route,
+        issue.viewport.width,
+        refs.join(","),
+        issue.before_width,
+        issue.after_width
+    )
+}
+
+pub fn deduplicate_responsive_issues(issues: Vec<ResponsiveIssue>) -> Vec<ResponsiveIssue> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for issue in issues {
+        if out.len() >= MAX_RESPONSIVE_ISSUES {
+            break;
+        }
+        if seen.insert(issue_key(&issue)) {
+            out.push(issue);
+        }
+    }
+    out
+}
+
+// This constructor mirrors the bounded persisted issue schema field-for-field.
+#[allow(clippy::too_many_arguments)]
+fn issue(
+    observation: &ResponsiveObservation,
+    kind: ResponsiveIssueKind,
+    refs: Vec<String>,
+    class: ResponsiveIssueClass,
+    confidence_milli: u16,
+    evidence: Vec<String>,
+    before_width: Option<u32>,
+    after_width: Option<u32>,
+) -> ResponsiveIssue {
+    let mut evidence_with_snapshot = Vec::with_capacity(evidence.len() + 1);
+    evidence_with_snapshot.push(format!("snapshot_version={}", observation.snapshot_version));
+    evidence_with_snapshot.push(format!(
+        "state_fingerprint={:016x}",
+        observation.state_fingerprint
+    ));
+    evidence_with_snapshot.extend(evidence);
+    ResponsiveIssue {
+        kind,
+        session: observation.session.clone(),
+        route: observation.route.clone(),
+        viewport: observation.viewport,
+        refs,
+        detector: "responsive_geometry_v1".to_string(),
+        evidence: evidence_with_snapshot,
+        confidence_milli: confidence_milli.min(1000),
+        class,
+        before_width,
+        after_width,
+    }
+}
+
+fn overlap_area(a: &ResponsiveRect, b: &ResponsiveRect) -> f64 {
+    let left = a.x.max(b.x);
+    let top = a.y.max(b.y);
+    let right = a.right().min(b.right());
+    let bottom = a.bottom().min(b.bottom());
+    (right - left).max(0.0) * (bottom - top).max(0.0)
+}
+
+fn direct_parent_child(a: &ResponsiveNodeObservation, b: &ResponsiveNodeObservation) -> bool {
+    a.parent_reference.as_deref() == Some(b.reference.as_str())
+        || b.parent_reference.as_deref() == Some(a.reference.as_str())
+}
+
+pub fn evaluate_responsive_observation(
+    previous: Option<&ResponsiveObservation>,
+    observation: &ResponsiveObservation,
+) -> Result<ResponsiveProbeEvaluation, ResponsiveError> {
+    if observation.session.is_empty()
+        || observation.route.is_empty()
+        || observation.viewport.width == 0
+        || observation.viewport.height == 0
+        || observation.nodes.len() > MAX_RESPONSIVE_OBSERVATION_NODES
+        || observation
+            .nodes
+            .iter()
+            .any(|node| node.reference.is_empty() || !node.rect.valid())
+    {
+        return Err(ResponsiveError::InvalidResponsiveObservation);
+    }
+    if let Some(previous) = previous {
+        if previous.session != observation.session || previous.route != observation.route {
+            return Err(ResponsiveError::InvalidResponsiveObservation);
+        }
+    }
+
+    let viewport_width = f64::from(observation.viewport.width);
+    let viewport_height = f64::from(observation.viewport.height);
+    let nodes_by_ref = observation
+        .nodes
+        .iter()
+        .map(|node| (node.reference.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let mut issues = Vec::new();
+    let mut hard_failure = false;
+
+    for node in &observation.nodes {
+        let outside_x = node.rect.x < -VIEWPORT_EDGE_TOLERANCE_PX
+            || node.rect.right() > viewport_width + VIEWPORT_EDGE_TOLERANCE_PX;
+        let outside_y = node.rect.y < -VIEWPORT_EDGE_TOLERANCE_PX
+            || node.rect.bottom() > viewport_height + VIEWPORT_EDGE_TOLERANCE_PX;
+        if outside_x {
+            hard_failure = true;
+            issues.push(issue(
+                observation,
+                ResponsiveIssueKind::HorizontalOverflow,
+                vec![node.reference.clone()],
+                ResponsiveIssueClass::Deterministic,
+                1000,
+                vec![format!(
+                    "rect_x={:.2};rect_right={:.2};viewport_width={}",
+                    node.rect.x,
+                    node.rect.right(),
+                    observation.viewport.width
+                )],
+                None,
+                None,
+            ));
+        }
+        if node.text_or_control && (outside_x || outside_y) {
+            hard_failure = true;
+            issues.push(issue(
+                observation,
+                ResponsiveIssueKind::TextOrControlOutsideViewport,
+                vec![node.reference.clone()],
+                ResponsiveIssueClass::Deterministic,
+                1000,
+                vec![format!(
+                    "rect=({:.2},{:.2},{:.2},{:.2});viewport={}x{}",
+                    node.rect.x,
+                    node.rect.y,
+                    node.rect.width,
+                    node.rect.height,
+                    observation.viewport.width,
+                    observation.viewport.height
+                )],
+                None,
+                None,
+            ));
+        }
+        if let Some(parent_ref) = node.parent_reference.as_deref() {
+            if let Some(parent) = nodes_by_ref.get(parent_ref) {
+                let exceeds_parent = node.rect.x < parent.rect.x - PARENT_OVERFLOW_TOLERANCE_PX
+                    || node.rect.y < parent.rect.y - PARENT_OVERFLOW_TOLERANCE_PX
+                    || node.rect.right() > parent.rect.right() + PARENT_OVERFLOW_TOLERANCE_PX
+                    || node.rect.bottom() > parent.rect.bottom() + PARENT_OVERFLOW_TOLERANCE_PX;
+                if exceeds_parent {
+                    issues.push(issue(
+                        observation,
+                        ResponsiveIssueKind::Clipping,
+                        vec![parent.reference.clone(), node.reference.clone()],
+                        ResponsiveIssueClass::Suspected,
+                        650,
+                        vec![
+                            "child_geometry_exceeds_parent_geometry".to_string(),
+                            "computed_overflow_style_not_asserted".to_string(),
+                        ],
+                        None,
+                        None,
+                    ));
+                }
+            }
+        }
+    }
+
+    let interactive = observation
+        .nodes
+        .iter()
+        .filter(|node| node.interactive)
+        .take(MAX_COLLISION_NODES)
+        .collect::<Vec<_>>();
+    for left_index in 0..interactive.len() {
+        for right_index in (left_index + 1)..interactive.len() {
+            let left = interactive[left_index];
+            let right = interactive[right_index];
+            if direct_parent_child(left, right) {
+                continue;
+            }
+            let overlap = overlap_area(&left.rect, &right.rect);
+            let smaller = left.rect.area().min(right.rect.area());
+            if smaller > 0.0 && overlap / smaller >= CONTROL_COLLISION_RATIO {
+                hard_failure = true;
+                issues.push(issue(
+                    observation,
+                    ResponsiveIssueKind::ControlCollision,
+                    vec![left.reference.clone(), right.reference.clone()],
+                    ResponsiveIssueClass::Deterministic,
+                    950,
+                    vec![format!(
+                        "overlap_ratio={:.3};threshold={:.3}",
+                        overlap / smaller,
+                        CONTROL_COLLISION_RATIO
+                    )],
+                    None,
+                    None,
+                ));
+            }
+        }
+    }
+
+    let issues = deduplicate_responsive_issues(issues);
+    Ok(ResponsiveProbeEvaluation {
+        state: if !observation.complete {
+            ResponsiveDetectorState::Inconclusive
+        } else if hard_failure {
+            ResponsiveDetectorState::Fail
+        } else {
+            ResponsiveDetectorState::Pass
+        },
+        issues,
+    })
+}
+
+fn append_nearby_responsive_issues(
+    previous: &ResponsiveObservation,
+    observation: &ResponsiveObservation,
+    issues: &mut Vec<ResponsiveIssue>,
+) -> Result<(), ResponsiveError> {
+    if previous.session != observation.session || previous.route != observation.route {
+        return Err(ResponsiveError::InvalidResponsiveObservation);
+    }
+    if !previous.state_fingerprint_complete
+        || !observation.state_fingerprint_complete
+        || previous.state_fingerprint != observation.state_fingerprint
+    {
+        return Ok(());
+    }
+    let width_delta = previous.viewport.width.abs_diff(observation.viewport.width);
+    if width_delta > NEARBY_WIDTH_DELTA_PX {
+        return Ok(());
+    }
+
+    let previous_by_ref = previous
+        .nodes
+        .iter()
+        .map(|node| (node.reference.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let current_by_ref = observation
+        .nodes
+        .iter()
+        .map(|node| (node.reference.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+
+    for previous_node in &previous.nodes {
+        if (previous_node.interactive || previous_node.text_or_control)
+            && !current_by_ref.contains_key(previous_node.reference.as_str())
+        {
+            issues.push(issue(
+                observation,
+                ResponsiveIssueKind::UnexpectedDisappearance,
+                vec![previous_node.reference.clone()],
+                ResponsiveIssueClass::Suspected,
+                650,
+                vec!["stable_ref_present_only_at_one_nearby_width".to_string()],
+                Some(previous.viewport.width),
+                Some(observation.viewport.width),
+            ));
+        }
+    }
+    for current_node in &observation.nodes {
+        if (current_node.interactive || current_node.text_or_control)
+            && !previous_by_ref.contains_key(current_node.reference.as_str())
+        {
+            issues.push(issue(
+                observation,
+                ResponsiveIssueKind::UnexpectedDisappearance,
+                vec![current_node.reference.clone()],
+                ResponsiveIssueClass::Suspected,
+                650,
+                vec!["stable_ref_present_only_at_one_nearby_width".to_string()],
+                Some(previous.viewport.width),
+                Some(observation.viewport.width),
+            ));
+        }
+    }
+
+    for node in &observation.nodes {
+        let Some(previous_node) = previous_by_ref.get(node.reference.as_str()) else {
+            continue;
+        };
+        let previous_center_x = (previous_node.rect.x + previous_node.rect.width / 2.0)
+            / f64::from(previous.viewport.width);
+        let previous_center_y = (previous_node.rect.y + previous_node.rect.height / 2.0)
+            / f64::from(previous.viewport.height);
+        let center_x =
+            (node.rect.x + node.rect.width / 2.0) / f64::from(observation.viewport.width);
+        let center_y =
+            (node.rect.y + node.rect.height / 2.0) / f64::from(observation.viewport.height);
+        let center_shift = (center_x - previous_center_x)
+            .abs()
+            .max((center_y - previous_center_y).abs());
+        let old_area = previous_node.rect.area();
+        let new_area = node.rect.area();
+        let area_ratio = if old_area > new_area {
+            old_area / new_area.max(1.0)
+        } else {
+            new_area / old_area.max(1.0)
+        };
+        if center_shift >= DRAMATIC_CENTER_SHIFT_RATIO || area_ratio >= DRAMATIC_AREA_RATIO {
+            issues.push(issue(
+                observation,
+                ResponsiveIssueKind::DramaticLayoutJump,
+                vec![node.reference.clone()],
+                ResponsiveIssueClass::Deterministic,
+                900,
+                vec![format!(
+                    "normalized_center_shift={center_shift:.3};area_ratio={area_ratio:.3}"
+                )],
+                Some(previous.viewport.width),
+                Some(observation.viewport.width),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn analyze_responsive_series(
+    observations: &[ResponsiveObservation],
+    evaluations: &[ResponsiveProbeEvaluation],
+) -> Result<Vec<ResponsiveIssue>, ResponsiveError> {
+    if observations.len() != evaluations.len() || observations.is_empty() {
+        return Err(ResponsiveError::InvalidResponsiveObservation);
+    }
+    let mut indexed = observations
+        .iter()
+        .zip(evaluations.iter())
+        .collect::<Vec<_>>();
+    indexed.sort_by_key(|(observation, _)| observation.viewport.width);
+    if indexed
+        .windows(2)
+        .any(|pair| pair[0].0.viewport.width == pair[1].0.viewport.width)
+    {
+        return Err(ResponsiveError::InvalidResponsiveObservation);
+    }
+
+    let mut issues = Vec::new();
+    for pair in indexed.windows(2) {
+        append_nearby_responsive_issues(pair[0].0, pair[1].0, &mut issues)?;
+    }
+
+    for triple in indexed.windows(3) {
+        let left = triple[0];
+        let middle = triple[1];
+        let right = triple[2];
+        let same_state = left.0.state_fingerprint_complete
+            && middle.0.state_fingerprint_complete
+            && right.0.state_fingerprint_complete
+            && left.0.state_fingerprint == middle.0.state_fingerprint
+            && middle.0.state_fingerprint == right.0.state_fingerprint;
+        if same_state
+            && left.1.state == right.1.state
+            && middle.1.state != left.1.state
+            && !matches!(
+                (left.1.state, middle.1.state, right.1.state),
+                (ResponsiveDetectorState::Inconclusive, _, _)
+                    | (_, ResponsiveDetectorState::Inconclusive, _)
+                    | (_, _, ResponsiveDetectorState::Inconclusive)
+            )
+        {
+            issues.push(issue(
+                middle.0,
+                ResponsiveIssueKind::BreakpointLocalRegression,
+                Vec::new(),
+                ResponsiveIssueClass::Deterministic,
+                1000,
+                vec![format!(
+                    "detector_state={:?}->{:?}->{:?}",
+                    left.1.state, middle.1.state, right.1.state
+                )],
+                Some(left.0.viewport.width),
+                Some(right.0.viewport.width),
+            ));
+            if left.0.viewport.width.abs_diff(middle.0.viewport.width) <= NEARBY_WIDTH_DELTA_PX
+                && middle.0.viewport.width.abs_diff(right.0.viewport.width) <= NEARBY_WIDTH_DELTA_PX
+            {
+                issues.push(issue(
+                    middle.0,
+                    ResponsiveIssueKind::NearbyWidthInstability,
+                    Vec::new(),
+                    ResponsiveIssueClass::Inconclusive,
+                    1000,
+                    vec![format!(
+                        "nearby_detector_state={:?}->{:?}->{:?}",
+                        left.1.state, middle.1.state, right.1.state
+                    )],
+                    Some(left.0.viewport.width),
+                    Some(right.0.viewport.width),
+                ));
+            }
+        }
+    }
+
+    Ok(deduplicate_responsive_issues(issues))
+}
+
+pub fn resolve_observed_transition(
+    samples: &[ResponsiveProbeSample],
+    tolerance: u32,
+    detector: impl Into<String>,
+) -> ObservedTransitionResolution {
+    let detector = detector.into();
+    if samples.len() < 2 {
+        return ObservedTransitionResolution::Inconclusive {
+            detector,
+            reason: "insufficient_probe_evidence".to_string(),
+        };
+    }
+
+    let mut ordered = samples.to_vec();
+    ordered.sort_by_key(|sample| sample.width);
+    for pair in ordered.windows(2) {
+        if pair[0].width == pair[1].width && pair[0].state != pair[1].state {
+            return ObservedTransitionResolution::Inconclusive {
+                detector,
+                reason: "same_width_detector_instability".to_string(),
+            };
+        }
+    }
+    ordered.dedup_by_key(|sample| sample.width);
+    if ordered
+        .iter()
+        .any(|sample| sample.state == ResponsiveDetectorState::Inconclusive)
+    {
+        return ObservedTransitionResolution::Inconclusive {
+            detector,
+            reason: "inconclusive_probe_evidence".to_string(),
+        };
+    }
+
+    let transitions = ordered
+        .windows(2)
+        .filter(|pair| pair[0].state != pair[1].state)
+        .collect::<Vec<_>>();
+    match transitions.as_slice() {
+        [] => ObservedTransitionResolution::NoTransition { detector },
+        [pair] => {
+            let gap = pair[1].width.saturating_sub(pair[0].width);
+            if gap > tolerance.max(1) {
+                ObservedTransitionResolution::Inconclusive {
+                    detector,
+                    reason: "transition_not_resolved_within_tolerance".to_string(),
+                }
+            } else {
+                ObservedTransitionResolution::Resolved {
+                    detector,
+                    claim: "observed_responsive_transition".to_string(),
+                    lower_width: pair[0].width,
+                    upper_width: pair[1].width,
+                    lower_state: pair[0].state,
+                    upper_state: pair[1].state,
+                    tolerance_px: tolerance.max(1),
+                }
+            }
+        }
+        _ => ObservedTransitionResolution::Inconclusive {
+            detector,
+            reason: "non_monotonic_detector".to_string(),
+        },
+    }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait LayoutProbe {
     async fn fails_at(&self, width: u32) -> bool;
 }
 
@@ -374,7 +1102,6 @@ mod tests {
 
     struct P;
 
-    #[async_trait]
     impl LayoutProbe for P {
         async fn fails_at(&self, width: u32) -> bool {
             width < 728
@@ -389,11 +1116,8 @@ mod tests {
 
     #[test]
     fn contact_sheet_copies_exact_rows_and_keeps_opaque_gutters() {
-        let plan = plan_canonical_sweep(&[
-            ResponsivePresetId::MobileS,
-            ResponsivePresetId::Mobile,
-        ])
-        .unwrap();
+        let plan = plan_canonical_sweep(&[ResponsivePresetId::MobileS, ResponsivePresetId::Mobile])
+            .unwrap();
         let policy = ContactSheetPolicy {
             gutter_px: 1,
             max_rgba_bytes: 1024,
