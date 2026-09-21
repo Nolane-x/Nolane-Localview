@@ -29,7 +29,7 @@ const fixture = [
   '<button id="no-feedback" data-localview-safe-interaction="true">No feedback</button>',
   '<button id="unsafe" type="submit">Delete</button>',
   '<button id="trap">Trap</button><button id="offscreen">Offscreen</button>',
-  '<input id="secret" type="password" value="SUPER_PRIVATE_WAVE6_VALUE" aria-label="Password">',
+  '<input id="readonly" readonly aria-label="Read only"><input id="secret" type="password" value="SUPER_PRIVATE_WAVE6_VALUE" aria-label="Password">',
   '<iframe id="cross-frame" src="http://cross-origin.test:41767/frame"></iframe>',
   '<script>',
   'document.querySelector("#observed").addEventListener("click",event=>event.currentTarget.setAttribute("aria-expanded","true"));',
@@ -67,6 +67,11 @@ const scanJson = JSON.stringify(scan);
 assert.equal(scanJson.includes('SUPER_PRIVATE_WAVE6_VALUE'), false);
 assert.equal(scanJson.includes('#nameless'), false);
 assert.ok(['complete', 'inconclusive'].includes(scan.status));
+
+const smallRef = await ref('#small');
+const small = await page.evaluate(r => window.__LOCALVIEW_WAVE6__.effectiveHitbox(r), smallRef);
+assert.equal(small.nominal.width, 12);
+assert.equal(small.nominal.height, 12);
 
 const clippedRef = await ref('#clipped');
 const clipped = await page.evaluate(r => window.__LOCALVIEW_WAVE6__.effectiveHitbox(r), clippedRef);
@@ -138,6 +143,11 @@ const unsafeCandidate = safeTargets.find(item => item.reference === unsafeRef);
 assert.ok(unsafeCandidate);
 assert.equal(unsafeCandidate.probe_allowed, false);
 assert.equal(unsafeCandidate.safety, 'destructive_or_unknown');
+const readonlyRef = await ref('#readonly');
+const readonlyCandidate = safeTargets.find(item => item.reference === readonlyRef);
+assert.ok(readonlyCandidate);
+assert.equal(readonlyCandidate.probe_allowed, true);
+assert.equal(readonlyCandidate.safety, 'read_only');
 
 const observedRef = await ref('#observed');
 await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({ reference: r, documentGeneration: 11, safety: 'explicitly_safe' }), observedRef);
@@ -160,6 +170,13 @@ await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({ referen
 await page.locator('#no-feedback').click();
 const feedbackNone = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.finishFeedbackProbe({ documentGeneration: 11 }));
 assert.equal(feedbackNone.verdict, 'no_observed_feedback');
+
+await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({
+  reference: r, documentGeneration: 11, safety: 'explicitly_safe', deadlineMs: 40,
+}), noFeedbackRef);
+await page.waitForTimeout(70);
+const feedbackInconclusive = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.finishFeedbackProbe({ documentGeneration: 11 }));
+assert.equal(feedbackInconclusive.verdict, 'inconclusive');
 
 const skipped = await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({ reference: r, documentGeneration: 11 }), unsafeRef);
 assert.equal(skipped.status, 'skipped');
@@ -186,7 +203,7 @@ replay = await page.evaluate(({ target, expectedState }) => window.__LOCALVIEW_W
 assert.ok(['state_mismatch', 'stable_ref_invalid'].includes(replay.reason));
 
 const allReceipts = JSON.stringify({
-  scan, clipped, occluded, journey, trapped, feedbackObserved, feedbackDelayed, feedbackNone, safeTargets,
+  scan, small, clipped, occluded, journey, trapped, feedbackObserved, feedbackDelayed, feedbackNone, feedbackInconclusive, safeTargets,
 });
 assert.equal(allReceipts.includes('SUPER_PRIVATE_WAVE6_VALUE'), false);
 
@@ -204,7 +221,7 @@ console.log(JSON.stringify({
     'overlay-freeze-cleanup',
     'route-generation-drift',
     'safe-discovery-skip',
-    'feedback-observed-delayed-none',
+    'feedback-observed-delayed-none-inconclusive',
     'replay-fail-closed',
     'privacy',
   ],
