@@ -19,7 +19,10 @@ fn content_stress_runtime_is_bounded_private_and_transactional() {
         "[data-private]",
         "[data-sensitive]",
     ] {
-        assert!(script.contains(required), "missing content-stress contract: {required}");
+        assert!(
+            script.contains(required),
+            "missing content-stress contract: {required}"
+        );
     }
 }
 
@@ -70,6 +73,9 @@ fn content_stress_skips_sensitive_editable_and_code_surfaces() {
         "[contenteditable=\"true\"]",
         "[aria-hidden=\"true\"]",
     ] {
-        assert!(script.contains(selector), "missing skip selector: {selector}");
+        assert!(
+            script.contains(selector),
+            "missing skip selector: {selector}"
+        );
     }
 }
