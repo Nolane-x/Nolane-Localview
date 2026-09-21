@@ -264,6 +264,7 @@ const WAVE6_SCRIPT: &str = r##"
     journey = null;
     current.abort.abort();
     current.freezeObserver.disconnect();
+    clearTimeout(current.deadlineTimer);
     current.overlay.remove();
     return {
       status: reason ? 'cancelled' : 'complete',
@@ -271,12 +272,16 @@ const WAVE6_SCRIPT: &str = r##"
       initial: current.initial,
       transitions: current.transitions.slice(0, MAX_FOCUS_TRANSITIONS),
       candidates: current.candidates.slice(0, 256),
-      unreachable: current.candidates.filter(reference => !current.visited.has(reference)).slice(0, 256),
+      unvisited_candidates: current.candidates.filter(reference => !current.visited.has(reference)).slice(0, 256),
+      unreachable: current.closedCycle
+        ? current.candidates.filter(reference => !current.visited.has(reference)).slice(0, 256)
+        : [],
+      cycle_observed: current.closedCycle,
       problem_refs: Array.from(current.problemRefs).slice(0, 64),
     };
   };
 
-  const beginKeyboardJourney = ({ documentGeneration, maxTransitions = MAX_FOCUS_TRANSITIONS } = {}) => {
+  const beginKeyboardJourney = ({ documentGeneration, maxTransitions = MAX_FOCUS_TRANSITIONS, deadlineMs = 8000 } = {}) => {
     if (journey) cleanupJourney('replaced');
     const cap = Math.max(1, Math.min(Number(maxTransitions) || 0, MAX_FOCUS_TRANSITIONS));
     const abort = new AbortController();
@@ -289,13 +294,19 @@ const WAVE6_SCRIPT: &str = r##"
       candidates: focusableCandidates(),
       visited: new Set(),
       problemRefs: new Set(),
+      closedCycle: false,
       abort,
       overlay,
       freezeObserver: new MutationObserver(syncOverlayFreeze),
+      deadlineTimer: 0,
       initial: null,
     };
     journey.initial = focusObservation(documentGeneration, 'initial');
     if (journey.initial.reference) journey.visited.add(journey.initial.reference);
+    const boundedDeadlineMs = Math.max(100, Math.min(Number(deadlineMs) || 8000, 30000));
+    journey.deadlineTimer = setTimeout(() => {
+      if (journey) cleanupJourney('deadline');
+    }, boundedDeadlineMs);
     let pendingTabDirection = null;
     document.addEventListener('keydown', event => {
       if (!journey) return;
@@ -325,7 +336,14 @@ const WAVE6_SCRIPT: &str = r##"
     }, { capture: true, signal: abort.signal });
     journey.freezeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-localview-visual-freeze'] });
     renderFocusOverlay();
-    return { status: 'armed', route: journey.route, document_generation: journey.generation, max_transitions: cap, initial: journey.initial };
+    return {
+      status: 'armed',
+      route: journey.route,
+      document_generation: journey.generation,
+      max_transitions: cap,
+      deadline_ms: boundedDeadlineMs,
+      initial: journey.initial,
+    };
   };
 
   const recordKeyboardFocus = ({ documentGeneration, direction = 'tab' } = {}) => {
@@ -341,7 +359,10 @@ const WAVE6_SCRIPT: &str = r##"
     }
     const observation = focusObservation(documentGeneration, direction);
     journey.transitions.push(observation);
-    if (observation.reference) journey.visited.add(observation.reference);
+    if (observation.reference) {
+      if (journey.visited.has(observation.reference)) journey.closedCycle = true;
+      journey.visited.add(observation.reference);
+    }
     renderFocusOverlay();
     return { status: 'recorded', observation };
   };
