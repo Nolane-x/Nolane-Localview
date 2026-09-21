@@ -286,55 +286,8 @@ async fn run_inner(
         }
     };
 
-    let verification = authed_get_value(
-        client,
-        control,
-        token,
-        &format!("/v1/sessions/{}/verify", session.id),
-    )
-    .await?;
-    let verification_verdict = verification
-        .get("verdict")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_owned();
-
-    let proof = authed_post_value(
-        client,
-        control,
-        token,
-        &format!("/v1/sessions/{}/proof", session.id),
-        None,
-    )
-    .await?;
-    let proof_hashes = proof
-        .pointer("/proof/proof_hash")
-        .and_then(Value::as_str)
-        .map(|value| vec![bounded_text(value, 160)])
-        .unwrap_or_default();
-
-    let evidence = authed_get_value(
-        client,
-        control,
-        token,
-        &format!("/v1/sessions/{}/evidence/recent", session.id),
-    )
-    .await?;
-    let evidence = summarize_evidence(&evidence);
-
     let mut git = read_git_annotation(client, control, token, session.id, &diagnostics).await;
-    git.annotation
-        .relevant_source_files
-        .extend(evidence.source_files.iter().cloned());
-    git.annotation.relevant_source_files.sort();
-    git.annotation.relevant_source_files.dedup();
-    git.annotation.relevant_source_files.truncate(MAX_RELEVANT_FILES);
-    let revision = git.working_tree_id.clone().or_else(|| {
-        verification
-            .get("revision")
-            .and_then(Value::as_str)
-            .map(|value| bounded_text(value, 160))
-    });
+    let mut revision = git.working_tree_id.clone();
 
     let fixture_hash = fixture.map(object_hash);
     let state_identity = object_hash(&StateIdentityInput {
@@ -432,6 +385,54 @@ async fn run_inner(
             initial_semantic_hash != final_semantic_hash
         ));
     }
+
+    let verification = authed_get_value(
+        client,
+        control,
+        token,
+        &format!("/v1/sessions/{}/verify", session.id),
+    )
+    .await?;
+    let verification_verdict = verification
+        .get("verdict")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    if revision.is_none() {
+        revision = verification
+            .get("revision")
+            .and_then(Value::as_str)
+            .map(|value| bounded_text(value, 160));
+    }
+
+    let proof = authed_post_value(
+        client,
+        control,
+        token,
+        &format!("/v1/sessions/{}/proof", session.id),
+        None,
+    )
+    .await?;
+    let proof_hashes = proof
+        .pointer("/proof/proof_hash")
+        .and_then(Value::as_str)
+        .map(|value| vec![bounded_text(value, 160)])
+        .unwrap_or_default();
+
+    let evidence = authed_get_value(
+        client,
+        control,
+        token,
+        &format!("/v1/sessions/{}/evidence/recent", session.id),
+    )
+    .await?;
+    let evidence = summarize_evidence(&evidence);
+    git.annotation
+        .relevant_source_files
+        .extend(evidence.source_files.iter().cloned());
+    git.annotation.relevant_source_files.sort();
+    git.annotation.relevant_source_files.dedup();
+    git.annotation.relevant_source_files.truncate(MAX_RELEVANT_FILES);
 
     let state_root = project_root.join(".localview").join("wave8-ci");
     let artifact_root = state_root.join("artifacts");
