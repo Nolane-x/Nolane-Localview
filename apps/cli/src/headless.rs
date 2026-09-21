@@ -14,8 +14,8 @@ use localview_diagnostics::{DiagnosticClass, DiagnosticIssue, DiagnosticReport};
 use localview_live_analysis::{FindingClass, LiveDiagnosis};
 use localview_protocol::{PageSnapshot, Session, SessionId};
 use localview_reports::{
-    ArtifactReference, BaselineComparison, BaselineComparisonStatus, GitAnnotation, LocalViewReport,
-    ReportStatus, render_html, render_json, render_markdown,
+    ArtifactReference, BaselineComparison, BaselineComparisonStatus, GitAnnotation,
+    LocalViewReport, ReportStatus, render_html, render_json, render_markdown,
 };
 use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -176,9 +176,7 @@ pub async fn run(client: &Client, control: &str, token: &str, args: HeadlessArgs
     };
     if let Some(spec) = &fixture {
         if (spec.setup.is_some() || spec.cleanup.is_some()) && !args.allow_fixture_command {
-            bail!(
-                "fixture setup/cleanup commands require explicit --allow-fixture-command policy"
-            );
+            bail!("fixture setup/cleanup commands require explicit --allow-fixture-command policy");
         }
         if let Some(command) = &spec.setup {
             run_fixture_command(&project_root, command, "setup").await?;
@@ -268,10 +266,7 @@ async fn run_inner(
             bounded_text(&unknown.reason, 256)
         ));
     }
-    let diagnostics = sanitize_diagnostics(
-        diagnostic_report_from_live(&diagnosis),
-        project_root,
-    );
+    let diagnostics = sanitize_diagnostics(diagnostic_report_from_live(&diagnosis), project_root);
     let analysis_result = match args.analysis {
         HeadlessAnalysis::Diagnose => "diagnose".to_owned(),
         HeadlessAnalysis::Full => {
@@ -432,7 +427,9 @@ async fn run_inner(
         .extend(evidence.source_files.iter().cloned());
     git.annotation.relevant_source_files.sort();
     git.annotation.relevant_source_files.dedup();
-    git.annotation.relevant_source_files.truncate(MAX_RELEVANT_FILES);
+    git.annotation
+        .relevant_source_files
+        .truncate(MAX_RELEVANT_FILES);
 
     let state_root = project_root.join(".localview").join("wave8-ci");
     let artifact_root = state_root.join("artifacts");
@@ -468,8 +465,7 @@ async fn run_inner(
     .await?;
 
     if baseline.status == BaselineComparisonStatus::Incompatible {
-        inconclusive_reasons
-            .push("baseline is unavailable or failed canonical validation".into());
+        inconclusive_reasons.push("baseline is unavailable or failed canonical validation".into());
     }
 
     if verification_verdict == "inconclusive"
@@ -609,8 +605,7 @@ fn evaluate_exit_policy(
     let baseline_failed = args.require_baseline_match
         && baseline_status == BaselineComparisonStatus::Changed
         && !args.update_baseline;
-    let verification_incomplete =
-        args.require_verification_pass && verification_verdict != "pass";
+    let verification_incomplete = args.require_verification_pass && verification_verdict != "pass";
 
     if hard_deterministic || hard_heuristic || verification_failed || baseline_failed {
         (ReportStatus::Failed, EXIT_HARD_FAILURE)
@@ -653,7 +648,9 @@ fn project_root(session: &Session) -> Result<PathBuf> {
         .git_root
         .as_deref()
         .or(session.project.cwd.as_deref())
-        .ok_or_else(|| anyhow!("session has no project root; headless CI cannot bind fixture state"))?;
+        .ok_or_else(|| {
+            anyhow!("session has no project root; headless CI cannot bind fixture state")
+        })?;
     let path = PathBuf::from(raw);
     if !path.is_absolute() {
         bail!("session project root is not absolute");
@@ -668,7 +665,8 @@ async fn load_fixture(project_root: &Path, requested: &Path) -> Result<FixtureSp
         bail!("fixture exceeds {MAX_FIXTURE_BYTES} bytes");
     }
     let bytes = tokio::fs::read(&path).await?;
-    let spec: FixtureSpec = serde_json::from_slice(&bytes).context("invalid Wave 8 fixture JSON")?;
+    let spec: FixtureSpec =
+        serde_json::from_slice(&bytes).context("invalid Wave 8 fixture JSON")?;
     validate_fixture(&spec)?;
     Ok(spec)
 }
@@ -801,10 +799,7 @@ fn unavailable_git_project_state() -> GitProjectState {
     }
 }
 
-fn git_project_state_from_value(
-    value: &Value,
-    diagnostics: &DiagnosticReport,
-) -> GitProjectState {
+fn git_project_state_from_value(value: &Value, diagnostics: &DiagnosticReport) -> GitProjectState {
     let changed_files = value
         .get("dirty_files")
         .and_then(Value::as_array)
@@ -849,16 +844,7 @@ fn relevant_source_files(diagnostics: &DiagnosticReport) -> Vec<String> {
             matches!(
                 Path::new(value).extension().and_then(|ext| ext.to_str()),
                 Some(
-                    "rs"
-                        | "ts"
-                        | "tsx"
-                        | "js"
-                        | "jsx"
-                        | "vue"
-                        | "svelte"
-                        | "css"
-                        | "scss"
-                        | "html"
+                    "rs" | "ts" | "tsx" | "js" | "jsx" | "vue" | "svelte" | "css" | "scss" | "html"
                 )
             )
         })
@@ -1177,11 +1163,11 @@ async fn compare_and_retain_baseline(
         return Ok((
             BaselineComparison {
                 status: BaselineComparisonStatus::Incompatible,
-                baseline_hash: existing.as_ref().map(|locator| locator.content_hash.clone()),
+                baseline_hash: existing
+                    .as_ref()
+                    .map(|locator| locator.content_hash.clone()),
                 candidate_hash: Some(candidate_hash),
-                reasons: vec![
-                    "headless state drifted; baseline authority was withheld".into(),
-                ],
+                reasons: vec!["headless state drifted; baseline authority was withheld".into()],
             },
             None,
         ));
@@ -1324,9 +1310,12 @@ fn valid_physical_artifact_id(value: &str) -> bool {
 }
 
 async fn resolve_output_dir(project_root: &Path, requested: Option<&Path>) -> Result<PathBuf> {
-    let path = requested
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| project_root.join(".localview").join("wave8-ci").join("reports"));
+    let path = requested.map(Path::to_path_buf).unwrap_or_else(|| {
+        project_root
+            .join(".localview")
+            .join("wave8-ci")
+            .join("reports")
+    });
     let path = if path.is_absolute() {
         path
     } else {
@@ -1508,8 +1497,12 @@ fn contained_existing_path(project_root: &Path, requested: &Path) -> Result<Path
     validate_lexically_contained(project_root, &joined)?;
     let canonical_root =
         std::fs::canonicalize(project_root).context("project root is unavailable")?;
-    let canonical = std::fs::canonicalize(&joined)
-        .with_context(|| format!("project-contained path is unavailable: {}", joined.display()))?;
+    let canonical = std::fs::canonicalize(&joined).with_context(|| {
+        format!(
+            "project-contained path is unavailable: {}",
+            joined.display()
+        )
+    })?;
     if !canonical.starts_with(&canonical_root) {
         bail!("path escapes project root");
     }
