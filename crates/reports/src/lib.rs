@@ -618,6 +618,54 @@ pub fn render_wave8_html(report: &Wave8Report) -> String {
     )
 }
 
+fn sanitize_json_value(value: &mut Value, depth: usize) {
+    if depth > 8 {
+        *value = Value::String("<truncated>".into());
+        return;
+    }
+    match value {
+        Value::Object(map) => {
+            let keys = map.keys().cloned().collect::<Vec<_>>();
+            for key in keys {
+                if sensitive_key(&key) {
+                    map.insert(key, Value::String("<redacted>".into()));
+                    continue;
+                }
+                if let Some(value) = map.get_mut(&key) {
+                    sanitize_json_value(value, depth + 1);
+                }
+            }
+        }
+        Value::Array(values) => {
+            values.truncate(MAX_IDS);
+            for value in values {
+                sanitize_json_value(value, depth + 1);
+            }
+        }
+        Value::String(value) => {
+            *value = bounded_text(value);
+        }
+        _ => {}
+    }
+}
+
+fn sensitive_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    [
+        "token",
+        "cookie",
+        "password",
+        "secret",
+        "authorization",
+        "input_value",
+        "raw_value",
+        "control_path",
+        "absolute_path",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 fn bounded_text(input: &str) -> String {
     let filtered = input
         .chars()
