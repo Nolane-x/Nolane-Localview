@@ -58,6 +58,18 @@ const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
+fn metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 const SURFACE_OWNER_REAP_INTERVAL: Duration = Duration::from_secs(5);
 
 #[tokio::main]
@@ -417,7 +429,10 @@ fn ensure_secure_state_root(state_root: &Path) -> Result<()> {
     }
 
     let metadata = fs::symlink_metadata(state_root).context("inspect LocalView state directory")?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata.file_type().is_symlink()
+        || metadata_is_reparse_point(&metadata)
+        || !metadata.is_dir()
+    {
         anyhow::bail!("LocalView state root must remain a real directory");
     }
 
@@ -454,7 +469,10 @@ fn read_existing_token(path: &Path) -> Result<Option<String>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("inspect control token"),
     };
-    if before.file_type().is_symlink() || !before.is_file() {
+    if before.file_type().is_symlink()
+        || metadata_is_reparse_point(&before)
+        || !before.is_file()
+    {
         anyhow::bail!("control token must be a regular file and may not be a symlink/reparse entry");
     }
 
@@ -469,7 +487,10 @@ fn read_existing_token(path: &Path) -> Result<Option<String>> {
         anyhow::bail!("control token handle resolves to a reparse point");
     }
     let after = fs::symlink_metadata(path).context("revalidate control token path")?;
-    if after.file_type().is_symlink() || !after.is_file() {
+    if after.file_type().is_symlink()
+        || metadata_is_reparse_point(&after)
+        || !after.is_file()
+    {
         anyhow::bail!("control token path changed during secure open");
     }
 
