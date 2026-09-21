@@ -125,16 +125,19 @@ Windows/WebView2 has the matching hosted **rendered-pixel proof**. A custom Wind
 
 The viewport **Native screenshot adapter is Implemented**: all three production platform backends have live rendered-pixel acquisition evidence in dedicated hosted GUI gates, in addition to compile/contracts coverage. **Bounded CSS-region execution, evidence-backed progressive semantic targeting, baseline-driven changed-region scheduling, guarded full-page stitching, token-aware progressive visual-packet selection, planner-owned Active Perception budget authorization, dedicated native visual execution, planner-authorized Chromium execution, retained feedback, whole-cycle accounting, cooperative public BridgeAction cancellation and deterministic capture → diff → verification are now present** above that acquisition/runtime path.
 
-This does **not** make the entire V3 Active Perception/diagnose-fix system complete. Public BridgeAction cancellation is now explicit, exact-owned and cooperative, and native-executor cancellation already has its separate authority; neither path force-kills a synchronous JavaScript/platform call already executing. The Runtime Resource Governor now has live sample/admission authority, owner-local capture-storage/visual-baseline enforcement, real Chromium process lifecycle authority and exact native preview/workspace surface lifecycle authority. D1 removes daemon-restart `SessionId` discontinuity for unambiguous targets. D2 is also landed: desktop owner-instance identity, daemon boot epochs, daemon-issued owner leases, durable bounded recovery debt, exact reattach through fresh governor leases, heartbeat/reaper cleanup, async request-lifetime owner pins and a permanent restart matrix fence crash/restart authority without restoring provider/action/evidence authority. Analysis-concurrency enforcement remains incomplete, and Vue/CSS ownership depth, adaptive/content-stress responsive intelligence and native-workspace composition safety gates remain incomplete. Bounded Svelte live ownership is landed alongside React.
+Wave 4 and Wave 5 software capability closure is now landed on the live product path. Wave 4 carries bounded live layout intelligence, adaptive/binary responsive execution, deeper responsive issue evidence and transactional content/locale stress. Wave 5 carries project-owned Source Map authority, trusted runtime-position correlation, bounded React/Svelte/Vue ownership, CSS declaration/cascade/source-coordinate authority, direct human point-select to stable `ElementRef`, and the Trusted Fix → HMR-aware settle → fresh semantic/source validation → affected-region evidence → deterministic Verify loop.
+
+Those closures do **not** make the complete V1/V2/V3 program finished. Native workspace composition/focus/crash safety is still not promoted to the default surface; analysis-concurrency authority remains deferred until a concrete concurrent analysis owner exists; Wave 6 accessibility/interaction, Wave 7 visual critic/design grammar, Wave 8 headless/CI reporting and Wave 9 autonomous verification still contain substantive product work. W10 mixed-DPI physical evidence is independently deferred from the software critical path and remains unmeasured on hosted CI.
 
 ## Next vertical slices
 
-The strongest remaining capture/perception gates are:
+The software frontier now moves beyond Wave 4/5:
 
-1. deeper framework ownership correlation now continues with Vue over the landed project-owned Source Map + trusted live RuntimeError + bounded React/Svelte ownership paths, followed by CSS ownership and interactive point-and-select inspector wiring;
-2. adaptive/binary responsive breakpoint execution, content/locale stress and deeper responsive issue intelligence over the now-landed canonical preset/contact-sheet authority;
+1. Wave 6 accessibility and interaction intelligence: keyboard/focus ordering, hit-target/dead-interaction evidence, accessibility-tree/axe integration and deterministic flow discovery/replay verification;
+2. Wave 7 visual critic and design grammar over the now-live layout/responsive/source evidence, without converting heuristic aesthetic judgments into deterministic claims;
 3. native workspace composition/focus/DPI/crash safety gates before promoting the child WebView surface from feature-gated to default;
-4. add analysis-concurrency authority only when a concrete concurrent analysis owner exists rather than introducing a synthetic counter.
+4. add analysis-concurrency authority only when a concrete concurrent analysis owner exists rather than introducing a synthetic counter;
+5. then Wave 8 headless/CI reporting/baselines and Wave 9 autonomous fix/verification proof receipts.
 
 Wave 3 bounded runtime telemetry is no longer a frontier item: action/request/UI-response correlation, exact-session loopback fault authority, strongly classified loopback HMR signals with daemon-owned settling, and bounded exact-session performance-lite packets are landed.
 

@@ -3001,9 +3001,7 @@ pub(crate) async fn wait_for_verification_settle(session_id: SessionId) -> Resul
         .map_err(|_| "trusted Verify settle failed".to_string())
 }
 
-pub(crate) async fn wait_for_content_stress_settle(
-    session_id: SessionId,
-) -> Result<(), String> {
+pub(crate) async fn wait_for_content_stress_settle(session_id: SessionId) -> Result<(), String> {
     wait_for_capture_settle(session_id)
         .await
         .map_err(|_| "content stress settle failed".to_string())
