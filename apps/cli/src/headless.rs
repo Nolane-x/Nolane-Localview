@@ -1980,16 +1980,10 @@ mod tests {
         let mut store = ArtifactStore::open(&artifact_root, 1024 * 1024)
             .await
             .unwrap();
-        let (created, _) = compare_and_retain_baseline(
-            &root,
-            &artifact_root,
-            &mut store,
-            &candidate,
-            true,
-            false,
-        )
-        .await
-        .unwrap();
+        let (created, _) =
+            compare_and_retain_baseline(&root, &artifact_root, &mut store, &candidate, true, false)
+                .await
+                .unwrap();
         assert_eq!(created.status, BaselineComparisonStatus::Created);
 
         let index = load_baseline_index(&root.join("baseline-index.json"))
