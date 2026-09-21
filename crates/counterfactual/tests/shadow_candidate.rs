@@ -223,11 +223,9 @@ fn traversal_secret_oversized_and_binary_candidates_fail_closed() {
 #[test]
 fn tracked_symlink_is_rejected_without_following_it() {
     let fixture = Fixture::new();
-    let blob = output(&fixture.root, &["hash-object", "-w", "--stdin"]);
-    let _ = blob;
     // Create a symbolic-link tree entry portably without requiring the host to
     // permit filesystem symlink creation.
-    let output = Command::new("git")
+    let hash_output = Command::new("git")
         .arg("-C")
         .arg(&fixture.root)
         .args(["hash-object", "-w", "--stdin"])
@@ -240,8 +238,11 @@ fn tracked_symlink_is_rejected_without_following_it() {
             child.wait_with_output()
         })
         .unwrap();
-    assert!(output.status.success());
-    let blob = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+    assert!(hash_output.status.success());
+    let blob = String::from_utf8(hash_output.stdout)
+        .unwrap()
+        .trim()
+        .to_owned();
     git(
         &fixture.root,
         &["update-index", "--add", "--cacheinfo", &format!("120000,{blob},src/link.txt")],
