@@ -1253,6 +1253,7 @@ function AiPanel({
         <div className="fix-status success" role="status" aria-live="polite">
           <strong>{translate(locale, 'fix.applied')}</strong>
           <span>{fixState.displayFile}</span>
+          <small className="fix-preflight-note">{translate(locale, 'fix.preflightInconclusive')}</small>
           <button className="fix-again-action" onClick={onBeginFix}>
             {translate(locale, 'fix.startReview')}
           </button>
