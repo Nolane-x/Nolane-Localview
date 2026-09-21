@@ -331,9 +331,8 @@ fn discrepancy(
     dom: Option<&str>,
     native: Option<&str>,
 ) {
-    let normalize = |value: Option<&str>| value.map(str::trim).filter(|value| !value.is_empty());
-    let dom = normalize(dom);
-    let native = normalize(native);
+    let dom = normalize_nonempty(dom);
+    let native = normalize_nonempty(native);
     if dom.is_some() && native.is_some() && dom != native {
         out.push(A11yDiscrepancy {
             field: field.into(),
@@ -341,6 +340,10 @@ fn discrepancy(
             native_value: native.map(|value| bounded_text(value, 120)),
         });
     }
+}
+
+fn normalize_nonempty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn discrepancy_bool(
