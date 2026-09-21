@@ -1576,10 +1576,7 @@ fn read_optional_regular_leaf(path: &Path, max_bytes: u64) -> Result<Option<Vec<
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if before.file_type().is_symlink()
-        || metadata_is_reparse_point(&before)
-        || !before.is_file()
-    {
+    if before.file_type().is_symlink() || metadata_is_reparse_point(&before) || !before.is_file() {
         bail!("persistence leaf must be a regular file");
     }
     if before.len() > max_bytes {
