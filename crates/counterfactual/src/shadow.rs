@@ -595,6 +595,27 @@ mod tests {
     }
 
     #[test]
+    fn shadow_startup_and_lifetime_overrun_are_rejected_before_launch() {
+        let mut policy = ShadowLaunchPolicy {
+            network_isolation_proven: true,
+            production_service_isolation_proven: true,
+            ..Default::default()
+        };
+        policy.startup_timeout_ms = MAX_SHADOW_STARTUP_MS + 1;
+        assert_eq!(
+            authorize_shadow_launch("127.0.0.1", &policy),
+            Err(ShadowLaunchBlocker::InvalidStartupTimeout)
+        );
+
+        policy.startup_timeout_ms = MAX_SHADOW_STARTUP_MS;
+        policy.lifetime_ms = MAX_SHADOW_LIFETIME_MS + 1;
+        assert_eq!(
+            authorize_shadow_launch("127.0.0.1", &policy),
+            Err(ShadowLaunchBlocker::InvalidLifetime)
+        );
+    }
+
+    #[test]
     fn external_host_navigation_is_rejected() {
         let policy = ShadowLaunchPolicy {
             network_isolation_proven: true,
