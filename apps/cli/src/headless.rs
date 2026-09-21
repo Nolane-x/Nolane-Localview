@@ -2175,7 +2175,7 @@ mod tests {
                 "pass",
                 BaselineComparisonStatus::Match,
                 false,
-                false
+                false,
             ),
             (ReportStatus::Passed, EXIT_PASS)
         );
@@ -2204,7 +2204,8 @@ mod tests {
                 &diagnostics,
                 "pass",
                 BaselineComparisonStatus::Match,
-                false
+                false,
+                false,
             ),
             (ReportStatus::Failed, EXIT_HARD_FAILURE)
         );
