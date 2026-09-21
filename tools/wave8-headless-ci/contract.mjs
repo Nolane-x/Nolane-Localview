@@ -23,6 +23,8 @@ requireText(cli, 'multiple LocalView sessions are active', 'ambiguous sessions m
 requireText(cli, 'headless mode refuses non-loopback session target', 'headless target must remain loopback');
 requireText(cli, 'shell interpreters are not allowed', 'fixture shell execution must be rejected');
 requireText(cli, 'allow_fixture_command', 'fixture command execution must require explicit policy opt-in');
+requireText(cli, 'CONTROL_REQUEST_TIMEOUT', 'headless control transport must be time-bounded');
+requireText(cli, 'cleanup after setup failure', 'failed fixture setup must still attempt cleanup compensation');
 requireText(cli, 'state_stable', 'baseline authority must be bound to stable end state');
 requireText(cli, 'safe_route', 'route transport must strip secret query/fragment data');
 
