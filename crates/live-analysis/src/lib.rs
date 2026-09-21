@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
 mod layout;
+mod visual_critic;
 
 pub use layout::LiveLayoutAnalysis;
+pub use visual_critic::{LiveVisualCriticAnalysis, analyze_visual_critic_events};
 
 use localview_console::{ConsoleEntry, ConsoleGroup, ConsoleLevel};
 use localview_layout::{LayoutIssueClass, Severity as LayoutSeverity};
@@ -22,6 +24,8 @@ pub struct LiveAnalysis {
     pub performance_lite: PerformanceLitePacket,
     #[serde(default)]
     pub layout: LiveLayoutAnalysis,
+    #[serde(default)]
+    pub visual_critic: LiveVisualCriticAnalysis,
     pub counts: LiveEventCounts,
 }
 
@@ -119,6 +123,7 @@ pub fn analyze_live(events: &[ObserverEvent]) -> LiveAnalysis {
     let performance_lite =
         localview_performance::lite_packet(&performance, PerformanceLiteBudget::default());
     let layout = layout::analyze_layout_events(events);
+    let visual_critic = visual_critic::analyze_visual_critic_events(events);
 
     LiveAnalysis {
         network: localview_network::analyze(&network_records, &NetworkPolicy::default()),
@@ -126,6 +131,7 @@ pub fn analyze_live(events: &[ObserverEvent]) -> LiveAnalysis {
         performance: localview_performance::analyze(&performance),
         performance_lite,
         layout,
+        visual_critic,
         counts,
     }
 }
