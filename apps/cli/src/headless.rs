@@ -1422,12 +1422,16 @@ async fn load_retained_baseline(
         return Err("baseline locator has invalid physical artifact id".into());
     }
     if let Err(error) = revalidate_canonical_directory(artifact_root, "headless artifact root") {
-        return Err(format!("retained baseline artifact root is unsafe: {error}"));
+        return Err(format!(
+            "retained baseline artifact root is unsafe: {error}"
+        ));
     }
     let path = artifact_root.join(&locator.storage_id);
     let bytes = read_optional_regular_leaf(&path, MAX_BASELINE_BYTES)
         .map_err(|_| "retained baseline artifact is unsafe or unreadable".to_owned())?
-        .ok_or_else(|| "retained baseline artifact is missing under bounded retention".to_owned())?;
+        .ok_or_else(|| {
+            "retained baseline artifact is missing under bounded retention".to_owned()
+        })?;
     let baseline: BaselineEnvelope = serde_json::from_slice(&bytes)
         .map_err(|_| "retained baseline artifact is invalid JSON".to_owned())?;
     if baseline.canonical_hash() != locator.content_hash {
@@ -1592,9 +1596,18 @@ async fn write_bundle<T: Serialize>(
     attestation: &T,
 ) -> Result<()> {
     revalidate_canonical_directory(output_dir, "headless report output")?;
-    atomic_replace_regular(&output_dir.join("report.json"), render_json(report)?.as_bytes())?;
-    atomic_replace_regular(&output_dir.join("report.md"), render_markdown(report).as_bytes())?;
-    atomic_replace_regular(&output_dir.join("report.html"), render_html(report).as_bytes())?;
+    atomic_replace_regular(
+        &output_dir.join("report.json"),
+        render_json(report)?.as_bytes(),
+    )?;
+    atomic_replace_regular(
+        &output_dir.join("report.md"),
+        render_markdown(report).as_bytes(),
+    )?;
+    atomic_replace_regular(
+        &output_dir.join("report.html"),
+        render_html(report).as_bytes(),
+    )?;
     atomic_replace_regular(
         &output_dir.join("attestation.json"),
         serde_json::to_string_pretty(attestation)?.as_bytes(),
@@ -2539,7 +2552,9 @@ mod tests {
 
         let project = std::env::temp_dir().join(format!("lv-headless-project-{}", Uuid::new_v4()));
         let outside = std::env::temp_dir().join(format!("lv-headless-outside-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(project.join(".localview")).await.unwrap();
+        tokio::fs::create_dir_all(project.join(".localview"))
+            .await
+            .unwrap();
         tokio::fs::create_dir_all(&outside).await.unwrap();
         symlink(&outside, project.join(".localview/wave8-ci")).unwrap();
         assert!(
@@ -2548,7 +2563,9 @@ mod tests {
                 .is_err()
         );
         assert!(!outside.join("artifacts").exists());
-        tokio::fs::remove_file(project.join(".localview/wave8-ci")).await.unwrap();
+        tokio::fs::remove_file(project.join(".localview/wave8-ci"))
+            .await
+            .unwrap();
 
         let state = ensure_project_directory(&project, Path::new(".localview/wave8-ci"))
             .await
@@ -2605,7 +2622,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
-        assert!(tokio::fs::symlink_metadata(&legacy_temp).await.unwrap().file_type().is_symlink());
+        assert!(
+            tokio::fs::symlink_metadata(&legacy_temp)
+                .await
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
 
         let _ = tokio::fs::remove_dir_all(project).await;
         let _ = tokio::fs::remove_file(outside).await;
@@ -2631,5 +2654,4 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(project).await;
         let _ = tokio::fs::remove_file(outside).await;
     }
-
 }
