@@ -168,10 +168,15 @@ impl LocalViewReport {
 }
 
 pub fn render_json(report: &LocalViewReport) -> Result<String, serde_json::Error> {
-    serde_json::to_string_pretty(report)
+    let mut report = report.clone();
+    report.normalize();
+    serde_json::to_string_pretty(&report)
 }
 
 pub fn render_markdown(report: &LocalViewReport) -> String {
+    let mut report = report.clone();
+    report.normalize();
+    let report = &report;
     let mut output = format!(
         "# {}\n\n**Project:** `{}`  \n**Route:** `{}`  \n**Generated:** {}\n\n",
         markdown_text(&report.title),
@@ -205,10 +210,61 @@ pub fn render_markdown(report: &LocalViewReport) -> String {
             output.push('\n');
         }
     }
+    output.push_str("\n## Verification\n\n");
+    output.push_str(&format!(
+        "Verdict: **{}**\n\n",
+        markdown_text(
+            report
+                .verification
+                .get("verdict")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        )
+    ));
+    output.push_str("## Baseline\n\n");
+    output.push_str(&format!(
+        "Status: **{:?}**  \nBaseline hash: {}  \nCandidate hash: {}\n\n",
+        report.baseline.status,
+        markdown_text(report.baseline.baseline_hash.as_deref().unwrap_or("none")),
+        markdown_text(report.baseline.candidate_hash.as_deref().unwrap_or("none"))
+    ));
+    output.push_str("## Git\n\n");
+    if report.git.available {
+        output.push_str(&format!(
+            "Revision: {}  \nBranch: {}  \nDirty: **{}**\n\n",
+            markdown_text(report.git.revision.as_deref().unwrap_or("unknown")),
+            markdown_text(report.git.branch.as_deref().unwrap_or("detached")),
+            report.git.dirty.unwrap_or(false)
+        ));
+    } else {
+        output.push_str(&format!(
+            "{}\n\n",
+            markdown_text(
+                report
+                    .git
+                    .unavailable_reason
+                    .as_deref()
+                    .unwrap_or("git unavailable")
+            )
+        ));
+    }
+    if !report.incomplete_reasons.is_empty() || !report.inconclusive_reasons.is_empty() {
+        output.push_str("## Incomplete / inconclusive\n\n");
+        for reason in report
+            .incomplete_reasons
+            .iter()
+            .chain(report.inconclusive_reasons.iter())
+        {
+            output.push_str(&format!("- {}\n", markdown_text(reason)));
+        }
+    }
     output
 }
 
 pub fn render_html(report: &LocalViewReport) -> String {
+    let mut report = report.clone();
+    report.normalize();
+    let report = &report;
     let findings = report
         .diagnostics
         .issues
@@ -225,16 +281,32 @@ pub fn render_html(report: &LocalViewReport) -> String {
         })
         .collect::<Vec<_>>()
         .join("");
+    let verdict = report
+        .verification
+        .get("verdict")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let incomplete = report
+        .incomplete_reasons
+        .iter()
+        .chain(report.inconclusive_reasons.iter())
+        .map(|reason| format!("<li>{}</li>", html_escape(reason)))
+        .collect::<Vec<_>>()
+        .join("");
     format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{}</title><style>body{{font:14px system-ui;max-width:980px;margin:40px auto;padding:0 24px;background:#0b0e13;color:#e8edf3}}article{{border:1px solid #26303d;border-radius:10px;padding:16px;margin:12px 0;background:#11161e}}.meta{{font:11px ui-monospace;color:#8290a4}}h1,h3{{letter-spacing:-.02em}}code{{color:#9fc7ee}}</style></head><body><h1>{}</h1><p><code>{}</code> · <code>{}</code></p><p>Deterministic: {} · Heuristic: {} · Subjective: {}</p>{}</body></html>"#,
+        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{}</title><style>body{{font:14px system-ui;max-width:980px;margin:40px auto;padding:0 24px;background:#0b0e13;color:#e8edf3}}article{{border:1px solid #26303d;border-radius:10px;padding:16px;margin:12px 0;background:#11161e}}.meta{{font:11px ui-monospace;color:#8290a4}}h1,h2,h3{{letter-spacing:-.02em}}code{{color:#9fc7ee}}</style></head><body><h1>{}</h1><p><code>{}</code> · <code>{}</code></p><p>Status: <strong>{:?}</strong> · Deterministic: {} · Heuristic: {} · Subjective: {}</p>{}<h2>Verification</h2><p>{}</p><h2>Baseline</h2><p>{:?}</p><h2>Incomplete / inconclusive</h2><ul>{}</ul></body></html>"#,
         html_escape(&report.title),
         html_escape(&report.title),
         html_escape(&report.project),
         html_escape(&report.route),
+        report.status,
         report.diagnostics.deterministic,
         report.diagnostics.heuristic,
         report.diagnostics.subjective,
-        findings
+        findings,
+        html_escape(verdict),
+        report.baseline.status,
+        incomplete
     )
 }
 
