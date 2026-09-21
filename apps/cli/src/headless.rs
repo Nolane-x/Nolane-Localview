@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
     process::Stdio,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -24,6 +24,9 @@ use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{process::Command, time::timeout};
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 pub const EXIT_PASS: i32 = 0;
 pub const EXIT_HARD_FAILURE: i32 = 2;
@@ -1533,10 +1536,20 @@ fn read_optional_regular_leaf(path: &Path, max_bytes: u64) -> Result<Option<Vec<
     if before.len() > max_bytes {
         bail!("persistence leaf exceeds bounded size policy");
     }
-    let bytes = fs::read(path)?;
+    let mut file = fs::File::open(path)?;
+    let opened = file.metadata()?;
     let after = fs::symlink_metadata(path)?;
     if after.file_type().is_symlink() || !after.is_file() || after.len() != before.len() {
         bail!("persistence leaf identity changed during read");
+    }
+    #[cfg(unix)]
+    if opened.dev() != after.dev() || opened.ino() != after.ino() {
+        bail!("persistence leaf identity changed during read");
+    }
+    let mut bytes = Vec::with_capacity(opened.len().min(max_bytes) as usize);
+    file.read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        bail!("persistence leaf exceeds bounded size policy");
     }
     Ok(Some(bytes))
 }
