@@ -5,6 +5,7 @@ mod consequential_journal;
 #[path = "cancellable_lib.rs"]
 mod legacy;
 mod postcondition_reconciliation;
+mod wave6;
 
 pub use action_envelope::*;
 pub use consequential_journal::*;
@@ -17,6 +18,7 @@ pub use legacy::{
     ObserverEvent, ObserverEventKind, PrivateBridgeAction, PrivateCaptureActionData,
 };
 pub use postcondition_reconciliation::*;
+pub use wave6::*;
 
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
