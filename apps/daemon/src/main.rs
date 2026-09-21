@@ -50,6 +50,13 @@ use tracing::{info, warn};
 
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 const SURFACE_OWNER_REAP_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -451,8 +458,16 @@ fn read_existing_token(path: &Path) -> Result<Option<String>> {
         anyhow::bail!("control token must be a regular file and may not be a symlink/reparse entry");
     }
 
-    let mut file = fs::File::open(path).context("open control token")?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let mut file = options.open(path).context("open control token without following reparse points")?;
     let opened = file.metadata().context("inspect opened control token")?;
+    #[cfg(windows)]
+    if opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        anyhow::bail!("control token handle resolves to a reparse point");
+    }
     let after = fs::symlink_metadata(path).context("revalidate control token path")?;
     if after.file_type().is_symlink() || !after.is_file() {
         anyhow::bail!("control token path changed during secure open");
