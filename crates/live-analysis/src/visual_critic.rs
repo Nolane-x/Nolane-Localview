@@ -448,7 +448,7 @@ fn parse_source_hint(value: Option<&Value>) -> Option<CriticSourceHint> {
     if file.is_empty()
         || file.len() > MAX_SOURCE_FILE_BYTES
         || file.starts_with('/')
-        || file.contains('\')
+        || file.contains('\\')
         || file
             .split('/')
             .any(|segment| segment.is_empty() || segment == "." || segment == "..")
