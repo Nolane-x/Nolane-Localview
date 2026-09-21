@@ -74,6 +74,42 @@ function isStableElementReference(reference: unknown): reference is string {
     && STABLE_ELEMENT_REFERENCE.test(reference);
 }
 
+const SINGLE_KEY_INTERACTIVE_SELECTOR = [
+  'button',
+  'a[href]',
+  'input',
+  'textarea',
+  'select',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="checkbox"]',
+  '[role="radio"]',
+  '[role="switch"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="option"]',
+  '[role="listbox"]',
+  '[role="tab"]',
+  '[role="treeitem"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="combobox"]',
+  '[role="textbox"]',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+function blocksSingleKeyShortcut(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null;
+  return !!element?.closest(SINGLE_KEY_INTERACTIVE_SELECTOR);
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null;
+  return !!element?.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])');
+}
+
 function createPointSelectToken(): string {
   if (typeof crypto.randomUUID === 'function') return `point-${crypto.randomUUID()}`;
   const entropy = new Uint32Array(4);
@@ -446,6 +482,12 @@ export default function LocalViewShell() {
   const pointSelectTokenRef = useRef<string | undefined>(undefined);
   const pointSelectionRouteSequenceRef = useRef(0);
   const latestRouteSequenceRef = useRef(0);
+  const chromeLayerRef = useRef<HTMLDivElement | null>(null);
+  const panelFocusOriginRef = useRef<{
+    element: HTMLElement | null;
+    sessionId?: string;
+    routeSequence: number;
+  } | null>(null);
 
   const patchPreferences = useCallback((patch: Partial<LocalViewPreferences>) => {
     setPreferences((current) => persistPreferences(current, patch));
@@ -743,9 +785,53 @@ export default function LocalViewShell() {
     ? `${current.endpoint.scheme}://${current.endpoint.host}:${current.endpoint.port}/`
     : undefined;
 
-  const togglePanel = useCallback((tool: ToolId) => {
-    setActiveTool((active) => active === tool ? undefined : tool);
+  const rememberPanelFocus = useCallback(() => {
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelFocusOriginRef.current = {
+      element: active && active !== document.body && active !== document.documentElement ? active : null,
+      sessionId: current?.id,
+      routeSequence: latestRouteSequenceRef.current,
+    };
+  }, [current?.id]);
+
+  const restorePanelFocus = useCallback(() => {
+    const origin = panelFocusOriginRef.current;
+    panelFocusOriginRef.current = null;
+    window.requestAnimationFrame(() => {
+      const trigger = origin
+        && origin.sessionId === currentSessionIdRef.current
+        && origin.routeSequence === latestRouteSequenceRef.current
+        && origin.element?.isConnected
+        && origin.element.getClientRects().length > 0
+        ? origin.element
+        : null;
+      if (trigger) {
+        trigger.focus({ preventScroll: true });
+      } else {
+        chromeLayerRef.current?.focus({ preventScroll: true });
+      }
+    });
   }, []);
+
+  const closeActiveTool = useCallback(() => {
+    setActiveTool(undefined);
+    restorePanelFocus();
+  }, [restorePanelFocus]);
+
+  const openPanel = useCallback((tool: ToolId) => {
+    if (!activeTool) rememberPanelFocus();
+    setActiveTool(tool);
+  }, [activeTool, rememberPanelFocus]);
+
+  const togglePanel = useCallback((tool: ToolId) => {
+    if (activeTool === tool) {
+      panelFocusOriginRef.current = null;
+      setActiveTool(undefined);
+      return;
+    }
+    if (!activeTool) rememberPanelFocus();
+    setActiveTool(tool);
+  }, [activeTool, rememberPanelFocus]);
 
   const togglePause = useCallback(async () => {
     try {
@@ -875,9 +961,10 @@ export default function LocalViewShell() {
       cancelPointSelect(true);
       return;
     }
+    if (!activeTool) rememberPanelFocus();
     setActiveTool('inspect');
     void beginPointSelect();
-  }, [beginPointSelect, cancelPointSelect, pointSelectActive, togglePanel]);
+  }, [activeTool, beginPointSelect, cancelPointSelect, pointSelectActive, rememberPanelFocus, togglePanel]);
 
   const captureResponsiveSweep = useCallback(async (presets: ResponsivePresetId[]) => {
     const session = current;
@@ -1371,23 +1458,23 @@ export default function LocalViewShell() {
   const executeCommand = useCallback((command: CommandId) => {
     switch (command) {
       case COMMAND_IDS.inspectActivate:
-        setActiveTool('inspect');
+        openPanel('inspect');
         return;
       case COMMAND_IDS.sourceOpen:
-        setActiveTool('inspect');
+        openPanel('inspect');
         if (selectedReference) void openSourceForSelection(selectedReference);
         return;
       case COMMAND_IDS.responsiveOpen:
-        setActiveTool('responsive');
+        openPanel('responsive');
         return;
       case COMMAND_IDS.consoleOpen:
-        setActiveTool('console');
+        openPanel('console');
         return;
       case COMMAND_IDS.networkOpen:
-        setActiveTool('network');
+        openPanel('network');
         return;
       case COMMAND_IDS.aiOpen:
-        setActiveTool('ai');
+        openPanel('ai');
         return;
       case COMMAND_IDS.aiAskSelection:
         setActiveTool('ai');
@@ -1403,10 +1490,10 @@ export default function LocalViewShell() {
         void verifyFixChange();
         return;
       case COMMAND_IDS.advancedOpen:
-        setActiveTool('advanced');
+        openPanel('advanced');
         return;
       case COMMAND_IDS.settingsOpen:
-        setActiveTool('settings');
+        openPanel('settings');
         return;
       case COMMAND_IDS.previewOpenNative:
         void openNative();
@@ -1437,6 +1524,7 @@ export default function LocalViewShell() {
     beginFixReview,
     verifyFixChange,
     openNative,
+    openPanel,
     openSourceForSelection,
     patchPreferences,
     preferences.locale,
@@ -1449,12 +1537,26 @@ export default function LocalViewShell() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.matches('input,textarea,select,[contenteditable="true"]')) return;
+      if (event.isComposing || event.key === 'Process') return;
+      const target = event.target;
+
       if (event.key === 'Escape') {
-        setActiveTool(undefined);
+        const commandSearch = target instanceof Element && !!target.closest('.command-search');
+        if (activeTool === 'command' && commandSearch) {
+          event.preventDefault();
+          closeActiveTool();
+          return;
+        }
+        if (isEditableTarget(target)) return;
+        if (activeTool) {
+          event.preventDefault();
+          closeActiveTool();
+        }
         return;
       }
+
+      if (isEditableTarget(target)) return;
+
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         toggleTool('command');
@@ -1471,6 +1573,10 @@ export default function LocalViewShell() {
         executeCommand(COMMAND_IDS.workspaceToggleTargetBar);
         return;
       }
+
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || blocksSingleKeyShortcut(target)) {
+        return;
+      }
       const shortcuts: Record<string, CommandId> = {
         i: COMMAND_IDS.inspectActivate,
         r: COMMAND_IDS.responsiveOpen,
@@ -1485,7 +1591,7 @@ export default function LocalViewShell() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [executeCommand, toggleTool]);
+  }, [activeTool, closeActiveTool, executeCommand, toggleTool]);
 
   return (
     <div
@@ -1493,7 +1599,7 @@ export default function LocalViewShell() {
       data-point-select-active={pointSelectActive || undefined}
     >
       <WorkspaceSurface current={current} url={currentUrl} support={state.workspace_surface} locale={preferences.locale} />
-      <div className="chrome-layer" aria-label={translate(preferences.locale, 'aria.localViewControls')}>
+      <div ref={chromeLayerRef} tabIndex={-1} className="chrome-layer" aria-label={translate(preferences.locale, 'aria.localViewControls')}>
         {preferences.showTargetBar && (
           <TopPill
             state={state}
@@ -1530,7 +1636,7 @@ export default function LocalViewShell() {
             preferences={preferences}
             onClose={() => {
               if (pointSelectActive && activeTool === 'inspect') cancelPointSelect(false);
-              setActiveTool(undefined);
+              closeActiveTool();
             }}
             onSelect={setSelected}
             onOpenNative={() => void openNative()}
