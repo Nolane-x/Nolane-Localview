@@ -27,7 +27,7 @@ const fixture = [
   '<button id="observed" data-localview-safe-interaction="true" aria-expanded="false">Observed</button>',
   '<button id="delayed" data-localview-safe-interaction="true" aria-expanded="false">Delayed</button>',
   '<button id="no-feedback" data-localview-safe-interaction="true">No feedback</button>',
-  '<button id="unsafe" data-localview-destructive="true">Delete</button>',
+  '<button id="unsafe" type="submit">Delete</button>',
   '<button id="trap">Trap</button><button id="offscreen">Offscreen</button>',
   '<input id="secret" type="password" value="SUPER_PRIVATE_WAVE6_VALUE" aria-label="Password">',
   '<iframe id="cross-frame" src="http://cross-origin.test:41767/frame"></iframe>',
@@ -82,16 +82,10 @@ assert.ok(occluded.occluders.includes(blockerRef));
 
 await page.evaluate(() => window.__LOCALVIEW_WAVE6__.beginKeyboardJourney({ documentGeneration: 11 }));
 await page.keyboard.press('Tab');
-let tab1 = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.recordKeyboardFocus({ documentGeneration: 11, direction: 'tab' }));
-assert.equal(tab1.status, 'recorded');
-assert.equal(tab1.observation.reference, await ref('#positive'));
+assert.equal(await page.evaluate(() => document.activeElement?.id), 'positive');
 await page.keyboard.press('Tab');
-let tab2 = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.recordKeyboardFocus({ documentGeneration: 11, direction: 'tab' }));
-assert.equal(tab2.status, 'recorded');
 await page.keyboard.press('Shift+Tab');
-let back = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.recordKeyboardFocus({ documentGeneration: 11, direction: 'shift_tab' }));
-assert.equal(back.status, 'recorded');
-assert.equal(back.observation.direction, 'shift_tab');
+await page.waitForTimeout(20);
 
 const overlay = page.locator('[data-localview-owned="wave6-focus-path"]');
 assert.equal(await overlay.count(), 1);
@@ -110,14 +104,16 @@ await page.evaluate(r => window.__LOCALVIEW_WAVE6__.markFocusProblem(r), positiv
 assert.equal(await page.locator('[data-localview-owned="wave6-focus-path-marker"][data-problem="true"]').count() > 0, true);
 const journey = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.finishKeyboardJourney());
 assert.equal(journey.status, 'complete');
+assert.ok(journey.transitions.length >= 3);
+assert.equal(journey.transitions[0].reference, positiveRef);
+assert.ok(journey.transitions.some(item => item.direction === 'shift_tab'));
 assert.equal(await overlay.count(), 0);
 
 await page.locator('#trap').focus();
 await page.evaluate(() => window.__LOCALVIEW_WAVE6__.beginKeyboardJourney({ documentGeneration: 11, maxTransitions: 8 }));
 for (let i = 0; i < 4; i += 1) {
   await page.keyboard.press('Tab');
-  const entry = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.recordKeyboardFocus({ documentGeneration: 11, direction: 'tab' }));
-  assert.equal(entry.status, 'recorded');
+  await page.waitForTimeout(5);
 }
 const trapped = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.finishKeyboardJourney());
 assert.equal(new Set(trapped.transitions.map(item => item.reference)).size, 1);
@@ -138,17 +134,20 @@ assert.equal(await overlay.count(), 0);
 
 const safeTargets = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.safeDiscoveryTargets(32));
 const unsafeRef = await ref('#unsafe');
-assert.equal(safeTargets.some(item => item.reference === unsafeRef), false);
+const unsafeCandidate = safeTargets.find(item => item.reference === unsafeRef);
+assert.ok(unsafeCandidate);
+assert.equal(unsafeCandidate.probe_allowed, false);
+assert.equal(unsafeCandidate.safety, 'destructive_or_unknown');
 
 const observedRef = await ref('#observed');
-await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({ reference: r, documentGeneration: 11 }), observedRef);
+await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({ reference: r, documentGeneration: 11, safety: 'explicitly_safe' }), observedRef);
 await page.locator('#observed').click();
 let feedbackObserved = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.finishFeedbackProbe({ documentGeneration: 11 }));
 assert.equal(feedbackObserved.verdict, 'observed_feedback');
 
 const delayedRef = await ref('#delayed');
 await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({
-  reference: r, documentGeneration: 11, delayedThresholdMs: 250, deadlineMs: 1000,
+  reference: r, documentGeneration: 11, safety: 'explicitly_safe', delayedThresholdMs: 250, deadlineMs: 1000,
 }), delayedRef);
 await page.locator('#delayed').click();
 await page.waitForTimeout(380);
@@ -157,13 +156,14 @@ assert.equal(feedbackDelayed.verdict, 'delayed_feedback');
 
 const noFeedbackRef = await ref('#no-feedback');
 await page.locator('#no-feedback').focus();
-await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({ reference: r, documentGeneration: 11 }), noFeedbackRef);
+await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({ reference: r, documentGeneration: 11, safety: 'explicitly_safe' }), noFeedbackRef);
 await page.locator('#no-feedback').click();
 const feedbackNone = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.finishFeedbackProbe({ documentGeneration: 11 }));
 assert.equal(feedbackNone.verdict, 'no_observed_feedback');
 
 const skipped = await page.evaluate(r => window.__LOCALVIEW_WAVE6__.beginFeedbackProbe({ reference: r, documentGeneration: 11 }), unsafeRef);
 assert.equal(skipped.status, 'skipped');
+assert.equal(skipped.reason, 'trusted_safety_required');
 
 const replayTarget = await ref('#small');
 const expected = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.stateIdentity(11));
