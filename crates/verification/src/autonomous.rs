@@ -1,9 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use localview_content_addressed::{ObjectHash, object_hash};
 use localview_contracts::{ContractEvaluationSummary, ContractStrength, ContractVerdict};
 use localview_counterfactual::{
-    ExternalSideEffectContainment, IsolationLevel, ShadowCandidateProof, ShadowCleanupProof,
+    CounterfactualCandidate, ExternalSideEffectContainment, IsolationLevel, ShadowCandidateProof,
+    ShadowCleanupProof, ShadowWorkspace, patch_digest,
 };
 use localview_mutation::{MutationChallengeResult, MutationVerdict};
 use localview_planner::PartialRevalidationPlan;
@@ -130,6 +134,88 @@ impl VerificationCleanupProof {
             && self.real_worktree_unchanged
             && !self.external_side_effects_observed
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductionCandidatePreflightVerdict {
+    Rejected,
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProductionCandidatePreflightReceipt {
+    pub candidate_id: String,
+    pub base_revision: String,
+    pub patch_digest: String,
+    pub shadow_proof: ShadowCandidateProof,
+    pub cleanup_proof: ShadowCleanupProof,
+    pub verdict: ProductionCandidatePreflightVerdict,
+    pub reasons: Vec<String>,
+}
+
+impl ProductionCandidatePreflightReceipt {
+    pub fn digest(&self) -> ObjectHash {
+        object_hash(self)
+    }
+}
+
+pub fn run_production_candidate_preflight(
+    repository_root: &Path,
+    candidate: &CounterfactualCandidate,
+) -> Result<ProductionCandidatePreflightReceipt, String> {
+    let expected_patch_digest = patch_digest(&candidate.overlays);
+    let mut shadow = ShadowWorkspace::prepare(repository_root, candidate)
+        .map_err(|error| format!("Wave 9 shadow preparation failed: {error:?}"))?;
+    let proof = match shadow.proof() {
+        Ok(proof) => proof,
+        Err(error) => {
+            let _ = shadow.cleanup();
+            return Err(format!("Wave 9 shadow proof failed: {error:?}"));
+        }
+    };
+    let cleanup = shadow
+        .cleanup()
+        .map_err(|error| format!("Wave 9 shadow cleanup failed: {error:?}"))?;
+
+    let mut reasons = Vec::new();
+    let identity_matches = proof.candidate_id == candidate.id
+        && proof.base_revision == candidate.base_revision
+        && proof.patch_digest == expected_patch_digest;
+    if !identity_matches {
+        reasons.push("shadow proof identity does not bind the candidate".into());
+    }
+    if !proof.real_worktree_unchanged {
+        reasons.push("real working tree changed while the shadow candidate was prepared".into());
+    }
+    if !(cleanup.attempted && cleanup.worktree_removed && cleanup.directory_absent) {
+        reasons.push("shadow cleanup proof is incomplete".into());
+    }
+    if proof.external_side_effect_containment != ExternalSideEffectContainment::ProvenBlocked {
+        reasons.push(
+            "external side-effect containment is not proven; candidate preflight is inconclusive"
+                .into(),
+        );
+    }
+
+    let rejected = !identity_matches
+        || !proof.real_worktree_unchanged
+        || !(cleanup.attempted && cleanup.worktree_removed && cleanup.directory_absent);
+    let verdict = if rejected {
+        ProductionCandidatePreflightVerdict::Rejected
+    } else {
+        ProductionCandidatePreflightVerdict::Inconclusive
+    };
+
+    Ok(ProductionCandidatePreflightReceipt {
+        candidate_id: candidate.id.to_string(),
+        base_revision: candidate.base_revision.clone(),
+        patch_digest: expected_patch_digest,
+        shadow_proof: proof,
+        cleanup_proof: cleanup,
+        verdict,
+        reasons,
+    })
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -678,6 +764,14 @@ mod tests {
             resource_budget: budget(true),
             cleanup_proof: cleanup(true),
         }
+    }
+
+    #[test]
+    fn production_preflight_has_no_verified_state() {
+        assert_ne!(
+            ProductionCandidatePreflightVerdict::Inconclusive,
+            ProductionCandidatePreflightVerdict::Rejected
+        );
     }
 
     #[test]
