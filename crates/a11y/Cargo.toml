@@ -7,4 +7,5 @@ license.workspace = true
 
 [dependencies]
 localview-protocol = { path = "../protocol" }
+localview-native-provider = { path = "../native-provider" }
 serde.workspace = true
