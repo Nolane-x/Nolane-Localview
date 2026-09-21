@@ -123,6 +123,7 @@ mod tests {
             parent_surface_ref: Some("window:wave6".into()),
             acquisition_cut_ref: cut.into(),
             realization: ProviderElementRealization::RealizedCurrent,
+            lifetime_profile_revision: "windows-uia-lifetime-v1".into(),
         }
     }
 
