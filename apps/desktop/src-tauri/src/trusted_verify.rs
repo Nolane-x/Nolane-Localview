@@ -354,6 +354,15 @@ impl VerificationStore {
     }
 
     
+
+#[cfg(test)]
+    fn retained_visual_bytes_for_test(&self) -> usize {
+        self.records
+            .lock()
+            .map(|records| Self::retained_visual_bytes(&records))
+            .unwrap_or(0)
+    }
+}
 pub fn validate_wave9_verified_handoff(
     receipt: &localview_verification::AutonomousVerificationReceipt,
     expected_base_revision: &str,
@@ -386,14 +395,7 @@ pub fn validate_wave9_verified_handoff(
     Ok(())
 }
 
-#[cfg(test)]
-    fn retained_visual_bytes_for_test(&self) -> usize {
-        self.records
-            .lock()
-            .map(|records| Self::retained_visual_bytes(&records))
-            .unwrap_or(0)
-    }
-}
+
 
 fn exact_node<'a>(
     node: &'a SemanticNode,
