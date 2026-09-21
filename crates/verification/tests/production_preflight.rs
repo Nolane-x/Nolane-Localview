@@ -72,22 +72,24 @@ fn production_preflight_uses_real_temp_git_shadow_without_mutating_source() {
 
     let receipt = run_production_candidate_preflight(&root, &candidate).unwrap();
 
-    assert_eq!(receipt.candidate_id, candidate.id.to_string());
-    assert_eq!(receipt.base_revision, head);
+    assert_eq!(receipt.candidate_id.as_deref(), Some(candidate.id.to_string().as_str()));
+    assert_eq!(receipt.base_revision.as_deref(), Some(head.as_str()));
+    let shadow_proof = receipt.shadow_proof.as_ref().expect("shadow proof");
+    let cleanup_proof = receipt.cleanup_proof.as_ref().expect("cleanup proof");
     assert_eq!(
-        receipt.shadow_proof.external_side_effect_containment,
+        shadow_proof.external_side_effect_containment,
         ExternalSideEffectContainment::NotProven
     );
     assert_eq!(
         receipt.verdict,
         ProductionCandidatePreflightVerdict::Inconclusive
     );
-    assert!(receipt.cleanup_proof.attempted);
-    assert!(receipt.cleanup_proof.worktree_removed);
-    assert!(receipt.cleanup_proof.directory_absent);
+    assert!(cleanup_proof.attempted);
+    assert!(cleanup_proof.worktree_removed);
+    assert!(cleanup_proof.directory_absent);
     assert_eq!(fs::read(root.join("src/app.txt")).unwrap(), b"before\n");
     assert!(
-        !Path::new(&receipt.shadow_proof.shadow_path).exists(),
+        !Path::new(&shadow_proof.shadow_path).exists(),
         "shadow directory must be absent after preflight"
     );
     assert!(
