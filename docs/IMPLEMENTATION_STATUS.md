@@ -125,19 +125,27 @@ Windows/WebView2 has the matching hosted **rendered-pixel proof**. A custom Wind
 
 The viewport **Native screenshot adapter is Implemented**: all three production platform backends have live rendered-pixel acquisition evidence in dedicated hosted GUI gates, in addition to compile/contracts coverage. **Bounded CSS-region execution, evidence-backed progressive semantic targeting, baseline-driven changed-region scheduling, guarded full-page stitching, token-aware progressive visual-packet selection, planner-owned Active Perception budget authorization, dedicated native visual execution, planner-authorized Chromium execution, retained feedback, whole-cycle accounting, cooperative public BridgeAction cancellation and deterministic capture → diff → verification are now present** above that acquisition/runtime path.
 
-Wave 4 and Wave 5 software capability closure is now landed on the live product path. Wave 4 carries bounded live layout intelligence, adaptive/binary responsive execution, deeper responsive issue evidence and transactional content/locale stress. Wave 5 carries project-owned Source Map authority, trusted runtime-position correlation, bounded React/Svelte/Vue ownership, CSS declaration/cascade/source-coordinate authority, direct human point-select to stable `ElementRef`, and the Trusted Fix → HMR-aware settle → fresh semantic/source validation → affected-region evidence → deterministic Verify loop.
+Waves 1–9 now have their bounded software capability closures landed on the live product path. Wave 4 carries bounded live layout/responsive/content-stress intelligence; Wave 5 carries project-owned source/CSS/point-select and Trusted Fix → deterministic Verify authority; Wave 6 carries accessibility/interaction discovery and replay; Wave 7 carries live visual-critic/design-grammar evidence; Wave 8 carries headless/CI/report/baseline/attestation execution; and Wave 9 carries isolated autonomous candidate verification, contracts, mutation challenges, impact comparison, partial revalidation and proof receipts.
 
-Those closures do **not** make the complete V1/V2/V3 program finished. Native workspace composition/focus/crash safety is still not promoted to the default surface; analysis-concurrency authority remains deferred until a concrete concurrent analysis owner exists; Wave 6 accessibility/interaction, Wave 7 visual critic/design grammar, Wave 8 headless/CI reporting and Wave 9 autonomous verification still contain substantive product work. W10 mixed-DPI physical evidence is independently deferred from the software critical path and remains unmeasured on hosted CI.
+Wave 9 was integrated through PR #198 and merged as `bded849d7fdb4a640b4cd12c802381b783bc42c2` after its exact head `e5f59b074fa2979b2e91f919e0e4258a8ccd1087` passed all 35 GitHub Actions workflows. The Wave 9 handoff preserves human/trusted authority over real project mutation: autonomous verification proves candidates in isolated shadow state and does not silently apply a winning candidate to the user's working tree.
+
+This **does not** mean every broader V1/V2/V3 umbrella capability is finished. Native workspace composition/focus/crash/DPI safety is still not promoted to the default surface; analysis-concurrency authority remains deferred until a concrete concurrent analysis owner exists; broader Partial items remain explicitly listed in `docs/SPEC_COVERAGE.md`; and V4.3 W10 mixed-DPI physical evidence on PR #116 remains independently deferred/unmeasured on hosted CI.
 
 ## Next vertical slices
 
-The software frontier now moves beyond Wave 4/5:
+The immediate frontier is now **production/security hardening and incomplete-surface discovery**, not another assumption-driven feature wave. The next worker should begin from current `main`, use evidence and the user's supplied security skills, enumerate concrete defects/incomplete paths/security risks, and only then define new non-overlapping hardening waves.
 
-1. Wave 6 accessibility and interaction intelligence: keyboard/focus ordering, hit-target/dead-interaction evidence, accessibility-tree/axe integration and deterministic flow discovery/replay verification;
-2. Wave 7 visual critic and design grammar over the now-live layout/responsive/source evidence, without converting heuristic aesthetic judgments into deterministic claims;
-3. native workspace composition/focus/DPI/crash safety gates before promoting the child WebView surface from feature-gated to default;
-4. add analysis-concurrency authority only when a concrete concurrent analysis owner exists rather than introducing a synthetic counter;
-5. then Wave 8 headless/CI reporting/baselines and Wave 9 autonomous fix/verification proof receipts.
+Recommended hardening focus:
+
+1. adversarial security audit of authenticated loopback control, bridge/action ownership, native providers, headless/CLI, artifact/report/baseline persistence, shadow-worktree execution and trusted Fix/Verify boundaries;
+2. incomplete/Partial capability audit from `docs/SPEC_COVERAGE.md`, separating production blockers from deliberately deferred breadth;
+3. dependency/supply-chain, path/symlink/traversal, process-launch, shell/argument, temporary-file, artifact-retention, secret/redaction and cross-origin boundary review;
+4. fuzz/property/adversarial tests for parsers, protocol envelopes, content-addressed objects, report rendering, candidate patch inputs and cleanup/rollback;
+5. native workspace composition/focus/DPI/crash safety before promoting the child WebView surface to default;
+6. analysis-concurrency authority only when a concrete concurrent owner exists;
+7. later expanded V2/V3 causal, proof-carrying, multi-agent, content-addressed and attested-proof vertical slices after security/production closure.
+
+Do not touch or merge PR #116/W10 unless the user explicitly reopens that physical hardware task. Do not convert heuristic/subjective evidence into security or correctness facts.
 
 Wave 3 bounded runtime telemetry is no longer a frontier item: action/request/UI-response correlation, exact-session loopback fault authority, strongly classified loopback HMR signals with daemon-owned settling, and bounded exact-session performance-lite packets are landed.
 

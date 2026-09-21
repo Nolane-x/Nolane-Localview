@@ -191,40 +191,99 @@ Truth boundaries:
 - the bounded author-cascade subset is not claimed to be the browser's complete cascade winner model;
 - direct point selection requires the exact LocalView-managed/instrumented surface; opaque cross-origin frame contents are not traversed.
 
-## Wave 6 — Accessibility + interaction
+## Wave 6 — Accessibility + interaction — software scope closed
 
-- axe-core bridge plus LocalView deterministic checks.
-- native AX enrichment where useful and privacy-safe.
-- keyboard journey.
-- focus-path overlay.
-- effective hitbox testing.
-- dead-click and feedback-latency detection.
-- interaction graph discovery and deterministic replay.
+Software closure landed:
 
-## Wave 7 — Visual critic + design grammar
+- bundled/local axe-core bridge plus LocalView deterministic checks;
+- privacy-safe native AX enrichment with discrepancy evidence instead of silent precedence;
+- bounded keyboard/focus journey with route/document-generation authority;
+- transient focus-path overlay isolated from semantic/capture evidence;
+- effective hitbox evidence that distinguishes nominal geometry from clipping/occlusion uncertainty;
+- bounded dead-click/feedback-latency observation with observed/delayed/no-feedback/inconclusive states;
+- live interaction-graph discovery and deterministic replay receipts bound to stable refs and exact state identity.
 
-- project design-scale extraction from live evidence.
-- density/balance/hierarchy features.
-- deterministic / heuristic / subjective evidence classes.
-- critic overlay with confidence/evidence/source hints.
-- design regression baselines.
+Truth boundaries:
 
-## Wave 8 — Headless/CI
+- axe/native AX evidence does not claim automated accessibility completeness;
+- unsafe/destructive interaction discovery remains fail-closed;
+- geometry-only suspicion is not promoted to deterministic pointer-delivery truth.
 
-- headless visual session.
-- deterministic fixture/state adapters.
-- report export: JSON, Markdown and HTML.
-- baseline artifacts with content-addressed retention.
-- Git-aware annotations and CI attestations.
+Closure PR: #195. Exact-head dedicated Wave 6 and full repository CI were green before merge.
 
-## Wave 9 — Autonomous verification
+## Wave 7 — Visual critic + design grammar — software scope closed
 
-- affected-state compilation.
-- candidate patches in isolated shadow state.
-- contract/invariant system.
-- mutation challenge suite.
-- predicted versus actual impact.
-- proof receipts and partial revalidation.
+Software closure landed:
+
+- live project design-scale extraction from bounded semantic/layout/style evidence;
+- density, balance and hierarchy feature extraction;
+- explicit deterministic / heuristic / subjective evidence classes;
+- structured critic findings with stable refs, measured evidence, confidence and optional source hints;
+- isolated critic overlay model;
+- serializable design-regression baselines and bounded diff logic.
+
+Truth boundaries:
+
+- inferred clusters are observed project patterns, not automatically official design tokens;
+- subjective aesthetic findings do not fail CI or masquerade as deterministic truth;
+- missing style/source authority stays unavailable/inconclusive rather than guessed.
+
+Closure PR: #194. Exact-head dedicated Wave 7 and full repository CI were green before merge.
+
+## Wave 8 — Headless/CI — software scope closed
+
+Software closure landed:
+
+- real headless LocalView execution through the existing authenticated/session-owned runtime;
+- deterministic bounded fixture/state adapters and explicit exit policy;
+- complete JSON / Markdown / HTML report production;
+- bounded baseline artifacts with content-addressed identity and retention;
+- Git-aware local annotations without remote GitHub API dependence;
+- CI annotations/policy that distinguish hard deterministic failures from heuristic/subjective findings;
+- bounded digest attestation over report/state/evidence identity without claiming an unproven trusted signature.
+
+Truth boundaries:
+
+- headless execution does not bypass daemon auth, runtime resource governance or local-session authority;
+- heuristic/subjective findings do not fail CI by default without explicit policy;
+- digest attestation is not called cryptographically signed unless a real signer exists.
+
+Closure PR: #196. Exact-head dedicated Wave 8 and full repository CI were green before merge.
+
+## Wave 9 — Autonomous verification — software scope closed
+
+Software closure landed:
+
+- bounded affected-state compilation with explicit incomplete/truncation authority;
+- project-contained candidate patches executed in isolated disposable shadow worktrees;
+- live hard/soft contract and invariant evaluation with Pass/Fail/Excepted/Unknown semantics;
+- safety-bounded mutation challenge execution with killed/survived/skipped/invalid results;
+- predicted-versus-actual impact comparison including unexpected observed impact;
+- partial revalidation that escalates when dependency/coverage authority is incomplete;
+- serializable autonomous verification proof receipts with cleanup/resource evidence;
+- trusted Fix/Verify handoff that does not let autonomous verification silently write the user's real working tree.
+
+Truth boundaries:
+
+- Unknown never becomes Pass;
+- surviving mutation challenges remain visible and block a verified handoff when policy requires;
+- candidate verification does not bypass user/trusted mutation authority for the real project;
+- no root-cause claim is invented from correlation-only evidence.
+
+Closure integration PR: #198, merged as `bded849d7fdb4a640b4cd12c802381b783bc42c2`. Its exact head `e5f59b074fa2979b2e91f919e0e4258a8ccd1087` passed all 35 GitHub Actions workflows before merge, including the dedicated Wave 9 matrix, full cross-platform CI and Windows UIA smoke.
+
+## Wave 1–9 software roadmap closure
+
+Waves 1–9 now have their software capability closures landed on the live product path. This closure means the roadmap's bounded software waves are implemented and verified; it does **not** mean every broader V1/V2/V3 umbrella capability, physical hardware gate or future research slice is complete.
+
+Independently open after this closure:
+
+- native workspace composition/focus/crash/DPI policy before promotion to the default surface;
+- V4.3 W10 physical mixed-DPI proof on PR #116, which remains deferred and unmeasured on hosted CI;
+- broader Partial capabilities explicitly retained in `docs/SPEC_COVERAGE.md`;
+- analysis-concurrency authority only when a concrete concurrent owner exists;
+- security/production hardening and adversarial audit work;
+- later expanded causal, proof-carrying, multi-agent, content-addressed and attested-proof vertical slices.
 
 ## Later expanded-spec phases
 
