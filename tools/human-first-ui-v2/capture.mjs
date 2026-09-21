@@ -4154,6 +4154,7 @@ invariant(
   await responsiveRail.evaluate((button) => button === document.activeElement && button.matches(':focus-visible')),
   'ui-audit:rail-keyboard-focus-visible',
 );
+await page.waitForTimeout(180);
 const tooltipEvidence = await responsiveRail.locator('.rail-tooltip').evaluate((tooltip) => ({
   opacity: getComputedStyle(tooltip).opacity,
   ariaHidden: tooltip.getAttribute('aria-hidden'),
