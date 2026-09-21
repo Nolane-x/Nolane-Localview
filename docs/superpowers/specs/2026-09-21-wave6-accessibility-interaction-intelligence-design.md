@@ -18,7 +18,7 @@ Accessibility findings carry an explicit provenance:
 - \`native_ax\`: enrichment from provider-normalized native accessibility evidence.
 - \`heuristic\`: bounded suspicion where delivery or platform authority is incomplete.
 
-axe-core is pinned to 4.13.0 in the desktop package. Tauri packages \`axe.min.js\` and its upstream license as application resources. Managed preview/workspace initialization reads axe only from that application resource, with the exact local \`node_modules\` path as a development fallback. There is no CDN/runtime network loader.
+axe-core is pinned to 4.13.0 in the desktop package and the exact minified release plus its MPL-2.0 license are checked into \`apps/desktop/src-tauri/resources/wave6/\`. Tauri packages those checked-in files as application resources. Managed preview/workspace initialization reads axe only from the packaged application resource, with the same checked-in file as the development fallback. Rust builds therefore do not depend on \`node_modules\`, and there is no CDN/runtime network loader.
 
 The page-side scan retains only bounded rule metadata: rule id, impact, help text, LocalView stable reference when exact mapping is proven, and an explicit unresolved state otherwise. axe selectors are used transiently to attempt a unique element mapping and are not retained as selector authority. The scan does not retain arbitrary DOM HTML, form values, cookies, storage, tokens, or arbitrary page text.
 
@@ -104,7 +104,7 @@ Receipts distinguish \`observed_feedback\`, \`delayed_feedback\`, \`no_observed_
 - bounded semantic fingerprint;
 - optional viewport.
 
-Edges retain action kind, stable target ref, exact pre/post state identity, safety classification, and bounded evidence refs. `LiveBridge` owns a bounded per-session graph store (maximum 64 live session graphs), removes it with session teardown, and admits transitions only through the same bounded `record_live` authority. Discovery has explicit node, edge, route-state, and deadline budgets and rejects unknown/destructive action admission.
+Edges retain action kind, stable target ref, exact pre/post state identity, safety classification, monotonic elapsed time, and bounded evidence refs. `LiveBridge` owns a bounded per-session graph store (maximum 64 live session graphs), removes it with session teardown, and admits transitions only through the same bounded `record_live` authority. Discovery has explicit node, edge, route-state, and deadline budgets; an edge whose elapsed time exceeds the transaction deadline is rejected before insertion, and unknown/destructive action admission is rejected.
 
 Replay never repairs a stale ref with a selector guess. Before each step it requires exact pre-state compatibility and a valid stable ref. The live bridge reuses the existing deterministic action queue for Click and Focus. Other action kinds remain unsupported by this replay adapter when the current bridge cannot prove equivalent behavior. A replay receipt records attempted/passed steps, first failure, before/after state, evidence refs, and \`complete / failed / inconclusive\`.
 
