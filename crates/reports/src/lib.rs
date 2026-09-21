@@ -713,22 +713,20 @@ fn sanitize_json_value(value: &mut Value, depth: usize) {
                     continue;
                 }
                 let lower = key.to_ascii_lowercase();
-                if matches!(lower.as_str(), "route" | "url") || lower.ends_with("_url") {
-                    if let Some(Value::String(value)) = map.get_mut(&key) {
-                        *value = bounded_route(value);
-                        continue;
-                    }
-                }
-                if matches!(lower.as_str(), "file" | "path")
-                    || lower.ends_with("_file")
-                    || lower.ends_with("_path")
+                if (matches!(lower.as_str(), "route" | "url") || lower.ends_with("_url"))
+                    && let Some(Value::String(value)) = map.get_mut(&key)
                 {
-                    if let Some(Value::String(value)) = map.get_mut(&key) {
-                        if !safe_relative_file(value) {
-                            *value = "<redacted-path>".into();
-                            continue;
-                        }
-                    }
+                    *value = bounded_route(value);
+                    continue;
+                }
+                if (matches!(lower.as_str(), "file" | "path")
+                    || lower.ends_with("_file")
+                    || lower.ends_with("_path"))
+                    && let Some(Value::String(value)) = map.get_mut(&key)
+                    && !safe_relative_file(value)
+                {
+                    *value = "<redacted-path>".into();
+                    continue;
                 }
                 if let Some(value) = map.get_mut(&key) {
                     sanitize_json_value(value, depth + 1);
