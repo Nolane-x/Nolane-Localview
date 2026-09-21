@@ -126,11 +126,7 @@ impl ContentStressState {
         Ok(())
     }
 
-    async fn mark_restore_pending(
-        &self,
-        session_id: SessionId,
-        token: &str,
-    ) -> Result<(), String> {
+    async fn mark_restore_pending(&self, session_id: SessionId, token: &str) -> Result<(), String> {
         let mut entries = self.entries.lock().await;
         let entry = entries
             .get_mut(&session_id)
@@ -316,11 +312,7 @@ fn canonical_route(route: &str) -> Result<String, String> {
         .map_err(|_| "content_stress_route_invalid".to_string())
 }
 
-fn managed_eval(
-    app: &tauri::AppHandle,
-    session_id: SessionId,
-    script: &str,
-) -> Result<(), String> {
+fn managed_eval(app: &tauri::AppHandle, session_id: SessionId, script: &str) -> Result<(), String> {
     let preview_label = workspace_surface::preview_surface_label(session_id);
     if let Some(window) = app.get_webview_window(&preview_label) {
         if !workspace_surface::bridge_surface_label_allowed(window.label(), session_id) {
@@ -351,8 +343,8 @@ fn begin_script(token: &str, route: &str, profile: ContentStressProfile) -> Resu
     validate_token(token)?;
     let token = serde_json::to_string(token).map_err(|_| "content_stress_token_invalid")?;
     let route = serde_json::to_string(route).map_err(|_| "content_stress_route_invalid")?;
-    let profile = serde_json::to_string(profile.as_str())
-        .map_err(|_| "content_stress_profile_invalid")?;
+    let profile =
+        serde_json::to_string(profile.as_str()).map_err(|_| "content_stress_profile_invalid")?;
     Ok(format!(
         "window.__LOCALVIEW__?.beginContentStress?.({{ requestToken: {token}, route: {route}, profile: {profile} }});"
     ))
@@ -377,11 +369,7 @@ struct FlatNode {
 }
 
 fn flatten_snapshot(snapshot: &PageSnapshot) -> BTreeMap<String, FlatNode> {
-    fn visit(
-        node: &SemanticNode,
-        parent: Option<&str>,
-        output: &mut BTreeMap<String, FlatNode>,
-    ) {
+    fn visit(node: &SemanticNode, parent: Option<&str>, output: &mut BTreeMap<String, FlatNode>) {
         output.insert(
             node.reference.clone(),
             FlatNode {
@@ -514,16 +502,26 @@ fn analyze_profile(
                 let left_ref = &refs[left_index];
                 let right_ref = &refs[right_index];
                 let (Some(before_left), Some(before_right), Some(after_left), Some(after_right)) = (
-                    baseline_nodes.get(left_ref).and_then(|node| node.rect.as_ref()),
-                    baseline_nodes.get(right_ref).and_then(|node| node.rect.as_ref()),
-                    stressed_nodes.get(left_ref).and_then(|node| node.rect.as_ref()),
-                    stressed_nodes.get(right_ref).and_then(|node| node.rect.as_ref()),
+                    baseline_nodes
+                        .get(left_ref)
+                        .and_then(|node| node.rect.as_ref()),
+                    baseline_nodes
+                        .get(right_ref)
+                        .and_then(|node| node.rect.as_ref()),
+                    stressed_nodes
+                        .get(left_ref)
+                        .and_then(|node| node.rect.as_ref()),
+                    stressed_nodes
+                        .get(right_ref)
+                        .and_then(|node| node.rect.as_ref()),
                 ) else {
                     continue;
                 };
                 let before_ratio = overlap_ratio(before_left, before_right);
                 let after_ratio = overlap_ratio(after_left, after_right);
-                if before_ratio <= BASELINE_COLLISION_TOLERANCE && after_ratio >= NEW_COLLISION_RATIO {
+                if before_ratio <= BASELINE_COLLISION_TOLERANCE
+                    && after_ratio >= NEW_COLLISION_RATIO
+                {
                     let mut pair = vec![left_ref.clone(), right_ref.clone()];
                     pair.sort();
                     push_issue(
@@ -597,7 +595,9 @@ async fn best_effort_restore(
     if let Ok(script) = restore_script(token) {
         let _ = managed_eval(app, session_id, &script);
     }
-    let _ = state.wait_for(session_id, token, StressPhase::Restored).await;
+    let _ = state
+        .wait_for(session_id, token, StressPhase::Restored)
+        .await;
     state.clear(session_id, token).await;
 }
 
@@ -759,7 +759,12 @@ mod tests {
     use localview_protocol::{Rect, SemanticNode};
     use std::collections::BTreeMap;
 
-    fn node(reference: &str, rect: Rect, interactive: bool, children: Vec<SemanticNode>) -> SemanticNode {
+    fn node(
+        reference: &str,
+        rect: Rect,
+        interactive: bool,
+        children: Vec<SemanticNode>,
+    ) -> SemanticNode {
         SemanticNode {
             reference: reference.into(),
             role: None,
@@ -790,61 +795,154 @@ mod tests {
     fn detects_new_viewport_overflow_without_calling_growth_itself_a_failure() {
         let before = snapshot(node(
             "@eroot",
-            Rect { x: 0.0, y: 0.0, width: 400.0, height: 800.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 800.0,
+            },
             false,
             vec![node(
                 "@e1",
-                Rect { x: 20.0, y: 20.0, width: 120.0, height: 30.0 },
+                Rect {
+                    x: 20.0,
+                    y: 20.0,
+                    width: 120.0,
+                    height: 30.0,
+                },
                 true,
                 vec![],
             )],
         ));
         let after = snapshot(node(
             "@eroot",
-            Rect { x: 0.0, y: 0.0, width: 400.0, height: 800.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 800.0,
+            },
             false,
             vec![node(
                 "@e1",
-                Rect { x: 20.0, y: 20.0, width: 420.0, height: 60.0 },
+                Rect {
+                    x: 20.0,
+                    y: 20.0,
+                    width: 420.0,
+                    height: 60.0,
+                },
                 true,
                 vec![],
             )],
         ));
         let issues = analyze_profile(ContentStressProfile::Expanded180, &before, &after).unwrap();
-        assert!(issues.iter().any(|issue| issue.code == "content_viewport_overflow"));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "content_viewport_overflow")
+        );
     }
 
     #[test]
     fn detects_new_sibling_collision() {
         let before = snapshot(node(
             "@eroot",
-            Rect { x: 0.0, y: 0.0, width: 400.0, height: 800.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 800.0,
+            },
             false,
             vec![
-                node("@ea", Rect { x: 10.0, y: 10.0, width: 100.0, height: 40.0 }, true, vec![]),
-                node("@eb", Rect { x: 130.0, y: 10.0, width: 100.0, height: 40.0 }, true, vec![]),
+                node(
+                    "@ea",
+                    Rect {
+                        x: 10.0,
+                        y: 10.0,
+                        width: 100.0,
+                        height: 40.0,
+                    },
+                    true,
+                    vec![],
+                ),
+                node(
+                    "@eb",
+                    Rect {
+                        x: 130.0,
+                        y: 10.0,
+                        width: 100.0,
+                        height: 40.0,
+                    },
+                    true,
+                    vec![],
+                ),
             ],
         ));
         let after = snapshot(node(
             "@eroot",
-            Rect { x: 0.0, y: 0.0, width: 400.0, height: 800.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 800.0,
+            },
             false,
             vec![
-                node("@ea", Rect { x: 10.0, y: 10.0, width: 180.0, height: 40.0 }, true, vec![]),
-                node("@eb", Rect { x: 130.0, y: 10.0, width: 100.0, height: 40.0 }, true, vec![]),
+                node(
+                    "@ea",
+                    Rect {
+                        x: 10.0,
+                        y: 10.0,
+                        width: 180.0,
+                        height: 40.0,
+                    },
+                    true,
+                    vec![],
+                ),
+                node(
+                    "@eb",
+                    Rect {
+                        x: 130.0,
+                        y: 10.0,
+                        width: 100.0,
+                        height: 40.0,
+                    },
+                    true,
+                    vec![],
+                ),
             ],
         ));
         let issues = analyze_profile(ContentStressProfile::Expanded180, &before, &after).unwrap();
-        assert!(issues.iter().any(|issue| issue.code == "content_sibling_collision"));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "content_sibling_collision")
+        );
     }
 
     #[test]
     fn restore_validation_rejects_semantic_or_geometry_drift() {
         let baseline = snapshot(node(
             "@eroot",
-            Rect { x: 0.0, y: 0.0, width: 400.0, height: 800.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 800.0,
+            },
             false,
-            vec![node("@e1", Rect { x: 10.0, y: 10.0, width: 100.0, height: 40.0 }, true, vec![])],
+            vec![node(
+                "@e1",
+                Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    width: 100.0,
+                    height: 40.0,
+                },
+                true,
+                vec![],
+            )],
         ));
         let mut changed = baseline.clone();
         changed.root.children[0].name = Some("different".into());
@@ -863,7 +961,13 @@ mod tests {
         })
         .unwrap();
         let encoded = value.to_string();
-        for forbidden in ["textContent", "innerHTML", "originalText", "stressedText", "inputValue"] {
+        for forbidden in [
+            "textContent",
+            "innerHTML",
+            "originalText",
+            "stressedText",
+            "inputValue",
+        ] {
             assert!(!encoded.contains(forbidden));
         }
     }
