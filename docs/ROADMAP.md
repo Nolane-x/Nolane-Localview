@@ -168,6 +168,8 @@ Truth boundaries:
 - content-stress profiles are synthetic expansion/locale-shape probes, not translations and not retained source text;
 - W10 mixed-DPI physical hardware proof remains an independent deferred hardware gate and is not part of Wave 4 software closure.
 
+Closure evidence for Waves 4–5 is accepted only from exact-head/live-path tests; these software closures do not imply that later Waves 6–9 or the deferred W10 hardware proof are complete.
+
 ## Wave 5 — Source intelligence
 
 Software closure landed:
