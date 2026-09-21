@@ -486,6 +486,18 @@ mod tests {
     }
 
     #[test]
+    fn small_target_is_nominal_geometry_suspicion_not_delivery_proof() {
+        let mut target = node("@e3", "button", Some("Tiny"), true);
+        target.rect = Some(Rect { x: 0.0, y: 0.0, width: 12.0, height: 18.0 });
+        let finding = audit(&target)
+            .into_iter()
+            .find(|finding| finding.code == "small_nominal_hit_target")
+            .expect("small nominal target finding");
+        assert!(!finding.deterministic);
+        assert_eq!(finding.evidence_kind, A11yEvidenceKind::Heuristic);
+    }
+
+    #[test]
     fn axe_unresolved_target_never_fabricates_reference() {
         let findings = normalize_axe_findings(
             &[AxeRuleNode {
