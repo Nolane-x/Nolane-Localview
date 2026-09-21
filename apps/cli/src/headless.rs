@@ -150,6 +150,7 @@ struct EvidenceSummary {
     classes: BTreeMap<String, usize>,
     ids: Vec<String>,
     hashes: Vec<String>,
+    baseline_hashes: Vec<String>,
     source_files: Vec<String>,
 }
 
@@ -444,7 +445,9 @@ async fn run_inner(
         &format!("/v1/sessions/{}/evidence/recent", session.id),
     )
     .await?;
-    let evidence = summarize_evidence(&evidence);
+    let baseline_evidence_ids =
+        baseline_evidence_ids(&verification, &visual_result, &chromium_result);
+    let evidence = summarize_evidence(&evidence, &baseline_evidence_ids);
     git.annotation
         .relevant_source_files
         .extend(evidence.source_files.iter().cloned());
@@ -463,17 +466,22 @@ async fn run_inner(
         .ok_or_else(|| anyhow!("artifact budget overflows byte accounting"))?;
     let mut artifact_store = ArtifactStore::open(&artifact_root, budget_bytes).await?;
 
+    let mut baseline_evidence_hashes = evidence.baseline_hashes.clone();
+    baseline_evidence_hashes.push(final_semantic_hash.clone());
+    baseline_evidence_hashes.sort();
+    baseline_evidence_hashes.dedup();
     let baseline_envelope = BaselineEnvelope {
         schema_version: 1,
         state_identity: state_identity.clone(),
         route: safe_route(&snapshot.route),
         viewport: snapshot.viewport,
-        evidence_hashes: evidence.hashes.clone(),
+        evidence_hashes: baseline_evidence_hashes,
         design_baseline_hash: args.design_baseline_hash.clone(),
         created_revision: revision.clone(),
         provenance: BTreeMap::from([
             ("source".into(), "wave8-headless-ci".into()),
             ("session".into(), session.id.to_string()),
+            ("observed_state_hash".into(), final_semantic_hash.clone()),
         ]),
     }
     .normalized();
@@ -890,16 +898,50 @@ fn relevant_source_files(diagnostics: &DiagnosticReport) -> Vec<String> {
     files
 }
 
-fn summarize_evidence(value: &Value) -> EvidenceSummary {
+fn baseline_evidence_ids(
+    verification: &Value,
+    visual_result: &Value,
+    chromium_result: &Value,
+) -> std::collections::BTreeSet<String> {
+    let mut ids = std::collections::BTreeSet::new();
+    if let Some(fresh) = verification.get("fresh_evidence_ids").and_then(Value::as_array) {
+        ids.extend(fresh.iter().filter_map(Value::as_str).map(str::to_owned));
+    }
+    if let Some(id) = visual_result.get("evidence_id").and_then(Value::as_str) {
+        ids.insert(id.to_owned());
+    }
+    if let Some(steps) = chromium_result.get("steps").and_then(Value::as_array) {
+        for step in steps {
+            if step.pointer("/execution/kind").and_then(Value::as_str)
+                == Some("chromium_compatibility")
+            {
+                if let Some(id) = step
+                    .pointer("/execution/evidence_id")
+                    .and_then(Value::as_str)
+                {
+                    ids.insert(id.to_owned());
+                }
+            }
+        }
+    }
+    ids
+}
+
+fn summarize_evidence(
+    value: &Value,
+    baseline_evidence_ids: &std::collections::BTreeSet<String>,
+) -> EvidenceSummary {
     let mut classes = BTreeMap::new();
     let mut ids = Vec::new();
     let mut hashes = Vec::new();
+    let mut baseline_hashes = Vec::new();
     let mut source_files = std::collections::BTreeSet::new();
     let Some(items) = value.as_array() else {
         return EvidenceSummary {
             classes,
             ids,
             hashes,
+            baseline_hashes,
             source_files: Vec::new(),
         };
     };
@@ -931,7 +973,11 @@ fn summarize_evidence(value: &Value) -> EvidenceSummary {
                 .map(|value| bounded_text(value, 96)),
             payload_hash: object_hash(item.get("payload").unwrap_or(&Value::Null)),
         };
-        hashes.push(object_hash(&safe));
+        let safe_hash = object_hash(&safe);
+        hashes.push(safe_hash.clone());
+        if baseline_evidence_ids.contains(id) {
+            baseline_hashes.push(safe_hash);
+        }
         collect_evidence_source_files(
             item.get("payload").unwrap_or(&Value::Null),
             &mut source_files,
@@ -942,10 +988,13 @@ fn summarize_evidence(value: &Value) -> EvidenceSummary {
     ids.dedup();
     hashes.sort();
     hashes.dedup();
+    baseline_hashes.sort();
+    baseline_hashes.dedup();
     EvidenceSummary {
         classes,
         ids,
         hashes,
+        baseline_hashes,
         source_files: source_files.into_iter().collect(),
     }
 }
@@ -2102,14 +2151,53 @@ mod tests {
     }
 
     #[test]
+    fn baseline_evidence_selection_is_run_local_not_history_wide() {
+        let ids = baseline_evidence_ids(
+            &json!({
+                "fresh_evidence_ids": ["ev_semantic", "ev_layout"]
+            }),
+            &json!({"evidence_id": "ev_visual", "result": {"verdict": "pass"}}),
+            &json!({
+                "steps": [{
+                    "execution": {
+                        "kind": "chromium_compatibility",
+                        "evidence_id": "ev_chromium"
+                    }
+                }]
+            }),
+        );
+        assert_eq!(
+            ids,
+            std::collections::BTreeSet::from([
+                "ev_chromium".to_owned(),
+                "ev_layout".to_owned(),
+                "ev_semantic".to_owned(),
+                "ev_visual".to_owned(),
+            ])
+        );
+
+        let history = json!([
+            {"id":"ev_old","kind":"semantic","secret_taint":false,"payload":{"state":"old"},"provenance":{"source":"observer","revision":"abc"}},
+            {"id":"ev_semantic","kind":"semantic","secret_taint":false,"payload":{"state":"current"},"provenance":{"source":"observer","revision":"abc"}}
+        ]);
+        let summary = summarize_evidence(&history, &ids);
+        assert_eq!(summary.hashes.len(), 2);
+        assert_eq!(summary.baseline_hashes.len(), 1);
+    }
+
+    #[test]
     fn secret_tainted_evidence_is_excluded_from_report_hash_inputs() {
         let value = json!([
             {"id":"ev_secret","kind":"semantic","secret_taint":true,"payload":{"token":"secret"}},
             {"id":"ev_safe","kind":"layout","secret_taint":false,"uncertainty":"observed","provenance":{"source":"native","revision":"abc"}}
         ]);
-        let summary = summarize_evidence(&value);
+        let summary = summarize_evidence(
+            &value,
+            &std::collections::BTreeSet::from(["ev_safe".to_owned()]),
+        );
         assert_eq!(summary.ids, vec!["ev_safe"]);
         assert_eq!(summary.hashes.len(), 1);
+        assert_eq!(summary.baseline_hashes.len(), 1);
     }
 
     #[test]
