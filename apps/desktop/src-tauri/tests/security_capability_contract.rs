@@ -33,7 +33,11 @@ fn invoke_names(source: &str) -> BTreeSet<String> {
     while let Some(relative) = source[offset..].find("invoke") {
         let invoke_start = offset + relative;
         let mut cursor = invoke_start + "invoke".len();
-        while source[cursor..].starts_with(char::is_whitespace) {
+        while source[cursor..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+        {
             cursor += source[cursor..].chars().next().unwrap().len_utf8();
         }
 
@@ -58,7 +62,11 @@ fn invoke_names(source: &str) -> BTreeSet<String> {
                 continue;
             };
             cursor = next;
-            while source[cursor..].starts_with(char::is_whitespace) {
+            while source[cursor..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+        {
                 cursor += source[cursor..].chars().next().unwrap().len_utf8();
             }
         }
@@ -68,7 +76,11 @@ fn invoke_names(source: &str) -> BTreeSet<String> {
             continue;
         }
         cursor += 1;
-        while source[cursor..].starts_with(char::is_whitespace) {
+        while source[cursor..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+        {
             cursor += source[cursor..].chars().next().unwrap().len_utf8();
         }
 
