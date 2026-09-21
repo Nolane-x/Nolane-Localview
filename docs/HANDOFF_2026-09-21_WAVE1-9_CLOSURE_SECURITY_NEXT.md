@@ -270,10 +270,21 @@ It is successful when:
 
 ## 11. Final closure evidence note
 
-Before treating this handoff itself as final, verify the post-merge GitHub Actions suite for main commit:
+Post-merge main closure is verified.
+
+Main commit:
 
 `bded849d7fdb4a640b4cd12c802381b783bc42c2`
 
-The exact-head pre-merge evidence is already closed: PR #198 head `e5f59b074fa2979b2e91f919e0e4258a8ccd1087` passed 35/35 workflows.
+passed **28/28 push-triggered GitHub Actions workflows** with zero failed or active runs, including:
 
-This file should be updated to state post-merge main is green only after all push-triggered workflows on `bded849d...` complete successfully.
+- full cross-platform CI;
+- Windows UIA Observe;
+- Windows real-provider seeds;
+- macOS/Linux/Windows Rust-core gates;
+- WebView2 / WKWebView / WebKitGTK rendered-pixel GUI smoke;
+- Tauri/frontend regression coverage.
+
+The exact-head pre-merge evidence is also closed: PR #198 head `e5f59b074fa2979b2e91f919e0e4258a8ccd1087` passed **35/35 workflows** before merge.
+
+A later docs-only closure PR observed one isolated Windows `vue_snapshot_authority` HTTP-timeout failure while the identical runtime code on post-merge `main` was fully green. Treat such a single hosted timeout as a flake unless it reproduces; do not weaken source/session authority to make it disappear.
