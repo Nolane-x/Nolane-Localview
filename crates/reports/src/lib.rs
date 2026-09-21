@@ -827,6 +827,7 @@ fn safe_relative_file(value: &str) -> bool {
     let value = value.replace('\\', "/");
     !value.is_empty()
         && value.len() <= 512
+        && !value.starts_with('/')
         && !Path::new(&value).is_absolute()
         && !looks_like_windows_absolute(&value)
         && !value.split('/').any(|part| part == "..")
