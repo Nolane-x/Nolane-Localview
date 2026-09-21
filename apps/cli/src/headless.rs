@@ -1185,12 +1185,15 @@ async fn compare_and_retain_baseline(
     if bytes.len() as u64 > MAX_BASELINE_BYTES {
         bail!("baseline envelope exceeds retained size policy");
     }
-    let meta = store.put("wave8/baseline-json", &bytes).await?;
+    let retained = store
+        .put_canonical("wave8/baseline-json", &candidate_hash, &bytes)
+        .await?;
+    let meta = retained.physical;
     index.schema_version = 1;
     index.states.insert(
         candidate.state_identity.clone(),
         BaselineLocator {
-            content_hash: candidate_hash.clone(),
+            content_hash: retained.canonical_hash,
             storage_id: meta.id.clone(),
         },
     );
@@ -1371,10 +1374,32 @@ async fn authed_post_value(
         .context("invalid control JSON response")
 }
 
+fn authed_get_request(
+    client: &Client,
+    base: &str,
+    token: &str,
+    path: &str,
+) -> reqwest::RequestBuilder {
+    client.get(format!("{base}{path}")).bearer_auth(token)
+}
+
+fn authed_post_request(
+    client: &Client,
+    base: &str,
+    token: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> reqwest::RequestBuilder {
+    let request = client.post(format!("{base}{path}")).bearer_auth(token);
+    if let Some(body) = body {
+        request.json(body)
+    } else {
+        request
+    }
+}
+
 async fn authed_get_raw(client: &Client, base: &str, token: &str, path: &str) -> Result<Response> {
-    client
-        .get(format!("{base}{path}"))
-        .bearer_auth(token)
+    authed_get_request(client, base, token, path)
         .send()
         .await
         .context("cannot reach LocalView control plane")
@@ -1387,13 +1412,7 @@ async fn authed_post_raw(
     path: &str,
     body: Option<&Value>,
 ) -> Result<Response> {
-    let request = client.post(format!("{base}{path}")).bearer_auth(token);
-    let request = if let Some(body) = body {
-        request.json(body)
-    } else {
-        request
-    };
-    request
+    authed_post_request(client, base, token, path, body)
         .send()
         .await
         .context("cannot reach LocalView control plane")
@@ -1607,6 +1626,42 @@ mod tests {
             visual_max_changed_ratio: 0.01,
             artifact_budget_mib: 64,
         }
+    }
+
+    #[test]
+    fn headless_control_requests_carry_bearer_auth() {
+        let client = Client::new();
+        let request = authed_get_request(
+            &client,
+            "http://127.0.0.1:45454",
+            "test-token",
+            "/v1/sessions",
+        )
+        .build()
+        .expect("request");
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-token")
+        );
+
+        let post = authed_post_request(
+            &client,
+            "http://127.0.0.1:45454",
+            "test-token",
+            "/v1/sessions/00000000-0000-0000-0000-000000000000/proof",
+            None,
+        )
+        .build()
+        .expect("post request");
+        assert_eq!(
+            post.headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-token")
+        );
     }
 
     #[test]
