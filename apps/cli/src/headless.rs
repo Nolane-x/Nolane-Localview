@@ -329,6 +329,18 @@ async fn run_inner(
         }
     }
 
+    let visual_verdict = visual_result
+        .pointer("/result/verdict")
+        .and_then(Value::as_str);
+    let visual_failed = visual_verdict == Some("fail");
+    if visual_verdict == Some("inconclusive") {
+        let reason = visual_result
+            .pointer("/result/reason")
+            .and_then(Value::as_str)
+            .unwrap_or("visual verification was inconclusive");
+        inconclusive_reasons.push(format!("visual verification: {}", bounded_text(reason, 256)));
+    }
+
     let mut chromium_result = Value::Null;
     if args.chromium {
         match fixture {
@@ -345,7 +357,15 @@ async fn run_inner(
                 )
                 .await
                 {
-                    Ok(value) => chromium_result = value,
+                    Ok(value) => {
+                        if !chromium_cycle_executed(&value) {
+                            inconclusive_reasons.push(
+                                "Chromium was requested but the bounded perception cycle produced no chromium_compatibility receipt"
+                                    .into(),
+                            );
+                        }
+                        chromium_result = value;
+                    },
                     Err(VisualRequestError::ResourceDenied) => inconclusive_reasons
                         .push("Chromium denied by Runtime Resource Governor".into()),
                     Err(VisualRequestError::Unavailable(reason)) => {
@@ -482,6 +502,7 @@ async fn run_inner(
         &diagnostics,
         &verification_verdict,
         baseline.status,
+        visual_failed,
         !inconclusive_reasons.is_empty(),
     );
 
@@ -490,6 +511,10 @@ async fn run_inner(
     metadata.insert("visual_requested".into(), args.visual.to_string());
     metadata.insert("chromium_requested".into(), args.chromium.to_string());
     metadata.insert("visual_result".into(), compact_status(&visual_result));
+    metadata.insert(
+        "chromium_executed".into(),
+        chromium_cycle_executed(&chromium_result).to_string(),
+    );
     metadata.insert("chromium_result".into(), compact_status(&chromium_result));
     metadata.insert(
         "artifact_retained_bytes".into(),
@@ -592,6 +617,7 @@ fn evaluate_exit_policy(
     diagnostics: &DiagnosticReport,
     verification_verdict: &str,
     baseline_status: BaselineComparisonStatus,
+    visual_failed: bool,
     has_inconclusive_reason: bool,
 ) -> (ReportStatus, i32) {
     let hard_deterministic = diagnostics.issues.iter().any(|issue| {
@@ -609,7 +635,12 @@ fn evaluate_exit_policy(
         && !args.update_baseline;
     let verification_incomplete = args.require_verification_pass && verification_verdict != "pass";
 
-    if hard_deterministic || hard_heuristic || verification_failed || baseline_failed {
+    if hard_deterministic
+        || hard_heuristic
+        || verification_failed
+        || baseline_failed
+        || visual_failed
+    {
         (ReportStatus::Failed, EXIT_HARD_FAILURE)
     } else if verification_incomplete || has_inconclusive_reason {
         (ReportStatus::Inconclusive, EXIT_INCONCLUSIVE)
@@ -1024,6 +1055,18 @@ fn sanitize_text(value: &str, project_root: &str, max: usize) -> String {
         value.replace(project_root, "<project>")
     };
     bounded_text(&replaced.replace(['\r', '\n'], " "), max)
+}
+
+fn chromium_cycle_executed(value: &Value) -> bool {
+    value
+        .get("steps")
+        .and_then(Value::as_array)
+        .is_some_and(|steps| {
+            steps.iter().any(|step| {
+                step.pointer("/execution/kind").and_then(Value::as_str)
+                    == Some("chromium_compatibility")
+            })
+        })
 }
 
 struct VisualCaptureVerifyInput<'a> {
@@ -1492,6 +1535,7 @@ fn compact_status(value: &Value) -> String {
         .get("error")
         .and_then(Value::as_str)
         .or_else(|| value.get("verdict").and_then(Value::as_str))
+        .or_else(|| value.pointer("/result/verdict").and_then(Value::as_str))
         .or_else(|| value.get("completion").and_then(Value::as_str))
         .map(|value| bounded_text(value, 160))
         .unwrap_or_else(|| {
@@ -2062,6 +2106,52 @@ mod tests {
     }
 
     #[test]
+    fn visual_fail_is_a_hard_gate_and_inconclusive_is_not() {
+        let diagnostics = DiagnosticReport::default();
+        assert_eq!(
+            evaluate_exit_policy(
+                &args(),
+                &diagnostics,
+                "pass",
+                BaselineComparisonStatus::Match,
+                true,
+                false,
+            ),
+            (ReportStatus::Failed, EXIT_HARD_FAILURE)
+        );
+        assert_eq!(
+            evaluate_exit_policy(
+                &args(),
+                &diagnostics,
+                "pass",
+                BaselineComparisonStatus::Match,
+                false,
+                true,
+            ),
+            (ReportStatus::Inconclusive, EXIT_INCONCLUSIVE)
+        );
+    }
+
+    #[test]
+    fn chromium_request_requires_a_real_compatibility_receipt() {
+        assert!(chromium_cycle_executed(&json!({
+            "steps": [{
+                "execution": {
+                    "kind": "chromium_compatibility",
+                    "exit_code": 0,
+                    "evidence_id": "ev_chromium"
+                }
+            }]
+        })));
+        assert!(!chromium_cycle_executed(&json!({
+            "completion": "no_op",
+            "steps": [{
+                "execution": {"kind": "semantic_snapshot"}
+            }]
+        })));
+    }
+
+    #[test]
     fn heuristic_only_findings_do_not_fail_default_policy() {
         let diagnostics = DiagnosticReport {
             issues: vec![DiagnosticIssue {
@@ -2084,6 +2174,7 @@ mod tests {
                 &diagnostics,
                 "pass",
                 BaselineComparisonStatus::Match,
+                false,
                 false
             ),
             (ReportStatus::Passed, EXIT_PASS)
