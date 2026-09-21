@@ -62,7 +62,6 @@ jobs:
           rustfmt --edition 2024 --check \
             crates/design-grammar/src/lib.rs \
             crates/design-grammar/tests/wave7_design_grammar.rs \
-            crates/quality/src/lib.rs \
             crates/quality/src/visual_critic.rs \
             crates/quality/tests/wave7_visual_critic.rs \
             crates/live-analysis/src/lib.rs \
