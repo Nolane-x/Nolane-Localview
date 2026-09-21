@@ -221,7 +221,7 @@ impl ShadowWorkspace {
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
         let expected = workspace.changed_files.iter().cloned().collect::<BTreeSet<_>>();
-        for path in actual_files.difference(&expected) {
+        if let Some(path) = actual_files.difference(&expected).next() {
             let error = ShadowError::UnexpectedChangedFile { path: path.clone() };
             let _ = workspace.cleanup();
             return Err(error);
