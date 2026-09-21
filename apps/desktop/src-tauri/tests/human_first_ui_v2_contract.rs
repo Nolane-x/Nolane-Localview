@@ -695,3 +695,95 @@ fn visual_system_uses_muted_moss_instead_of_ai_blue() {
     assert!(styles.contains("--lv-accent-soft"));
     assert!(!styles.contains("--lv-accent:#8bb6ff"));
 }
+
+
+#[test]
+fn ui_audit_requires_safe_keyboard_scope_focus_restore_and_truthful_toggle_semantics() {
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    for required in [
+        "isComposing",
+        "blocksSingleKeyShortcut",
+        "command-search",
+        "chrome-layer",
+        "restorePanelFocus",
+        "latestRouteSequenceRef.current",
+    ] {
+        assert!(
+            shell.contains(required),
+            "UI keyboard/focus hardening is missing {required}"
+        );
+    }
+
+    assert!(
+        tools.matches("aria-pressed={active}").count() >= 2,
+        "Command rail must expose the same truthful toggle state as other rail buttons"
+    );
+    assert!(tools.contains("aria-hidden=\"true\""));
+    assert!(capture.contains("ui-audit:command-search-autofocus"));
+    assert!(capture.contains("ui-audit:command-escape-safe-focus"));
+    assert!(capture.contains("ui-audit:single-key-suppressed-button-focus"));
+    assert!(capture.contains("ui-audit:single-key-safe-scope"));
+    assert!(capture.contains("ui-audit:rail-focus-restored"));
+    assert!(capture.contains("ui-audit:hidden-trigger-falls-back-safely"));
+    assert!(capture.contains("ui-audit:session-change-does-not-restore-stale-trigger"));
+    assert!(capture.contains("ui-audit:route-change-does-not-restore-stale-trigger"));
+    assert!(capture.contains("ui-audit:rail-keyboard-tooltip"));
+}
+
+#[test]
+fn ui_audit_requires_platform_shortcuts_minimum_hit_areas_and_iframe_sandbox() {
+    let surface = include_str!("../../src/app/WorkspaceSurface.tsx");
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let styles = include_str!("../../src/styles.css");
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    assert!(surface.contains("formatShortcut"));
+    assert!(tools.contains("formatShortcut"));
+    assert!(!surface.contains("<kbd>⌘</kbd><kbd>K</kbd>"));
+    assert!(!tools.contains("<kbd>⌘K</kbd>"));
+    assert!(!tools.contains("shortcut: '⌘,'"));
+
+    assert!(surface.contains("sandbox=\"allow-scripts allow-same-origin\""));
+    assert!(!surface.contains("allow-top-navigation"));
+    assert!(!surface.contains("allow-popups"));
+    assert!(!surface.contains("allow-forms"));
+
+    assert!(styles.contains(".rail-button:focus-visible .rail-tooltip"));
+    assert!(styles.contains("width:40px"));
+    assert!(styles.contains("height:40px"));
+
+    for marker in [
+        "ui-audit:iframe-minimal-sandbox",
+        "ui-audit:linux-shortcut-presentation",
+        "ui-audit:windows-shortcut-presentation",
+        "ui-audit:mac-shortcut-presentation",
+        "ui-audit:minimum-chrome-hit-area",
+        "ui-audit:rail-targets-no-overlap",
+        "159-command-input-focused.png",
+        "167-macos-shortcut-labels.png",
+    ] {
+        assert!(capture.contains(marker), "render audit missing {marker}");
+    }
+}
+
+#[test]
+fn ui_audit_keeps_reduced_motion_and_preference_recovery_regressions_registered() {
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+    let styles = include_str!("../../src/styles.css");
+
+    assert!(styles.contains(".is-reduced-motion *"));
+    assert!(styles.contains("@media(prefers-reduced-motion:reduce)"));
+    for marker in [
+        "invalid-preferences-normalized",
+        "partial-preferences-recovered",
+        "explicit-reduced-motion",
+        "settings-reset-recovered",
+        "settings-live-locale-switch-en",
+        "settings-live-locale-switch-vi",
+    ] {
+        assert!(capture.contains(marker), "existing regression marker disappeared: {marker}");
+    }
+}
