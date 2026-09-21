@@ -275,10 +275,10 @@ impl ArtifactStore {
             self.revalidate_root().await?;
             match tokio::fs::symlink_metadata(&meta.path).await {
                 Ok(metadata)
-            if metadata.file_type().is_symlink()
-                || metadata_is_reparse_point(&metadata)
-                || !metadata.is_file() =>
-        {
+                    if metadata.file_type().is_symlink()
+                        || metadata_is_reparse_point(&metadata)
+                        || !metadata.is_file() =>
+                {
                     anyhow::bail!("artifact GC refuses non-regular retained entry {}", meta.id)
                 }
                 Ok(_) => {}
@@ -361,7 +361,9 @@ fn revalidate_atomic_parent(parent: &Path) -> Result<()> {
     }
     let canonical = fs::canonicalize(parent).context("canonicalize atomic persistence parent")?;
     if canonical != parent {
-        anyhow::bail!("atomic persistence parent identity changed or resolves through reparse/symlink");
+        anyhow::bail!(
+            "atomic persistence parent identity changed or resolves through reparse/symlink"
+        );
     }
     Ok(())
 }
