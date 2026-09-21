@@ -840,12 +840,31 @@ mod tests {
     #[test]
     fn html_escapes_project_name() {
         let report = LocalViewReport {
+            schema_version: 1,
             title: "Audit".into(),
             generated_at: "now".into(),
+            status: ReportStatus::Passed,
             project: "<demo>".into(),
+            project_key: "demo".into(),
+            session_id: "session".into(),
+            revision: None,
+            state_identity: "sha256:state".into(),
             route: "/".into(),
             viewport: None,
+            evidence_classes: BTreeMap::new(),
+            evidence_ids: Vec::new(),
             diagnostics: DiagnosticReport::default(),
+            verification: serde_json::json!({"verdict": "pass"}),
+            baseline: BaselineComparison {
+                status: BaselineComparisonStatus::Created,
+                baseline_hash: None,
+                candidate_hash: None,
+                reasons: Vec::new(),
+            },
+            artifacts: Vec::new(),
+            incomplete_reasons: Vec::new(),
+            inconclusive_reasons: Vec::new(),
+            git: GitAnnotation::default(),
             metadata: BTreeMap::new(),
         };
         assert!(render_html(&report).contains("&lt;demo&gt;"));
