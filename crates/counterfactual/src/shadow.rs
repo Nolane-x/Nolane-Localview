@@ -102,13 +102,17 @@ impl ShadowWorkspace {
         repository_root: &Path,
         candidate: &CounterfactualCandidate,
     ) -> Result<Self, ShadowError> {
-        candidate.validate().map_err(|_| ShadowError::NotDisposable)?;
+        candidate
+            .validate()
+            .map_err(|_| ShadowError::NotDisposable)?;
         if !candidate.disposable {
             return Err(ShadowError::NotDisposable);
         }
         if !matches!(
             candidate.isolation,
-            IsolationLevel::NativeWebView | IsolationLevel::ChromiumSandbox | IsolationLevel::SemanticOnly
+            IsolationLevel::NativeWebView
+                | IsolationLevel::ChromiumSandbox
+                | IsolationLevel::SemanticOnly
         ) {
             return Err(ShadowError::UnsupportedIsolation);
         }
@@ -121,13 +125,16 @@ impl ShadowWorkspace {
         let total_patch_bytes = candidate
             .overlays
             .iter()
-            .try_fold(0usize, |total, overlay| total.checked_add(overlay.patch.len()))
+            .try_fold(0usize, |total, overlay| {
+                total.checked_add(overlay.patch.len())
+            })
             .ok_or(ShadowError::OversizedPatch)?;
         if total_patch_bytes > MAX_SHADOW_PATCH_BYTES {
             return Err(ShadowError::OversizedPatch);
         }
 
-        let repository_root = fs::canonicalize(repository_root).map_err(|_| ShadowError::NonGitProject)?;
+        let repository_root =
+            fs::canonicalize(repository_root).map_err(|_| ShadowError::NonGitProject)?;
         let top = git_output(&repository_root, &["rev-parse", "--show-toplevel"])
             .ok_or(ShadowError::NonGitProject)?;
         let canonical_top = fs::canonicalize(top.trim()).map_err(|_| ShadowError::NonGitProject)?;
@@ -146,7 +153,10 @@ impl ShadowWorkspace {
         }
         let resolved = git_output(
             &repository_root,
-            &["rev-parse", &format!("{}^{{commit}}", candidate.base_revision)],
+            &[
+                "rev-parse",
+                &format!("{}^{{commit}}", candidate.base_revision),
+            ],
         )
         .ok_or(ShadowError::GitUnavailable)?
         .trim()
@@ -220,7 +230,11 @@ impl ShadowWorkspace {
             .filter(|line| !line.trim().is_empty())
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
-        let expected = workspace.changed_files.iter().cloned().collect::<BTreeSet<_>>();
+        let expected = workspace
+            .changed_files
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
         if let Some(path) = actual_files.difference(&expected).next() {
             let error = ShadowError::UnexpectedChangedFile { path: path.clone() };
             let _ = workspace.cleanup();
@@ -486,7 +500,10 @@ fn validate_patch_paths(overlay: &SourceOverlay) -> Result<(), ShadowError> {
         });
     }
     for line in overlay.patch.lines() {
-        let Some(raw) = line.strip_prefix("--- ").or_else(|| line.strip_prefix("+++ ")) else {
+        let Some(raw) = line
+            .strip_prefix("--- ")
+            .or_else(|| line.strip_prefix("+++ "))
+        else {
             continue;
         };
         let raw = raw.split_whitespace().next().unwrap_or(raw);

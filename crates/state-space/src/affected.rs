@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CompiledStateSpace, Constraint, ProductState, StateDimension, StateSpacePlan, compile};
+use crate::{
+    CompiledStateSpace, Constraint, ProductState, StateDimension, StateSpacePlan, compile,
+};
 
 pub const MAX_AFFECTED_ROUTES: usize = 64;
 pub const MAX_AFFECTED_REGIONS: usize = 128;
@@ -175,9 +177,13 @@ fn build_plan(input: &AffectedStateInput, compiled: CompiledStateSpace) -> Affec
         .iter()
         .map(|state| state.score)
         .fold(0.0f32, f32::max);
-    let uncertainty_penalty = if incomplete_reasons.is_empty() { 0.0 } else { 25.0 };
-    let risk_score = (frontier_size.min(100) as f32 + max_state_risk + uncertainty_penalty)
-        .clamp(0.0, 100.0);
+    let uncertainty_penalty = if incomplete_reasons.is_empty() {
+        0.0
+    } else {
+        25.0
+    };
+    let risk_score =
+        (frontier_size.min(100) as f32 + max_state_risk + uncertainty_penalty).clamp(0.0, 100.0);
 
     AffectedStatePlan {
         base_revision: input.base_revision.clone(),
@@ -221,7 +227,10 @@ pub fn state_values_by_dimension(plan: &AffectedStatePlan) -> BTreeMap<String, B
     let mut values = BTreeMap::<String, BTreeSet<String>>::new();
     for state in &plan.compiled_states {
         for (dimension, value) in &state.values {
-            values.entry(dimension.clone()).or_default().insert(value.clone());
+            values
+                .entry(dimension.clone())
+                .or_default()
+                .insert(value.clone());
         }
     }
     values

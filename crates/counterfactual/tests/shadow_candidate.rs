@@ -7,8 +7,8 @@ use std::{
 };
 
 use localview_counterfactual::{
-    CounterfactualCandidate, IsolationLevel, ShadowError, ShadowWorkspace, SourceOverlay,
-    MAX_SHADOW_PATCH_BYTES, patch_digest, sha256_bytes,
+    CounterfactualCandidate, IsolationLevel, MAX_SHADOW_PATCH_BYTES, ShadowError, ShadowWorkspace,
+    SourceOverlay, patch_digest, sha256_bytes,
 };
 use uuid::Uuid;
 
@@ -198,7 +198,9 @@ fn traversal_secret_oversized_and_binary_candidates_fail_closed() {
     fs::write(fixture.root.join("src/binary.bin"), [0, 1, 2, 3]).unwrap();
     git(&fixture.root, &["add", "src/binary.bin"]);
     git(&fixture.root, &["commit", "-m", "binary"]);
-    let binary_head = output(&fixture.root, &["rev-parse", "HEAD"]).trim().to_owned();
+    let binary_head = output(&fixture.root, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
     let binary = CounterfactualCandidate {
         id: Uuid::new_v4(),
         name: "binary".into(),
@@ -245,10 +247,17 @@ fn tracked_symlink_is_rejected_without_following_it() {
         .to_owned();
     git(
         &fixture.root,
-        &["update-index", "--add", "--cacheinfo", &format!("120000,{blob},src/link.txt")],
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("120000,{blob},src/link.txt"),
+        ],
     );
     git(&fixture.root, &["commit", "-m", "symlink"]);
-    let head = output(&fixture.root, &["rev-parse", "HEAD"]).trim().to_owned();
+    let head = output(&fixture.root, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
 
     let candidate = CounterfactualCandidate {
         id: Uuid::new_v4(),

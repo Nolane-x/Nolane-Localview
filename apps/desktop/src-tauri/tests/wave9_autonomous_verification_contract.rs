@@ -8,9 +8,7 @@ fn source(path: &str) -> String {
 fn function_body<'a>(source: &'a str, name: &str, next: &str) -> &'a str {
     let start = source.find(name).expect("function must exist");
     let tail = &source[start..];
-    let end = tail
-        .find(next)
-        .unwrap_or(tail.len());
+    let end = tail.find(next).unwrap_or(tail.len());
     &tail[..end]
 }
 

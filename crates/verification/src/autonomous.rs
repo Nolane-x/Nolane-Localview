@@ -172,8 +172,7 @@ impl AutonomousVerificationReceipt {
             .evaluated
             .iter()
             .filter(|record| {
-                record.strength == ContractStrength::Hard
-                    && record.verdict == ContractVerdict::Fail
+                record.strength == ContractStrength::Hard && record.verdict == ContractVerdict::Fail
             })
             .map(|record| record.contract_id.clone())
             .collect()
@@ -207,8 +206,7 @@ pub struct AutonomousVerificationInput {
 pub fn build_autonomous_receipt(
     input: AutonomousVerificationInput,
 ) -> AutonomousVerificationReceipt {
-    let impact_comparison =
-        compare_predicted_actual(&input.predicted_impact, &input.actual_impact);
+    let impact_comparison = compare_predicted_actual(&input.predicted_impact, &input.actual_impact);
     let affected_state_plan_hash = object_hash(&input.affected);
     let mut reasons = Vec::new();
 
@@ -376,9 +374,13 @@ pub fn build_autonomous_receipt(
 fn collect_evidence_ids(input: &AutonomousVerificationInput) -> Vec<String> {
     let mut ids = BTreeSet::new();
     ids.extend(input.affected.evidence_provenance.iter().cloned());
-    ids.extend(input.shadow_proof.changed_files.iter().map(|path| {
-        format!("shadow-file:{path}")
-    }));
+    ids.extend(
+        input
+            .shadow_proof
+            .changed_files
+            .iter()
+            .map(|path| format!("shadow-file:{path}")),
+    );
     for record in &input.contracts.evaluated {
         ids.extend(record.evidence_ids.iter().cloned());
     }
@@ -391,7 +393,11 @@ fn collect_evidence_ids(input: &AutonomousVerificationInput) -> Vec<String> {
 }
 
 fn sorted_dedup(values: Vec<String>) -> Vec<String> {
-    values.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
+    values
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 pub fn impact_targets_from_affected(plan: &AffectedStatePlan) -> PredictedImpact {
@@ -400,27 +406,35 @@ pub fn impact_targets_from_affected(plan: &AffectedStatePlan) -> PredictedImpact
         kind: ImpactKind::Route,
         id,
     }));
-    targets.extend(plan.impacted_regions.iter().cloned().map(|id| ImpactTarget {
-        kind: ImpactKind::Region,
-        id,
-    }));
+    targets.extend(
+        plan.impacted_regions
+            .iter()
+            .cloned()
+            .map(|id| ImpactTarget {
+                kind: ImpactKind::Region,
+                id,
+            }),
+    );
     targets.extend(plan.impacted_refs.iter().cloned().map(|id| ImpactTarget {
         kind: ImpactKind::Reference,
         id,
     }));
-    targets.extend(plan.impacted_contracts.iter().cloned().map(|id| ImpactTarget {
-        kind: ImpactKind::Contract,
-        id,
-    }));
+    targets.extend(
+        plan.impacted_contracts
+            .iter()
+            .cloned()
+            .map(|id| ImpactTarget {
+                kind: ImpactKind::Contract,
+                id,
+            }),
+    );
     PredictedImpact {
         targets,
         evidence_ids: plan.evidence_provenance.clone(),
     }
 }
 
-pub fn contract_verdict_counts(
-    summary: &ContractEvaluationSummary,
-) -> BTreeMap<String, usize> {
+pub fn contract_verdict_counts(summary: &ContractEvaluationSummary) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     for record in &summary.evaluated {
         let key = match record.verdict {
@@ -433,7 +447,6 @@ pub fn contract_verdict_counts(
     }
     counts
 }
-
 
 pub fn record_native_postcondition(
     summary: &mut ContractEvaluationSummary,
@@ -458,21 +471,23 @@ pub fn record_native_postcondition(
         ContractVerdict::Pass => "registered postcondition verified".to_string(),
         ContractVerdict::Fail => "registered postcondition failed".to_string(),
         ContractVerdict::Unknown => "registered postcondition is unknown".to_string(),
-        ContractVerdict::Excepted => unreachable!("postcondition adapter does not create exceptions"),
+        ContractVerdict::Excepted => {
+            unreachable!("postcondition adapter does not create exceptions")
+        }
     };
-    summary.evaluated.push(localview_contracts::ContractEvaluationRecord {
-        contract_id: contract_id.clone(),
-        strength,
-        verdict,
-        explanation,
-        evidence_ids,
-    });
+    summary
+        .evaluated
+        .push(localview_contracts::ContractEvaluationRecord {
+            contract_id: contract_id.clone(),
+            strength,
+            verdict,
+            explanation,
+            evidence_ids,
+        });
     match (strength, verdict) {
         (_, ContractVerdict::Pass) => summary.pass_count += 1,
         (_, ContractVerdict::Excepted) => summary.excepted_count += 1,
-        (ContractStrength::Hard, ContractVerdict::Fail) => {
-            summary.hard_failures.push(contract_id)
-        }
+        (ContractStrength::Hard, ContractVerdict::Fail) => summary.hard_failures.push(contract_id),
         (ContractStrength::Hard, ContractVerdict::Unknown) => {
             summary.hard_unknowns.push(contract_id)
         }
@@ -544,7 +559,10 @@ mod tests {
         }
     }
 
-    fn contracts(verdict: ContractVerdict, strength: ContractStrength) -> ContractEvaluationSummary {
+    fn contracts(
+        verdict: ContractVerdict,
+        strength: ContractStrength,
+    ) -> ContractEvaluationSummary {
         let record = ContractEvaluationRecord {
             contract_id: if strength == ContractStrength::Hard {
                 "hard".into()

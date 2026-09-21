@@ -101,7 +101,10 @@ impl ContractRegistry {
         }
 
         Ok(CompiledContractSet {
-            contract_ids: contracts.iter().map(|contract| contract.id.clone()).collect(),
+            contract_ids: contracts
+                .iter()
+                .map(|contract| contract.id.clone())
+                .collect(),
             contracts,
         })
     }
@@ -159,10 +162,7 @@ fn fact_weight(facts: &LiveRuntimeFacts) -> usize {
         + usize::from(facts.facts.unnamed_interactive_count > 0)
 }
 
-fn compile_fact_payload(
-    object: &serde_json::Map<String, Value>,
-    output: &mut LiveRuntimeFacts,
-) {
+fn compile_fact_payload(object: &serde_json::Map<String, Value>, output: &mut LiveRuntimeFacts) {
     if let Some(selectors) = object.get("selectors").and_then(Value::as_array) {
         output.facts.selectors.extend(
             selectors
@@ -224,7 +224,9 @@ fn compile_fact_payload(
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        output.complete_domains.insert(RuntimeFactDomain::IssueCodes);
+        output
+            .complete_domains
+            .insert(RuntimeFactDomain::IssueCodes);
     }
 
     if let Some(count) = object
@@ -232,8 +234,7 @@ fn compile_fact_payload(
         .and_then(Value::as_u64)
         .and_then(|count| usize::try_from(count).ok())
     {
-        output.facts.unnamed_interactive_count =
-            output.facts.unnamed_interactive_count.max(count);
+        output.facts.unnamed_interactive_count = output.facts.unnamed_interactive_count.max(count);
     }
     if object
         .get("interactive_names_complete")
@@ -264,9 +265,9 @@ pub fn evaluate_live_contract(
     }
 
     let domain_known = match &contract.predicate {
-        ContractPredicate::Exists { .. } | ContractPredicate::NotExists { .. } => {
-            live.complete_domains.contains(&RuntimeFactDomain::Selectors)
-        }
+        ContractPredicate::Exists { .. } | ContractPredicate::NotExists { .. } => live
+            .complete_domains
+            .contains(&RuntimeFactDomain::Selectors),
         ContractPredicate::MetricAtMost { metric, .. }
         | ContractPredicate::MetricAtLeast { metric, .. } => {
             live.metric_keys.contains(metric)
@@ -276,9 +277,9 @@ pub fn evaluate_live_contract(
             live.value_keys.contains(key)
                 || live.complete_domains.contains(&RuntimeFactDomain::Values)
         }
-        ContractPredicate::NoIssueCode { .. } => {
-            live.complete_domains.contains(&RuntimeFactDomain::IssueCodes)
-        }
+        ContractPredicate::NoIssueCode { .. } => live
+            .complete_domains
+            .contains(&RuntimeFactDomain::IssueCodes),
         ContractPredicate::EveryInteractiveNamed => live
             .complete_domains
             .contains(&RuntimeFactDomain::InteractiveNames),
@@ -293,12 +294,7 @@ pub fn evaluate_live_contract(
         };
     }
 
-    evaluate(
-        contract,
-        &live.facts,
-        exception,
-        live.evidence_ids.clone(),
-    )
+    evaluate(contract, &live.facts, exception, live.evidence_ids.clone())
 }
 
 fn decisive_partial_result(
@@ -330,9 +326,7 @@ fn decisive_partial_result(
         ContractPredicate::NoIssueCode { code } if live.facts.issue_codes.contains(code) => {
             Some(format!("issue {code} present"))
         }
-        ContractPredicate::EveryInteractiveNamed
-            if live.facts.unnamed_interactive_count > 0 =>
-        {
+        ContractPredicate::EveryInteractiveNamed if live.facts.unnamed_interactive_count > 0 => {
             Some(format!(
                 "{} interactive element(s) are unnamed",
                 live.facts.unnamed_interactive_count
@@ -357,12 +351,7 @@ pub fn evaluate_compiled_contracts(
 ) -> ContractEvaluationSummary {
     let mut summary = ContractEvaluationSummary::default();
     for contract in &compiled.contracts {
-        let result = evaluate_live_contract(
-            contract,
-            live,
-            exceptions.get(&contract.id),
-            revision,
-        );
+        let result = evaluate_live_contract(contract, live, exceptions.get(&contract.id), revision);
         let record = ContractEvaluationRecord {
             contract_id: contract.id.clone(),
             strength: contract.strength,
@@ -493,8 +482,7 @@ mod tests {
             )],
             "abc",
         );
-        let summary =
-            evaluate_compiled_contracts(&compiled, &live, &BTreeMap::new(), "abc");
+        let summary = evaluate_compiled_contracts(&compiled, &live, &BTreeMap::new(), "abc");
         assert_eq!(summary.hard_unknowns, vec!["hard"]);
         assert_eq!(summary.soft_warnings, vec!["soft"]);
         assert_eq!(summary.pass_count, 0);

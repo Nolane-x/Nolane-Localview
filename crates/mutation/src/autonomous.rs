@@ -1,4 +1,7 @@
-use std::{collections::{BTreeMap, BTreeSet}, fmt::Write as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -102,13 +105,8 @@ where
     let before_digest = state_digest(baseline);
     let safety = wave9_policy_allows(case, policy);
     if let Err(reason) = safety {
-        let evidence_id = execution_evidence_id(
-            case,
-            &before_digest,
-            None,
-            &BTreeSet::new(),
-            &reason,
-        );
+        let evidence_id =
+            execution_evidence_id(case, &before_digest, None, &BTreeSet::new(), &reason);
         let outcome = MutationOutcome {
             mutation_id: case.id,
             verdict: if case.expected_detectors.is_empty() {
@@ -138,13 +136,8 @@ where
     let mut candidate = baseline.clone();
     let applied = apply_operator(&mut candidate, &case.operator);
     if let Err(reason) = applied {
-        let evidence_id = execution_evidence_id(
-            case,
-            &before_digest,
-            None,
-            &BTreeSet::new(),
-            &reason,
-        );
+        let evidence_id =
+            execution_evidence_id(case, &before_digest, None, &BTreeSet::new(), &reason);
         return MutationChallengeResult {
             outcome: MutationOutcome {
                 mutation_id: case.id,
@@ -249,7 +242,7 @@ fn wave9_policy_allows(
             }
         }
         _ if !policy.safety.allow_source_overlay => {
-            return Err("source/semantic overlay mutation is disabled by safety policy".into())
+            return Err("source/semantic overlay mutation is disabled by safety policy".into());
         }
         _ => {}
     }
@@ -329,14 +322,8 @@ fn execution_evidence_id(
     triggered: &BTreeSet<String>,
     reason: &str,
 ) -> String {
-    let bytes = serde_json::to_vec(&(
-        case.id,
-        before,
-        after,
-        triggered,
-        reason,
-    ))
-    .unwrap_or_default();
+    let bytes =
+        serde_json::to_vec(&(case.id, before, after, triggered, reason)).unwrap_or_default();
     format!("mutation:{}", hex_lower(&Sha256::digest(bytes)))
 }
 

@@ -66,7 +66,8 @@ pub fn plan_partial_revalidation(input: &PartialRevalidationInput) -> PartialRev
     let mut routes: BTreeSet<String> = input.affected.impacted_routes.iter().cloned().collect();
     let mut regions: BTreeSet<String> = input.affected.impacted_regions.iter().cloned().collect();
     let mut refs: BTreeSet<String> = input.affected.impacted_refs.iter().cloned().collect();
-    let mut contracts: BTreeSet<String> = input.affected.impacted_contracts.iter().cloned().collect();
+    let mut contracts: BTreeSet<String> =
+        input.affected.impacted_contracts.iter().cloned().collect();
     let mut flow_checkpoints = input.impacted_flow_checkpoints.clone();
     let mut visual_baselines = input.relevant_visual_baselines.clone();
     let mut source_semantic_checks = input.source_semantic_checks.clone();
@@ -108,8 +109,7 @@ pub fn plan_partial_revalidation(input: &PartialRevalidationInput) -> PartialRev
             state_keys.extend(universe.state_keys.iter().cloned());
             denominator_known = universe.denominator_known;
             if !universe.denominator_known {
-                escalation_reasons
-                    .push("escalation universe denominator is also unknown".into());
+                escalation_reasons.push("escalation universe denominator is also unknown".into());
             }
         } else {
             denominator_known = false;
@@ -217,9 +217,11 @@ mod tests {
         });
         assert_eq!(plan.mode, RevalidationMode::Escalated);
         assert!(!plan.complete_claim_allowed);
-        assert!(plan.escalation_reasons.iter().any(|reason| {
-            reason.contains("dependency/impact evidence is incomplete")
-        }));
+        assert!(
+            plan.escalation_reasons
+                .iter()
+                .any(|reason| { reason.contains("dependency/impact evidence is incomplete") })
+        );
     }
 
     #[test]
