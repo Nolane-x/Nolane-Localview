@@ -36,6 +36,7 @@ const MAX_BASELINE_BYTES: u64 = 2 * 1024 * 1024;
 const DEFAULT_ARTIFACT_BUDGET_MIB: u64 = 64;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 30_000;
 const MAX_COMMAND_TIMEOUT_MS: u64 = 120_000;
+const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Args)]
 pub struct HeadlessArgs {
@@ -180,7 +181,18 @@ pub async fn run(client: &Client, control: &str, token: &str, args: HeadlessArgs
             bail!("fixture setup/cleanup commands require explicit --allow-fixture-command policy");
         }
         if let Some(command) = &spec.setup {
-            run_fixture_command(&project_root, command, "setup").await?;
+            if let Err(setup_error) = run_fixture_command(&project_root, command, "setup").await {
+                let cleanup_result = match &spec.cleanup {
+                    Some(cleanup) => run_fixture_command(&project_root, cleanup, "cleanup").await,
+                    None => Ok(()),
+                };
+                return match cleanup_result {
+                    Ok(()) => Err(setup_error.context("fixture setup failed")),
+                    Err(cleanup_error) => Err(anyhow!(
+                        "{setup_error:#}; fixture cleanup after setup failure also failed: {cleanup_error:#}"
+                    )),
+                };
+            }
         }
     }
 
@@ -1553,10 +1565,13 @@ fn authed_post_request(
 }
 
 async fn authed_get_raw(client: &Client, base: &str, token: &str, path: &str) -> Result<Response> {
-    authed_get_request(client, base, token, path)
-        .send()
-        .await
-        .context("cannot reach LocalView control plane")
+    timeout(
+        CONTROL_REQUEST_TIMEOUT,
+        authed_get_request(client, base, token, path).send(),
+    )
+    .await
+    .map_err(|_| anyhow!("LocalView control GET timed out"))?
+    .context("cannot reach LocalView control plane")
 }
 
 async fn authed_post_raw(
@@ -1566,10 +1581,13 @@ async fn authed_post_raw(
     path: &str,
     body: Option<&Value>,
 ) -> Result<Response> {
-    authed_post_request(client, base, token, path, body)
-        .send()
-        .await
-        .context("cannot reach LocalView control plane")
+    timeout(
+        CONTROL_REQUEST_TIMEOUT,
+        authed_post_request(client, base, token, path, body).send(),
+    )
+    .await
+    .map_err(|_| anyhow!("LocalView control POST timed out"))?
+    .context("cannot reach LocalView control plane")
 }
 
 async fn check_control_status(response: Response) -> Result<Response> {
