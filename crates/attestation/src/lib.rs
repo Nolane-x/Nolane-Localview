@@ -10,47 +10,20 @@ use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DigestAttestationPayload {
-    pub schema_version: u32,
-    pub report_hash: String,
-    pub revision: Option<String>,
-    pub state_identity: String,
-    pub evidence_hashes: Vec<String>,
-    pub proof_hashes: Vec<String>,
-    pub gate_status: String,
-    pub environment_fingerprint: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DigestAttestation {
-    pub kind: String,
-    pub digest: String,
-    pub payload: DigestAttestationPayload,
-}
-
-pub fn digest_attestation(mut payload: DigestAttestationPayload) -> DigestAttestation {
-    payload.evidence_hashes.sort();
-    payload.evidence_hashes.dedup();
-    payload.proof_hashes.sort();
-    payload.proof_hashes.dedup();
-    let canonical = canonical_value(serde_json::to_value(&payload).unwrap_or(Value::Null));
-    let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
-    let digest = format!("sha256:{}", hex::encode(Sha256::digest(bytes)));
-    DigestAttestation {
-        kind: "digest_attestation".into(),
-        digest,
-        payload,
-    }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptVerdict {
+    Pass,
+    Fail,
+    Inconclusive,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ReceiptVerdict { Pass, Fail, Inconclusive }
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AttestorKind { Local, Ci }
+pub enum AttestorKind {
+    Local,
+    Ci,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProofReceiptPayload {
@@ -69,9 +42,7 @@ pub struct ProofReceiptPayload {
 
 impl ProofReceiptPayload {
     pub fn canonical_hash(&self) -> String {
-        let canonical = canonical_value(serde_json::to_value(self).unwrap_or(Value::Null));
-        let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
-        format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+        canonical_hash(self)
     }
 }
 
@@ -84,25 +55,45 @@ pub struct ProofReceipt {
     pub signature: String,
 }
 
-pub fn sign(payload: ProofReceiptPayload, attestor: AttestorKind, key_id: impl Into<String>, key: &[u8]) -> Result<ProofReceipt, AttestationError> {
-    if key.len() < 16 { return Err(AttestationError::WeakKey); }
+pub fn sign(
+    payload: ProofReceiptPayload,
+    attestor: AttestorKind,
+    key_id: impl Into<String>,
+    key: &[u8],
+) -> Result<ProofReceipt, AttestationError> {
+    if key.len() < 16 {
+        return Err(AttestationError::WeakKey);
+    }
     let payload_hash = payload.canonical_hash();
     let mut mac = HmacSha256::new_from_slice(key).map_err(|_| AttestationError::InvalidKey)?;
     mac.update(payload_hash.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
-    Ok(ProofReceipt { payload, payload_hash, attestor, key_id: key_id.into(), signature })
+    Ok(ProofReceipt {
+        payload,
+        payload_hash,
+        attestor,
+        key_id: key_id.into(),
+        signature,
+    })
 }
 
 pub fn verify(receipt: &ProofReceipt, key: &[u8]) -> Result<bool, AttestationError> {
-    if receipt.payload.canonical_hash() != receipt.payload_hash { return Ok(false); }
+    if receipt.payload.canonical_hash() != receipt.payload_hash {
+        return Ok(false);
+    }
     let mut mac = HmacSha256::new_from_slice(key).map_err(|_| AttestationError::InvalidKey)?;
     mac.update(receipt.payload_hash.as_bytes());
-    let signature = hex::decode(&receipt.signature).map_err(|_| AttestationError::InvalidSignatureEncoding)?;
+    let signature =
+        hex::decode(&receipt.signature).map_err(|_| AttestationError::InvalidSignatureEncoding)?;
     Ok(mac.verify_slice(&signature).is_ok())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AttestationError { WeakKey, InvalidKey, InvalidSignatureEncoding }
+pub enum AttestationError {
+    WeakKey,
+    InvalidKey,
+    InvalidSignatureEncoding,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CurrentRuntimeBinding {
@@ -112,14 +103,26 @@ pub struct CurrentRuntimeBinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StalenessReport { pub stale: bool, pub reasons: Vec<String> }
+pub struct StalenessReport {
+    pub stale: bool,
+    pub reasons: Vec<String>,
+}
 
 pub fn staleness(receipt: &ProofReceipt, current: &CurrentRuntimeBinding) -> StalenessReport {
     let mut reasons = Vec::new();
-    if receipt.payload.candidate_revision != current.candidate_revision { reasons.push("candidate revision changed".into()); }
-    if receipt.payload.environment_hash != current.environment_hash { reasons.push("environment changed".into()); }
-    if receipt.payload.plan_hash != current.plan_hash { reasons.push("verification plan changed".into()); }
-    StalenessReport { stale: !reasons.is_empty(), reasons }
+    if receipt.payload.candidate_revision != current.candidate_revision {
+        reasons.push("candidate revision changed".into());
+    }
+    if receipt.payload.environment_hash != current.environment_hash {
+        reasons.push("environment changed".into());
+    }
+    if receipt.payload.plan_hash != current.plan_hash {
+        reasons.push("verification plan changed".into());
+    }
+    StalenessReport {
+        stale: !reasons.is_empty(),
+        reasons,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -130,19 +133,70 @@ pub struct PrEvidenceReceipt {
     pub all_pass: bool,
 }
 
-pub fn aggregate_pr(pull_request: impl Into<String>, head_revision: impl Into<String>, receipts: &[ProofReceipt]) -> PrEvidenceReceipt {
+pub fn aggregate_pr(
+    pull_request: impl Into<String>,
+    head_revision: impl Into<String>,
+    receipts: &[ProofReceipt],
+) -> PrEvidenceReceipt {
     PrEvidenceReceipt {
         pull_request: pull_request.into(),
         head_revision: head_revision.into(),
-        receipt_hashes: receipts.iter().map(|receipt| receipt.payload_hash.clone()).collect(),
-        all_pass: !receipts.is_empty() && receipts.iter().all(|receipt| receipt.payload.verdict == ReceiptVerdict::Pass),
+        receipt_hashes: receipts
+            .iter()
+            .map(|receipt| receipt.payload_hash.clone())
+            .collect(),
+        all_pass: !receipts.is_empty()
+            && receipts
+                .iter()
+                .all(|receipt| receipt.payload.verdict == ReceiptVerdict::Pass),
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DigestAttestationPayload {
+    pub schema_version: u32,
+    pub report_hash: String,
+    pub revision: Option<String>,
+    pub state_identity: String,
+    pub evidence_hashes: Vec<String>,
+    pub proof_hashes: Vec<String>,
+    pub gate_status: String,
+    pub environment_fingerprint: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DigestAttestation {
+    pub kind: String,
+    pub payload: DigestAttestationPayload,
+    pub digest: String,
+}
+
+pub fn digest_attestation(mut payload: DigestAttestationPayload) -> DigestAttestation {
+    payload.evidence_hashes.sort();
+    payload.evidence_hashes.dedup();
+    payload.proof_hashes.sort();
+    payload.proof_hashes.dedup();
+    let digest = canonical_hash(&payload);
+    DigestAttestation {
+        kind: "digest_attestation".into(),
+        payload,
+        digest,
+    }
+}
+
+fn canonical_hash<T: Serialize>(value: &T) -> String {
+    let canonical = canonical_value(serde_json::to_value(value).unwrap_or(Value::Null));
+    let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
 fn canonical_value(value: Value) -> Value {
     match value {
         Value::Object(map) => {
-            let ordered = map.into_iter().map(|(key, value)| (key, canonical_value(value))).collect::<BTreeMap<_, _>>();
+            let ordered = map
+                .into_iter()
+                .map(|(key, value)| (key, canonical_value(value)))
+                .collect::<BTreeMap<_, _>>();
             Value::Object(ordered.into_iter().collect())
         }
         Value::Array(values) => Value::Array(values.into_iter().map(canonical_value).collect()),
@@ -155,28 +209,19 @@ mod tests {
     use super::*;
 
     fn payload() -> ProofReceiptPayload {
-        ProofReceiptPayload { schema_version: 1, project: "LocalView".into(), baseline_revision: "a".into(), candidate_revision: "b".into(), environment_hash: "env".into(), plan_hash: "plan".into(), evidence_hashes: vec!["ev".into()], contract_hashes: vec![], mutation_run_hash: None, verdict: ReceiptVerdict::Pass, created_at: DateTime::<Utc>::from_timestamp(1, 0).expect("timestamp") }
-    }
-
-    #[test]
-    fn digest_attestation_is_stable_without_claiming_a_signature() {
-        let payload = DigestAttestationPayload {
+        ProofReceiptPayload {
             schema_version: 1,
-            report_hash: "sha256:report".into(),
-            revision: Some("abc".into()),
-            state_identity: "sha256:state".into(),
-            evidence_hashes: vec!["sha256:b".into(), "sha256:a".into()],
-            proof_hashes: vec!["sha256:p".into()],
-            gate_status: "passed".into(),
-            environment_fingerprint: "sha256:env".into(),
-        };
-        let first = digest_attestation(payload.clone());
-        let mut reordered = payload;
-        reordered.evidence_hashes.reverse();
-        let second = digest_attestation(reordered);
-        assert_eq!(first.digest, second.digest);
-        assert_eq!(first.kind, "digest_attestation");
-        assert!(first.digest.starts_with("sha256:"));
+            project: "LocalView".into(),
+            baseline_revision: "a".into(),
+            candidate_revision: "b".into(),
+            environment_hash: "env".into(),
+            plan_hash: "plan".into(),
+            evidence_hashes: vec!["ev".into()],
+            contract_hashes: vec![],
+            mutation_run_hash: None,
+            verdict: ReceiptVerdict::Pass,
+            created_at: DateTime::<Utc>::from_timestamp(1, 0).expect("timestamp"),
+        }
     }
 
     #[test]
@@ -186,5 +231,27 @@ mod tests {
         assert!(verify(&receipt, key).expect("verify"));
         receipt.payload.candidate_revision = "tampered".into();
         assert!(!verify(&receipt, key).expect("verify"));
+    }
+
+    #[test]
+    fn digest_attestation_is_stable_and_is_not_a_signature() {
+        let payload = DigestAttestationPayload {
+            schema_version: 1,
+            report_hash: "sha256:report".into(),
+            revision: Some("abc".into()),
+            state_identity: "sha256:state".into(),
+            evidence_hashes: vec!["z".into(), "a".into(), "a".into()],
+            proof_hashes: vec!["proof".into()],
+            gate_status: "passed".into(),
+            environment_fingerprint: BTreeMap::from([
+                ("os".into(), "linux".into()),
+                ("arch".into(), "x86_64".into()),
+            ]),
+        };
+        let first = digest_attestation(payload.clone());
+        let second = digest_attestation(payload);
+        assert_eq!(first.digest, second.digest);
+        assert_eq!(first.kind, "digest_attestation");
+        assert_eq!(first.payload.evidence_hashes, vec!["a", "z"]);
     }
 }
