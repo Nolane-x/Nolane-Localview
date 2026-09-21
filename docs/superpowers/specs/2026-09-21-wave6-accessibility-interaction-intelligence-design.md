@@ -104,7 +104,7 @@ Receipts distinguish \`observed_feedback\`, \`delayed_feedback\`, \`no_observed_
 - bounded semantic fingerprint;
 - optional viewport.
 
-Edges retain action kind, stable target ref, exact pre/post state identity, safety classification, and bounded evidence refs. Discovery has explicit node, edge, route-state, and deadline budgets and rejects unknown/destructive action admission.
+Edges retain action kind, stable target ref, exact pre/post state identity, safety classification, and bounded evidence refs. `LiveBridge` owns a bounded per-session graph store (maximum 64 live session graphs), removes it with session teardown, and admits transitions only through the same bounded `record_live` authority. Discovery has explicit node, edge, route-state, and deadline budgets and rejects unknown/destructive action admission.
 
 Replay never repairs a stale ref with a selector guess. Before each step it requires exact pre-state compatibility and a valid stable ref. The live bridge then reuses the existing deterministic action queue for Click, Focus, Tab, and Shift+Tab. Missing Key/Scroll payloads are rejected rather than invented. A replay receipt records attempted/passed steps, first failure, before/after state, evidence refs, and \`complete / failed / inconclusive\`.
 
