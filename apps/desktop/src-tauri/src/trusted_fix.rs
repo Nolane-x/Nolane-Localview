@@ -239,7 +239,6 @@ impl FixProposalStore {
                 .get(proposal_id)
                 .ok_or_else(|| "trusted Fix proposal is unavailable".to_string())?;
             if proposal.expires_at <= Instant::now() {
-                proposals.remove(proposal_id);
                 return Err("trusted Fix proposal expired".to_string());
             }
             if proposal.status != FixProposalStatus::Pending {
@@ -273,7 +272,6 @@ impl FixProposalStore {
             .ok_or_else(|| "trusted Fix proposal is unavailable".to_string())?;
         if proposal.expires_at <= Instant::now() {
             proposal.status = FixProposalStatus::Invalidated;
-            proposals.remove(proposal_id);
             return Err("trusted Fix proposal expired".to_string());
         }
         if proposal.status != FixProposalStatus::Pending {
