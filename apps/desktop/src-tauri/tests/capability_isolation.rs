@@ -2,6 +2,9 @@
 
 use serde_json::Value;
 
+#[path = "security_capability_contract.rs"]
+mod security_capability_contract;
+
 fn capability(path: &str) -> Value {
     let raw = match path {
         "main" => include_str!("../capabilities/default.json"),
