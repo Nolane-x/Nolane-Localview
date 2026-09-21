@@ -165,6 +165,37 @@ export interface ResponsiveViewportReceipt {
   sheet_y: number;
 }
 
+export type ContentStressProfile =
+  | 'expanded_130'
+  | 'expanded_180'
+  | 'dense_cjk'
+  | 'rtl_pseudo';
+
+export interface ContentStressIssue {
+  profile: ContentStressProfile;
+  code: string;
+  refs: string[];
+  confidence: number;
+  evidence: string;
+}
+
+export interface ContentStressProfileReceipt {
+  profile: ContentStressProfile;
+  synthetic: boolean;
+  mutated_nodes: number;
+  snapshot_version: number;
+  issue_count: number;
+}
+
+export interface ContentStressReceipt {
+  route: string;
+  viewport: [number, number];
+  synthetic: boolean;
+  restored: boolean;
+  profiles: ContentStressProfileReceipt[];
+  issues: ContentStressIssue[];
+}
+
 export interface VisualCaptureReceipt {
   artifact_id: string;
   evidence_id: string;
@@ -209,6 +240,8 @@ export const api = {
   captureCurrentViewport: (sessionId: string) => invoke<VisualCaptureReceipt>('capture_current_viewport', { sessionId, revision: null }),
   captureResponsiveSweep: ({ sessionId, presets }: ResponsiveSweepRequest) =>
     invoke<ResponsiveSweepReceipt>('capture_responsive_sweep', { sessionId, presets }),
+  captureContentLocaleStress: (sessionId: string) =>
+    invoke<ContentStressReceipt>('capture_content_locale_stress', { sessionId }),
   beginPointSelect: (sessionId: string, requestToken: string) =>
     invoke<HumanPointSelectStatus>('point_select_begin', { sessionId, requestToken }),
   pointSelectStatus: (sessionId: string, requestToken: string) =>

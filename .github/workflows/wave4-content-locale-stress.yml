@@ -1,0 +1,99 @@
+name: Wave 4 content locale stress
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/src/api.ts"
+      - "apps/desktop/src-tauri/src/content_stress.rs"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/src/visual_capture.rs"
+      - "apps/desktop/src-tauri/permissions/localview.toml"
+      - "apps/desktop/src-tauri/tests/wave4_content_locale_stress_contract.rs"
+      - "crates/instrumentation/**"
+      - "tools/wave4-content-stress/**"
+      - ".github/workflows/wave4-content-locale-stress.yml"
+      - "docs/superpowers/specs/2026-09-21-wave4-content-locale-stress-design.md"
+  push:
+    branches:
+      - "feat/wave4-content-locale-stress"
+
+concurrency:
+  group: wave4-content-locale-stress-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Verify focused Rust formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            crates/instrumentation/src/lib.rs \
+            crates/instrumentation/examples/content_stress_bootstrap.rs \
+            crates/instrumentation/tests/content_stress_contract.rs \
+            apps/desktop/src-tauri/src/content_stress.rs \
+            apps/desktop/src-tauri/tests/wave4_content_locale_stress_contract.rs
+
+      - name: Verify instrumentation content-stress contract
+        run: cargo test -p localview-instrumentation --test content_stress_contract -- --nocapture
+
+      - name: Verify desktop content-stress authority
+        run: |
+          cargo test -p localview-desktop content_stress --lib -- --nocapture
+          cargo test -p localview-desktop --test wave4_content_locale_stress_contract -- --nocapture
+
+      - name: Verify desktop TypeScript
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Check affected Rust targets
+        run: cargo check -p localview-instrumentation -p localview-desktop --all-targets
+
+      - name: Clippy affected Rust targets
+        run: cargo clippy -p localview-instrumentation -p localview-desktop --all-targets -- -D warnings
+
+  browser-proof:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize exact LocalView content-stress bootstrap
+        run: cargo run -p localview-instrumentation --example content_stress_bootstrap > /tmp/localview-content-stress-bootstrap.js
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install browser proof dependencies
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove transactional content stress in Chromium
+        working-directory: apps/desktop
+        run: |
+          cp ../../tools/wave4-content-stress/runtime.mjs ./wave4-content-stress-runtime.mjs
+          node ./wave4-content-stress-runtime.mjs
+          rm ./wave4-content-stress-runtime.mjs

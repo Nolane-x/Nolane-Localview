@@ -19,6 +19,7 @@ commands.allow = [
   "capture_current_viewport",
   "open_source_for_selection",
   "measure_current_selection",
+  "capture_content_locale_stress",
   "point_select_begin",
   "point_select_status",
   "point_select_cancel",
@@ -37,5 +38,6 @@ commands.allow = [
   "preview_take_network_fault_controls",
   "preview_complete_network_fault_control",
   "preview_complete_action",
+  "preview_complete_content_stress",
   "preview_complete_point_select"
 ]

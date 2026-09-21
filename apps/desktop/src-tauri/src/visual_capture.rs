@@ -2771,7 +2771,7 @@ pub(crate) fn canonical_visual_diff_route(route: &str) -> Result<String, String>
     Ok(route.to_string())
 }
 
-async fn session_capture_gate(
+pub(crate) async fn session_capture_gate(
     state: &VisualCaptureState,
     session_id: SessionId,
 ) -> Result<Arc<Mutex<()>>, String> {
@@ -2999,6 +2999,14 @@ pub(crate) async fn wait_for_verification_settle(session_id: SessionId) -> Resul
     wait_for_capture_settle(session_id)
         .await
         .map_err(|_| "trusted Verify settle failed".to_string())
+}
+
+pub(crate) async fn wait_for_content_stress_settle(
+    session_id: SessionId,
+) -> Result<(), String> {
+    wait_for_capture_settle(session_id)
+        .await
+        .map_err(|_| "content stress settle failed".to_string())
 }
 
 async fn wait_for_capture_settle(session_id: SessionId) -> Result<(), String> {
@@ -3427,7 +3435,7 @@ pub async fn capture_progressive_target(
     })
 }
 
-async fn fresh_semantic_snapshot(session_id: SessionId) -> Result<PageSnapshot, String> {
+pub(crate) async fn fresh_semantic_snapshot(session_id: SessionId) -> Result<PageSnapshot, String> {
     let token = read_token().await?;
     control_client()?
         .get(format!(
