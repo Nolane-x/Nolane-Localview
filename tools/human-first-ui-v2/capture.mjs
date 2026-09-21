@@ -4334,10 +4334,12 @@ invariant(macSettingsShortcut === '⌘,', 'ui-audit:mac-settings-shortcut', { ma
 await shot(page, '167-macos-shortcut-labels.png', 'ui-audit-macos-shortcut-labels');
 await page.close();
 
+const auditPath = 'human-first-ui-v2-render/audit.json';
 await fs.writeFile(
-  'human-first-ui-v2-render/audit.json',
-  JSON.stringify(audit, null, 2) + '\\n',
+  auditPath,
+  JSON.stringify(audit, null, 2) + '\n',
   'utf8'
 );
+JSON.parse(await fs.readFile(auditPath, 'utf8'));
 await browser.close();
 console.log(`captured ${audit.screenshots.length} human-first UI V2 screenshots with ${audit.checks.length} executable checks`);
