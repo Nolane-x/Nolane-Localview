@@ -37,6 +37,18 @@ pub struct CanonicalArtifactMeta {
     pub canonical_hash: String,
 }
 
+fn metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 pub struct ArtifactStore {
     root: PathBuf,
     max_bytes: u64,
@@ -59,7 +71,7 @@ impl ArtifactStore {
             Err(error) => return Err(error.into()),
         }
         let metadata = tokio::fs::symlink_metadata(&root).await?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_dir() {
             anyhow::bail!("artifact root must remain a real directory");
         }
         let root = tokio::fs::canonicalize(&root).await?;
@@ -217,7 +229,11 @@ impl ArtifactStore {
             if !is_content_id(&id) {
                 continue;
             }
-            if file_type.is_symlink() || !file_type.is_file() {
+            let link_metadata = tokio::fs::symlink_metadata(entry.path()).await?;
+            if file_type.is_symlink()
+                || metadata_is_reparse_point(&link_metadata)
+                || !file_type.is_file()
+            {
                 anyhow::bail!("artifact store contains non-regular retained entry {id}");
             }
             let metadata = entry.metadata().await?;
@@ -252,7 +268,7 @@ impl ArtifactStore {
 
             self.revalidate_root().await?;
             match tokio::fs::symlink_metadata(&meta.path).await {
-                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                Ok(metadata) if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() => {
                     anyhow::bail!("artifact GC refuses non-regular retained entry {}", meta.id)
                 }
                 Ok(_) => {}
@@ -279,7 +295,7 @@ pub fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
     revalidate_atomic_parent(parent)?;
 
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() => {
             anyhow::bail!("refusing to replace non-regular persistence leaf")
         }
         Ok(_) => {}
@@ -294,7 +310,7 @@ pub fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
 
     revalidate_atomic_parent(parent)?;
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() => {
             file.discard()?;
             anyhow::bail!("persistence leaf changed to a non-regular entry before commit");
         }
@@ -308,7 +324,7 @@ pub fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
     file.commit()?;
 
     let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
         anyhow::bail!("atomic persistence did not produce a regular file");
     }
     Ok(())
@@ -328,7 +344,7 @@ fn revalidate_atomic_parent(parent: &Path) -> Result<()> {
 
 fn read_regular_file(path: &Path) -> Result<Vec<u8>> {
     let before = fs::symlink_metadata(path).context("inspect artifact path")?;
-    if before.file_type().is_symlink() || !before.is_file() {
+    if before.file_type().is_symlink() || metadata_is_reparse_point(&before) || !before.is_file() {
         anyhow::bail!("artifact path must be a regular file");
     }
 
@@ -345,7 +361,7 @@ fn read_regular_file(path: &Path) -> Result<Vec<u8>> {
         anyhow::bail!("artifact handle resolves to a reparse point");
     }
     let after = fs::symlink_metadata(path).context("revalidate retained artifact path")?;
-    if after.file_type().is_symlink() || !after.is_file() {
+    if after.file_type().is_symlink() || metadata_is_reparse_point(&after) || !after.is_file() {
         anyhow::bail!("artifact path changed during read");
     }
 
