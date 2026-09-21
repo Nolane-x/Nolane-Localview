@@ -257,13 +257,14 @@ The 2026-09-22 production audit disproved the earlier end-to-end closure claim. 
 Production wiring now present on this branch:
 
 - human `apply_fix_proposal` reaches `FixProposalStore::begin_apply`;
-- `begin_apply` derives the exact repository revision, binds the pending reviewed proposal to a disposable `SemanticOnly` candidate, and executes `run_production_candidate_preflight`;
-- production preflight calls `ShadowWorkspace::prepare -> proof -> cleanup` before the existing real-file Apply transaction;
+- `begin_apply` attempts to derive an exact Git revision and, when that authority exists and binds the reviewed preimage, executes a disposable `SemanticOnly` candidate through `run_production_candidate_preflight`;
+- for supported Git candidates, production preflight calls `ShadowWorkspace::prepare -> proof -> cleanup` before the existing real-file Apply transaction;
+- when exact Git/shadow authority is unavailable, the preflight is explicitly recorded as `Inconclusive` with no shadow proof and the existing human-reviewed Trusted Fix authority remains usable;
 - the shadow worktree is source-only: LocalView materializes only validated candidate files from exact committed blobs, applies the bounded patch there, and never checks out or launches the project as part of this preflight;
 - Git commands issued by the shadow layer disable repository hooks/fsmonitor inheritance and external-diff inheritance;
 - cleanup and real-worktree equality remain explicit proof obligations;
 - external side-effect containment is represented as `not_proven` unless an actual isolation authority proves otherwise;
-- production preflight has no `Verified` state. With current platform authority, a clean preflight is truthfully `Inconclusive`; identity, real-worktree, revision or cleanup failures reject/fail closed;
+- production preflight has no `Verified` state. With current platform authority, both a clean supported shadow and an unsupported/no-Git preflight are truthfully `Inconclusive`; once a shadow proof exists, identity, real-worktree, revision or cleanup failures reject/fail closed;
 - the existing Trusted Fix transaction remains the only human-reviewed real-file write authority;
 - the existing Trusted Verify path still performs fresh semantic/source/visual partial revalidation after Apply.
 
