@@ -64,9 +64,7 @@ async fn main() -> Result<()> {
 
     let config = RuntimeConfig::default();
     let state_root = state_dir()?;
-    tokio::fs::create_dir_all(&state_root)
-        .await
-        .context("create LocalView state directory")?;
+    ensure_secure_state_root(&state_root)?;
 
     let identity_resolver =
         SessionIdentityResolver::open_file(state_root.join(SESSION_IDENTITY_REGISTRY_FILE)).await;
