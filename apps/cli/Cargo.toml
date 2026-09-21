@@ -6,6 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+localview-verification = { path = "../../crates/verification" }
+localview-reports = { path = "../../crates/reports" }
+localview-evidence = { path = "../../crates/evidence" }
+localview-diagnostics = { path = "../../crates/diagnostics" }
+localview-content-addressed = { path = "../../crates/content-addressed" }
+localview-attestation = { path = "../../crates/attestation" }
+localview-artifacts = { path = "../../crates/artifacts" }
+chrono.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 dirs.workspace = true
