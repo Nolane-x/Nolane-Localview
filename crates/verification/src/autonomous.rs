@@ -434,6 +434,54 @@ pub fn contract_verdict_counts(
     counts
 }
 
+
+pub fn record_native_postcondition(
+    summary: &mut ContractEvaluationSummary,
+    contract_id: impl Into<String>,
+    strength: ContractStrength,
+    evaluation: localview_postcondition_contracts::NativeSemanticPostconditionEvaluation,
+    evidence_ids: Vec<String>,
+) {
+    let contract_id = contract_id.into();
+    let verdict = match evaluation {
+        localview_postcondition_contracts::NativeSemanticPostconditionEvaluation::VerifiedPass => {
+            ContractVerdict::Pass
+        }
+        localview_postcondition_contracts::NativeSemanticPostconditionEvaluation::VerifiedFail => {
+            ContractVerdict::Fail
+        }
+        localview_postcondition_contracts::NativeSemanticPostconditionEvaluation::Unknown => {
+            ContractVerdict::Unknown
+        }
+    };
+    let explanation = match verdict {
+        ContractVerdict::Pass => "registered postcondition verified".to_string(),
+        ContractVerdict::Fail => "registered postcondition failed".to_string(),
+        ContractVerdict::Unknown => "registered postcondition is unknown".to_string(),
+        ContractVerdict::Excepted => unreachable!("postcondition adapter does not create exceptions"),
+    };
+    summary.evaluated.push(localview_contracts::ContractEvaluationRecord {
+        contract_id: contract_id.clone(),
+        strength,
+        verdict,
+        explanation,
+        evidence_ids,
+    });
+    match (strength, verdict) {
+        (_, ContractVerdict::Pass) => summary.pass_count += 1,
+        (_, ContractVerdict::Excepted) => summary.excepted_count += 1,
+        (ContractStrength::Hard, ContractVerdict::Fail) => {
+            summary.hard_failures.push(contract_id)
+        }
+        (ContractStrength::Hard, ContractVerdict::Unknown) => {
+            summary.hard_unknowns.push(contract_id)
+        }
+        (ContractStrength::Soft, ContractVerdict::Fail | ContractVerdict::Unknown) => {
+            summary.soft_warnings.push(contract_id)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
