@@ -2,13 +2,26 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
+    fs,
     hash::{Hash, Hasher},
-    path::PathBuf,
+    io::{Read, Write},
+    path::{Path, PathBuf},
     time::UNIX_EPOCH,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use atomic_write_file::AtomicWriteFile;
 use serde::{Deserialize, Serialize};
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactMeta {
@@ -24,6 +37,18 @@ pub struct CanonicalArtifactMeta {
     pub canonical_hash: String,
 }
 
+fn metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 pub struct ArtifactStore {
     root: PathBuf,
     max_bytes: u64,
@@ -35,7 +60,24 @@ pub struct ArtifactStore {
 impl ArtifactStore {
     pub async fn open(root: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
         let root = root.into();
-        tokio::fs::create_dir_all(&root).await?;
+        match tokio::fs::symlink_metadata(&root).await {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                anyhow::bail!("artifact root must be a real directory")
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::create_dir_all(&root).await?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        let metadata = tokio::fs::symlink_metadata(&root).await?;
+        if metadata.file_type().is_symlink()
+            || metadata_is_reparse_point(&metadata)
+            || !metadata.is_dir()
+        {
+            anyhow::bail!("artifact root must remain a real directory");
+        }
+        let root = tokio::fs::canonicalize(&root).await?;
         let mut store = Self {
             root,
             max_bytes,
@@ -66,7 +108,7 @@ impl ArtifactStore {
             anyhow::bail!("canonical artifact hash must be a sha256:<64 hex> digest");
         }
         let physical = self.put(kind, bytes).await?;
-        let retained = tokio::fs::read(&physical.path).await?;
+        let retained = read_regular_file(Path::new(&physical.path))?;
         if retained != bytes {
             anyhow::bail!(
                 "physical artifact id collision detected; canonical artifact was not retained"
@@ -113,16 +155,55 @@ impl ArtifactStore {
 
     pub async fn put(&mut self, kind: &str, bytes: &[u8]) -> Result<ArtifactMeta> {
         self.projected_used_bytes_after_put(bytes)?;
+        self.revalidate_root().await?;
 
         let id = content_id(bytes);
         if let Some(existing) = self.index.get_mut(&id) {
+            if existing.bytes != bytes.len() as u64 {
+                anyhow::bail!(
+                    "physical artifact id collision detected; retained size differs for {id}"
+                );
+            }
+            let retained = read_regular_file(Path::new(&existing.path))
+                .with_context(|| format!("validate retained artifact {}", existing.id))?;
+            if retained != bytes {
+                anyhow::bail!(
+                    "physical artifact id collision detected; retained bytes differ for {id}"
+                );
+            }
             if existing.kind == "retained" {
                 existing.kind = kind.into();
             }
             return Ok(existing.clone());
         }
+
         let path = self.root.join(&id);
-        tokio::fs::write(&path, bytes).await?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        let mut file = match options.open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                anyhow::bail!(
+                    "artifact destination already exists outside the retained index; refusing overwrite"
+                )
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return Err(error.into());
+        }
+        drop(file);
+
+        let retained = read_regular_file(&path)
+            .context("revalidate newly persisted artifact before indexing")?;
+        if retained != bytes {
+            anyhow::bail!(
+                "artifact destination changed during persistence; refusing to index mismatched bytes"
+            );
+        }
+
         let meta = ArtifactMeta {
             id: id.clone(),
             kind: kind.into(),
@@ -136,19 +217,38 @@ impl ArtifactStore {
         Ok(meta)
     }
 
+    async fn revalidate_root(&self) -> Result<()> {
+        let metadata = tokio::fs::symlink_metadata(&self.root).await?;
+        if metadata.file_type().is_symlink()
+            || metadata_is_reparse_point(&metadata)
+            || !metadata.is_dir()
+        {
+            anyhow::bail!("artifact root identity is no longer a real directory");
+        }
+        let canonical = tokio::fs::canonicalize(&self.root).await?;
+        if canonical != self.root {
+            anyhow::bail!("artifact root identity changed after store open");
+        }
+        Ok(())
+    }
+
     async fn restore_existing(&mut self) -> Result<()> {
         let mut entries = tokio::fs::read_dir(&self.root).await?;
         let mut restored = Vec::new();
         while let Some(entry) = entries.next_entry().await? {
             let file_type = entry.file_type().await?;
-            if !file_type.is_file() {
-                continue;
-            }
             let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
             if !is_content_id(&id) {
                 continue;
+            }
+            let link_metadata = tokio::fs::symlink_metadata(entry.path()).await?;
+            if file_type.is_symlink()
+                || metadata_is_reparse_point(&link_metadata)
+                || !file_type.is_file()
+            {
+                anyhow::bail!("artifact store contains non-regular retained entry {id}");
             }
             let metadata = entry.metadata().await?;
             let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
@@ -180,6 +280,19 @@ impl ArtifactStore {
                 continue;
             };
 
+            self.revalidate_root().await?;
+            match tokio::fs::symlink_metadata(&meta.path).await {
+                Ok(metadata)
+                    if metadata.file_type().is_symlink()
+                        || metadata_is_reparse_point(&metadata)
+                        || !metadata.is_file() =>
+                {
+                    anyhow::bail!("artifact GC refuses non-regular retained entry {}", meta.id)
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
             match tokio::fs::remove_file(&meta.path).await {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -191,6 +304,114 @@ impl ArtifactStore {
         }
         Ok(())
     }
+}
+
+pub fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("bounded persistence path has no parent"))?;
+    revalidate_atomic_parent(parent)?;
+
+    match fs::symlink_metadata(path) {
+        Ok(metadata)
+            if metadata.file_type().is_symlink()
+                || metadata_is_reparse_point(&metadata)
+                || !metadata.is_file() =>
+        {
+            anyhow::bail!("refusing to replace non-regular persistence leaf")
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    let mut file = AtomicWriteFile::open(path)
+        .with_context(|| format!("open atomic persistence file {}", path.display()))?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+
+    revalidate_atomic_parent(parent)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata)
+            if metadata.file_type().is_symlink()
+                || metadata_is_reparse_point(&metadata)
+                || !metadata.is_file() =>
+        {
+            file.discard()?;
+            anyhow::bail!("persistence leaf changed to a non-regular entry before commit");
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            file.discard()?;
+            return Err(error.into());
+        }
+    }
+    file.commit()?;
+
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || metadata_is_reparse_point(&metadata)
+        || !metadata.is_file()
+    {
+        anyhow::bail!("atomic persistence did not produce a regular file");
+    }
+    let retained = read_regular_file(path).context("revalidate committed persistence bytes")?;
+    if retained != bytes {
+        anyhow::bail!("atomic persistence commit bytes do not match requested content");
+    }
+    Ok(())
+}
+
+fn revalidate_atomic_parent(parent: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(parent).context("inspect atomic persistence parent")?;
+    if metadata.file_type().is_symlink()
+        || metadata_is_reparse_point(&metadata)
+        || !metadata.is_dir()
+    {
+        anyhow::bail!("atomic persistence parent must be a real directory");
+    }
+    let canonical = fs::canonicalize(parent).context("canonicalize atomic persistence parent")?;
+    if canonical != parent {
+        anyhow::bail!(
+            "atomic persistence parent identity changed or resolves through reparse/symlink"
+        );
+    }
+    Ok(())
+}
+
+fn read_regular_file(path: &Path) -> Result<Vec<u8>> {
+    let before = fs::symlink_metadata(path).context("inspect artifact path")?;
+    if before.file_type().is_symlink() || metadata_is_reparse_point(&before) || !before.is_file() {
+        anyhow::bail!("artifact path must be a regular file");
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let mut file = options
+        .open(path)
+        .context("open retained artifact without following reparse points")?;
+    let opened = file.metadata().context("inspect retained artifact")?;
+    #[cfg(windows)]
+    if opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        anyhow::bail!("artifact handle resolves to a reparse point");
+    }
+    let after = fs::symlink_metadata(path).context("revalidate retained artifact path")?;
+    if after.file_type().is_symlink() || metadata_is_reparse_point(&after) || !after.is_file() {
+        anyhow::bail!("artifact path changed during read");
+    }
+
+    #[cfg(unix)]
+    if opened.dev() != after.dev() || opened.ino() != after.ino() {
+        anyhow::bail!("artifact identity changed during read");
+    }
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .context("read retained artifact")?;
+    Ok(bytes)
 }
 
 fn valid_canonical_hash(value: &str) -> bool {
@@ -277,6 +498,95 @@ mod tests {
             disk_bytes(&dir).await <= 5,
             "reopening the store must count and evict pre-existing artifacts"
         );
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn existing_physical_id_with_wrong_bytes_is_collision_not_dedupe() {
+        let dir = test_dir("collision");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let id = content_id(b"expected");
+        tokio::fs::write(dir.join(&id), b"wrong").await.unwrap();
+
+        let mut store = ArtifactStore::open(&dir, 1024).await.unwrap();
+        let error = store
+            .put("text", b"expected")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("collision"));
+        assert_eq!(tokio::fs::read(dir.join(id)).await.unwrap(), b"wrong");
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn malicious_artifact_symlink_is_rejected_on_reopen() {
+        use std::os::unix::fs::symlink;
+
+        let dir = test_dir("symlink-reopen");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let outside = test_dir("symlink-outside");
+        tokio::fs::write(&outside, b"outside").await.unwrap();
+        symlink(&outside, dir.join("lv-0123456789abcdef")).unwrap();
+
+        assert!(ArtifactStore::open(&dir, 1024).await.is_err());
+        assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
+        let _ = tokio::fs::remove_dir_all(dir).await;
+        let _ = tokio::fs::remove_file(outside).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn new_put_refuses_preexisting_leaf_symlink_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = test_dir("symlink-put");
+        let mut store = ArtifactStore::open(&dir, 1024).await.unwrap();
+        let bytes = b"artifact";
+        let outside = test_dir("symlink-target");
+        tokio::fs::write(&outside, b"outside").await.unwrap();
+        symlink(&outside, dir.join(content_id(bytes))).unwrap();
+
+        let error = store.put("text", bytes).await.unwrap_err().to_string();
+        assert!(error.contains("refusing overwrite"));
+        assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
+        let _ = tokio::fs::remove_dir_all(dir).await;
+        let _ = tokio::fs::remove_file(outside).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn atomic_replace_refuses_leaf_symlink_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = test_dir("atomic-symlink");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let outside = test_dir("atomic-symlink-outside");
+        tokio::fs::write(&outside, b"outside").await.unwrap();
+        let destination = dir.join("report.json");
+        symlink(&outside, &destination).unwrap();
+
+        let error = atomic_replace_regular(&destination, b"replacement")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("non-regular") || error.contains("symlink"));
+        assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
+
+        let _ = tokio::fs::remove_dir_all(dir).await;
+        let _ = tokio::fs::remove_file(outside).await;
+    }
+
+    #[tokio::test]
+    async fn verified_dedupe_keeps_retained_accounting_stable() {
+        let dir = test_dir("verified-dedupe");
+        let mut store = ArtifactStore::open(&dir, 1024).await.unwrap();
+        let first = store.put("visual/png", b"same").await.unwrap();
+        let used = store.used_bytes();
+        let second = store.put("visual/png", b"same").await.unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(store.used_bytes(), used);
+        assert_eq!(disk_bytes(&dir).await, used);
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
 }
