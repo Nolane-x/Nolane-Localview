@@ -42,8 +42,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Wave 8 ownership and authority contract
         run: node tools/wave8-headless-ci/contract.mjs
-      - name: Formatting
-        run: cargo fmt --all -- --check
+      - name: Formatting (Wave 8 owned packages)
+        run: cargo fmt -p localview -p localview-reports -p localview-artifacts -p localview-content-addressed -p localview-attestation -- --check
       - name: Check Wave 8 crates
         run: cargo check -p localview -p localview-reports -p localview-artifacts -p localview-content-addressed -p localview-attestation --all-targets
       - name: Clippy Wave 8 crates
