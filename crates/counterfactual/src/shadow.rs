@@ -641,7 +641,10 @@ mod tests {
             base_hash: "sha256:a".into(),
             patch: "patch".into(),
         };
-        assert_eq!(patch_digest(&[overlay.clone()]), patch_digest(&[overlay.clone()]));
+        assert_eq!(
+            patch_digest(std::slice::from_ref(&overlay)),
+            patch_digest(std::slice::from_ref(&overlay))
+        );
         let other = SourceOverlay {
             file: "src/other.rs".into(),
             ..overlay
