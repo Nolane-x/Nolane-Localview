@@ -224,8 +224,16 @@ fn production_csp_is_non_null_and_script_policy_stays_strict() {
     let csp = security["csp"].as_object().expect("production CSP must be configured");
 
     assert_eq!(csp["script-src"], "'self'");
+    assert_eq!(
+        csp["frame-src"],
+        "'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*"
+    );
     assert!(!csp.values().any(|value| value.as_str().is_some_and(|s| s.contains("'unsafe-eval'"))));
     assert!(!csp.values().any(|value| value.as_str().is_some_and(|s| s.contains(" *"))));
+    let frame_src = csp["frame-src"].as_str().unwrap();
+    assert!(!frame_src.contains("://*"));
+    assert!(!frame_src.contains("http: *"));
+    assert!(!frame_src.contains("https: *"));
     assert_eq!(security["devCsp"], serde_json::Value::Null);
     assert_eq!(config["app"]["withGlobalTauri"], true, "preview bridge currently requires window.__TAURI__");
 }
