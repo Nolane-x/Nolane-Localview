@@ -136,7 +136,6 @@ fn arbitrary_style_fields_and_private_text_are_not_retained_in_layout_output() {
     assert!(serialized.contains("grid_container"));
 }
 
-
 #[test]
 fn missing_or_invalid_live_viewport_is_unknown_not_a_critical_layout_finding() {
     for snapshot in [
