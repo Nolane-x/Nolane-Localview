@@ -202,7 +202,6 @@ async fn open_native(
     url: url::Url,
     bounds: WorkspaceBounds,
 ) -> Result<(), String> {
-    use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
     use tauri::webview::WebviewBuilder;
     use tauri::{LogicalPosition, LogicalSize, Manager, WebviewUrl};
 
@@ -254,11 +253,8 @@ async fn open_native(
         label.clone(),
     );
     let reservation = surface_resource::reserve_surface(session_id).await?;
-    let initialization_script = format!(
-        "{}\n{}",
-        bootstrap_script(&InstrumentationConfig::default()),
-        super::preview_bridge_script(session_id)
-    );
+    let initialization_script =
+        super::wave6_accessibility_interaction::managed_initialization_script(app, session_id)?;
     let builder = WebviewBuilder::new(label, WebviewUrl::External(url))
         .initialization_script(initialization_script)
         .on_navigation(workspace_navigation_allowed);
