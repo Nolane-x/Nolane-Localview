@@ -143,6 +143,11 @@ impl ArtifactStore {
 
         let id = content_id(bytes);
         if let Some(existing) = self.index.get_mut(&id) {
+            if existing.bytes != bytes.len() as u64 {
+                anyhow::bail!(
+                    "physical artifact id collision detected; retained size differs for {id}"
+                );
+            }
             let retained = read_regular_file(Path::new(&existing.path))
                 .with_context(|| format!("validate retained artifact {}", existing.id))?;
             if retained != bytes {
