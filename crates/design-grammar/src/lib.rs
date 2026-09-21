@@ -313,12 +313,15 @@ pub struct ResponsiveMetricVariation {
     pub family_centers_by_width: BTreeMap<u32, Vec<f64>>,
 }
 
+type GrammarMetricAccessor = fn(&ProjectDesignGrammar) -> &MetricFamilies;
+type GrammarMetric = (&'static str, GrammarMetricAccessor);
+
 pub fn responsive_variation(
     snapshots: &[ResponsiveGrammarSnapshot],
 ) -> Vec<ResponsiveMetricVariation> {
     let mut snapshots = snapshots.to_vec();
     snapshots.sort_by_key(|snapshot| snapshot.viewport_width);
-    let metrics: [(&str, fn(&ProjectDesignGrammar) -> &MetricFamilies); 5] = [
+    let metrics: [GrammarMetric; 5] = [
         ("spacing", |value| &value.spacing_families),
         ("type_size", |value| &value.type_size_families),
         ("font_weight", |value| &value.font_weight_families),
