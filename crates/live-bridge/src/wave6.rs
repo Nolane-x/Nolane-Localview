@@ -1,10 +1,13 @@
 use localview_flow::{
-    InteractionActionKind, ReplayStep, SafetyClass, StateIdentity,
+    DiscoveryBounds, GraphAdmissionError, InteractionActionKind, InteractionGraph,
+    LiveTransition, ReplayStep, SafetyClass, StateIdentity,
 };
 use localview_protocol::SessionId;
 use serde::{Deserialize, Serialize};
 
 use crate::{BridgeAction, BridgeActionKind, LiveBridge};
+
+const MAX_WAVE6_GRAPH_SESSIONS: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -13,6 +16,19 @@ pub enum Wave6ReplayAdmissionError {
     StableRefInvalid,
     PreStateMismatch,
     UnsupportedReplayPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Wave6GraphError {
+    SessionCapacityExceeded,
+    Admission(GraphAdmissionError),
+}
+
+impl From<GraphAdmissionError> for Wave6GraphError {
+    fn from(value: GraphAdmissionError) -> Self {
+        Self::Admission(value)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,6 +47,30 @@ pub struct Wave6ReplayAdmission {
 /// immediately before the step. Post-state verification remains a separate
 /// fresh observation fed into localview-flow's replay receipt.
 impl LiveBridge {
+    pub async fn record_wave6_live_transition(
+        &self,
+        session_id: SessionId,
+        transition: LiveTransition,
+        bounds: DiscoveryBounds,
+    ) -> Result<(), Wave6GraphError> {
+        let mut graphs = self.wave6_graphs.write().await;
+        if !graphs.contains_key(&session_id) && graphs.len() >= MAX_WAVE6_GRAPH_SESSIONS {
+            return Err(Wave6GraphError::SessionCapacityExceeded);
+        }
+        graphs
+            .entry(session_id)
+            .or_insert_with(InteractionGraph::default)
+            .record_live(transition, bounds)
+            .map_err(Wave6GraphError::from)
+    }
+
+    pub async fn wave6_interaction_graph(
+        &self,
+        session_id: SessionId,
+    ) -> Option<InteractionGraph> {
+        self.wave6_graphs.read().await.get(&session_id).cloned()
+    }
+
     pub async fn enqueue_wave6_replay_step(
         &self,
         session_id: SessionId,
@@ -100,6 +140,58 @@ mod tests {
             expected_after: state("after"),
             evidence_refs: vec![],
         }
+    }
+
+    #[tokio::test]
+    async fn live_graph_is_session_owned_bounded_and_released() {
+        let bridge = LiveBridge::new(32, 8);
+        let session = uuid::Uuid::new_v4();
+        bridge
+            .record_wave6_live_transition(
+                session,
+                LiveTransition {
+                    action: InteractionActionKind::Click,
+                    target: "@eabc".into(),
+                    safety: SafetyClass::ExplicitlySafe,
+                    pre_state: state("before"),
+                    resulting_state: state("after"),
+                    evidence_refs: vec!["evidence:1".into()],
+                },
+                DiscoveryBounds::default(),
+            )
+            .await
+            .unwrap();
+
+        let graph = bridge.wave6_interaction_graph(session).await.unwrap();
+        assert_eq!(graph.live_edge_count(), 1);
+
+        bridge.release_session(session).await;
+        assert!(bridge.wave6_interaction_graph(session).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn live_graph_rejects_unsafe_discovery() {
+        let bridge = LiveBridge::new(32, 8);
+        let session = uuid::Uuid::new_v4();
+        let error = bridge
+            .record_wave6_live_transition(
+                session,
+                LiveTransition {
+                    action: InteractionActionKind::Click,
+                    target: "@eabc".into(),
+                    safety: SafetyClass::Unknown,
+                    pre_state: state("before"),
+                    resulting_state: state("after"),
+                    evidence_refs: vec![],
+                },
+                DiscoveryBounds::default(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            Wave6GraphError::Admission(GraphAdmissionError::UnsafeAction)
+        );
     }
 
     #[tokio::test]
