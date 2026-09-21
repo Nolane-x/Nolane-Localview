@@ -136,11 +136,11 @@ struct StateIdentityInput<'a> {
 
 #[derive(Debug, Clone, Serialize)]
 struct SafeEvidenceSummary {
-    id: String,
     kind: String,
     uncertainty: Option<String>,
     revision: Option<String>,
     source: Option<String>,
+    payload_hash: String,
 }
 
 #[derive(Debug)]
@@ -393,6 +393,34 @@ async fn run_inner(
         }
     }
 
+    let final_snapshot: PageSnapshot = authed_get(
+        client,
+        control,
+        token,
+        &format!("/v1/sessions/{}/semantic-snapshot/fresh", session.id),
+    )
+    .await?
+    .json()
+    .await
+    .context("final semantic evidence was not a valid bounded PageSnapshot")?;
+    let initial_semantic_hash = semantic_state_hash(&snapshot);
+    let final_semantic_hash = semantic_state_hash(&final_snapshot);
+    let state_stable = snapshot.route == final_snapshot.route
+        && snapshot.viewport == final_snapshot.viewport
+        && initial_semantic_hash == final_semantic_hash;
+    if !state_stable {
+        inconclusive_reasons.push(format!(
+            "headless state drifted during execution: route {} -> {}, viewport {}x{} -> {}x{}, semantic_state_changed={}",
+            safe_route(&snapshot.route),
+            safe_route(&final_snapshot.route),
+            snapshot.viewport.0,
+            snapshot.viewport.1,
+            final_snapshot.viewport.0,
+            final_snapshot.viewport.1,
+            initial_semantic_hash != final_semantic_hash
+        ));
+    }
+
     let state_root = project_root.join(".localview").join("wave8-ci");
     let artifact_root = state_root.join("artifacts");
     tokio::fs::create_dir_all(&artifact_root).await?;
@@ -421,6 +449,7 @@ async fn run_inner(
         &artifact_root,
         &mut artifact_store,
         &baseline_envelope,
+        state_stable,
         args.update_baseline,
     )
     .await?;
@@ -853,7 +882,6 @@ fn summarize_evidence(value: &Value) -> EvidenceSummary {
         *classes.entry(kind.to_owned()).or_insert(0) += 1;
         ids.push(bounded_text(id, 160));
         let safe = SafeEvidenceSummary {
-            id: bounded_text(id, 160),
             kind: bounded_text(kind, 64),
             uncertainty: item
                 .get("uncertainty")
@@ -867,6 +895,7 @@ fn summarize_evidence(value: &Value) -> EvidenceSummary {
                 .pointer("/provenance/source")
                 .and_then(Value::as_str)
                 .map(|value| bounded_text(value, 96)),
+            payload_hash: object_hash(item.get("payload").unwrap_or(&Value::Null)),
         };
         hashes.push(object_hash(&safe));
     }
@@ -1085,6 +1114,7 @@ async fn compare_and_retain_baseline(
     artifact_root: &Path,
     store: &mut ArtifactStore,
     candidate: &BaselineEnvelope,
+    retain_allowed: bool,
     update: bool,
 ) -> Result<(BaselineComparison, Option<ArtifactReference>)> {
     tokio::fs::create_dir_all(state_root).await?;
@@ -1092,6 +1122,20 @@ async fn compare_and_retain_baseline(
     let mut index = load_baseline_index(&index_path).await?;
     let candidate_hash = candidate.canonical_hash();
     let existing = index.states.get(&candidate.state_identity).cloned();
+
+    if !retain_allowed {
+        return Ok((
+            BaselineComparison {
+                status: BaselineComparisonStatus::Incompatible,
+                baseline_hash: existing.as_ref().map(|locator| locator.content_hash.clone()),
+                candidate_hash: Some(candidate_hash),
+                reasons: vec![
+                    "headless state drifted; baseline authority was withheld".into(),
+                ],
+            },
+            None,
+        ));
+    }
 
     let mut comparison = BaselineComparison {
         status: BaselineComparisonStatus::Created,
@@ -1447,6 +1491,14 @@ fn safe_relative_report_path(value: &str) -> bool {
                 Component::ParentDir | Component::RootDir | Component::Prefix(_)
             )
         })
+}
+
+fn semantic_state_hash(snapshot: &PageSnapshot) -> String {
+    object_hash(&json!({
+        "route": snapshot.route,
+        "viewport": snapshot.viewport,
+        "root": snapshot.root,
+    }))
 }
 
 fn safe_route(value: &str) -> String {
