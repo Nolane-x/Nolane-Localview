@@ -354,6 +354,25 @@ pub fn authorize_shadow_launch(
     Ok(())
 }
 
+pub fn exact_repository_revision(repository_root: &Path) -> Result<String, ShadowError> {
+    let repository_root =
+        fs::canonicalize(repository_root).map_err(|_| ShadowError::NonGitProject)?;
+    let top = git_output(&repository_root, &["rev-parse", "--show-toplevel"])
+        .ok_or(ShadowError::NonGitProject)?;
+    let canonical_top = fs::canonicalize(top.trim()).map_err(|_| ShadowError::NonGitProject)?;
+    if canonical_top != repository_root {
+        return Err(ShadowError::NonGitProject);
+    }
+    let head = git_output(&repository_root, &["rev-parse", "HEAD"])
+        .ok_or(ShadowError::GitUnavailable)?
+        .trim()
+        .to_owned();
+    if !is_exact_object_id(&head) {
+        return Err(ShadowError::BaseRevisionNotExact);
+    }
+    Ok(head)
+}
+
 pub fn patch_digest(overlays: &[SourceOverlay]) -> String {
     let mut hasher = Sha256::new();
     for overlay in overlays {
