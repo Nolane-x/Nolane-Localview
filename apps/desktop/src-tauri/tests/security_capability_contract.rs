@@ -226,7 +226,7 @@ fn production_csp_is_non_null_and_script_policy_stays_strict() {
     assert_eq!(csp["script-src"], "'self'");
     assert_eq!(
         csp["frame-src"],
-        "'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*"
+        "'self' http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:* https://[::1]:*"
     );
     assert!(!csp.values().any(|value| value.as_str().is_some_and(|s| s.contains("'unsafe-eval'"))));
     assert!(!csp.values().any(|value| value.as_str().is_some_and(|s| s.contains(" *"))));
