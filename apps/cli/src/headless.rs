@@ -1414,6 +1414,20 @@ async fn write_baseline_index(path: &Path, index: &BaselineIndex) -> Result<()> 
     if bytes.len() as u64 > MAX_BASELINE_BYTES {
         bail!("baseline index exceeds bounded size policy");
     }
+
+    // Wave 8 historically used this fixed temp leaf. It is no longer used for
+    // persistence, but an attacker-controlled symlink/reparse entry there is
+    // still treated as an unsafe state rather than silently ignored.
+    let legacy_temp = path.with_extension("json.tmp");
+    match fs::symlink_metadata(&legacy_temp) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            bail!("baseline index temp leaf is an unsafe non-regular entry");
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
     atomic_replace_regular(path, &bytes)
 }
 
@@ -2596,7 +2610,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn baseline_index_leaf_symlink_is_rejected_and_fixed_temp_name_is_unused() {
+    async fn baseline_index_and_legacy_temp_leaf_symlinks_are_rejected() {
         use std::os::unix::fs::symlink;
 
         let project = std::env::temp_dir().join(format!("lv-headless-project-{}", Uuid::new_v4()));
@@ -2625,15 +2639,17 @@ mod tests {
 
         let legacy_temp = state.join("baseline-index.json.tmp");
         symlink(&outside, &legacy_temp).unwrap();
-        write_baseline_index(
-            &index_path,
-            &BaselineIndex {
-                schema_version: 1,
-                states: BTreeMap::new(),
-            },
-        )
-        .await
-        .unwrap();
+        assert!(
+            write_baseline_index(
+                &index_path,
+                &BaselineIndex {
+                    schema_version: 1,
+                    states: BTreeMap::new(),
+                },
+            )
+            .await
+            .is_err()
+        );
         assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
         assert!(
             tokio::fs::symlink_metadata(&legacy_temp)
