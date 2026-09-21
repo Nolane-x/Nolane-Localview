@@ -53,6 +53,8 @@ jobs:
             crates/counterfactual/tests/shadow_candidate.rs \
             crates/state-space/src/affected.rs \
             crates/planner/src/autonomous_verification.rs \
+            apps/desktop/src-tauri/src/trusted_fix.rs \
+            apps/desktop/src-tauri/src/trusted_verify.rs \
             apps/desktop/src-tauri/tests/wave9_autonomous_verification_contract.rs
 
       - name: Contracts
