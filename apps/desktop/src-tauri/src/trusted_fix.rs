@@ -137,6 +137,7 @@ pub struct FixProposalRecord {
     pub expires_at: Instant,
     pub expires_at_unix_ms: u64,
     pub status: FixProposalStatus,
+    pub wave9_preflight: Option<localview_verification::ProductionCandidatePreflightReceipt>,
 }
 
 #[derive(Debug, Serialize)]
@@ -228,32 +229,59 @@ impl FixProposalStore {
     }
 
     pub fn begin_apply(&self, proposal_id: &str) -> Result<FixProposalRecord, String> {
+        let pending = {
+            let mut proposals = self
+                .proposals
+                .lock()
+                .map_err(|_| "trusted Fix proposal store unavailable".to_string())?;
+            Self::reap_expired_locked(&mut proposals);
+            let proposal = proposals
+                .get(proposal_id)
+                .ok_or_else(|| "trusted Fix proposal is unavailable".to_string())?;
+            if proposal.expires_at <= Instant::now() {
+                proposals.remove(proposal_id);
+                return Err("trusted Fix proposal expired".to_string());
+            }
+            if proposal.status != FixProposalStatus::Pending {
+                return Err("trusted Fix proposal is no longer pending".to_string());
+            }
+            proposal.clone()
+        };
+
+        let preflight = wave9_preflight_for_pending_proposal(&pending)?;
+        if preflight.verdict
+            == localview_verification::ProductionCandidatePreflightVerdict::Rejected
+        {
+            return Err("Wave 9 candidate preflight rejected the pending Fix proposal".into());
+        }
+
+        let current_revision = localview_counterfactual::exact_repository_revision(
+            &pending.project_root,
+        )
+        .map_err(|error| format!("Wave 9 current revision is unavailable: {error:?}"))?;
+        if current_revision != preflight.base_revision {
+            return Err("Wave 9 project revision changed during candidate preflight".into());
+        }
+
         let mut proposals = self
             .proposals
             .lock()
             .map_err(|_| "trusted Fix proposal store unavailable".to_string())?;
-        let now = Instant::now();
-
-        let result = {
-            let proposal = proposals
-                .get_mut(proposal_id)
-                .ok_or_else(|| "trusted Fix proposal is unavailable".to_string())?;
-            if proposal.expires_at <= now {
-                proposal.status = FixProposalStatus::Invalidated;
-                Err("trusted Fix proposal expired".to_string())
-            } else if proposal.status != FixProposalStatus::Pending {
-                Err("trusted Fix proposal is no longer pending".to_string())
-            } else {
-                proposal.status = FixProposalStatus::Applying;
-                Ok(proposal.clone())
-            }
-        };
-
-        if result.is_err() {
-            proposals.remove(proposal_id);
-        }
         Self::reap_expired_locked(&mut proposals);
-        result
+        let proposal = proposals
+            .get_mut(proposal_id)
+            .ok_or_else(|| "trusted Fix proposal is unavailable".to_string())?;
+        if proposal.expires_at <= Instant::now() {
+            proposal.status = FixProposalStatus::Invalidated;
+            proposals.remove(proposal_id);
+            return Err("trusted Fix proposal expired".to_string());
+        }
+        if proposal.status != FixProposalStatus::Pending {
+            return Err("trusted Fix proposal is no longer pending".to_string());
+        }
+        proposal.wave9_preflight = Some(preflight);
+        proposal.status = FixProposalStatus::Applying;
+        Ok(proposal.clone())
     }
 
     pub fn complete_apply(&self, proposal_id: &str) -> Result<(), String> {
@@ -757,6 +785,7 @@ pub fn new_proposal_record(
         expires_at,
         expires_at_unix_ms,
         status: FixProposalStatus::Pending,
+        wave9_preflight: None,
     }
 }
 
@@ -967,6 +996,22 @@ pub fn wave9_candidate_from_pending_proposal(
         .validate()
         .map_err(|_| "Wave 9 candidate failed counterfactual validation".to_string())?;
     Ok(candidate)
+}
+
+pub fn wave9_preflight_for_pending_proposal(
+    proposal: &FixProposalRecord,
+) -> Result<localview_verification::ProductionCandidatePreflightReceipt, String> {
+    if proposal.status != FixProposalStatus::Pending || proposal.expires_at <= Instant::now() {
+        return Err("trusted Fix proposal is not pending for Wave 9 preflight".into());
+    }
+    let exact_revision = localview_counterfactual::exact_repository_revision(&proposal.project_root)
+        .map_err(|error| format!("Wave 9 exact repository revision is unavailable: {error:?}"))?;
+    let candidate = wave9_candidate_from_pending_proposal(
+        proposal,
+        &exact_revision,
+        localview_counterfactual::IsolationLevel::SemanticOnly,
+    )?;
+    localview_verification::run_production_candidate_preflight(&proposal.project_root, &candidate)
 }
 
 pub fn validate_wave9_candidate_for_human_apply(
