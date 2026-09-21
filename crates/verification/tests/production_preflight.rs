@@ -72,7 +72,8 @@ fn production_preflight_uses_real_temp_git_shadow_without_mutating_source() {
 
     let receipt = run_production_candidate_preflight(&root, &candidate).unwrap();
 
-    assert_eq!(receipt.candidate_id.as_deref(), Some(candidate.id.to_string().as_str()));
+    let candidate_id = candidate.id.to_string();
+    assert_eq!(receipt.candidate_id.as_deref(), Some(candidate_id.as_str()));
     assert_eq!(receipt.base_revision.as_deref(), Some(head.as_str()));
     let shadow_proof = receipt.shadow_proof.as_ref().expect("shadow proof");
     let cleanup_proof = receipt.cleanup_proof.as_ref().expect("cleanup proof");
