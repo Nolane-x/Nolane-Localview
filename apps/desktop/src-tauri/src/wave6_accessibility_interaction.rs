@@ -12,7 +12,7 @@ const AXE_VERSION: &str = "4.13.0";
 const MAX_AXE_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 
 fn development_axe_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../node_modules/axe-core/axe.min.js")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/wave6/axe.min.js")
 }
 
 fn load_local_axe_source(app: &tauri::AppHandle) -> Result<String, String> {
@@ -41,7 +41,7 @@ fn validate_axe_source(source: &str) -> Result<(), String> {
 /// native workspace surfaces.
 ///
 /// axe-core is read only from the application resource bundle (or the exact
-/// development node_modules fallback); no page/runtime network loader exists.
+/// checked-in repo-local development resource); no page/runtime network loader exists.
 pub fn managed_initialization_script(
     app: &tauri::AppHandle,
     session_id: SessionId,
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn development_path_never_points_at_remote_content() {
         let path = development_axe_path().to_string_lossy().replace('\\', "/");
-        assert!(path.ends_with("node_modules/axe-core/axe.min.js"));
+        assert!(path.ends_with("resources/wave6/axe.min.js"));
         assert!(!path.contains("http://"));
         assert!(!path.contains("https://"));
     }
