@@ -411,7 +411,10 @@ fn normalized_difference(left: f64, right: f64) -> f64 {
     }
 }
 
-fn hierarchy_features(nodes: &[CriticNode], viewport: (f64, f64)) -> FeatureState<HierarchyFeatures> {
+fn hierarchy_features(
+    nodes: &[CriticNode],
+    viewport: (f64, f64),
+) -> FeatureState<HierarchyFeatures> {
     let max_font = nodes
         .iter()
         .filter_map(|node| node.font_size)
@@ -439,8 +442,7 @@ fn hierarchy_features(nodes: &[CriticNode], viewport: (f64, f64)) -> FeatureStat
                 .font_weight
                 .zip(max_weight)
                 .map_or(0.0, |(value, max)| (value / max).clamp(0.0, 1.0));
-            let area_ratio =
-                (clipped_area(&node.rect, viewport) / viewport_area).clamp(0.0, 1.0);
+            let area_ratio = (clipped_area(&node.rect, viewport) / viewport_area).clamp(0.0, 1.0);
             let contrast = node
                 .contrast
                 .filter(|value| value.is_finite() && *value >= 0.0)
@@ -576,12 +578,7 @@ fn family_tolerance(family: &ScaleFamily, metric_name: &str) -> f64 {
     }
 }
 
-fn measurement(
-    name: &str,
-    measured: f64,
-    unit: &str,
-    expected: Option<f64>,
-) -> CriticMeasurement {
+fn measurement(name: &str, measured: f64, unit: &str, expected: Option<f64>) -> CriticMeasurement {
     CriticMeasurement {
         name: name.into(),
         measured,
@@ -701,18 +698,18 @@ pub fn build_design_baseline(
         horizontal_imbalance: available_balance(report).map(|value| value.horizontal_imbalance),
         vertical_imbalance: available_balance(report).map(|value| value.vertical_imbalance),
     };
-    let hierarchy = available_hierarchy(report).map_or_else(
-        HierarchyBaselineSummary::default,
-        |value| HierarchyBaselineSummary {
-            salience_spread: Some(value.salience_spread),
-            leading_refs: value
-                .entries
-                .iter()
-                .take(8)
-                .map(|entry| entry.reference.clone())
-                .collect(),
-        },
-    );
+    let hierarchy =
+        available_hierarchy(report).map_or_else(HierarchyBaselineSummary::default, |value| {
+            HierarchyBaselineSummary {
+                salience_spread: Some(value.salience_spread),
+                leading_refs: value
+                    .entries
+                    .iter()
+                    .take(8)
+                    .map(|entry| entry.reference.clone())
+                    .collect(),
+            }
+        });
     DesignGrammarBaseline {
         schema_version: DESIGN_BASELINE_SCHEMA_VERSION,
         grammar,
@@ -834,7 +831,11 @@ fn grammar_metrics<'a>(
 ) -> [MetricPair<'a>; 8] {
     [
         ("spacing", &before.spacing_families, &after.spacing_families),
-        ("type_size", &before.type_size_families, &after.type_size_families),
+        (
+            "type_size",
+            &before.type_size_families,
+            &after.type_size_families,
+        ),
         (
             "font_weight",
             &before.font_weight_families,
@@ -890,11 +891,15 @@ fn diff_metric(
 
     let mut matched_after = BTreeSet::new();
     for old in before.families() {
-        let nearest = after.families().iter().enumerate().min_by(|(_, left), (_, right)| {
-            (old.center - left.center)
-                .abs()
-                .total_cmp(&(old.center - right.center).abs())
-        });
+        let nearest = after
+            .families()
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| {
+                (old.center - left.center)
+                    .abs()
+                    .total_cmp(&(old.center - right.center).abs())
+            });
         let Some((index, new)) = nearest else {
             continue;
         };
