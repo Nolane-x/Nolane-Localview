@@ -12,7 +12,10 @@ fn desktop_registers_bounded_content_stress_authority() {
         "preview_complete_content_stress",
         "takeContentStressCompletions",
     ] {
-        assert!(desktop.contains(required), "missing desktop wiring: {required}");
+        assert!(
+            desktop.contains(required),
+            "missing desktop wiring: {required}"
+        );
     }
 
     for required in [
@@ -30,7 +33,10 @@ fn desktop_registers_bounded_content_stress_authority() {
         "_capture_guard",
         "best_effort_restore",
     ] {
-        assert!(module.contains(required), "missing content-stress authority: {required}");
+        assert!(
+            module.contains(required),
+            "missing content-stress authority: {required}"
+        );
     }
 
     assert!(api.contains("captureContentLocaleStress"));
@@ -49,7 +55,10 @@ fn content_stress_receipt_is_synthetic_and_does_not_claim_translation_authority(
         "locale_translation",
         "source_text:",
     ] {
-        assert!(!module.contains(forbidden), "forbidden authority claim: {forbidden}");
+        assert!(
+            !module.contains(forbidden),
+            "forbidden authority claim: {forbidden}"
+        );
     }
     assert!(module.contains("pub synthetic: bool"));
     assert!(module.contains("synthetic: true"));
