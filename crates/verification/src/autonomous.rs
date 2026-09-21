@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use localview_content_addressed::{ObjectHash, object_hash};
 use localview_contracts::{ContractEvaluationSummary, ContractStrength, ContractVerdict};
-use localview_counterfactual::{IsolationLevel, ShadowCandidateProof, ShadowCleanupProof};
+use localview_counterfactual::{
+    ExternalSideEffectContainment, IsolationLevel, ShadowCandidateProof, ShadowCleanupProof,
+};
 use localview_mutation::{MutationChallengeResult, MutationVerdict};
 use localview_planner::PartialRevalidationPlan;
 use localview_state_space::AffectedStatePlan;
@@ -219,6 +221,12 @@ pub fn build_autonomous_receipt(
     if !input.shadow_proof.real_worktree_unchanged {
         reasons.push("real working tree changed during candidate verification".into());
     }
+    let external_side_effect_containment_unproven =
+        input.shadow_proof.external_side_effect_containment
+            != ExternalSideEffectContainment::ProvenBlocked;
+    if external_side_effect_containment_unproven {
+        reasons.push("external side-effect containment is not proven".into());
+    }
 
     if !input.contracts.hard_failures.is_empty() {
         reasons.push(format!(
@@ -335,7 +343,8 @@ pub fn build_autonomous_receipt(
         || input.affected.incomplete
         || !input.stale_evidence_ids.is_empty()
         || !input.resource_budget.within_budget()
-        || !unaccounted.is_empty();
+        || !unaccounted.is_empty()
+        || external_side_effect_containment_unproven;
 
     let final_verdict = if rejected {
         AutonomousVerificationVerdict::Rejected
@@ -555,7 +564,7 @@ mod tests {
             shadow_path: "/tmp/shadow".into(),
             original_worktree_dirty: true,
             real_worktree_unchanged: true,
-            external_side_effects_blocked: true,
+            external_side_effect_containment: ExternalSideEffectContainment::ProvenBlocked,
         }
     }
 
@@ -812,6 +821,28 @@ mod tests {
         );
         assert_eq!(receipt.surviving_mutations().len(), 1);
         assert_eq!(receipt.unexpected_impact.len(), 1);
+    }
+
+    #[test]
+    fn unproven_external_side_effect_containment_is_inconclusive() {
+        let candidate = Uuid::new_v4();
+        let mut input = input(
+            candidate,
+            contracts(ContractVerdict::Pass, ContractStrength::Hard),
+        );
+        input.shadow_proof.external_side_effect_containment =
+            ExternalSideEffectContainment::NotProven;
+        let receipt = build_autonomous_receipt(input);
+        assert_eq!(
+            receipt.final_verdict,
+            AutonomousVerificationVerdict::Inconclusive
+        );
+        assert!(
+            receipt
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("containment is not proven"))
+        );
     }
 
     #[test]
