@@ -4146,8 +4146,14 @@ invariant(
 );
 await shot(page, '160-command-escape-focus-restored.png', 'ui-audit-command-escape-focus-restored');
 
+const inspectRail = page.locator('.floating-rail').getByRole('button', { name: 'Inspect' });
 const responsiveRail = page.locator('.floating-rail').getByRole('button', { name: 'Responsive' });
-await responsiveRail.focus();
+await inspectRail.focus();
+await page.keyboard.press('Tab');
+invariant(
+  await responsiveRail.evaluate((button) => button === document.activeElement && button.matches(':focus-visible')),
+  'ui-audit:rail-keyboard-focus-visible',
+);
 const tooltipEvidence = await responsiveRail.locator('.rail-tooltip').evaluate((tooltip) => ({
   opacity: getComputedStyle(tooltip).opacity,
   ariaHidden: tooltip.getAttribute('aria-hidden'),
