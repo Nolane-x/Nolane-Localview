@@ -70,7 +70,7 @@ async function assertMeaningfulTextReadability(page, state) {
     '.source-open-status span', '.source-open-status code',
     '.responsive-result', '.responsive-result-viewports span', '.responsive-failure',
     '.stream-status', '.stream-empty p', '.network-summary strong',
-    '.ai-status.failure', '.fix-status span',
+    '.ai-status.failure', '.fix-status span', '.fix-preflight-note',
     '.verify-result>span', '.verify-result>small', '.verify-result li',
     '.verify-advisory span', '.verify-advisory p',
   ].join(',');
@@ -3146,6 +3146,11 @@ await page.locator('.fix-apply-action').click();
 await page.waitForTimeout(120);
 await assertVisible(page, '.fix-status.success', 'fix-apply-success');
 const applySuccessText = await page.locator('.fix-status.success').innerText();
+invariant(
+  applySuccessText.includes('not an autonomous verification result'),
+  'fix:apply-success-wave9-preflight-truthful',
+  { applySuccessText },
+);
 invariant(applySuccessText.includes('Change applied'), 'fix:apply-success-humanized', { applySuccessText });
 const appliedWrites = await page.evaluate(() => window.__LOCALVIEW_AUDIT_FIX_WRITES__);
 invariant(appliedWrites === 1, 'fix:apply-single-write', { appliedWrites });
@@ -3269,6 +3274,11 @@ await page.waitForTimeout(120);
 await page.locator('.fix-apply-action').click();
 await page.waitForTimeout(120);
 const viFixApplied = await page.locator('.fix-status.success').innerText();
+invariant(
+  viFixApplied.includes('không phải là kết quả xác minh tự động'),
+  'fix:vi-apply-wave9-preflight-truthful',
+  { viFixApplied },
+);
 invariant(viFixApplied.includes('Đã áp dụng thay đổi'), 'fix:vi-apply-localized', { viFixApplied });
 await shot(page, '110-vi-fix-apply-success.png', 'vi-fix-apply-success');
 await page.close();
