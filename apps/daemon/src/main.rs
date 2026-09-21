@@ -565,6 +565,16 @@ mod security_tests {
     }
 
     #[tokio::test]
+    async fn control_token_creation_preserves_missing_parent_startup() {
+        let base = test_root("token-missing-parent");
+        let root = base.join("nested").join("LocalView");
+        let token = load_or_create_token(&root).await.unwrap();
+        assert!(!token.is_empty());
+        assert!(root.join("control.token").is_file());
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
     async fn control_token_is_stable_across_reopen() {
         let root = test_root("token-stable");
         let first = load_or_create_token(&root).await.unwrap();
