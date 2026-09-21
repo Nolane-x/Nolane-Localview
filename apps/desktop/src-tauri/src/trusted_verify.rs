@@ -353,9 +353,7 @@ impl VerificationStore {
         self.discard_verification(verification_id)
     }
 
-    
-
-#[cfg(test)]
+    #[cfg(test)]
     fn retained_visual_bytes_for_test(&self) -> usize {
         self.records
             .lock()
@@ -370,7 +368,9 @@ pub fn validate_wave9_verified_handoff(
     use localview_verification::AutonomousVerificationVerdict;
 
     if expected_base_revision.trim().is_empty() || receipt.base_revision != expected_base_revision {
-        return Err("Wave 9 receipt base revision does not match the current trusted revision".into());
+        return Err(
+            "Wave 9 receipt base revision does not match the current trusted revision".into(),
+        );
     }
     if receipt.final_verdict != AutonomousVerificationVerdict::Verified {
         return Err("Wave 9 receipt is not verified".into());
@@ -394,8 +394,6 @@ pub fn validate_wave9_verified_handoff(
     }
     Ok(())
 }
-
-
 
 fn exact_node<'a>(
     node: &'a SemanticNode,
