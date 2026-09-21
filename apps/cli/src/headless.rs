@@ -307,11 +307,13 @@ async fn run_inner(
                     client,
                     control,
                     token,
-                    session.id,
-                    snapshot.viewport,
-                    device_scale_factor,
-                    revision.as_deref(),
-                    args.visual_max_changed_ratio,
+                    VisualCaptureVerifyInput {
+                        session: session.id,
+                        viewport: snapshot.viewport,
+                        device_scale_factor,
+                        revision: revision.as_deref(),
+                        max_changed_ratio: args.visual_max_changed_ratio,
+                    },
                 )
                 .await
                 {
@@ -1021,32 +1023,36 @@ fn sanitize_text(value: &str, project_root: &str, max: usize) -> String {
     } else {
         value.replace(project_root, "<project>")
     };
-    bounded_text(&replaced.replace('\r', " ").replace('\n', " "), max)
+    bounded_text(&replaced.replace(['\r', '\n'], " "), max)
+}
+
+struct VisualCaptureVerifyInput<'a> {
+    session: SessionId,
+    viewport: (u32, u32),
+    device_scale_factor: f64,
+    revision: Option<&'a str>,
+    max_changed_ratio: f64,
 }
 
 async fn visual_capture_verify(
     client: &Client,
     control: &str,
     token: &str,
-    session: SessionId,
-    viewport: (u32, u32),
-    device_scale_factor: f64,
-    revision: Option<&str>,
-    max_changed_ratio: f64,
+    input: VisualCaptureVerifyInput<'_>,
 ) -> std::result::Result<Value, VisualRequestError> {
     let body = json!({
         "viewport": {
-            "css_width": viewport.0,
-            "css_height": viewport.1,
-            "device_scale_factor": device_scale_factor,
+            "css_width": input.viewport.0,
+            "css_height": input.viewport.1,
+            "device_scale_factor": input.device_scale_factor,
         },
-        "revision": revision,
+        "revision": input.revision,
         "expectation": {
             "kind": "unchanged",
-            "max_changed_ratio": max_changed_ratio,
+            "max_changed_ratio": input.max_changed_ratio,
         }
     });
-    let path = format!("/v1/sessions/{session}/verify/visual/capture");
+    let path = format!("/v1/sessions/{}/verify/visual/capture", input.session);
     let first = authed_post_raw(client, control, token, &path, Some(&body))
         .await
         .map_err(VisualRequestError::Fatal)?;
