@@ -815,17 +815,21 @@ fn bounded_relative_files(values: &[String]) -> Vec<String> {
     let mut output = BTreeSet::new();
     for value in values.iter().take(MAX_FILES) {
         let value = value.replace('\\', "/");
-        if value.is_empty()
-            || value.len() > 512
-            || Path::new(&value).is_absolute()
-            || looks_like_windows_absolute(&value)
-            || value.split('/').any(|part| part == "..")
-        {
+        if !safe_relative_file(&value) {
             continue;
         }
         output.insert(value);
     }
     output.into_iter().collect()
+}
+
+fn safe_relative_file(value: &str) -> bool {
+    let value = value.replace('\\', "/");
+    !value.is_empty()
+        && value.len() <= 512
+        && !Path::new(&value).is_absolute()
+        && !looks_like_windows_absolute(&value)
+        && !value.split('/').any(|part| part == "..")
 }
 
 fn looks_like_windows_absolute(value: &str) -> bool {
@@ -936,6 +940,16 @@ mod tests {
             incomplete_reasons: Vec::new(),
             status: Wave8ReportStatus::Passed,
         }
+    }
+
+    #[test]
+    fn relative_file_policy_rejects_absolute_and_parent_traversal() {
+        assert!(safe_relative_file("src/app.rs"));
+        assert!(safe_relative_file("src\\app.rs"));
+        assert!(!safe_relative_file("/home/user/app.rs"));
+        assert!(!safe_relative_file("C:\\Users\\user\\app.rs"));
+        assert!(!safe_relative_file("../secret.rs"));
+        assert!(!safe_relative_file("src/../../secret.rs"));
     }
 
     #[test]
