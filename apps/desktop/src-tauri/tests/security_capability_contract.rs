@@ -15,13 +15,14 @@ fn permission_commands(permission: &str) -> BTreeSet<String> {
         .lines()
         .filter_map(|line| {
             let line = line.trim();
-            if line.starts_with('"') && line.ends_with("\\",") {
-                Some(line.trim_matches([',', '"']).to_owned())
-            } else if line.starts_with('"') && line.ends_with('"') {
-                Some(line.trim_matches('"').to_owned())
-            } else {
-                None
+            if !line.starts_with('"') {
+                return None;
             }
+            Some(
+                line.trim_end_matches(',')
+                    .trim_matches('"')
+                    .to_owned(),
+            )
         })
         .collect()
 }
