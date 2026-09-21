@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Weak},
     time::Duration,
 };
@@ -9,27 +9,31 @@ use std::{
 use localview_artifacts::ArtifactStore;
 use localview_capture::{CaptureTarget, SettleDecision, SettleReason, StableCapturePolicy};
 use localview_native_capture::{
-    capture_webview, CaptureRequest, CapturedFrame, NativeCaptureBackend, NativeCaptureError,
-    ViewportMeta,
+    CaptureRequest, CapturedFrame, NativeCaptureBackend, NativeCaptureError, ViewportMeta,
+    capture_webview,
 };
-use localview_protocol::{Rect, SessionId};
+use localview_protocol::{ElementRef, PageSnapshot, Rect, SemanticNode, SessionId};
 use localview_resource_governor::{
-    RetainedResourceBudget, RetainedResourceKind, RetainedResourceLedger,
-    RetainedResourceViolation,
+    RetainedResourceBudget, RetainedResourceKind, RetainedResourceLedger, RetainedResourceViolation,
 };
 use localview_responsive::{
-    build_responsive_contact_sheet, plan_canonical_sweep, ContactSheetPolicy, ResponsiveFrame,
-    ResponsivePresetId, ResponsiveSweepPlan,
+    ContactSheetPolicy, DEFAULT_ADAPTIVE_INITIAL_PROBE_CAP, DEFAULT_ADAPTIVE_MAX_WIDTH,
+    DEFAULT_ADAPTIVE_MIN_WIDTH, DEFAULT_ADAPTIVE_PROBE_CAP, DEFAULT_BREAKPOINT_TOLERANCE_PX,
+    LayoutProbe, MAX_RESPONSIVE_OBSERVATION_NODES, ObservedTransitionResolution,
+    ResponsiveDetectorState, ResponsiveFrame, ResponsiveIssue, ResponsiveNodeObservation,
+    ResponsiveObservation, ResponsivePresetId, ResponsiveProbeEvaluation, ResponsiveProbeSample,
+    ResponsiveRect, ResponsiveSweepPlan, analyze_responsive_series, bounded_adaptive_sweep,
+    build_responsive_contact_sheet, deduplicate_responsive_issues, discover_breakpoint,
+    evaluate_responsive_observation, plan_canonical_sweep, resolve_observed_transition,
 };
 use localview_visual::{
-    decode_png_rgba, encode_png_rgba, plan_changed_css_regions, plan_full_page,
-    project_full_page_output, stitch_full_page_tile, ChangedRegionPlan, ChangedRegionPolicy,
-    FullPageError, FullPagePlan, FullPagePolicy, RgbaImage, VisualBaselineCache,
-    VisualBaselineContext,
+    ChangedRegionPlan, ChangedRegionPolicy, FullPageError, FullPagePlan, FullPagePolicy, RgbaImage,
+    VisualBaselineCache, VisualBaselineContext, decode_png_rgba, encode_png_rgba,
+    plan_changed_css_regions, plan_full_page, project_full_page_output, stitch_full_page_tile,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 use crate::{control_client, err, read_token, state_dir, workspace_surface};
 use workspace_surface::{bridge_surface_label_allowed, workspace_navigation_allowed};
@@ -201,6 +205,7 @@ pub struct ResponsiveSweepReceipt {
     pub contact_sheet_pixel_width: u32,
     pub contact_sheet_pixel_height: u32,
     pub viewports: Vec<ResponsiveViewportReceipt>,
+    pub adaptive: ResponsiveAdaptiveReceipt,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -213,6 +218,24 @@ pub struct ResponsiveViewportReceipt {
     pub pixel_height: u32,
     pub sheet_x: u32,
     pub sheet_y: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponsiveAdaptiveReceipt {
+    pub detector: String,
+    pub probe_cap: usize,
+    pub probes: Vec<ResponsiveAdaptiveProbeReceipt>,
+    pub transition: ObservedTransitionResolution,
+    pub issues: Vec<ResponsiveIssue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponsiveAdaptiveProbeReceipt {
+    pub css_width: u32,
+    pub css_height: u32,
+    pub snapshot_version: u64,
+    pub state: ResponsiveDetectorState,
+    pub issue_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -252,6 +275,37 @@ struct ResponsivePreviewState {
     original_physical_width: u32,
     original_physical_height: u32,
     canonical_route: String,
+}
+
+#[derive(Debug)]
+struct ResponsiveTransactionOutput {
+    captured: Vec<ResponsiveCapturedViewport>,
+    adaptive: ResponsiveAdaptiveReceipt,
+}
+
+#[derive(Debug, Clone)]
+struct LiveResponsiveProbe {
+    observation: ResponsiveObservation,
+    evaluation: ResponsiveProbeEvaluation,
+}
+
+#[derive(Debug)]
+struct LiveResponsiveProbeState {
+    probes: BTreeMap<u32, LiveResponsiveProbe>,
+    attempted_widths: BTreeSet<u32>,
+    failure: Option<String>,
+}
+
+struct LiveResponsiveLayoutProbe<'a> {
+    window: &'a tauri::WebviewWindow,
+    registry: &'a workspace_surface::surface_registry::DesktopSurfaceRegistry,
+    session_id: SessionId,
+    preview_label: &'a str,
+    expected_route: &'a str,
+    css_height: u32,
+    deadline: tokio::time::Instant,
+    probe_cap: usize,
+    state: Mutex<LiveResponsiveProbeState>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -352,18 +406,19 @@ pub async fn capture_responsive_sweep(
 ) -> Result<ResponsiveSweepReceipt, String> {
     use workspace_surface::surface_registry::DesktopSurfaceKind;
 
-    let plan = plan_canonical_sweep(&presets)
-        .map_err(|_| "responsive_invalid_presets".to_string())?;
+    let plan =
+        plan_canonical_sweep(&presets).map_err(|_| "responsive_invalid_presets".to_string())?;
     let preview_label = workspace_surface::preview_surface_label(session_id);
     let window = app
         .get_webview_window(&preview_label)
         .ok_or_else(|| "responsive_preview_unavailable".to_string())?;
-    let current = registry.current(
-        session_id,
-        DesktopSurfaceKind::PreviewWindow,
-        &preview_label,
-    )
-    .ok_or_else(|| "responsive_preview_owner_mismatch".to_string())?;
+    let current = registry
+        .current(
+            session_id,
+            DesktopSurfaceKind::PreviewWindow,
+            &preview_label,
+        )
+        .ok_or_else(|| "responsive_preview_owner_mismatch".to_string())?;
     if current.identity.label != preview_label
         || current.identity.session_id != session_id
         || current.identity.owner_instance_id != registry.owner_instance_id()
@@ -372,12 +427,34 @@ pub async fn capture_responsive_sweep(
     {
         return Err("responsive_preview_owner_mismatch".into());
     }
-    if window.is_maximized().map_err(|_| "responsive_preview_unavailable".to_string())? {
+    if window
+        .is_maximized()
+        .map_err(|_| "responsive_preview_unavailable".to_string())?
+    {
         return Err("responsive_preview_maximized".into());
     }
-    if window.is_fullscreen().map_err(|_| "responsive_preview_unavailable".to_string())? {
+    if window
+        .is_fullscreen()
+        .map_err(|_| "responsive_preview_unavailable".to_string())?
+    {
         return Err("responsive_preview_fullscreen".into());
     }
+
+    let capture_gate = session_capture_gate(&state, session_id)
+        .await
+        .map_err(|_| "responsive_preview_unavailable".to_string())?;
+    let _capture_guard = capture_gate.lock().await;
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_millis(RESPONSIVE_TRANSACTION_TIMEOUT_MS);
+    let work_deadline = deadline - Duration::from_millis(RESPONSIVE_CLEANUP_RESERVE_MS);
+
+    validate_responsive_preview_authority(
+        &registry,
+        &window,
+        session_id,
+        &preview_label,
+        "responsive_preview_owner_mismatch",
+    )?;
     let route = window
         .url()
         .map_err(|_| "responsive_preview_unavailable".to_string())?;
@@ -392,19 +469,24 @@ pub async fn capture_responsive_sweep(
     if original.width == 0 || original.height == 0 {
         return Err("responsive_preview_unavailable".into());
     }
+    let initial_scale = window
+        .scale_factor()
+        .map_err(|_| "responsive_preview_unavailable".to_string())?;
+    validate_trusted_scale_factor(initial_scale)
+        .map_err(|_| "responsive_viewport_mismatch".to_string())?;
+    let initial_css_width =
+        trusted_css_dimension((f64::from(original.width) / initial_scale).round(), "width")
+            .map_err(|_| "responsive_viewport_mismatch".to_string())?;
+    let initial_css_height = trusted_css_dimension(
+        (f64::from(original.height) / initial_scale).round(),
+        "height",
+    )
+    .map_err(|_| "responsive_viewport_mismatch".to_string())?;
     let preview_state = ResponsivePreviewState {
         original_physical_width: original.width,
         original_physical_height: original.height,
         canonical_route: canonical_route.clone(),
     };
-
-    let capture_gate = session_capture_gate(&state, session_id)
-        .await
-        .map_err(|_| "responsive_preview_unavailable".to_string())?;
-    let _capture_guard = capture_gate.lock().await;
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_millis(RESPONSIVE_TRANSACTION_TIMEOUT_MS);
-    let work_deadline = deadline - Duration::from_millis(RESPONSIVE_CLEANUP_RESERVE_MS);
 
     window
         .set_min_size(None::<tauri::LogicalSize<f64>>)
@@ -428,6 +510,13 @@ pub async fn capture_responsive_sweep(
             )
             .await?;
 
+            validate_responsive_preview_authority(
+                &registry,
+                &window,
+                session_id,
+                &preview_label,
+                "responsive_session_drift",
+            )?;
             let current_route = window
                 .url()
                 .map_err(|_| "responsive_preview_unavailable".to_string())?;
@@ -452,7 +541,6 @@ pub async fn capture_responsive_sweep(
                 &app,
                 &window,
                 session_id,
-                preset,
                 viewport_meta,
                 &canonical_route,
             )
@@ -477,14 +565,30 @@ pub async fn capture_responsive_sweep(
                 captured_at_unix_ms: frame.captured_at_unix_ms,
             });
         }
-        Ok::<Vec<ResponsiveCapturedViewport>, String>(captured)
+
+        let adaptive = run_live_adaptive_responsive(
+            &window,
+            &registry,
+            session_id,
+            &preview_label,
+            &canonical_route,
+            initial_css_width,
+            initial_css_height,
+            work_deadline,
+        )
+        .await?;
+
+        Ok::<ResponsiveTransactionOutput, String>(ResponsiveTransactionOutput {
+            captured,
+            adaptive,
+        })
     })
     .await
     .unwrap_or_else(|_| Err("responsive_transaction_timeout".to_string()));
 
     let restore = restore_responsive_preview(&window, session_id, &preview_state, deadline).await;
-    let captured = match (work, restore) {
-        (Ok(captured), Ok(())) => captured,
+    let transaction = match (work, restore) {
+        (Ok(transaction), Ok(())) => transaction,
         (Err(primary), Ok(())) => return Err(primary),
         (Ok(_), Err(_)) => return Err("responsive_restore_failed".into()),
         (Err(primary), Err(_)) => return Err(format!("{primary};responsive_restore_failed")),
@@ -499,22 +603,20 @@ pub async fn capture_responsive_sweep(
         return Err("responsive_route_drift".into());
     }
 
-    let responsive_frames = captured
+    let responsive_frames = transaction
+        .captured
         .iter()
         .map(|entry| entry.responsive_frame.clone())
         .collect::<Vec<_>>();
-    let contact_sheet = build_responsive_contact_sheet(
-        &plan,
-        &responsive_frames,
-        ContactSheetPolicy::default(),
-    )
-    .map_err(|error| match error {
-        localview_responsive::ResponsiveError::FrameMemoryBudgetExceeded
-        | localview_responsive::ResponsiveError::ContactSheetMemoryBudgetExceeded => {
-            "responsive_memory_budget_exceeded".to_string()
-        }
-        _ => "responsive_contact_sheet_failed".to_string(),
-    })?;
+    let contact_sheet =
+        build_responsive_contact_sheet(&plan, &responsive_frames, ContactSheetPolicy::default())
+            .map_err(|error| match error {
+                localview_responsive::ResponsiveError::FrameMemoryBudgetExceeded
+                | localview_responsive::ResponsiveError::ContactSheetMemoryBudgetExceeded => {
+                    "responsive_memory_budget_exceeded".to_string()
+                }
+                _ => "responsive_contact_sheet_failed".to_string(),
+            })?;
     let image = RgbaImage {
         width: contact_sheet.geometry.pixel_width,
         height: contact_sheet.geometry.pixel_height,
@@ -523,8 +625,7 @@ pub async fn capture_responsive_sweep(
     image
         .validate()
         .map_err(|_| "responsive_contact_sheet_failed".to_string())?;
-    let png = encode_png_rgba(&image)
-        .map_err(|_| "responsive_contact_sheet_failed".to_string())?;
+    let png = encode_png_rgba(&image).map_err(|_| "responsive_contact_sheet_failed".to_string())?;
 
     if tokio::time::Instant::now() >= deadline {
         return Err("responsive_transaction_timeout".into());
@@ -535,14 +636,505 @@ pub async fn capture_responsive_sweep(
             &state,
             session_id,
             &plan,
-            &captured,
+            &transaction.captured,
             &contact_sheet.geometry,
             png,
             &preview_state.canonical_route,
+            transaction.adaptive,
         ),
     )
     .await
     .map_err(|_| "responsive_transaction_timeout".to_string())?
+}
+
+fn validate_responsive_preview_authority(
+    registry: &workspace_surface::surface_registry::DesktopSurfaceRegistry,
+    window: &tauri::WebviewWindow,
+    session_id: SessionId,
+    preview_label: &str,
+    error_code: &str,
+) -> Result<(), String> {
+    use workspace_surface::surface_registry::DesktopSurfaceKind;
+
+    let current = registry
+        .current(session_id, DesktopSurfaceKind::PreviewWindow, preview_label)
+        .ok_or_else(|| error_code.to_string())?;
+    if current.identity.label != preview_label
+        || current.identity.session_id != session_id
+        || current.identity.owner_instance_id != registry.owner_instance_id()
+        || window.label() != preview_label
+        || !bridge_surface_label_allowed(window.label(), session_id)
+    {
+        return Err(error_code.to_string());
+    }
+    Ok(())
+}
+
+fn responsive_text_or_control(node: &SemanticNode) -> bool {
+    if node.interactive
+        || node
+            .name
+            .as_deref()
+            .is_some_and(|name| !name.trim().is_empty())
+    {
+        return true;
+    }
+
+    let tag = node.tag.as_str();
+    if [
+        "a", "button", "input", "label", "option", "select", "textarea", "p", "span", "h1", "h2",
+        "h3", "h4", "h5", "h6",
+    ]
+    .iter()
+    .any(|candidate| tag.eq_ignore_ascii_case(candidate))
+    {
+        return true;
+    }
+
+    node.role.as_deref().is_some_and(|role| {
+        [
+            "button", "link", "textbox", "combobox", "checkbox", "radio", "switch", "menuitem",
+            "tab", "heading",
+        ]
+        .iter()
+        .any(|candidate| role.eq_ignore_ascii_case(candidate))
+    })
+}
+
+const MAX_RESPONSIVE_STATE_FINGERPRINT_NODES: usize = 1024;
+const RESPONSIVE_STATE_FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const RESPONSIVE_STATE_FNV_PRIME: u64 = 0x100000001b3;
+
+fn responsive_state_hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(RESPONSIVE_STATE_FNV_PRIME);
+    }
+    hash
+}
+
+fn responsive_semantic_state_fingerprint(snapshot: &PageSnapshot) -> (u64, bool) {
+    let mut hash = RESPONSIVE_STATE_FNV_OFFSET;
+    let mut visited = 0usize;
+    let mut stack = vec![&snapshot.root];
+
+    while let Some(node) = stack.pop() {
+        if visited >= MAX_RESPONSIVE_STATE_FINGERPRINT_NODES {
+            return (hash, false);
+        }
+        visited += 1;
+
+        hash = responsive_state_hash_bytes(hash, node.reference.as_bytes());
+        hash = responsive_state_hash_bytes(hash, &[0xff]);
+        hash = responsive_state_hash_bytes(hash, node.tag.as_bytes());
+        hash = responsive_state_hash_bytes(hash, &[0xfe]);
+        if let Some(role) = node.role.as_deref() {
+            hash = responsive_state_hash_bytes(hash, role.as_bytes());
+        }
+        hash = responsive_state_hash_bytes(hash, &[u8::from(node.interactive)]);
+        hash = responsive_state_hash_bytes(hash, &node.children.len().to_le_bytes());
+
+        for child in node.children.iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    (hash, true)
+}
+
+fn responsive_observation_from_snapshot(
+    session_id: SessionId,
+    expected_route: &str,
+    viewport: localview_responsive::Viewport,
+    snapshot: &PageSnapshot,
+) -> Result<ResponsiveObservation, String> {
+    if snapshot.viewport != (viewport.width, viewport.height) {
+        return Err("responsive_viewport_mismatch".into());
+    }
+    let route = canonical_visual_diff_route(&snapshot.route)
+        .map_err(|_| "responsive_route_drift".to_string())?;
+    if route != expected_route {
+        return Err("responsive_route_drift".into());
+    }
+
+    let mut nodes = Vec::new();
+    let mut complete = true;
+    let mut stack = vec![(&snapshot.root, None::<String>)];
+    while let Some((node, parent_reference)) = stack.pop() {
+        for child in node.children.iter().rev() {
+            stack.push((child, Some(node.reference.clone())));
+        }
+
+        let Some(rect) = node.rect.as_ref() else {
+            continue;
+        };
+        if !rect.x.is_finite()
+            || !rect.y.is_finite()
+            || !rect.width.is_finite()
+            || !rect.height.is_finite()
+            || rect.width <= 0.0
+            || rect.height <= 0.0
+        {
+            return Err("responsive_invalid_observation".into());
+        }
+        if nodes.len() >= MAX_RESPONSIVE_OBSERVATION_NODES {
+            complete = false;
+            break;
+        }
+
+        nodes.push(ResponsiveNodeObservation {
+            reference: node.reference.clone(),
+            parent_reference,
+            rect: ResponsiveRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+            },
+            interactive: node.interactive,
+            text_or_control: responsive_text_or_control(node),
+        });
+    }
+
+    let (state_fingerprint, state_fingerprint_complete) =
+        responsive_semantic_state_fingerprint(snapshot);
+
+    Ok(ResponsiveObservation {
+        session: session_id.to_string(),
+        route,
+        viewport,
+        snapshot_version: snapshot.version,
+        state_fingerprint,
+        state_fingerprint_complete,
+        complete,
+        nodes,
+    })
+}
+
+impl LiveResponsiveLayoutProbe<'_> {
+    async fn probe_width(&self, width: u32) -> Result<LiveResponsiveProbe, String> {
+        if !(DEFAULT_ADAPTIVE_MIN_WIDTH..=DEFAULT_ADAPTIVE_MAX_WIDTH).contains(&width) {
+            return Err("responsive_probe_width_out_of_bounds".into());
+        }
+
+        {
+            let mut state = self.state.lock().await;
+            if let Some(failure) = state.failure.clone() {
+                return Err(failure);
+            }
+            if let Some(probe) = state.probes.get(&width) {
+                return Ok(probe.clone());
+            }
+            if state.attempted_widths.len() >= self.probe_cap {
+                let error = "responsive_probe_cap_exceeded".to_string();
+                state.failure = Some(error.clone());
+                return Err(error);
+            }
+            state.attempted_widths.insert(width);
+        }
+
+        let result = async {
+            if tokio::time::Instant::now() >= self.deadline {
+                return Err("responsive_transaction_timeout".to_string());
+            }
+            validate_responsive_preview_authority(
+                self.registry,
+                self.window,
+                self.session_id,
+                self.preview_label,
+                "responsive_session_drift",
+            )?;
+            self.window
+                .set_size(tauri::LogicalSize::new(
+                    f64::from(width),
+                    f64::from(self.css_height),
+                ))
+                .map_err(|_| "responsive_resize_failed".to_string())?;
+            wait_for_responsive_size_convergence(
+                self.window,
+                width,
+                self.css_height,
+                self.deadline,
+            )
+            .await?;
+            validate_responsive_preview_authority(
+                self.registry,
+                self.window,
+                self.session_id,
+                self.preview_label,
+                "responsive_session_drift",
+            )?;
+
+            let route = self
+                .window
+                .url()
+                .map_err(|_| "responsive_preview_unavailable".to_string())?;
+            let route = canonical_visual_diff_route(route.as_str())
+                .map_err(|_| "responsive_route_drift".to_string())?;
+            if route != self.expected_route {
+                return Err("responsive_route_drift".to_string());
+            }
+
+            wait_for_capture_settle(self.session_id)
+                .await
+                .map_err(|_| "responsive_settle_failed".to_string())?;
+            validate_responsive_preview_authority(
+                self.registry,
+                self.window,
+                self.session_id,
+                self.preview_label,
+                "responsive_session_drift",
+            )?;
+            let snapshot = fresh_semantic_snapshot(self.session_id)
+                .await
+                .map_err(|_| "responsive_evidence_capture_failed".to_string())?;
+            let observation = responsive_observation_from_snapshot(
+                self.session_id,
+                self.expected_route,
+                localview_responsive::Viewport {
+                    width,
+                    height: self.css_height,
+                },
+                &snapshot,
+            )?;
+
+            let previous = {
+                let state = self.state.lock().await;
+                state
+                    .probes
+                    .values()
+                    .min_by_key(|probe| probe.observation.viewport.width.abs_diff(width))
+                    .map(|probe| probe.observation.clone())
+            };
+            let evaluation = evaluate_responsive_observation(previous.as_ref(), &observation)
+                .map_err(|_| "responsive_detector_failed".to_string())?;
+
+            Ok::<LiveResponsiveProbe, String>(LiveResponsiveProbe {
+                observation,
+                evaluation,
+            })
+        }
+        .await;
+
+        let mut state = self.state.lock().await;
+        match result {
+            Ok(probe) => {
+                state.probes.insert(width, probe.clone());
+                Ok(probe)
+            }
+            Err(error) => {
+                state.failure = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    async fn snapshot(&self) -> (Vec<LiveResponsiveProbe>, Option<String>) {
+        let state = self.state.lock().await;
+        (
+            state.probes.values().cloned().collect(),
+            state.failure.clone(),
+        )
+    }
+}
+
+impl LayoutProbe for LiveResponsiveLayoutProbe<'_> {
+    async fn fails_at(&self, width: u32) -> bool {
+        match self.probe_width(width).await {
+            Ok(probe) => probe.evaluation.state == ResponsiveDetectorState::Fail,
+            Err(_) => false,
+        }
+    }
+}
+
+async fn run_live_adaptive_responsive(
+    window: &tauri::WebviewWindow,
+    registry: &workspace_surface::surface_registry::DesktopSurfaceRegistry,
+    session_id: SessionId,
+    preview_label: &str,
+    expected_route: &str,
+    initial_css_width: u32,
+    css_height: u32,
+    deadline: tokio::time::Instant,
+) -> Result<ResponsiveAdaptiveReceipt, String> {
+    let probe = LiveResponsiveLayoutProbe {
+        window,
+        registry,
+        session_id,
+        preview_label,
+        expected_route,
+        css_height,
+        deadline,
+        probe_cap: DEFAULT_ADAPTIVE_PROBE_CAP,
+        state: Mutex::new(LiveResponsiveProbeState {
+            probes: BTreeMap::new(),
+            attempted_widths: BTreeSet::new(),
+            failure: None,
+        }),
+    };
+
+    let initial_width =
+        initial_css_width.clamp(DEFAULT_ADAPTIVE_MIN_WIDTH, DEFAULT_ADAPTIVE_MAX_WIDTH);
+    let initial_widths = bounded_adaptive_sweep(
+        DEFAULT_ADAPTIVE_MIN_WIDTH,
+        DEFAULT_ADAPTIVE_MAX_WIDTH,
+        &[
+            ResponsivePresetId::MobileS.viewport().width,
+            ResponsivePresetId::Mobile.viewport().width,
+            ResponsivePresetId::Tablet.viewport().width,
+            ResponsivePresetId::Desktop.viewport().width,
+            initial_width,
+        ],
+        DEFAULT_ADAPTIVE_INITIAL_PROBE_CAP,
+    )
+    .map_err(|_| "responsive_adaptive_plan_failed".to_string())?;
+
+    for width in initial_widths {
+        probe.probe_width(width).await?;
+    }
+
+    let (initial_probes, failure) = probe.snapshot().await;
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
+    let initial_samples = initial_probes
+        .iter()
+        .map(|probe| ResponsiveProbeSample {
+            width: probe.observation.viewport.width,
+            state: probe.evaluation.state,
+        })
+        .collect::<Vec<_>>();
+    let all_concrete = initial_samples
+        .iter()
+        .all(|sample| sample.state != ResponsiveDetectorState::Inconclusive);
+    let initial_state_fingerprints_complete = initial_probes
+        .iter()
+        .all(|probe| probe.observation.state_fingerprint_complete);
+    let initial_same_semantic_state = initial_probes
+        .first()
+        .map(|first| {
+            initial_probes.iter().all(|probe| {
+                probe.observation.state_fingerprint == first.observation.state_fingerprint
+            })
+        })
+        .unwrap_or(false);
+    let initial_fixed_height = initial_probes
+        .iter()
+        .all(|probe| probe.observation.viewport.height == css_height);
+    let transition_pairs = initial_samples
+        .windows(2)
+        .filter(|pair| pair[0].state != pair[1].state)
+        .collect::<Vec<_>>();
+
+    if all_concrete
+        && initial_state_fingerprints_complete
+        && initial_same_semantic_state
+        && initial_fixed_height
+        && transition_pairs.len() == 1
+    {
+        let pair = transition_pairs[0];
+        let (known_good, known_bad) = if pair[0].state == ResponsiveDetectorState::Pass {
+            (pair[0].width, pair[1].width)
+        } else {
+            (pair[1].width, pair[0].width)
+        };
+        let _ = discover_breakpoint(
+            &probe,
+            known_good,
+            known_bad,
+            DEFAULT_BREAKPOINT_TOLERANCE_PX,
+        )
+        .await;
+    }
+
+    let (final_probes, failure) = probe.snapshot().await;
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
+    if final_probes.len() > DEFAULT_ADAPTIVE_PROBE_CAP {
+        return Err("responsive_probe_cap_exceeded".into());
+    }
+
+    let samples = final_probes
+        .iter()
+        .map(|probe| ResponsiveProbeSample {
+            width: probe.observation.viewport.width,
+            state: probe.evaluation.state,
+        })
+        .collect::<Vec<_>>();
+    let state_fingerprints_complete = final_probes
+        .iter()
+        .all(|probe| probe.observation.state_fingerprint_complete);
+    let same_semantic_state = final_probes
+        .first()
+        .map(|first| {
+            final_probes.iter().all(|probe| {
+                probe.observation.state_fingerprint == first.observation.state_fingerprint
+            })
+        })
+        .unwrap_or(false);
+    let fixed_height = final_probes
+        .iter()
+        .all(|probe| probe.observation.viewport.height == css_height);
+
+    let transition = if !state_fingerprints_complete {
+        ObservedTransitionResolution::Inconclusive {
+            detector: "responsive_geometry_v1".to_string(),
+            reason: "semantic_state_fingerprint_incomplete".to_string(),
+        }
+    } else if !same_semantic_state {
+        ObservedTransitionResolution::Inconclusive {
+            detector: "responsive_geometry_v1".to_string(),
+            reason: "semantic_state_drift".to_string(),
+        }
+    } else if !fixed_height {
+        ObservedTransitionResolution::Inconclusive {
+            detector: "responsive_geometry_v1".to_string(),
+            reason: "adaptive_height_drift".to_string(),
+        }
+    } else {
+        resolve_observed_transition(
+            &samples,
+            DEFAULT_BREAKPOINT_TOLERANCE_PX,
+            "responsive_geometry_v1",
+        )
+    };
+
+    let observations = final_probes
+        .iter()
+        .map(|probe| probe.observation.clone())
+        .collect::<Vec<_>>();
+    let evaluations = final_probes
+        .iter()
+        .map(|probe| probe.evaluation.clone())
+        .collect::<Vec<_>>();
+    let mut issues = evaluations
+        .iter()
+        .flat_map(|evaluation| evaluation.issues.clone())
+        .collect::<Vec<_>>();
+    let series_issues = analyze_responsive_series(&observations, &evaluations)
+        .map_err(|_| "responsive_detector_failed".to_string())?;
+    issues.extend(series_issues);
+    let issues = deduplicate_responsive_issues(issues);
+
+    let probes = final_probes
+        .into_iter()
+        .map(|probe| ResponsiveAdaptiveProbeReceipt {
+            css_width: probe.observation.viewport.width,
+            css_height: probe.observation.viewport.height,
+            snapshot_version: probe.observation.snapshot_version,
+            state: probe.evaluation.state,
+            issue_count: probe.evaluation.issues.len(),
+        })
+        .collect();
+
+    Ok(ResponsiveAdaptiveReceipt {
+        detector: "responsive_geometry_v1".to_string(),
+        probe_cap: DEFAULT_ADAPTIVE_PROBE_CAP,
+        probes,
+        transition,
+        issues,
+    })
 }
 
 async fn wait_for_responsive_size_convergence(
@@ -559,8 +1151,7 @@ async fn wait_for_responsive_size_convergence(
         let scale = window
             .scale_factor()
             .map_err(|_| "responsive_resize_failed".to_string())?;
-        validate_trusted_scale_factor(scale)
-            .map_err(|_| "responsive_resize_failed".to_string())?;
+        validate_trusted_scale_factor(scale).map_err(|_| "responsive_resize_failed".to_string())?;
         let size = window
             .inner_size()
             .map_err(|_| "responsive_resize_failed".to_string())?;
@@ -582,7 +1173,6 @@ async fn capture_responsive_viewport_after_resize(
     app: &tauri::AppHandle,
     window: &tauri::WebviewWindow,
     session_id: SessionId,
-    preset: ResponsivePresetId,
     viewport: ViewportMeta,
     expected_route: &str,
 ) -> Result<CapturedFrame, String> {
@@ -593,20 +1183,15 @@ async fn capture_responsive_viewport_after_resize(
         .await
         .map_err(|_| "responsive_freeze_failed".to_string())?;
     if trusted_css_dimension(freeze.viewport_css_width, "width").ok() != Some(viewport.css_width)
-        || trusted_css_dimension(freeze.viewport_css_height, "height").ok() != Some(viewport.css_height)
+        || trusted_css_dimension(freeze.viewport_css_height, "height").ok()
+            != Some(viewport.css_height)
     {
         let _ = restore_visual_state(session_id, &freeze.token).await;
         return Err("responsive_viewport_mismatch".into());
     }
 
-    let native_result = capture_managed_surface_preview_only(
-        app,
-        window,
-        session_id,
-        viewport.clone(),
-        None,
-    )
-    .await;
+    let native_result =
+        capture_managed_surface_preview_only(app, window, session_id, viewport.clone(), None).await;
     let restore_result = restore_visual_state(session_id, &freeze.token).await;
     let frame = match (native_result, restore_result) {
         (Ok(frame), Ok(())) => frame,
@@ -619,8 +1204,8 @@ async fn capture_responsive_viewport_after_resize(
     let canonical_route = canonical_visual_diff_route(&frame.route)
         .map_err(|_| "responsive_route_drift".to_string())?;
     if canonical_route != expected_route
-        || frame.viewport.css_width != preset.viewport().width
-        || frame.viewport.css_height != preset.viewport().height
+        || frame.viewport.css_width != viewport.css_width
+        || frame.viewport.css_height != viewport.css_height
         || (frame.viewport.device_scale_factor - viewport.device_scale_factor).abs() > f64::EPSILON
     {
         return Err("responsive_viewport_mismatch".into());
@@ -715,6 +1300,7 @@ async fn persist_responsive_contact_sheet_and_register(
     geometry: &localview_responsive::ContactSheetGeometry,
     png: Vec<u8>,
     route: &str,
+    adaptive: ResponsiveAdaptiveReceipt,
 ) -> Result<ResponsiveSweepReceipt, String> {
     let artifact_id = {
         let mut artifacts = state.artifacts.lock().await;
@@ -755,7 +1341,10 @@ async fn persist_responsive_contact_sheet_and_register(
         return Err("responsive_contact_sheet_failed".into());
     }
     let revision = captured.first().and_then(|entry| entry.revision.clone());
-    if captured.iter().any(|entry| entry.revision != revision || entry.route != route) {
+    if captured
+        .iter()
+        .any(|entry| entry.revision != revision || entry.route != route)
+    {
         return Err("responsive_route_drift".into());
     }
     let captured_at_unix_ms = captured
@@ -829,6 +1418,7 @@ async fn persist_responsive_contact_sheet_and_register(
                 sheet_y: viewport.sheet_y,
             })
             .collect(),
+        adaptive,
     })
 }
 
@@ -848,8 +1438,8 @@ pub async fn capture_full_page(
         .await
         .map_err(|_| "full_page_capture_gate_unavailable".to_string())?;
     let _capture_guard = capture_gate.lock().await;
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_millis(FULL_PAGE_TRANSACTION_TIMEOUT_MS);
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_millis(FULL_PAGE_TRANSACTION_TIMEOUT_MS);
 
     full_page_capture_after_gate(app, &state, session_id, viewport, revision, deadline).await
 }
@@ -864,8 +1454,7 @@ async fn full_page_capture_after_gate(
 ) -> Result<FullPageCaptureReceipt, String> {
     let expected_route = managed_surface_canonical_route(&app, session_id)
         .map_err(|_| "full_page_route_drift".to_string())?;
-    let work_deadline =
-        deadline - Duration::from_millis(FULL_PAGE_CLEANUP_RESERVE_MS);
+    let work_deadline = deadline - Duration::from_millis(FULL_PAGE_CLEANUP_RESERVE_MS);
 
     tokio::time::timeout_at(work_deadline, wait_for_capture_settle(session_id))
         .await
@@ -905,8 +1494,7 @@ async fn full_page_capture_after_gate(
     .await
     .unwrap_or_else(|_| Err("full_page_transaction_timeout".to_string()));
 
-    let cleanup =
-        cleanup_full_page_state(session_id, &viewport, &freeze, deadline).await;
+    let cleanup = cleanup_full_page_state(session_id, &viewport, &freeze, deadline).await;
 
     let transaction = match (work, cleanup) {
         (Ok(transaction), Ok(())) => transaction,
@@ -974,14 +1562,9 @@ async fn capture_full_page_tiles(
             return Err("full_page_fixed_or_sticky_unsupported".into());
         }
 
-        let frame = capture_managed_surface(
-            app,
-            session_id,
-            viewport.clone(),
-            revision.clone(),
-        )
-        .await
-        .map_err(|_| "full_page_native_capture_failed".to_string())?;
+        let frame = capture_managed_surface(app, session_id, viewport.clone(), revision.clone())
+            .await
+            .map_err(|_| "full_page_native_capture_failed".to_string())?;
 
         let canonical_route = canonical_visual_diff_route(&frame.route)
             .map_err(|_| "full_page_route_drift".to_string())?;
@@ -1037,13 +1620,9 @@ async fn capture_full_page_tiles(
         }
 
         if output.is_none() {
-            let geometry = project_full_page_output(
-                plan,
-                tile.width,
-                tile.height,
-                FullPagePolicy::default(),
-            )
-            .map_err(full_page_plan_error)?;
+            let geometry =
+                project_full_page_output(plan, tile.width, tile.height, FullPagePolicy::default())
+                    .map_err(full_page_plan_error)?;
             let mut data = Vec::new();
             data.try_reserve_exact(geometry.rgba_bytes)
                 .map_err(|_| "full_page_output_memory_budget_exceeded".to_string())?;
@@ -1090,13 +1669,9 @@ async fn cleanup_full_page_state(
     )
     .await
     {
-        Ok(Ok(receipt)) => validate_capture_scroll_receipt(
-            &receipt,
-            freeze,
-            viewport,
-            original_scroll_y,
-        )
-        .is_ok(),
+        Ok(Ok(receipt)) => {
+            validate_capture_scroll_receipt(&receipt, freeze, viewport, original_scroll_y).is_ok()
+        }
         _ => false,
     };
 
@@ -1152,8 +1727,8 @@ async fn persist_full_page_and_register(
 
         let put_result = artifacts.put("visual/png", &png).await;
         let actual_bytes = artifacts.used_bytes();
-        let reconcile_result = retained_resources
-            .synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
+        let reconcile_result =
+            retained_resources.synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
 
         let artifact = put_result.map_err(|_| "full_page_artifact_persist_failed".to_string())?;
         reconcile_result.map_err(|_| "full_page_artifact_budget_denied".to_string())?;
@@ -1392,9 +1967,7 @@ fn validate_capture_tile_probe(
         probe.viewport_css_width,
         probe.viewport_css_height,
     ];
-    if values.iter().any(|value| !value.is_finite())
-        || probe.scroll_x < 0.0
-        || probe.scroll_y < 0.0
+    if values.iter().any(|value| !value.is_finite()) || probe.scroll_x < 0.0 || probe.scroll_y < 0.0
     {
         return Err("full_page_scroll_mismatch".into());
     }
@@ -1768,13 +2341,7 @@ pub async fn capture_current_viewport(
     revision: Option<String>,
 ) -> Result<VisualCaptureReceipt, String> {
     let frame = capture_current_redacted_frame(app, &state, session_id, revision).await?;
-    persist_and_register(
-        &state,
-        session_id,
-        frame,
-        &RequestedCaptureTarget::Viewport,
-    )
-    .await
+    persist_and_register(&state, session_id, frame, &RequestedCaptureTarget::Viewport).await
 }
 
 #[tauri::command]
@@ -1834,9 +2401,7 @@ pub async fn capture_changed_regions(
             ChangedRegionPolicy::default(),
         )
         .map_err(|_| "changed-region visual planning failed; pixels discarded".to_string())?,
-        None => ChangedRegionPlan::Viewport {
-            changed_ratio: 1.0,
-        },
+        None => ChangedRegionPlan::Viewport { changed_ratio: 1.0 },
     };
 
     if let ChangedRegionPlan::Unchanged = &plan {
@@ -1969,14 +2534,16 @@ async fn compatible_changed_baseline(
         .expect("visual baseline cache initialized above");
     let retained_resources = &state.retained_resources;
 
-    let current_bytes = u64::try_from(baselines.used_bytes())
-        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
+    let current_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
+        "visual baseline retained usage exceeds supported accounting range".to_string()
+    })?;
     retained_resources
         .synchronize(RetainedResourceKind::Cache, current_bytes)
         .map_err(retained_resource_error)?;
     let compatible = baselines.get_compatible(session_id, context);
-    let actual_bytes = u64::try_from(baselines.used_bytes())
-        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
+    let actual_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
+        "visual baseline retained usage exceeds supported accounting range".to_string()
+    })?;
     retained_resources
         .synchronize(RetainedResourceKind::Cache, actual_bytes)
         .map_err(retained_resource_error)?;
@@ -2001,8 +2568,9 @@ async fn commit_changed_baseline(
         .expect("visual baseline cache initialized above");
     let retained_resources = &state.retained_resources;
 
-    let current_bytes = u64::try_from(baselines.used_bytes())
-        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
+    let current_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
+        "visual baseline retained usage exceeds supported accounting range".to_string()
+    })?;
     retained_resources
         .synchronize(RetainedResourceKind::Cache, current_bytes)
         .map_err(retained_resource_error)?;
@@ -2019,16 +2587,19 @@ async fn commit_changed_baseline(
     else {
         return Ok(false);
     };
-    let projected_bytes = u64::try_from(projected_bytes)
-        .map_err(|_| "visual baseline retained projection exceeds supported accounting range".to_string())?;
+    let projected_bytes = u64::try_from(projected_bytes).map_err(|_| {
+        "visual baseline retained projection exceeds supported accounting range".to_string()
+    })?;
     retained_resources
         .admit_projected(RetainedResourceKind::Cache, projected_bytes)
         .map_err(retained_resource_error)?;
 
     let insert_result = baselines.insert(session_id, context, image);
-    let actual_bytes = u64::try_from(baselines.used_bytes())
-        .map_err(|_| "visual baseline retained usage exceeds supported accounting range".to_string())?;
-    let reconcile_result = retained_resources.synchronize(RetainedResourceKind::Cache, actual_bytes);
+    let actual_bytes = u64::try_from(baselines.used_bytes()).map_err(|_| {
+        "visual baseline retained usage exceeds supported accounting range".to_string()
+    })?;
+    let reconcile_result =
+        retained_resources.synchronize(RetainedResourceKind::Cache, actual_bytes);
 
     let cached = insert_result
         .map_err(|_| "visual baseline cache rejected the captured frame".to_string())?;
@@ -2119,9 +2690,8 @@ async fn emit_changed_capture_plan(
                     captured_at_unix_ms,
                 };
                 let target = RequestedCaptureTarget::Region(rect.clone());
-                receipts.push(
-                    persist_and_register(state, session_id, region_frame, &target).await?,
-                );
+                receipts
+                    .push(persist_and_register(state, session_id, region_frame, &target).await?);
             }
 
             Ok(ChangedCaptureEmission {
@@ -2194,8 +2764,8 @@ async fn register_visual_diff_evidence(
 }
 
 pub(crate) fn canonical_visual_diff_route(route: &str) -> Result<String, String> {
-    let mut route = url::Url::parse(route)
-        .map_err(|_| "visual diff route is not a valid URL".to_string())?;
+    let mut route =
+        url::Url::parse(route).map_err(|_| "visual diff route is not a valid URL".to_string())?;
     route.set_query(None);
     route.set_fragment(None);
     Ok(route.to_string())
@@ -2234,11 +2804,10 @@ fn validate_viewport(viewport: &ViewportMeta) -> Result<(), String> {
 }
 
 fn trusted_css_dimension(value: f64, axis: &str) -> Result<u32, String> {
-    if !value.is_finite()
-        || value <= 0.0
-        || value > MAX_CSS_VIEWPORT_DIMENSION
-    {
-        return Err(format!("trusted viewport {axis} is outside the safety range"));
+    if !value.is_finite() || value <= 0.0 || value > MAX_CSS_VIEWPORT_DIMENSION {
+        return Err(format!(
+            "trusted viewport {axis} is outside the safety range"
+        ));
     }
 
     let rounded = value.round();
@@ -2330,17 +2899,26 @@ fn validate_trusted_current_viewport(
     let css_width = trusted_css_dimension(freeze.viewport_css_width, "width")?;
     let css_height = trusted_css_dimension(freeze.viewport_css_height, "height")?;
     if frame.viewport.css_width != css_width || frame.viewport.css_height != css_height {
-        return Err("trusted current viewport geometry drifted during capture; pixels discarded".into());
+        return Err(
+            "trusted current viewport geometry drifted during capture; pixels discarded".into(),
+        );
     }
     if frame.viewport.device_scale_factor != expected_scale_factor {
-        return Err("trusted current viewport scale factor metadata mismatch; pixels discarded".into());
+        return Err(
+            "trusted current viewport scale factor metadata mismatch; pixels discarded".into(),
+        );
     }
     let current_scale_factor = managed_surface_scale_factor(app, session_id)?;
     if (current_scale_factor - expected_scale_factor).abs() > f64::EPSILON {
-        return Err("trusted current viewport device scale factor changed during capture; pixels discarded".into());
+        return Err(
+            "trusted current viewport device scale factor changed during capture; pixels discarded"
+                .into(),
+        );
     }
     if frame.pixel_width == 0 || frame.pixel_height == 0 {
-        return Err("trusted current viewport native pixel dimensions are invalid; pixels discarded".into());
+        return Err(
+            "trusted current viewport native pixel dimensions are invalid; pixels discarded".into(),
+        );
     }
     Ok(())
 }
@@ -2379,7 +2957,9 @@ fn validate_live_target_viewport(
         && (frame.viewport.css_width as f64 != freeze.viewport_css_width
             || frame.viewport.css_height as f64 != freeze.viewport_css_height)
     {
-        return Err("native visual region viewport changed during capture; pixels discarded".into());
+        return Err(
+            "native visual region viewport changed during capture; pixels discarded".into(),
+        );
     }
     Ok(())
 }
@@ -2415,9 +2995,7 @@ fn preflight_managed_surface(app: &tauri::AppHandle, session_id: SessionId) -> R
     Err("no LocalView-managed native surface is open for this session".into())
 }
 
-pub(crate) async fn wait_for_verification_settle(
-    session_id: SessionId,
-) -> Result<(), String> {
+pub(crate) async fn wait_for_verification_settle(session_id: SessionId) -> Result<(), String> {
     wait_for_capture_settle(session_id)
         .await
         .map_err(|_| "trusted Verify settle failed".to_string())
@@ -2466,17 +3044,11 @@ async fn wait_for_capture_settle(session_id: SessionId) -> Result<(), String> {
         }
     };
 
-    match tokio::time::timeout(
-        Duration::from_millis(policy.timeout_ms),
-        settle_transaction,
-    )
-    .await
-    {
+    match tokio::time::timeout(Duration::from_millis(policy.timeout_ms), settle_transaction).await {
         Ok(result) => result,
         Err(_) => {
             let reasons = last_reasons.lock().await;
-            let reason_names =
-                serde_json::to_string(&*reasons).unwrap_or_else(|_| "[]".to_owned());
+            let reason_names = serde_json::to_string(&*reasons).unwrap_or_else(|_| "[]".to_owned());
             Err(format!(
                 "stable capture settle timed out after {} ms; last_reasons={reason_names}",
                 policy.timeout_ms
@@ -2574,11 +3146,7 @@ fn apply_capture_target(
         return Ok(frame);
     };
 
-    validate_region(
-        rect,
-        freeze.viewport_css_width,
-        freeze.viewport_css_height,
-    )?;
+    validate_region(rect, freeze.viewport_css_width, freeze.viewport_css_height)?;
     let cropped = localview_visual::crop_png_css_rect(
         &frame.png,
         (frame.pixel_width, frame.pixel_height),
@@ -2586,8 +3154,9 @@ fn apply_capture_target(
         rect,
     )
     .map_err(|_| "native visual region crop failed; pixels discarded".to_string())?;
-    let decoded = localview_visual::decode_png_rgba(&cropped)
-        .map_err(|_| "native visual region crop verification failed; pixels discarded".to_string())?;
+    let decoded = localview_visual::decode_png_rgba(&cropped).map_err(|_| {
+        "native visual region crop verification failed; pixels discarded".to_string()
+    })?;
 
     frame.png = cropped;
     frame.pixel_width = decoded.width;
@@ -2732,8 +3301,8 @@ async fn persist_and_register(
 
         let put_result = artifacts.put("visual/png", &png).await;
         let actual_bytes = artifacts.used_bytes();
-        let reconcile_result = retained_resources
-            .synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
+        let reconcile_result =
+            retained_resources.synchronize(RetainedResourceKind::CaptureStorage, actual_bytes);
 
         let artifact = put_result.map_err(err)?;
         reconcile_result.map_err(retained_resource_error)?;
@@ -2797,17 +3366,14 @@ fn retained_resource_error(violation: RetainedResourceViolation) -> String {
     };
     format!(
         "retained resource denied: kind={kind} current={} projected_or_observed={} limit={}",
-        violation.current_bytes,
-        violation.projected_or_observed_bytes,
-        violation.limit_bytes
+        violation.current_bytes, violation.projected_or_observed_bytes, violation.limit_bytes
     )
 }
 
 use localview_capture::{
-    resolve_progressive_targets, ProgressiveTargetError, ProgressiveTargetKind,
-    ProgressiveTargetProvenance,
+    ProgressiveTargetError, ProgressiveTargetKind, ProgressiveTargetProvenance,
+    resolve_progressive_targets,
 };
-use localview_protocol::{ElementRef, PageSnapshot};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProgressiveTargetCaptureReceipt {
@@ -2836,7 +3402,8 @@ pub async fn capture_progressive_target(
     let _capture_guard = capture_gate.lock().await;
 
     let snapshot = fresh_semantic_snapshot(session_id).await?;
-    let plan = resolve_progressive_targets(&snapshot, &reference).map_err(progressive_target_error)?;
+    let plan =
+        resolve_progressive_targets(&snapshot, &reference).map_err(progressive_target_error)?;
     if snapshot.viewport != (viewport.css_width, viewport.css_height) {
         return Err("progressive target viewport does not match fresh semantic snapshot".into());
     }
@@ -2927,7 +3494,16 @@ fn validate_progressive_live_state(
 
 fn progressive_route_signature(
     route: &str,
-) -> Result<(String, Option<String>, Option<u16>, String, Vec<(String, String)>), String> {
+) -> Result<
+    (
+        String,
+        Option<String>,
+        Option<u16>,
+        String,
+        Vec<(String, String)>,
+    ),
+    String,
+> {
     let url = url::Url::parse(route)
         .map_err(|_| "progressive target route is not a valid URL".to_string())?;
     let mut query = Vec::new();
