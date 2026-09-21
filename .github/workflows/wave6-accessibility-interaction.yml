@@ -64,11 +64,9 @@ jobs:
             crates/a11y/src/lib.rs \
             crates/a11y/src/native_ax.rs \
             crates/flow/src/lib.rs \
-            crates/instrumentation/src/lib.rs \
             crates/instrumentation/src/wave6.rs \
             crates/instrumentation/examples/wave6_bootstrap.rs \
             crates/instrumentation/tests/wave6_accessibility_interaction_contract.rs \
-            crates/live-bridge/src/v43_lib.rs \
             crates/live-bridge/src/wave6.rs \
             crates/diagnostics/src/lib.rs \
             apps/desktop/src-tauri/src/wave6_accessibility_interaction.rs \
