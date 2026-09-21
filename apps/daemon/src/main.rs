@@ -416,6 +416,9 @@ fn ensure_secure_state_root(state_root: &Path) -> Result<()> {
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = state_root.parent() {
+                fs::create_dir_all(parent).context("create LocalView state parent directory")?;
+            }
             let mut builder = fs::DirBuilder::new();
             #[cfg(unix)]
             builder.mode(0o700);
