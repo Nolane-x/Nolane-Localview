@@ -405,9 +405,7 @@ async fn run_inner(
     .context("final semantic evidence was not a valid bounded PageSnapshot")?;
     let initial_semantic_hash = semantic_state_hash(&snapshot);
     let final_semantic_hash = semantic_state_hash(&final_snapshot);
-    let state_stable = snapshot.route == final_snapshot.route
-        && snapshot.viewport == final_snapshot.viewport
-        && initial_semantic_hash == final_semantic_hash;
+    let state_stable = headless_state_stable(&snapshot, &final_snapshot);
     if !state_stable {
         inconclusive_reasons.push(format!(
             "headless state drifted during execution: route {} -> {}, viewport {}x{} -> {}x{}, semantic_state_changed={}",
@@ -767,32 +765,31 @@ async fn read_git_annotation(
     )
     .await;
     let Ok(response) = response else {
-        return GitProjectState {
-            annotation: GitAnnotation {
-                unavailable_reason: Some("git unavailable".into()),
-                ..GitAnnotation::default()
-            },
-            working_tree_id: None,
-        };
+        return unavailable_git_project_state();
     };
     if !response.status().is_success() {
-        return GitProjectState {
-            annotation: GitAnnotation {
-                unavailable_reason: Some("git unavailable".into()),
-                ..GitAnnotation::default()
-            },
-            working_tree_id: None,
-        };
+        return unavailable_git_project_state();
     }
     let Ok(value) = response.json::<Value>().await else {
-        return GitProjectState {
-            annotation: GitAnnotation {
-                unavailable_reason: Some("git unavailable".into()),
-                ..GitAnnotation::default()
-            },
-            working_tree_id: None,
-        };
+        return unavailable_git_project_state();
     };
+    git_project_state_from_value(&value, diagnostics)
+}
+
+fn unavailable_git_project_state() -> GitProjectState {
+    GitProjectState {
+        annotation: GitAnnotation {
+            unavailable_reason: Some("git unavailable".into()),
+            ..GitAnnotation::default()
+        },
+        working_tree_id: None,
+    }
+}
+
+fn git_project_state_from_value(
+    value: &Value,
+    diagnostics: &DiagnosticReport,
+) -> GitProjectState {
     let changed_files = value
         .get("dirty_files")
         .and_then(Value::as_array)
@@ -1512,6 +1509,12 @@ fn safe_relative_report_path(value: &str) -> bool {
         })
 }
 
+fn headless_state_stable(initial: &PageSnapshot, final_snapshot: &PageSnapshot) -> bool {
+    initial.route == final_snapshot.route
+        && initial.viewport == final_snapshot.viewport
+        && semantic_state_hash(initial) == semantic_state_hash(final_snapshot)
+}
+
 fn semantic_state_hash(snapshot: &PageSnapshot) -> String {
     object_hash(&json!({
         "route": snapshot.route,
@@ -1714,6 +1717,85 @@ mod tests {
             .await
             .expect_err("sleep must time out");
         assert!(error.to_string().contains("timed out"));
+    }
+
+    fn page_snapshot(route: &str, viewport: (u32, u32), name: &str) -> PageSnapshot {
+        serde_json::from_value(json!({
+            "version": 1,
+            "route": route,
+            "viewport": [viewport.0, viewport.1],
+            "root": {
+                "reference": "@root",
+                "role": "main",
+                "name": name,
+                "tag": "main",
+                "rect": null,
+                "interactive": false,
+                "attributes": {},
+                "source": null,
+                "children": []
+            },
+            "console_errors": [],
+            "failed_requests": [],
+            "captured_at": "1970-01-01T00:00:01Z"
+        }))
+        .expect("snapshot fixture")
+    }
+
+    #[test]
+    fn route_viewport_or_semantic_drift_withholds_stable_state() {
+        let initial = page_snapshot("/", (1280, 720), "ready");
+        assert!(headless_state_stable(
+            &initial,
+            &page_snapshot("/", (1280, 720), "ready")
+        ));
+        assert!(!headless_state_stable(
+            &initial,
+            &page_snapshot("/other", (1280, 720), "ready")
+        ));
+        assert!(!headless_state_stable(
+            &initial,
+            &page_snapshot("/", (1024, 768), "ready")
+        ));
+        assert!(!headless_state_stable(
+            &initial,
+            &page_snapshot("/", (1280, 720), "changed")
+        ));
+    }
+
+    #[test]
+    fn git_annotation_covers_clean_dirty_and_unavailable_states() {
+        let diagnostics = DiagnosticReport::default();
+        let clean = git_project_state_from_value(
+            &json!({
+                "commit": "abc",
+                "branch": "main",
+                "dirty_files": [],
+                "working_tree_id": "wt:abc"
+            }),
+            &diagnostics,
+        );
+        assert_eq!(clean.annotation.dirty, Some(false));
+        assert_eq!(clean.annotation.revision.as_deref(), Some("abc"));
+
+        let dirty = git_project_state_from_value(
+            &json!({
+                "commit": "abc",
+                "branch": "feature",
+                "dirty_files": ["src/app.rs", "/home/user/secret.rs", "../escape.rs"],
+                "working_tree_id": "wt:abc+dirty.3"
+            }),
+            &diagnostics,
+        );
+        assert_eq!(dirty.annotation.dirty, Some(true));
+        assert_eq!(dirty.annotation.changed_files, vec!["src/app.rs"]);
+
+        let unavailable = unavailable_git_project_state();
+        assert!(!unavailable.annotation.available);
+        assert_eq!(
+            unavailable.annotation.unavailable_reason.as_deref(),
+            Some("git unavailable")
+        );
     }
 
     #[test]
