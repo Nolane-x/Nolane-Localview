@@ -22,17 +22,12 @@ pub enum A11yEvidenceKind {
     Heuristic,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetResolution {
     StableRef(ElementRef),
+    #[default]
     Unresolved,
-}
-
-impl Default for TargetResolution {
-    fn default() -> Self {
-        Self::Unresolved
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
