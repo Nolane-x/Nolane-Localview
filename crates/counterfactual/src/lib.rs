@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod shadow;
+pub use shadow::*;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use localview_evidence::EvidenceId;
