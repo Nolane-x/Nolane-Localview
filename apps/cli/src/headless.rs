@@ -1056,11 +1056,20 @@ async fn visual_capture_verify(
     let first = authed_post_raw(client, control, token, &path, Some(&body))
         .await
         .map_err(VisualRequestError::Fatal)?;
-    classify_visual_response(first).await?;
+    let first = classify_visual_response(first).await?;
+    if !visual_result_needs_baseline_retry(&first) {
+        return Ok(first);
+    }
     let second = authed_post_raw(client, control, token, &path, Some(&body))
         .await
         .map_err(VisualRequestError::Fatal)?;
     classify_visual_response(second).await
+}
+
+fn visual_result_needs_baseline_retry(value: &Value) -> bool {
+    value.pointer("/result/verdict").and_then(Value::as_str) == Some("inconclusive")
+        && value.pointer("/result/reason").and_then(Value::as_str)
+            == Some("visual assertion has no comparable baseline")
 }
 
 async fn request_bounded_chromium_cycle(
@@ -1906,6 +1915,28 @@ mod tests {
         };
         assert!(!visual_permitted(Some(&fixture)));
         assert!(!chromium_permitted(Some(&fixture)));
+    }
+
+    #[test]
+    fn visual_capture_retries_only_for_newly_uncomparable_baseline() {
+        assert!(visual_result_needs_baseline_retry(&json!({
+            "result": {
+                "verdict": "inconclusive",
+                "reason": "visual assertion has no comparable baseline"
+            }
+        })));
+        assert!(!visual_result_needs_baseline_retry(&json!({
+            "result": {
+                "verdict": "pass",
+                "reason": "changed ratio is within unchanged limit"
+            }
+        })));
+        assert!(!visual_result_needs_baseline_retry(&json!({
+            "result": {
+                "verdict": "inconclusive",
+                "reason": "different inconclusive cause"
+            }
+        })));
     }
 
     #[test]
