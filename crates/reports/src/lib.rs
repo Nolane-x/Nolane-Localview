@@ -712,6 +712,24 @@ fn sanitize_json_value(value: &mut Value, depth: usize) {
                     map.insert(key, Value::String("<redacted>".into()));
                     continue;
                 }
+                let lower = key.to_ascii_lowercase();
+                if matches!(lower.as_str(), "route" | "url") || lower.ends_with("_url") {
+                    if let Some(Value::String(value)) = map.get_mut(&key) {
+                        *value = bounded_route(value);
+                        continue;
+                    }
+                }
+                if matches!(lower.as_str(), "file" | "path")
+                    || lower.ends_with("_file")
+                    || lower.ends_with("_path")
+                {
+                    if let Some(Value::String(value)) = map.get_mut(&key) {
+                        if !safe_relative_file(value) {
+                            *value = "<redacted-path>".into();
+                            continue;
+                        }
+                    }
+                }
                 if let Some(value) = map.get_mut(&key) {
                     sanitize_json_value(value, depth + 1);
                 }
@@ -941,7 +959,9 @@ mod tests {
             diagnostics: DiagnosticReport::default(),
             verification: serde_json::json!({
                 "verdict": "pass",
-                "control_token": "must-not-leak"
+                "control_token": "must-not-leak",
+                "route": "/verify?token=hidden#fragment",
+                "source_file": "/home/user/private.rs"
             }),
             baseline: BaselineComparison {
                 status: BaselineComparisonStatus::Created,
@@ -960,7 +980,10 @@ mod tests {
         assert!(json.contains(r#""route": "/""#));
         assert!(!json.contains("must-not-leak"));
         assert!(!json.contains("token=secret"));
+        assert!(!json.contains("token=hidden"));
+        assert!(!json.contains("/home/user/private.rs"));
         assert!(json.contains("<redacted>"));
+        assert!(json.contains("<redacted-path>"));
 
         let markdown = render_markdown(&report);
         assert!(markdown.contains("&lt;demo&gt;"));
