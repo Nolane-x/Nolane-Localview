@@ -6,19 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-localview-verification = { path = "../../crates/verification" }
-localview-reports = { path = "../../crates/reports" }
-localview-evidence = { path = "../../crates/evidence" }
-localview-diagnostics = { path = "../../crates/diagnostics" }
-localview-content-addressed = { path = "../../crates/content-addressed" }
-localview-attestation = { path = "../../crates/attestation" }
-localview-artifacts = { path = "../../crates/artifacts" }
-chrono.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 dirs.workspace = true
+localview-artifacts = { path = "../../crates/artifacts" }
+localview-attestation = { path = "../../crates/attestation" }
+localview-content-addressed = { path = "../../crates/content-addressed" }
+localview-diagnostics = { path = "../../crates/diagnostics" }
 localview-live-bridge = { path = "../../crates/live-bridge" }
 localview-protocol = { path = "../../crates/protocol" }
+localview-reports = { path = "../../crates/reports" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
