@@ -1,0 +1,60 @@
+name: Wave 8 Headless CI Reporting
+
+on:
+  pull_request:
+    paths:
+      - "apps/cli/**"
+      - "crates/reports/**"
+      - "crates/artifacts/**"
+      - "crates/content-addressed/**"
+      - "crates/attestation/**"
+      - "tools/wave8-headless-ci/**"
+      - "docs/superpowers/specs/2026-09-21-wave8-headless-ci-reporting-design.md"
+      - ".github/workflows/wave8-headless-ci.yml"
+  push:
+    branches:
+      - "feat/wave8-headless-ci-reporting"
+    paths:
+      - "apps/cli/**"
+      - "crates/reports/**"
+      - "crates/artifacts/**"
+      - "crates/content-addressed/**"
+      - "crates/attestation/**"
+      - "tools/wave8-headless-ci/**"
+      - "docs/superpowers/specs/2026-09-21-wave8-headless-ci-reporting-design.md"
+      - ".github/workflows/wave8-headless-ci.yml"
+
+concurrency:
+  group: wave8-headless-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  wave8:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Wave 8 ownership and authority contract
+        run: node tools/wave8-headless-ci/contract.mjs
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Check Wave 8 crates
+        run: cargo check -p localview -p localview-reports -p localview-artifacts -p localview-content-addressed -p localview-attestation --all-targets
+      - name: Clippy Wave 8 crates
+        run: cargo clippy -p localview -p localview-reports -p localview-artifacts -p localview-content-addressed -p localview-attestation --all-targets -- -D warnings
+      - name: CLI headless tests
+        run: cargo test -p localview
+      - name: Report tests
+        run: cargo test -p localview-reports
+      - name: Artifact retention tests
+        run: cargo test -p localview-artifacts
+      - name: Content-addressed baseline tests
+        run: cargo test -p localview-content-addressed
+      - name: Attestation tests
+        run: cargo test -p localview-attestation
