@@ -8,6 +8,7 @@ use std::{
 use localview_content_addressed::object_hash;
 use localview_diagnostics::DiagnosticReport;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const WAVE8_REPORT_SCHEMA_VERSION: u32 = 1;
 const MAX_TEXT_BYTES: usize = 4 * 1024;
@@ -15,15 +16,155 @@ const MAX_FINDINGS: usize = 512;
 const MAX_IDS: usize = 1024;
 const MAX_FILES: usize = 256;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportStatus {
+    Passed,
+    Failed,
+    Inconclusive,
+    InfrastructureError,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BaselineComparisonStatus {
+    Created,
+    Match,
+    Changed,
+    Incompatible,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BaselineComparison {
+    pub status: BaselineComparisonStatus,
+    pub baseline_hash: Option<String>,
+    pub candidate_hash: Option<String>,
+    #[serde(default)]
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactReference {
+    pub kind: String,
+    pub storage_id: String,
+    pub content_hash: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitAnnotation {
+    pub available: bool,
+    pub revision: Option<String>,
+    pub branch: Option<String>,
+    pub dirty: Option<bool>,
+    #[serde(default)]
+    pub changed_files: Vec<String>,
+    #[serde(default)]
+    pub relevant_source_files: Vec<String>,
+    pub unavailable_reason: Option<String>,
+}
+
+impl Default for GitAnnotation {
+    fn default() -> Self {
+        Self {
+            available: false,
+            revision: None,
+            branch: None,
+            dirty: None,
+            changed_files: Vec::new(),
+            relevant_source_files: Vec::new(),
+            unavailable_reason: Some("git unavailable".into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalViewReport {
+    pub schema_version: u32,
     pub title: String,
     pub generated_at: String,
+    pub status: ReportStatus,
     pub project: String,
+    pub project_key: String,
+    pub session_id: String,
+    pub revision: Option<String>,
+    pub state_identity: String,
     pub route: String,
     pub viewport: Option<(u32, u32)>,
+    #[serde(default)]
+    pub evidence_classes: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
     pub diagnostics: DiagnosticReport,
+    pub verification: Value,
+    pub baseline: BaselineComparison,
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactReference>,
+    #[serde(default)]
+    pub incomplete_reasons: Vec<String>,
+    #[serde(default)]
+    pub inconclusive_reasons: Vec<String>,
+    #[serde(default)]
+    pub git: GitAnnotation,
+    #[serde(default)]
     pub metadata: BTreeMap<String, String>,
+}
+
+impl LocalViewReport {
+    pub fn normalize(&mut self) {
+        self.schema_version = 1;
+        self.title = bounded_text(&self.title);
+        self.generated_at = bounded_text(&self.generated_at);
+        self.project = bounded_text(&self.project);
+        self.project_key = bounded_identifier(&self.project_key);
+        self.session_id = bounded_identifier(&self.session_id);
+        self.revision = self.revision.as_deref().map(bounded_identifier);
+        self.state_identity = bounded_identifier(&self.state_identity);
+        self.route = bounded_route(&self.route);
+        self.evidence_ids = bounded_ids(&self.evidence_ids);
+        self.incomplete_reasons = bounded_texts(&self.incomplete_reasons, MAX_IDS);
+        self.inconclusive_reasons = bounded_texts(&self.inconclusive_reasons, MAX_IDS);
+
+        self.diagnostics.issues.truncate(MAX_FINDINGS);
+        for issue in &mut self.diagnostics.issues {
+            issue.category = bounded_identifier(&issue.category);
+            issue.code = bounded_identifier(&issue.code);
+            issue.message = bounded_text(&issue.message);
+            issue.refs = bounded_relative_files(&issue.refs);
+            issue.evidence = issue.evidence.as_deref().map(bounded_text);
+        }
+
+        self.git.revision = self.git.revision.as_deref().map(bounded_identifier);
+        self.git.branch = self.git.branch.as_deref().map(bounded_text);
+        self.git.changed_files = bounded_relative_files(&self.git.changed_files);
+        self.git.relevant_source_files =
+            bounded_relative_files(&self.git.relevant_source_files);
+        self.git.unavailable_reason =
+            self.git.unavailable_reason.as_deref().map(bounded_text);
+
+        self.baseline.baseline_hash =
+            self.baseline.baseline_hash.as_deref().map(bounded_identifier);
+        self.baseline.candidate_hash =
+            self.baseline.candidate_hash.as_deref().map(bounded_identifier);
+        self.baseline.reasons = bounded_texts(&self.baseline.reasons, MAX_IDS);
+
+        self.artifacts.truncate(MAX_FILES);
+        for artifact in &mut self.artifacts {
+            artifact.kind = bounded_identifier(&artifact.kind);
+            artifact.storage_id = bounded_identifier(&artifact.storage_id);
+            artifact.content_hash = bounded_identifier(&artifact.content_hash);
+        }
+
+        sanitize_json_value(&mut self.verification, 0);
+
+        let metadata = std::mem::take(&mut self.metadata);
+        self.metadata = metadata
+            .into_iter()
+            .take(128)
+            .filter(|(key, _)| !sensitive_key(key))
+            .map(|(key, value)| (bounded_identifier(&key), bounded_text(&value)))
+            .collect();
+    }
 }
 
 pub fn render_json(report: &LocalViewReport) -> Result<String, serde_json::Error> {
