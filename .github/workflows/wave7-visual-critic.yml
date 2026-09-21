@@ -1,0 +1,98 @@
+name: Wave 7 visual critic and design grammar
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/design-grammar/**"
+      - "crates/quality/**"
+      - "crates/live-analysis/**"
+      - "apps/desktop/src/features/visual-critic/**"
+      - "tools/wave7-visual-critic/**"
+      - "docs/superpowers/specs/2026-09-21-wave7-visual-critic-design-grammar-design.md"
+      - ".github/workflows/wave7-visual-critic.yml"
+  push:
+    branches: ["feat/wave7-visual-critic-design-grammar"]
+    paths:
+      - "crates/design-grammar/**"
+      - "crates/quality/**"
+      - "crates/live-analysis/**"
+      - "apps/desktop/src/features/visual-critic/**"
+      - "tools/wave7-visual-critic/**"
+      - "docs/superpowers/specs/2026-09-21-wave7-visual-critic-design-grammar-design.md"
+      - ".github/workflows/wave7-visual-critic.yml"
+
+concurrency:
+  group: wave7-visual-critic-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  focused-wave7:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify Wave 7 ownership boundary
+        shell: bash
+        run: |
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          if [[ -z "$base_sha" ]]; then
+            base_sha="$(git merge-base HEAD origin/main)"
+          fi
+          git diff --name-only "$base_sha"...HEAD > /tmp/wave7-files.txt
+          forbidden='^(crates/(a11y|flow|reports|artifacts|content-addressed|contracts|mutation|counterfactual|state-space|verification|postcondition-contracts|attestation)/|apps/cli/|docs/(ROADMAP|SPEC_COVERAGE|IMPLEMENTATION_STATUS)\.md$|.*trusted_(fix|verify)\.rs$)'
+          if grep -E "$forbidden" /tmp/wave7-files.txt; then
+            echo "Wave 7 branch modified a forbidden ownership path" >&2
+            exit 1
+          fi
+
+      - name: Verify focused Rust formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            crates/design-grammar/src/lib.rs \
+            crates/design-grammar/tests/wave7_design_grammar.rs \
+            crates/quality/src/lib.rs \
+            crates/quality/src/visual_critic.rs \
+            crates/quality/tests/wave7_visual_critic.rs \
+            crates/live-analysis/src/lib.rs \
+            crates/live-analysis/src/visual_critic.rs \
+            crates/live-analysis/tests/wave7_live_visual_critic.rs
+
+      - name: Check affected crates
+        run: cargo check -p localview-design-grammar -p localview-quality -p localview-live-analysis --all-targets
+
+      - name: Clippy affected crates
+        run: cargo clippy -p localview-design-grammar -p localview-quality -p localview-live-analysis --all-targets --no-deps -- -D warnings
+
+      - name: Test design grammar
+        run: cargo test -p localview-design-grammar -- --nocapture
+
+      - name: Test visual critic and baseline
+        run: cargo test -p localview-quality -- --nocapture
+
+      - name: Test live evidence integration
+        run: cargo test -p localview-live-analysis -- --nocapture
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Verify overlay isolation contract
+        run: node tools/wave7-visual-critic/overlay-contract.mjs
+
+      - name: Build desktop TypeScript
+        working-directory: apps/desktop
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
