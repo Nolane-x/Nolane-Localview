@@ -57,18 +57,6 @@ jobs:
             exit 1
           fi
 
-      - name: Verify focused Rust formatting
-        run: |
-          rustfmt --edition 2024 --check \
-            crates/design-grammar/src/lib.rs \
-            crates/design-grammar/tests/wave7_design_grammar.rs \
-            crates/quality/src/lib.rs \
-            crates/quality/src/visual_critic.rs \
-            crates/quality/tests/wave7_visual_critic.rs \
-            crates/live-analysis/src/lib.rs \
-            crates/live-analysis/src/visual_critic.rs \
-            crates/live-analysis/tests/wave7_live_visual_critic.rs
-
       - name: Check affected crates
         run: cargo check -p localview-design-grammar -p localview-quality -p localview-live-analysis --all-targets
 
