@@ -34,7 +34,8 @@
         "font-src": "'self'",
         "object-src": "'none'",
         "base-uri": "'none'",
-        "frame-ancestors": "'none'"
+        "frame-ancestors": "'none'",
+        "frame-src": "'self' http://localhost:* http://127.0.0.1:*"
       },
       "capabilities": [
         "main-capability",
