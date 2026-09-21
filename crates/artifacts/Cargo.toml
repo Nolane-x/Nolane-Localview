@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+atomic-write-file.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 tokio.workspace = true
