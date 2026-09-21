@@ -137,15 +137,19 @@ impl LocalViewReport {
         self.git.revision = self.git.revision.as_deref().map(bounded_identifier);
         self.git.branch = self.git.branch.as_deref().map(bounded_text);
         self.git.changed_files = bounded_relative_files(&self.git.changed_files);
-        self.git.relevant_source_files =
-            bounded_relative_files(&self.git.relevant_source_files);
-        self.git.unavailable_reason =
-            self.git.unavailable_reason.as_deref().map(bounded_text);
+        self.git.relevant_source_files = bounded_relative_files(&self.git.relevant_source_files);
+        self.git.unavailable_reason = self.git.unavailable_reason.as_deref().map(bounded_text);
 
-        self.baseline.baseline_hash =
-            self.baseline.baseline_hash.as_deref().map(bounded_identifier);
-        self.baseline.candidate_hash =
-            self.baseline.candidate_hash.as_deref().map(bounded_identifier);
+        self.baseline.baseline_hash = self
+            .baseline
+            .baseline_hash
+            .as_deref()
+            .map(bounded_identifier);
+        self.baseline.candidate_hash = self
+            .baseline
+            .candidate_hash
+            .as_deref()
+            .map(bounded_identifier);
         self.baseline.reasons = bounded_texts(&self.baseline.reasons, MAX_IDS);
 
         self.artifacts.truncate(MAX_FILES);
@@ -189,7 +193,9 @@ pub fn render_markdown(report: &LocalViewReport) -> String {
     }
     output.push_str(&format!(
         "## Findings\n\nDeterministic: **{}** · Heuristic: **{}** · Subjective: **{}**\n\n",
-        report.diagnostics.deterministic, report.diagnostics.heuristic, report.diagnostics.subjective
+        report.diagnostics.deterministic,
+        report.diagnostics.heuristic,
+        report.diagnostics.subjective
     ));
     if report.diagnostics.issues.is_empty() {
         output.push_str("No findings were recorded.\n");
@@ -466,8 +472,11 @@ impl Wave8Report {
         output.verification.fresh_evidence_classes =
             bounded_ids(&output.verification.fresh_evidence_classes);
 
-        output.baseline.baseline_hash =
-            output.baseline.baseline_hash.as_deref().map(bounded_identifier);
+        output.baseline.baseline_hash = output
+            .baseline
+            .baseline_hash
+            .as_deref()
+            .map(bounded_identifier);
         output.baseline.reason = bounded_text(&output.baseline.reason);
 
         output.evidence.classes = bounded_ids(&output.evidence.classes);
@@ -779,7 +788,11 @@ fn bounded_ids(values: &[String]) -> Vec<String> {
 }
 
 fn bounded_texts(values: &[String], max: usize) -> Vec<String> {
-    values.iter().take(max).map(|value| bounded_text(value)).collect()
+    values
+        .iter()
+        .take(max)
+        .map(|value| bounded_text(value))
+        .collect()
 }
 
 fn bounded_relative_files(values: &[String]) -> Vec<String> {
