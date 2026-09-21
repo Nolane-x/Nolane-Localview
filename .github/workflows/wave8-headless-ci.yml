@@ -47,7 +47,7 @@ jobs:
       - name: Check Wave 8 crates
         run: cargo check -p localview -p localview-reports -p localview-artifacts -p localview-content-addressed -p localview-attestation --all-targets
       - name: Clippy Wave 8 crates
-        run: cargo clippy -p localview -p localview-reports -p localview-artifacts -p localview-content-addressed -p localview-attestation --all-targets -- -D warnings
+        run: cargo clippy -p localview -p localview-reports -p localview-artifacts -p localview-content-addressed -p localview-attestation --all-targets --no-deps -- -D warnings
       - name: CLI headless tests
         run: cargo test -p localview
       - name: Report tests
