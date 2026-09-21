@@ -166,7 +166,7 @@ impl InteractionGraph {
             return Err(GraphAdmissionError::NodeBudgetExceeded);
         }
         if !all_states.contains(&transition.resulting_state.key())
-            && all_states.len().saturating_add(1) >= bounds.max_nodes
+            && all_states.len().saturating_add(1) > bounds.max_nodes
         {
             return Err(GraphAdmissionError::NodeBudgetExceeded);
         }
@@ -280,6 +280,10 @@ pub fn analyze_keyboard_journey(
     let max_transitions = max_transitions.min(DEFAULT_MAX_FOCUS_TRANSITIONS);
     let mut issues = Vec::new();
     let mut seen: BTreeMap<ElementRef, usize> = BTreeMap::new();
+    if let Some(reference) = initial.reference.clone() {
+        seen.insert(reference, initial.transition_index);
+    }
+    let was_truncated = transitions.len() > max_transitions;
     let mut bounded = transitions;
     bounded.truncate(max_transitions);
 
@@ -362,15 +366,11 @@ pub fn analyze_keyboard_journey(
 
     KeyboardJourneyReceipt {
         initial,
-        complete: transitions_within_limit(&bounded, max_transitions),
+        complete: !was_truncated,
         transitions: bounded,
         issues,
-        stopped_reason: None,
+        stopped_reason: was_truncated.then(|| "transition_cap".into()),
     }
-}
-
-fn transitions_within_limit(transitions: &[FocusObservation], limit: usize) -> bool {
-    transitions.len() <= limit
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -677,6 +677,34 @@ mod tests {
         );
         assert!(!result.complete);
         assert_eq!(result.stopped_reason.as_deref(), Some("route_drift"));
+    }
+
+    #[test]
+    fn transition_cap_is_terminal_and_explicit() {
+        let initial = FocusObservation {
+            transition_index: 0,
+            reference: None,
+            route: "/".into(),
+            document_generation: 1,
+            tabindex: None,
+            hidden_or_offscreen: false,
+            is_body_or_document: true,
+        };
+        let transitions = (1..=70)
+            .map(|index| FocusObservation {
+                transition_index: index,
+                reference: Some(format!("@e{index:x}")),
+                route: "/".into(),
+                document_generation: 1,
+                tabindex: Some(0),
+                hidden_or_offscreen: false,
+                is_body_or_document: false,
+            })
+            .collect();
+        let result = analyze_keyboard_journey(initial, transitions, 64);
+        assert_eq!(result.transitions.len(), 64);
+        assert!(!result.complete);
+        assert_eq!(result.stopped_reason.as_deref(), Some("transition_cap"));
     }
 
     #[test]
