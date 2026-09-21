@@ -14,6 +14,13 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactMeta {
@@ -265,8 +272,18 @@ fn read_regular_file(path: &Path) -> Result<Vec<u8>> {
         anyhow::bail!("artifact path must be a regular file");
     }
 
-    let mut file = fs::File::open(path).context("open retained artifact")?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let mut file = options
+        .open(path)
+        .context("open retained artifact without following reparse points")?;
     let opened = file.metadata().context("inspect retained artifact")?;
+    #[cfg(windows)]
+    if opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        anyhow::bail!("artifact handle resolves to a reparse point");
+    }
     let after = fs::symlink_metadata(path).context("revalidate retained artifact path")?;
     if after.file_type().is_symlink() || !after.is_file() {
         anyhow::bail!("artifact path changed during read");
