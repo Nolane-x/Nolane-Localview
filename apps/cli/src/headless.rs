@@ -352,7 +352,10 @@ async fn run_inner(
             .pointer("/result/reason")
             .and_then(Value::as_str)
             .unwrap_or("visual verification was inconclusive");
-        inconclusive_reasons.push(format!("visual verification: {}", bounded_text(reason, 256)));
+        inconclusive_reasons.push(format!(
+            "visual verification: {}",
+            bounded_text(reason, 256)
+        ));
     }
 
     let mut chromium_result = Value::Null;
@@ -379,7 +382,7 @@ async fn run_inner(
                             );
                         }
                         chromium_result = value;
-                    },
+                    }
                     Err(VisualRequestError::ResourceDenied) => inconclusive_reasons
                         .push("Chromium denied by Runtime Resource Governor".into()),
                     Err(VisualRequestError::Unavailable(reason)) => {
@@ -916,7 +919,10 @@ fn baseline_evidence_ids(
     chromium_result: &Value,
 ) -> std::collections::BTreeSet<String> {
     let mut ids = std::collections::BTreeSet::new();
-    if let Some(fresh) = verification.get("fresh_evidence_ids").and_then(Value::as_array) {
+    if let Some(fresh) = verification
+        .get("fresh_evidence_ids")
+        .and_then(Value::as_array)
+    {
         ids.extend(fresh.iter().filter_map(Value::as_str).map(str::to_owned));
     }
     if let Some(id) = visual_result.get("evidence_id").and_then(Value::as_str) {
@@ -1294,7 +1300,9 @@ async fn compare_and_retain_baseline(
                     .as_ref()
                     .map(|locator| locator.content_hash.clone()),
                 candidate_hash: Some(candidate_hash),
-                reasons: vec!["fixture or headless state drifted; baseline authority was withheld".into()],
+                reasons: vec![
+                    "fixture or headless state drifted; baseline authority was withheld".into(),
+                ],
             },
             None,
         ));
