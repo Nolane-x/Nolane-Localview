@@ -54,6 +54,8 @@ pub struct HeadlessArgs {
     #[arg(long)]
     pub update_baseline: bool,
     #[arg(long)]
+    pub design_baseline_hash: Option<String>,
+    #[arg(long)]
     pub require_baseline_match: bool,
     #[arg(long)]
     pub require_verification_pass: bool,
@@ -229,8 +231,8 @@ async fn run_inner(
         if snapshot.route != spec.route {
             inconclusive_reasons.push(format!(
                 "route drift: expected {}, observed {}",
-                bounded_text(&spec.route, 256),
-                bounded_text(&snapshot.route, 256)
+                safe_route(&spec.route),
+                safe_route(&snapshot.route)
             ));
         }
         if snapshot.viewport != (spec.viewport.width, spec.viewport.height) {
@@ -403,10 +405,10 @@ async fn run_inner(
     let baseline_envelope = BaselineEnvelope {
         schema_version: 1,
         state_identity: state_identity.clone(),
-        route: snapshot.route.clone(),
+        route: safe_route(&snapshot.route),
         viewport: snapshot.viewport,
         evidence_hashes: evidence.hashes.clone(),
-        design_baseline_hash: None,
+        design_baseline_hash: args.design_baseline_hash.clone(),
         created_revision: revision.clone(),
         provenance: BTreeMap::from([
             ("source".into(), "wave8-headless-ci".into()),
@@ -526,6 +528,13 @@ fn validate_cli_policy(args: &HeadlessArgs) -> Result<()> {
     }
     if args.artifact_budget_mib == 0 || args.artifact_budget_mib > 4096 {
         bail!("--artifact-budget-mib must be within 1..=4096");
+    }
+    if args
+        .design_baseline_hash
+        .as_deref()
+        .is_some_and(|value| !valid_sha256_hash(value))
+    {
+        bail!("--design-baseline-hash must be a canonical sha256:<64 hex> hash");
     }
     Ok(())
 }
@@ -1440,6 +1449,26 @@ fn safe_relative_report_path(value: &str) -> bool {
         })
 }
 
+fn safe_route(value: &str) -> String {
+    bounded_text(
+        value
+            .split('#')
+            .next()
+            .unwrap_or(value)
+            .split('?')
+            .next()
+            .unwrap_or(value),
+        512,
+    )
+}
+
+fn valid_sha256_hash(value: &str) -> bool {
+    let Some(digest) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn bounded_text(value: &str, max: usize) -> String {
     if value.len() <= max {
         value.to_owned()
@@ -1518,6 +1547,7 @@ mod tests {
             visual: false,
             chromium: false,
             update_baseline: false,
+            design_baseline_hash: None,
             require_baseline_match: false,
             require_verification_pass: false,
             fail_on_heuristic: false,
