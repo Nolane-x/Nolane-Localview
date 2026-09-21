@@ -817,6 +817,38 @@ mod tests {
     }
 
     #[test]
+    fn positive_tabindex_is_reported_as_ordering_suspicion() {
+        let initial = FocusObservation {
+            transition_index: 0,
+            reference: None,
+            route: "/".into(),
+            document_generation: 1,
+            tabindex: None,
+            hidden_or_offscreen: false,
+            is_body_or_document: true,
+        };
+        let result = analyze_keyboard_journey(
+            initial,
+            vec![FocusObservation {
+                transition_index: 1,
+                reference: Some("@e2".into()),
+                route: "/".into(),
+                document_generation: 1,
+                tabindex: Some(2),
+                hidden_or_offscreen: false,
+                is_body_or_document: false,
+            }],
+            64,
+        );
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| issue.kind == FocusIssueKind::PositiveTabindexOrdering)
+        );
+    }
+
+    #[test]
     fn hidden_and_document_focus_are_reported_explicitly() {
         let initial = FocusObservation {
             transition_index: 0,
