@@ -1,0 +1,37 @@
+name: Wave 6 vendor axe one-shot
+
+on:
+  push:
+    branches:
+      - "feat/wave6-accessibility-interaction"
+
+permissions:
+  contents: write
+
+jobs:
+  vendor:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: "feat/wave6-accessibility-interaction"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install pinned axe-core
+        working-directory: apps/desktop
+        run: npm install --no-audit --no-fund
+      - name: Vendor exact local axe resource
+        run: |
+          mkdir -p apps/desktop/src-tauri/resources/wave6
+          cp apps/desktop/node_modules/axe-core/axe.min.js apps/desktop/src-tauri/resources/wave6/axe.min.js
+          cp apps/desktop/node_modules/axe-core/LICENSE apps/desktop/src-tauri/resources/wave6/axe-core-LICENSE
+      - name: Commit vendored resources
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/desktop/src-tauri/resources/wave6/axe.min.js apps/desktop/src-tauri/resources/wave6/axe-core-LICENSE
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "build(wave6): vendor pinned axe-core resource"
+          git push origin HEAD:feat/wave6-accessibility-interaction
