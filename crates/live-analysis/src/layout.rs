@@ -29,15 +29,22 @@ pub fn analyze_layout_events(events: &[ObserverEvent]) -> LiveLayoutAnalysis {
 
     let packet = event.payload.get("snapshot").unwrap_or(&event.payload);
     let snapshot_version = packet.get("version").and_then(Value::as_u64);
-    let viewport = packet
-        .get("viewport")
-        .and_then(|value| {
-            Some((
-                value.get("width")?.as_f64()?,
-                value.get("height")?.as_f64()?,
-            ))
-        })
-        .unwrap_or((f64::NAN, f64::NAN));
+    let viewport = packet.get("viewport").and_then(|value| {
+        let width = value.get("width")?.as_f64()?;
+        let height = value.get("height")?.as_f64()?;
+        (width.is_finite() && width > 0.0 && height.is_finite() && height > 0.0)
+            .then_some((width, height))
+    });
+    let Some(viewport) = viewport else {
+        // Missing/invalid live viewport is an evidence gap, not an application
+        // layout defect. Keep snapshot identity for diagnosis/unknown handling
+        // but do not feed synthetic NaN geometry into the pure analyzer.
+        return LiveLayoutAnalysis {
+            snapshot_seq: Some(event.seq),
+            snapshot_version,
+            analysis: LayoutAnalysis::default(),
+        };
+    };
 
     let mut elements = Vec::new();
     let mut projection_truncated = false;
