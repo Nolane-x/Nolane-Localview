@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-atomic-write-file.workspace = true
 localview-verification = { path = "../../crates/verification" }
 localview-project-state = { path = "../../crates/project-state" }
 localview-live-analysis = { path = "../../crates/live-analysis" }
