@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use atomic_write_file::AtomicWriteFile;
 use serde::{Deserialize, Serialize};
 
 #[cfg(unix)]
@@ -269,6 +270,60 @@ impl ArtifactStore {
         }
         Ok(())
     }
+}
+
+pub fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("bounded persistence path has no parent"))?;
+    revalidate_atomic_parent(parent)?;
+
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            anyhow::bail!("refusing to replace non-regular persistence leaf")
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    let mut file = AtomicWriteFile::open(path)
+        .with_context(|| format!("open atomic persistence file {}", path.display()))?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+
+    revalidate_atomic_parent(parent)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            file.discard()?;
+            anyhow::bail!("persistence leaf changed to a non-regular entry before commit");
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            file.discard()?;
+            return Err(error.into());
+        }
+    }
+    file.commit()?;
+
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        anyhow::bail!("atomic persistence did not produce a regular file");
+    }
+    Ok(())
+}
+
+fn revalidate_atomic_parent(parent: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(parent).context("inspect atomic persistence parent")?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        anyhow::bail!("atomic persistence parent must be a real directory");
+    }
+    let canonical = fs::canonicalize(parent).context("canonicalize atomic persistence parent")?;
+    if canonical != parent {
+        anyhow::bail!("atomic persistence parent identity changed or resolves through reparse/symlink");
+    }
+    Ok(())
 }
 
 fn read_regular_file(path: &Path) -> Result<Vec<u8>> {
