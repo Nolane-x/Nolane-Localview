@@ -4130,7 +4130,7 @@ await assertRailTargetsDoNotOverlap(page, 'ui-audit-desktop');
 await page.keyboard.press('Control+k');
 await page.waitForTimeout(120);
 const commandInput = page.getByLabel('Search commands');
-invariant(await commandInput.isFocused(), 'ui-audit:command-search-autofocus');
+invariant(await commandInput.evaluate((input) => input === document.activeElement), 'ui-audit:command-search-autofocus');
 await shot(page, '159-command-input-focused.png', 'ui-audit-command-input-focused');
 await page.keyboard.press('Escape');
 await page.waitForTimeout(80);
