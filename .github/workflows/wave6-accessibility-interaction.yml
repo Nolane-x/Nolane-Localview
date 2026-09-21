@@ -10,6 +10,7 @@ on:
       - "crates/diagnostics/**"
       - "apps/desktop/package.json"
       - "apps/desktop/src-tauri/tauri.conf.json"
+      - "apps/desktop/src-tauri/resources/wave6/**"
       - "apps/desktop/src-tauri/src/lib.rs"
       - "apps/desktop/src-tauri/src/workspace_surface.rs"
       - "apps/desktop/src-tauri/src/wave6_accessibility_interaction.rs"
@@ -49,14 +50,6 @@ jobs:
           components: rustfmt,clippy
 
       - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-
-      - name: Install pinned desktop dependencies
-        working-directory: apps/desktop
-        run: npm install --no-audit --no-fund
 
       - name: Verify Wave 6 Rust formatting
         run: |
