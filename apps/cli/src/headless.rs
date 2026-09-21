@@ -233,6 +233,7 @@ async fn run_inner(
 
     let mut incomplete_reasons = Vec::new();
     let mut inconclusive_reasons = Vec::new();
+    let fixture_state_matches = fixture_matches_snapshot(fixture, &snapshot);
     if let Some(spec) = fixture {
         if snapshot.route != spec.route {
             inconclusive_reasons.push(format!(
@@ -481,7 +482,7 @@ async fn run_inner(
         &artifact_root,
         &mut artifact_store,
         &baseline_envelope,
-        state_stable,
+        state_stable && fixture_state_matches,
         args.update_baseline,
     )
     .await?;
@@ -1225,7 +1226,7 @@ async fn compare_and_retain_baseline(
                     .as_ref()
                     .map(|locator| locator.content_hash.clone()),
                 candidate_hash: Some(candidate_hash),
-                reasons: vec!["headless state drifted; baseline authority was withheld".into()],
+                reasons: vec!["fixture or headless state drifted; baseline authority was withheld".into()],
             },
             None,
         ));
@@ -1614,6 +1615,13 @@ fn safe_relative_report_path(value: &str) -> bool {
         })
 }
 
+fn fixture_matches_snapshot(fixture: Option<&FixtureSpec>, snapshot: &PageSnapshot) -> bool {
+    fixture.is_none_or(|spec| {
+        snapshot.route == spec.route
+            && snapshot.viewport == (spec.viewport.width, spec.viewport.height)
+    })
+}
+
 fn headless_state_stable(initial: &PageSnapshot, final_snapshot: &PageSnapshot) -> bool {
     initial.route == final_snapshot.route
         && initial.viewport == final_snapshot.viewport
@@ -1871,6 +1879,36 @@ mod tests {
             "captured_at": "1970-01-01T00:00:01Z"
         }))
         .expect("snapshot fixture")
+    }
+
+    #[test]
+    fn fixture_route_or_viewport_drift_withholds_baseline_authority() {
+        let fixture = FixtureSpec {
+            schema_version: 1,
+            route: "/".into(),
+            viewport: FixtureViewport {
+                width: 1280,
+                height: 720,
+                device_scale_factor: 1.0,
+            },
+            stable_state: "ready".into(),
+            allow_visual: false,
+            allow_chromium: false,
+            setup: None,
+            cleanup: None,
+        };
+        assert!(fixture_matches_snapshot(
+            Some(&fixture),
+            &page_snapshot("/", (1280, 720), "ready")
+        ));
+        assert!(!fixture_matches_snapshot(
+            Some(&fixture),
+            &page_snapshot("/other", (1280, 720), "ready")
+        ));
+        assert!(!fixture_matches_snapshot(
+            Some(&fixture),
+            &page_snapshot("/", (1024, 768), "ready")
+        ));
     }
 
     #[test]
