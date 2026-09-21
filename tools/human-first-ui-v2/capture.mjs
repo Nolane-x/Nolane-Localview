@@ -97,6 +97,46 @@ async function assertPrimaryControlsInViewport(page, state) {
   );
 }
 
+
+async function assertMinimumChromeHitAreas(page, state) {
+  const targets = await page.locator(
+    '.icon-button:visible, .close-button:visible, .rail-button:visible, .logo-button:visible, .chrome-drag-handle:visible'
+  ).evaluateAll((nodes) => nodes.map((node) => {
+    const rect = node.getBoundingClientRect();
+    return {
+      className: node.className,
+      width: rect.width,
+      height: rect.height,
+      label: node.getAttribute('aria-label') ?? node.textContent?.trim() ?? '',
+    };
+  }));
+  const undersized = targets.filter((target) => target.width < 40 || target.height < 40);
+  invariant(targets.length > 0 && undersized.length === 0, `ui-audit:minimum-chrome-hit-area:${state}`, {
+    targetCount: targets.length,
+    undersized,
+  });
+}
+
+async function assertRailTargetsDoNotOverlap(page, state) {
+  const targets = await page.locator('.floating-rail button:visible').evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, label: node.getAttribute('aria-label') };
+    })
+  );
+  const overlaps = [];
+  for (let leftIndex = 0; leftIndex < targets.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < targets.length; rightIndex += 1) {
+      const left = targets[leftIndex];
+      const right = targets[rightIndex];
+      const width = Math.min(left.right, right.right) - Math.max(left.left, right.left);
+      const height = Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top);
+      if (width > 0.5 && height > 0.5) overlaps.push({ left: left.label, right: right.label, width, height });
+    }
+  }
+  invariant(overlaps.length === 0, `ui-audit:rail-targets-no-overlap:${state}`, { overlaps });
+}
+
 async function readStoredPreferences(page) {
   return page.evaluate(() => {
     const raw = localStorage.getItem('localview.preferences.v2');
@@ -4075,10 +4115,231 @@ invariant(!staleCorrelationVisible, 'wave3-correlation:stale-result-isolated', {
 await shot(page, '158-wave3-correlation-stale-session-isolated.png', 'wave3-correlation-stale-session-isolated');
 await page.close();
 
+
+// UI/UX/accessibility hardening regression matrix.
+page = await pageFor(browser, { width: 1440, height: 900 });
+const iframeSandbox = await page.locator('.app-frame').getAttribute('sandbox');
+invariant(
+  iframeSandbox === 'allow-scripts allow-same-origin',
+  'ui-audit:iframe-minimal-sandbox',
+  { iframeSandbox },
+);
+await assertMinimumChromeHitAreas(page, 'ui-audit-desktop');
+await assertRailTargetsDoNotOverlap(page, 'ui-audit-desktop');
+
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(120);
+const commandInput = page.getByLabel('Search commands');
+invariant(await commandInput.evaluate((input) => input === document.activeElement), 'ui-audit:command-search-autofocus');
+await shot(page, '159-command-input-focused.png', 'ui-audit-command-input-focused');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(80);
+await assertHidden(page, '.panel-command', 'ui-audit-command-escape');
+const keyboardEscapeFocus = await page.evaluate(() => ({
+  className: document.activeElement?.className ?? '',
+  tagName: document.activeElement?.tagName ?? '',
+}));
+invariant(
+  String(keyboardEscapeFocus.className).includes('chrome-layer'),
+  'ui-audit:command-escape-safe-focus',
+  { keyboardEscapeFocus },
+);
+await shot(page, '160-command-escape-focus-restored.png', 'ui-audit-command-escape-focus-restored');
+
+const inspectRail = page.locator('.floating-rail').getByRole('button', { name: 'Inspect' });
+const responsiveRail = page.locator('.floating-rail').getByRole('button', { name: 'Responsive' });
+await inspectRail.focus();
+await page.keyboard.press('Tab');
+invariant(
+  await responsiveRail.evaluate((button) => button === document.activeElement && button.matches(':focus-visible')),
+  'ui-audit:rail-keyboard-focus-visible',
+);
+await page.waitForTimeout(180);
+const tooltipEvidence = await responsiveRail.locator('.rail-tooltip').evaluate((tooltip) => ({
+  opacity: getComputedStyle(tooltip).opacity,
+  ariaHidden: tooltip.getAttribute('aria-hidden'),
+  rect: tooltip.getBoundingClientRect().toJSON(),
+  viewport: { width: window.innerWidth, height: window.innerHeight },
+}));
+invariant(
+  Number(tooltipEvidence.opacity) > 0.9 && tooltipEvidence.ariaHidden === 'true',
+  'ui-audit:rail-keyboard-tooltip',
+  { tooltipEvidence },
+);
+invariant(
+  tooltipEvidence.rect.left >= 0
+    && tooltipEvidence.rect.top >= 0
+    && tooltipEvidence.rect.right <= tooltipEvidence.viewport.width
+    && tooltipEvidence.rect.bottom <= tooltipEvidence.viewport.height,
+  'ui-audit:rail-keyboard-tooltip-in-viewport',
+  { tooltipEvidence },
+);
+await shot(page, '161-rail-keyboard-tooltip.png', 'ui-audit-rail-keyboard-tooltip');
+
+await responsiveRail.press('a');
+await page.waitForTimeout(80);
+const aiFromFocusedButton = await page.locator('.panel-ai').isVisible().catch(() => false);
+invariant(!aiFromFocusedButton, 'ui-audit:single-key-suppressed-button-focus');
+
+const interactiveCases = [
+  { id: 'audit-link', tag: 'a', attrs: { href: '#' } },
+  { id: 'audit-role-button', tag: 'div', attrs: { role: 'button', tabindex: '0' } },
+  { id: 'audit-tab', tag: 'div', attrs: { role: 'tab', tabindex: '0' } },
+  { id: 'audit-listbox', tag: 'div', attrs: { role: 'listbox', tabindex: '0' } },
+];
+for (const testCase of interactiveCases) {
+  await page.evaluate(({ id, tag, attrs }) => {
+    const node = document.createElement(tag);
+    node.id = id;
+    node.textContent = id;
+    for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, value);
+    document.querySelector('.chrome-layer')?.appendChild(node);
+    node.focus();
+  }, testCase);
+  await page.keyboard.press('a');
+  await page.waitForTimeout(50);
+  const opened = await page.locator('.panel-ai').isVisible().catch(() => false);
+  invariant(!opened, `ui-audit:single-key-suppressed-${testCase.id}`);
+  await page.evaluate((id) => document.getElementById(id)?.remove(), testCase.id);
+}
+
+await page.locator('.chrome-layer').focus();
+await page.keyboard.press('a');
+await page.waitForTimeout(90);
+await assertVisible(page, '.panel-ai', 'ui-audit:single-key-safe-scope');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(60);
+
+await responsiveRail.click();
+await page.waitForTimeout(90);
+await page.locator('.panel-responsive .close-button').click();
+await page.waitForTimeout(80);
+const railRestore = await page.evaluate(() => ({
+  label: document.activeElement?.getAttribute('aria-label'),
+  connected: document.activeElement?.isConnected ?? false,
+}));
+invariant(
+  railRestore.label === 'Responsive' && railRestore.connected,
+  'ui-audit:rail-focus-restored',
+  { railRestore },
+);
+await shot(page, '162-rail-focus-restored.png', 'ui-audit-rail-focus-restored');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 });
+const settingsRail = page.locator('.floating-rail').getByRole('button', { name: 'Settings' });
+await settingsRail.click();
+await page.waitForTimeout(90);
+await page.getByLabel('Show tool rail').setChecked(false);
+await assertHidden(page, '.floating-rail', 'ui-audit-hidden-rail-while-panel-open');
+await page.locator('.panel-settings .close-button').click();
+await page.waitForTimeout(80);
+const hiddenRailFocus = await page.evaluate(() => document.activeElement?.className ?? '');
+invariant(
+  String(hiddenRailFocus).includes('chrome-layer'),
+  'ui-audit:hidden-trigger-falls-back-safely',
+  { hiddenRailFocus },
+);
+await shot(page, '163-hidden-rail-focus-fallback.png', 'ui-audit-hidden-rail-focus-fallback');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 });
+await page.locator('.floating-rail').getByRole('button', { name: 'Responsive' }).click();
+await page.waitForTimeout(80);
+await page.evaluate((nextDashboard) => {
+  window.__LOCALVIEW_AUDIT_DASHBOARD_STATE__ = structuredClone(nextDashboard);
+}, dashboardSessionB);
+await page.waitForTimeout(1550);
+await page.locator('.panel-responsive .close-button').click();
+await page.waitForTimeout(80);
+const staleSessionFocus = await page.evaluate(() => document.activeElement?.className ?? '');
+invariant(
+  String(staleSessionFocus).includes('chrome-layer'),
+  'ui-audit:session-change-does-not-restore-stale-trigger',
+  { staleSessionFocus },
+);
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 });
+await page.locator('.floating-rail').getByRole('button', { name: 'Responsive' }).click();
+await page.waitForTimeout(80);
+await page.evaluate((nextLive) => {
+  window.__LOCALVIEW_AUDIT_LIVE_STATE__ = structuredClone(nextLive);
+}, {
+  ...live,
+  observer: [
+    ...live.observer,
+    { seq: 99, captured_at: now, kind: 'route', route: '/route-b', payload: {} },
+  ],
+});
+await page.waitForTimeout(760);
+await page.locator('.panel-responsive .close-button').click();
+await page.waitForTimeout(80);
+const staleRouteFocus = await page.evaluate(() => document.activeElement?.className ?? '');
+invariant(
+  String(staleRouteFocus).includes('chrome-layer'),
+  'ui-audit:route-change-does-not-restore-stale-trigger',
+  { staleRouteFocus },
+);
+await page.close();
+
+page = await pageFor(browser, { width: 390, height: 844 });
+await assertMinimumChromeHitAreas(page, 'ui-audit-narrow');
+await assertRailTargetsDoNotOverlap(page, 'ui-audit-narrow');
+await page.locator('.floating-rail').getByRole('button', { name: 'Responsive' }).focus();
+await shot(page, '164-narrow-hit-area-focus.png', 'ui-audit-narrow-hit-area-focus');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveEmpty, dashboardNoTarget);
+const linuxShortcut = await page.locator('.empty-command kbd').allInnerTexts();
+invariant(
+  linuxShortcut.join('') === 'Ctrl+K',
+  'ui-audit:linux-shortcut-presentation',
+  { linuxShortcut },
+);
+await shot(page, '165-linux-shortcut-labels.png', 'ui-audit-linux-shortcut-labels');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveEmpty, dashboardNoTarget);
+await page.addInitScript(() => {
+  Object.defineProperty(navigator, 'platform', { configurable: true, get: () => 'Win32' });
+});
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(500);
+const windowsShortcut = await page.locator('.empty-command kbd').allInnerTexts();
+invariant(
+  windowsShortcut.join('') === 'Ctrl+K',
+  'ui-audit:windows-shortcut-presentation',
+  { windowsShortcut },
+);
+await page.keyboard.press('Control+k');
+await page.waitForTimeout(80);
+const windowsSettingsShortcut = await page.locator('.panel-command').getByRole('button', { name: /Settings/ }).locator('kbd').innerText();
+invariant(windowsSettingsShortcut === 'Ctrl+,', 'ui-audit:windows-settings-shortcut', { windowsSettingsShortcut });
+await shot(page, '166-windows-shortcut-labels.png', 'ui-audit-windows-shortcut-labels');
+await page.close();
+
+page = await pageFor(browser, { width: 1440, height: 900 }, 'en', {}, liveEmpty, dashboardNoTarget);
+await page.addInitScript(() => {
+  Object.defineProperty(navigator, 'platform', { configurable: true, get: () => 'MacIntel' });
+});
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(500);
+const macShortcut = await page.locator('.empty-command kbd').allInnerTexts();
+invariant(macShortcut.join('') === '⌘K', 'ui-audit:mac-shortcut-presentation', { macShortcut });
+await page.keyboard.press('Meta+k');
+await page.waitForTimeout(80);
+const macSettingsShortcut = await page.locator('.panel-command').getByRole('button', { name: /Settings/ }).locator('kbd').innerText();
+invariant(macSettingsShortcut === '⌘,', 'ui-audit:mac-settings-shortcut', { macSettingsShortcut });
+await shot(page, '167-macos-shortcut-labels.png', 'ui-audit-macos-shortcut-labels');
+await page.close();
+
+const auditPath = 'human-first-ui-v2-render/audit.json';
 await fs.writeFile(
-  'human-first-ui-v2-render/audit.json',
-  JSON.stringify(audit, null, 2) + '\\n',
+  auditPath,
+  JSON.stringify(audit, null, 2) + '\n',
   'utf8'
 );
+JSON.parse(await fs.readFile(auditPath, 'utf8'));
 await browser.close();
 console.log(`captured ${audit.screenshots.length} human-first UI V2 screenshots with ${audit.checks.length} executable checks`);

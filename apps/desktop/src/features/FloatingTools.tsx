@@ -4,6 +4,7 @@ import type { AiFixCapability, AiProviderCapability, ResponsivePresetId, VerifyS
 import type { ActionCorrelationReceipt, DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
+import { formatShortcut } from '../shortcuts';
 import {
   ActivityIcon,
   CloseIcon,
@@ -218,7 +219,7 @@ export const toolMeta: Record<Exclude<ToolId, 'sessions' | 'command'>, { message
   console: { messageKey: 'tool.console', shortcut: 'C' },
   network: { messageKey: 'tool.network', shortcut: 'N' },
   ai: { messageKey: 'tool.ai', shortcut: 'A' },
-  settings: { messageKey: 'tool.settings', shortcut: '⌘,' },
+  settings: { messageKey: 'tool.settings', shortcut: 'settings' },
   advanced: { messageKey: 'tool.advanced', shortcut: 'M' },
 };
 
@@ -1443,7 +1444,7 @@ function CommandPanel({
       disabled: verifyState.status !== 'ready' && !verifyRetryable,
     },
     { id: COMMAND_IDS.previewOpenNative, icon: <ExternalIcon />, title: translate(locale, 'action.openPreview'), detail: url ?? '', keys: '↵', disabled: !current },
-    { id: COMMAND_IDS.settingsOpen, icon: <SettingsIcon />, title: translate(locale, 'tool.settings'), detail: '', keys: '⌘,', disabled: false },
+    { id: COMMAND_IDS.settingsOpen, icon: <SettingsIcon />, title: translate(locale, 'tool.settings'), detail: '', keys: formatShortcut({ key: ',', commandOrControl: true }), disabled: false },
     { id: COMMAND_IDS.advancedOpen, icon: <MoreIcon />, title: translate(locale, 'tool.advanced'), detail: '', keys: 'M', disabled: !current },
     {
       id: COMMAND_IDS.workspaceToggleTargetBar,
@@ -1566,10 +1567,14 @@ export function RailButton({
 }) {
   const meta = toolMeta[tool];
   const label = translate(locale, meta.messageKey);
-  return <button className={`rail-button ${active ? 'active' : ''}`} onClick={onClick} aria-pressed={active} aria-label={label}>{children}<span className="rail-tooltip">{label}<kbd>{meta.shortcut}</kbd></span></button>;
+  const shortcut = meta.shortcut === 'settings'
+    ? formatShortcut({ key: ',', commandOrControl: true })
+    : formatShortcut({ key: meta.shortcut });
+  return <button className={`rail-button ${active ? 'active' : ''}`} onClick={onClick} aria-pressed={active} aria-label={label}>{children}<span className="rail-tooltip" aria-hidden="true">{label}<kbd>{shortcut}</kbd></span></button>;
 }
 
 export function CommandRailButton({ active, onClick, locale }: { active: boolean; onClick: () => void; locale: SupportedLocale }) {
   const label = translate(locale, 'tool.command');
-  return <button className={`rail-button command ${active ? 'active' : ''}`} onClick={onClick} aria-label={label}><CommandIcon /><span className="rail-tooltip">{label} <kbd>⌘K</kbd></span></button>;
+  const shortcut = formatShortcut({ key: 'K', commandOrControl: true });
+  return <button className={`rail-button command ${active ? 'active' : ''}`} onClick={onClick} aria-pressed={active} aria-label={label}><CommandIcon /><span className="rail-tooltip" aria-hidden="true">{label} <kbd>{shortcut}</kbd></span></button>;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { translate, type SupportedLocale } from '../i18n';
+import { formatShortcut } from '../shortcuts';
 import type { Session, WorkspaceBounds, WorkspaceSurfaceSupport } from '../types';
 
 interface WorkspaceSurfaceProps {
@@ -18,6 +19,7 @@ function readBounds(element: HTMLElement): WorkspaceBounds | undefined {
 }
 
 export function WorkspaceSurface({ current, url, support, locale }: WorkspaceSurfaceProps) {
+  const commandShortcut = formatShortcut({ key: 'K', commandOrControl: true });
   const slotRef = useRef<HTMLElement>(null);
   const openedSessionRef = useRef<string | null>(null);
   const lastUrlRef = useRef<string | null>(null);
@@ -106,7 +108,7 @@ export function WorkspaceSurface({ current, url, support, locale }: WorkspaceSur
         <span className="micro-label">LOCALVIEW</span>
         <h1>{translate(locale, 'empty.noTarget')}</h1>
         <p>{translate(locale, 'empty.runDevServer')}</p>
-        <div className="empty-command"><kbd>⌘</kbd><kbd>K</kbd><span>{translate(locale, 'tool.command')}</span></div>
+        <div className="empty-command"><kbd>{commandShortcut}</kbd><span>{translate(locale, 'tool.command')}</span></div>
       </div>
     </main>;
   }
@@ -120,6 +122,7 @@ export function WorkspaceSurface({ current, url, support, locale }: WorkspaceSur
         src={url}
         title={`${current.project.display_name} local preview`}
         referrerPolicy="no-referrer"
+        sandbox="allow-scripts allow-same-origin"
       />
     )}
     {nativeActive && <div className="native-surface-slot" aria-hidden="true" />}

@@ -332,3 +332,40 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   .bottom-sheet{left:58px;right:8px;bottom:8px;top:auto}
   .command-panel{left:58px;right:8px;top:64px;transform:none;width:auto}
 }
+
+
+/* UI audit: keyboard-equivalent help, humane chrome hit targets, and readable action copy. */
+.rail-button:focus-visible .rail-tooltip{opacity:1;transform:translate(0,-50%)}
+.logo-button,.icon-button,.close-button,.rail-button,.chrome-drag-handle{
+  width:40px;
+  height:40px;
+  min-width:40px;
+  min-height:40px
+}
+.floating-rail{width:54px;padding-top:4px;padding-bottom:4px;gap:1px}
+.top-pill-drag-handle,.tool-rail-drag-handle{width:40px;height:40px;margin-right:0}
+.panel-header>div>span{font-size:9px}
+.settings-section-title,.settings-row,.settings-toggle,.settings-row select,.settings-reset{font-size:11px}
+.command-list button div span,.command-footer,.runtime-toast>div>span,.panel-note{font-size:11px}
+.capture-status,.measure-status,.source-open-status,.responsive-failure,.responsive-result{font-size:10px}
+.ai-question-label>span,.ai-selection-summary span,.ai-selection-summary small{font-size:10px}
+.ai-question-label textarea,.ai-answer-text{font-size:11px}
+.ai-answer-header strong,.ai-answer-header span{font-size:10px}
+.ai-answer small,.ai-privacy-note{font-size:10px!important;line-height:1.5!important}
+.ai-status.failure{font-size:11px}
+.fix-review-heading>div>span,.fix-instruction-label>span{font-size:10px}
+.fix-unavailable p,.fix-disclosure p,.fix-advisory{font-size:10px}
+.fix-proposal-meta span,.fix-proposal-meta code{font-size:9px}
+.fix-status strong,.verify-result strong{font-size:11px}
+.fix-status span,.verify-result>span,.verify-result>small,.verify-result ul,.verify-advisory span,.verify-advisory p{font-size:10px}
+.network-correlation small{font-size:10px}
+
+@media(max-width:620px){
+  .icon-button,.close-button,.rail-button,.logo-button,.chrome-drag-handle{
+    width:40px;
+    height:40px;
+    min-width:40px;
+    min-height:40px
+  }
+  .floating-rail{width:50px;padding:4px}
+}
