@@ -198,6 +198,39 @@ pub struct NativeAxEnrichment {
     pub discrepancies: Vec<A11yDiscrepancy>,
 }
 
+pub fn native_ax_discrepancy_findings(
+    enrichments: &[NativeAxEnrichment],
+) -> Vec<A11yFinding> {
+    enrichments
+        .iter()
+        .filter(|entry| !entry.discrepancies.is_empty())
+        .take(MAX_NATIVE_AX_RECORDS)
+        .map(|entry| {
+            let fields = entry
+                .discrepancies
+                .iter()
+                .map(|item| item.field.as_str())
+                .take(8)
+                .collect::<Vec<_>>()
+                .join(",");
+            A11yFinding {
+                code: "dom_native_ax_discrepancy".into(),
+                reference: entry.reference.clone(),
+                message: bounded_text(
+                    &format!("DOM/native AX evidence differs for: {fields}"),
+                    MAX_FINDING_MESSAGE_BYTES,
+                ),
+                deterministic: false,
+                confidence: 92,
+                evidence_kind: A11yEvidenceKind::NativeAx,
+                target_resolution: TargetResolution::StableRef(entry.reference.clone()),
+                rule_id: None,
+                discrepancies: entry.discrepancies.clone(),
+            }
+        })
+        .collect()
+}
+
 pub fn enrich_native_ax(
     dom: &[DomA11yEvidence],
     native: &[NativeAxEvidence],
@@ -558,6 +591,33 @@ mod tests {
         assert_eq!(enriched.len(), 1);
         assert!(enriched[0].discrepancies.iter().any(|item| item.field == "role"));
         assert!(enriched[0].discrepancies.iter().any(|item| item.field == "expanded"));
+    }
+
+    #[test]
+    fn native_ax_discrepancy_is_classified_as_native_evidence() {
+        let findings = native_ax_discrepancy_findings(&[NativeAxEnrichment {
+            reference: "@eabc".into(),
+            native: NativeAxEvidence {
+                stable_reference: Some("@eabc".into()),
+                role: Some("checkbox".into()),
+                name: Some("Save".into()),
+                focusable: Some(true),
+                enabled: Some(true),
+                selected: None,
+                expanded: None,
+                offscreen: Some(false),
+                bounds: None,
+            },
+            discrepancies: vec![A11yDiscrepancy {
+                field: "role".into(),
+                dom_value: Some("button".into()),
+                native_value: Some("checkbox".into()),
+            }],
+        }]);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].evidence_kind, A11yEvidenceKind::NativeAx);
+        assert!(!findings[0].deterministic);
+        assert_eq!(findings[0].reference, "@eabc");
     }
 
     #[test]
