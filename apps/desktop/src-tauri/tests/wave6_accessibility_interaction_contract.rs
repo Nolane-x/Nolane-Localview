@@ -16,14 +16,18 @@ fn wave6_is_wired_only_into_managed_preview_and_workspace_initialization() {
 
     assert!(adapter.contains("BaseDirectory::Resource"));
     assert!(adapter.contains("wave6/axe.min.js"));
-    assert!(adapter.contains("../node_modules/axe-core/axe.min.js"));
+    assert!(adapter.contains("resources/wave6/axe.min.js"));
     assert!(adapter.contains("wave6_bootstrap_script()"));
     assert!(adapter.contains("installAxe(window.axe)"));
     assert!(adapter.contains("MAX_AXE_SOURCE_BYTES"));
 
-    assert!(tauri_config.contains("../node_modules/axe-core/axe.min.js"));
+    assert!(tauri_config.contains("resources/wave6/axe.min.js"));
     assert!(tauri_config.contains("wave6/axe-core-LICENSE"));
     assert!(package.contains("\"axe-core\": \"4.13.0\""));
+    let vendored_axe = include_str!("../resources/wave6/axe.min.js");
+    let vendored_license = include_str!("../resources/wave6/axe-core-LICENSE");
+    assert!(vendored_axe.starts_with("/*! axe v4.13.0"));
+    assert!(vendored_license.starts_with("Mozilla Public License, version 2.0"));
 }
 
 #[test]
