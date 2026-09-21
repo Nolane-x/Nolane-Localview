@@ -510,3 +510,531 @@ fn validate_cli_policy(args: &HeadlessArgs) -> Result<()> {
     }
     if !args.visual_max_changed_ratio.is_finite()
         || !(0.0..=1.0).contains(&args.visual_max_changed_ratio)
+    {
+        bail!("--visual-max-changed-ratio must be finite and within 0..=1");
+    }
+    if args.artifact_budget_mib == 0 || args.artifact_budget_mib > 4096 {
+        bail!("--artifact-budget-mib must be within 1..=4096");
+    }
+    Ok(())
+}
+
+fn visual_permitted(fixture: Option<&FixtureSpec>) -> bool {
+    fixture.is_none_or(|spec| spec.allow_visual)
+}
+
+fn chromium_permitted(fixture: Option<&FixtureSpec>) -> bool {
+    fixture.is_none_or(|spec| spec.allow_chromium)
+}
+
+fn evaluate_exit_policy(
+    args: &HeadlessArgs,
+    diagnostics: &DiagnosticReport,
+    verification_verdict: &str,
+    baseline_status: BaselineComparisonStatus,
+    has_inconclusive_reason: bool,
+) -> (ReportStatus, i32) {
+    let hard_deterministic = diagnostics.issues.iter().any(|issue| {
+        issue.class == DiagnosticClass::Deterministic
+            && issue.severity >= args.deterministic_severity
+    });
+    let hard_heuristic = args.fail_on_heuristic
+        && diagnostics
+            .issues
+            .iter()
+            .any(|issue| issue.class == DiagnosticClass::Heuristic);
+    let verification_failed = verification_verdict == "fail";
+    let baseline_failed = args.require_baseline_match
+        && baseline_status == BaselineComparisonStatus::Changed
+        && !args.update_baseline;
+    let verification_incomplete =
+        args.require_verification_pass && verification_verdict != "pass";
+
+    if hard_deterministic || hard_heuristic || verification_failed || baseline_failed {
+        (ReportStatus::Failed, EXIT_HARD_FAILURE)
+    } else if verification_incomplete || has_inconclusive_reason {
+        (ReportStatus::Inconclusive, EXIT_INCONCLUSIVE)
+    } else {
+        (ReportStatus::Passed, EXIT_PASS)
+    }
+}
+
+fn resolve_session(sessions: &[Session], requested: Option<SessionId>) -> Result<Session> {
+    if let Some(id) = requested {
+        return sessions
+            .iter()
+            .find(|session| session.id == id)
+            .cloned()
+            .ok_or_else(|| anyhow!("requested LocalView session {id} is not active"));
+    }
+    match sessions {
+        [] => bail!("no LocalView sessions are active"),
+        [session] => Ok(session.clone()),
+        _ => bail!("multiple LocalView sessions are active; pass --session explicitly"),
+    }
+}
+
+fn validate_local_session(session: &Session) -> Result<()> {
+    let host = session.endpoint.host.trim_matches(['[', ']']);
+    if !matches!(host, "127.0.0.1" | "localhost" | "::1") {
+        bail!("headless mode refuses non-loopback session target");
+    }
+    if !matches!(session.endpoint.scheme.as_str(), "http" | "https") {
+        bail!("headless mode requires an HTTP(S) localhost target");
+    }
+    Ok(())
+}
+
+fn project_root(session: &Session) -> Result<PathBuf> {
+    let raw = session
+        .project
+        .git_root
+        .as_deref()
+        .or(session.project.cwd.as_deref())
+        .ok_or_else(|| anyhow!("session has no project root; headless CI cannot bind fixture state"))?;
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        bail!("session project root is not absolute");
+    }
+    Ok(path)
+}
+
+async fn load_fixture(project_root: &Path, requested: &Path) -> Result<FixtureSpec> {
+    let path = contained_existing_path(project_root, requested)?;
+    let metadata = tokio::fs::metadata(&path).await?;
+    if metadata.len() > MAX_FIXTURE_BYTES {
+        bail!("fixture exceeds {MAX_FIXTURE_BYTES} bytes");
+    }
+    let bytes = tokio::fs::read(&path).await?;
+    let spec: FixtureSpec = serde_json::from_slice(&bytes).context("invalid Wave 8 fixture JSON")?;
+    validate_fixture(&spec)?;
+    Ok(spec)
+}
+
+fn validate_fixture(spec: &FixtureSpec) -> Result<()> {
+    if spec.schema_version != 1 {
+        bail!("unsupported fixture schema_version {}", spec.schema_version);
+    }
+    if spec.route.is_empty() || spec.route.len() > 1000 || !spec.route.starts_with('/') {
+        bail!("fixture route must be a bounded local route beginning with '/'");
+    }
+    if spec.viewport.width == 0
+        || spec.viewport.height == 0
+        || spec.viewport.width > 100_000
+        || spec.viewport.height > 100_000
+        || !spec.viewport.device_scale_factor.is_finite()
+        || spec.viewport.device_scale_factor <= 0.0
+        || spec.viewport.device_scale_factor > 8.0
+    {
+        bail!("fixture viewport is invalid");
+    }
+    if spec.stable_state.is_empty() || spec.stable_state.len() > 256 {
+        bail!("fixture stable_state must be 1..=256 bytes");
+    }
+    for command in [spec.setup.as_ref(), spec.cleanup.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        validate_fixture_command(command)?;
+    }
+    Ok(())
+}
+
+fn validate_fixture_command(command: &FixtureCommand) -> Result<()> {
+    if command.executable.is_empty() || command.executable.len() > 128 {
+        bail!("fixture executable is invalid");
+    }
+    if command.executable.contains(['/', '\\']) {
+        bail!("fixture executable must be resolved from PATH, not an arbitrary path");
+    }
+    let executable = command.executable.to_ascii_lowercase();
+    if matches!(
+        executable.as_str(),
+        "sh" | "bash" | "zsh" | "fish" | "cmd" | "cmd.exe" | "powershell" | "pwsh"
+    ) {
+        bail!("shell interpreters are not allowed in fixture commands");
+    }
+    if command.args.len() > 64 || command.args.iter().any(|arg| arg.len() > 4096) {
+        bail!("fixture command arguments exceed bounded policy");
+    }
+    if command.timeout_ms == 0 || command.timeout_ms > MAX_COMMAND_TIMEOUT_MS {
+        bail!("fixture command timeout must be within 1..={MAX_COMMAND_TIMEOUT_MS} ms");
+    }
+    if let Some(cwd) = &command.cwd {
+        validate_relative_path(Path::new(cwd))?;
+    }
+    Ok(())
+}
+
+async fn run_fixture_command(
+    project_root: &Path,
+    command: &FixtureCommand,
+    phase: &str,
+) -> Result<()> {
+    validate_fixture_command(command)?;
+    let cwd = match &command.cwd {
+        Some(relative) => contained_existing_path(project_root, Path::new(relative))?,
+        None => project_root.to_path_buf(),
+    };
+    let mut child = Command::new(&command.executable)
+        .args(&command.args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| format!("cannot start fixture {phase} command"))?;
+    let wait = timeout(Duration::from_millis(command.timeout_ms), child.wait()).await;
+    let status = match wait {
+        Ok(result) => result.with_context(|| format!("fixture {phase} command wait failed"))?,
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            bail!(
+                "fixture {phase} command timed out after {} ms",
+                command.timeout_ms
+            );
+        }
+    };
+    if !status.success() {
+        bail!("fixture {phase} command exited unsuccessfully");
+    }
+    Ok(())
+}
+
+async fn read_git_annotation(
+    client: &Client,
+    control: &str,
+    token: &str,
+    session: SessionId,
+    diagnostics: &DiagnosticReport,
+) -> GitProjectState {
+    let response = authed_get_raw(
+        client,
+        control,
+        token,
+        &format!("/v1/sessions/{session}/project-state"),
+    )
+    .await;
+    let Ok(response) = response else {
+        return GitProjectState {
+            annotation: GitAnnotation {
+                unavailable_reason: Some("git unavailable".into()),
+                ..GitAnnotation::default()
+            },
+            working_tree_id: None,
+        };
+    };
+    if !response.status().is_success() {
+        return GitProjectState {
+            annotation: GitAnnotation {
+                unavailable_reason: Some("git unavailable".into()),
+                ..GitAnnotation::default()
+            },
+            working_tree_id: None,
+        };
+    }
+    let Ok(value) = response.json::<Value>().await else {
+        return GitProjectState {
+            annotation: GitAnnotation {
+                unavailable_reason: Some("git unavailable".into()),
+                ..GitAnnotation::default()
+            },
+            working_tree_id: None,
+        };
+    };
+    let changed_files = value
+        .get("dirty_files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|path| safe_relative_report_path(path))
+        .take(MAX_CHANGED_FILES)
+        .map(|path| bounded_text(path, 512))
+        .collect::<Vec<_>>();
+    let relevant_source_files = relevant_source_files(diagnostics);
+    GitProjectState {
+        annotation: GitAnnotation {
+            available: true,
+            revision: value
+                .get("commit")
+                .and_then(Value::as_str)
+                .map(|value| bounded_text(value, 160)),
+            branch: value
+                .get("branch")
+                .and_then(Value::as_str)
+                .map(|value| bounded_text(value, 160)),
+            dirty: Some(!changed_files.is_empty()),
+            changed_files,
+            relevant_source_files,
+            unavailable_reason: None,
+        },
+        working_tree_id: value
+            .get("working_tree_id")
+            .and_then(Value::as_str)
+            .map(|value| bounded_text(value, 200)),
+    }
+}
+
+fn relevant_source_files(diagnostics: &DiagnosticReport) -> Vec<String> {
+    let mut files = diagnostics
+        .issues
+        .iter()
+        .flat_map(|issue| issue.refs.iter().chain(issue.evidence.iter()))
+        .filter(|value| safe_relative_report_path(value))
+        .filter(|value| {
+            matches!(
+                Path::new(value).extension().and_then(|ext| ext.to_str()),
+                Some(
+                    "rs"
+                        | "ts"
+                        | "tsx"
+                        | "js"
+                        | "jsx"
+                        | "vue"
+                        | "svelte"
+                        | "css"
+                        | "scss"
+                        | "html"
+                )
+            )
+        })
+        .take(MAX_RELEVANT_FILES)
+        .map(|value| bounded_text(value, 512))
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn summarize_evidence(value: &Value) -> EvidenceSummary {
+    let mut classes = BTreeMap::new();
+    let mut ids = Vec::new();
+    let mut hashes = Vec::new();
+    let Some(items) = value.as_array() else {
+        return EvidenceSummary {
+            classes,
+            ids,
+            hashes,
+        };
+    };
+    for item in items.iter().rev().take(MAX_EVIDENCE).rev() {
+        if item.get("secret_taint").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(kind) = item.get("kind").and_then(Value::as_str) else {
+            continue;
+        };
+        *classes.entry(kind.to_owned()).or_insert(0) += 1;
+        ids.push(bounded_text(id, 160));
+        let safe = SafeEvidenceSummary {
+            id: bounded_text(id, 160),
+            kind: bounded_text(kind, 64),
+            uncertainty: item
+                .get("uncertainty")
+                .and_then(Value::as_str)
+                .map(|value| bounded_text(value, 64)),
+            revision: item
+                .pointer("/provenance/revision")
+                .and_then(Value::as_str)
+                .map(|value| bounded_text(value, 160)),
+            source: item
+                .pointer("/provenance/source")
+                .and_then(Value::as_str)
+                .map(|value| bounded_text(value, 96)),
+        };
+        hashes.push(object_hash(&safe));
+    }
+    ids.sort();
+    ids.dedup();
+    hashes.sort();
+    hashes.dedup();
+    EvidenceSummary {
+        classes,
+        ids,
+        hashes,
+    }
+}
+
+fn sanitize_diagnostics(mut report: DiagnosticReport, project_root: &Path) -> DiagnosticReport {
+    let root = project_root.to_string_lossy();
+    for issue in &mut report.issues {
+        issue.category = sanitize_text(&issue.category, &root, 96);
+        issue.code = sanitize_text(&issue.code, &root, 160);
+        issue.message = sanitize_text(&issue.message, &root, MAX_DIAGNOSTIC_TEXT);
+        issue.refs = issue
+            .refs
+            .iter()
+            .take(64)
+            .map(|value| sanitize_text(value, &root, 256))
+            .collect();
+        issue.evidence = issue
+            .evidence
+            .as_deref()
+            .map(|value| sanitize_text(value, &root, MAX_DIAGNOSTIC_TEXT));
+    }
+    report.deterministic = report
+        .issues
+        .iter()
+        .filter(|issue| issue.class == DiagnosticClass::Deterministic)
+        .count();
+    report.heuristic = report
+        .issues
+        .iter()
+        .filter(|issue| issue.class == DiagnosticClass::Heuristic)
+        .count();
+    report.subjective = report
+        .issues
+        .iter()
+        .filter(|issue| issue.class == DiagnosticClass::Subjective)
+        .count();
+    report
+}
+
+fn sanitize_text(value: &str, project_root: &str, max: usize) -> String {
+    let replaced = if project_root.is_empty() {
+        value.to_owned()
+    } else {
+        value.replace(project_root, "<project>")
+    };
+    bounded_text(&replaced.replace(['\r', '\n'], " "), max)
+}
+
+async fn visual_capture_verify(
+    client: &Client,
+    control: &str,
+    token: &str,
+    session: SessionId,
+    viewport: (u32, u32),
+    device_scale_factor: f64,
+    revision: Option<&str>,
+    max_changed_ratio: f64,
+) -> std::result::Result<Value, VisualRequestError> {
+    let body = json!({
+        "viewport": {
+            "css_width": viewport.0,
+            "css_height": viewport.1,
+            "device_scale_factor": device_scale_factor,
+        },
+        "revision": revision,
+        "expectation": {
+            "kind": "unchanged",
+            "max_changed_ratio": max_changed_ratio,
+        }
+    });
+    let path = format!("/v1/sessions/{session}/verify/visual/capture");
+    let first = authed_post_raw(client, control, token, &path, Some(&body))
+        .await
+        .map_err(VisualRequestError::Fatal)?;
+    classify_visual_response(first).await?;
+    let second = authed_post_raw(client, control, token, &path, Some(&body))
+        .await
+        .map_err(VisualRequestError::Fatal)?;
+    classify_visual_response(second).await
+}
+
+async fn request_bounded_chromium_cycle(
+    client: &Client,
+    control: &str,
+    token: &str,
+    session: SessionId,
+    revision: Option<&str>,
+) -> std::result::Result<Value, VisualRequestError> {
+    let body = json!({
+        "budget": {
+            "latency_ms": 5_000,
+            "text_tokens": 800,
+            "image_regions": 0,
+            "chromium_spawns": 1
+        },
+        "deep_mode": false,
+        "compatibility_requested": true,
+        "target": Value::Null,
+        "revision": revision,
+    });
+    let response = authed_post_raw(
+        client,
+        control,
+        token,
+        &format!("/v1/sessions/{session}/perception/cycle"),
+        Some(&body),
+    )
+    .await
+    .map_err(VisualRequestError::Fatal)?;
+    classify_visual_response(response).await
+}
+
+#[derive(Debug)]
+enum VisualRequestError {
+    ResourceDenied,
+    Unavailable(String),
+    Fatal(anyhow::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BoundedRequestDisposition {
+    Success,
+    ResourceDenied,
+    Unavailable(String),
+    Fatal(String),
+}
+
+fn classify_control_status(status: StatusCode, value: &Value) -> BoundedRequestDisposition {
+    if status == StatusCode::TOO_MANY_REQUESTS
+        && value.get("error").and_then(Value::as_str) == Some("resource_governor_denied")
+    {
+        return BoundedRequestDisposition::ResourceDenied;
+    }
+    if matches!(
+        status,
+        StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT | StatusCode::SERVICE_UNAVAILABLE
+    ) {
+        let reason = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("visual_or_chromium_unavailable");
+        return BoundedRequestDisposition::Unavailable(bounded_text(reason, 160));
+    }
+    if !status.is_success() {
+        return BoundedRequestDisposition::Fatal(format!(
+            "headless control request failed with HTTP {status}: {}",
+            compact_status(value)
+        ));
+    }
+    BoundedRequestDisposition::Success
+}
+
+async fn classify_visual_response(
+    response: Response,
+) -> std::result::Result<Value, VisualRequestError> {
+    let status = response.status();
+    let value = response.json::<Value>().await.unwrap_or(Value::Null);
+    match classify_control_status(status, &value) {
+        BoundedRequestDisposition::Success => Ok(value),
+        BoundedRequestDisposition::ResourceDenied => Err(VisualRequestError::ResourceDenied),
+        BoundedRequestDisposition::Unavailable(reason) => {
+            Err(VisualRequestError::Unavailable(reason))
+        }
+        BoundedRequestDisposition::Fatal(message) => {
+            Err(VisualRequestError::Fatal(anyhow!(message)))
+        }
+    }
+}
+
+async fn compare_and_retain_baseline(
+    state_root: &Path,
+    artifact_root: &Path,
+    store: &mut ArtifactStore,
+    candidate: &BaselineEnvelope,
+    update: bool,
+) -> Result<(BaselineComparison, Option<ArtifactReference>)> {
+    tokio::fs::create_dir_all(state_root).await?;
+    let index_path = state_root.join("baseline-index.json");
+    let mut index = load_baseline_index(&index_path).await?;
+    let candidate_hash = candidate.canonical_hash();
+    let existing = index.states.get(&candidate.state_identity).cloned();
