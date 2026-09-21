@@ -85,7 +85,7 @@ impl ArtifactStore {
             anyhow::bail!("canonical artifact hash must be a sha256:<64 hex> digest");
         }
         let physical = self.put(kind, bytes).await?;
-        let retained = tokio::fs::read(&physical.path).await?;
+        let retained = read_regular_file(Path::new(&physical.path))?;
         if retained != bytes {
             anyhow::bail!(
                 "physical artifact id collision detected; canonical artifact was not retained"
