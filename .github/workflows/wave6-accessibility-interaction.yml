@@ -1,0 +1,154 @@
+name: Wave 6 accessibility interaction
+
+on:
+  pull_request:
+    paths:
+      - "crates/a11y/**"
+      - "crates/flow/**"
+      - "crates/instrumentation/**"
+      - "crates/live-bridge/**"
+      - "crates/diagnostics/**"
+      - "apps/desktop/package.json"
+      - "apps/desktop/src-tauri/tauri.conf.json"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/src/workspace_surface.rs"
+      - "apps/desktop/src-tauri/src/wave6_accessibility_interaction.rs"
+      - "apps/desktop/src-tauri/tests/wave6_accessibility_interaction_contract.rs"
+      - "tools/wave6-accessibility-interaction/**"
+      - "docs/superpowers/specs/2026-09-21-wave6-accessibility-interaction-intelligence-design.md"
+      - ".github/workflows/wave6-accessibility-interaction.yml"
+  push:
+    branches:
+      - "feat/wave6-accessibility-interaction"
+
+concurrency:
+  group: wave6-accessibility-interaction-\${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  WAVE6_EXACT_HEAD: \${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: \${{ env.WAVE6_EXACT_HEAD }}
+          fetch-depth: 1
+
+      - name: Assert exact head
+        run: test "$(git rev-parse HEAD)" = "$WAVE6_EXACT_HEAD"
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install pinned desktop dependencies
+        working-directory: apps/desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Verify Wave 6 Rust formatting
+        run: |
+          rustfmt --edition 2024 --check \
+            crates/a11y/src/lib.rs \
+            crates/a11y/src/native_ax.rs \
+            crates/flow/src/lib.rs \
+            crates/instrumentation/src/lib.rs \
+            crates/instrumentation/src/wave6.rs \
+            crates/instrumentation/examples/wave6_bootstrap.rs \
+            crates/instrumentation/tests/wave6_accessibility_interaction_contract.rs \
+            crates/live-bridge/src/v43_lib.rs \
+            crates/live-bridge/src/wave6.rs \
+            crates/diagnostics/src/lib.rs \
+            apps/desktop/src-tauri/src/wave6_accessibility_interaction.rs \
+            apps/desktop/src-tauri/tests/wave6_accessibility_interaction_contract.rs
+
+      - name: Test accessibility authority
+        run: cargo test -p localview-a11y -- --nocapture
+
+      - name: Test interaction graph and replay receipts
+        run: cargo test -p localview-flow -- --nocapture
+
+      - name: Test instrumentation Wave 6 contracts
+        run: cargo test -p localview-instrumentation wave6 -- --nocapture
+
+      - name: Test live-bridge Wave 6 replay
+        run: cargo test -p localview-live-bridge wave6 -- --nocapture
+
+      - name: Test accessibility diagnostics provenance
+        run: cargo test -p localview-diagnostics axe_evidence -- --nocapture
+
+      - name: Test managed-page desktop integration
+        run: |
+          cargo test -p localview-desktop wave6 --lib -- --nocapture
+          cargo test -p localview-desktop --test wave6_accessibility_interaction_contract -- --nocapture
+
+      - name: Check affected crates
+        run: |
+          cargo check \
+            -p localview-a11y \
+            -p localview-flow \
+            -p localview-instrumentation \
+            -p localview-live-bridge \
+            -p localview-diagnostics \
+            -p localview-desktop \
+            --all-targets
+
+      - name: Clippy Wave 6 owned crates
+        run: |
+          cargo clippy -p localview-a11y --all-targets --no-deps -- -D warnings
+          cargo clippy -p localview-flow --all-targets --no-deps -- -D warnings
+          cargo clippy -p localview-instrumentation --all-targets --no-deps -- -D warnings
+          cargo clippy -p localview-live-bridge --all-targets --no-deps -- -D warnings
+          cargo clippy -p localview-diagnostics --all-targets --no-deps -- -D warnings
+
+  browser-proof:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: \${{ env.WAVE6_EXACT_HEAD }}
+          fetch-depth: 1
+
+      - name: Assert exact head
+        run: test "$(git rev-parse HEAD)" = "$WAVE6_EXACT_HEAD"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize exact LocalView Wave 6 bootstrap
+        run: cargo run -p localview-instrumentation --example wave6_bootstrap > /tmp/localview-wave6-bootstrap.js
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install local axe and browser proof dependencies
+        working-directory: apps/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Prove accessibility and interaction flow in real Chromium
+        working-directory: apps/desktop
+        run: |
+          cp ../../tools/wave6-accessibility-interaction/runtime.mjs ./wave6-accessibility-interaction-runtime.mjs
+          node ./wave6-accessibility-interaction-runtime.mjs
+          rm ./wave6-accessibility-interaction-runtime.mjs
