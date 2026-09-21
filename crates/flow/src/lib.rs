@@ -99,6 +99,8 @@ pub struct LiveTransition {
     pub safety: SafetyClass,
     pub pre_state: StateIdentity,
     pub resulting_state: StateIdentity,
+    /// Monotonic elapsed time from the discovery transaction start.
+    pub elapsed_ms: u64,
     pub evidence_refs: Vec<String>,
 }
 
@@ -133,6 +135,7 @@ pub enum GraphAdmissionError {
     NodeBudgetExceeded,
     EdgeBudgetExceeded,
     RouteStateBudgetExceeded,
+    DeadlineExceeded,
     UnsafeAction,
     PreStateMismatch,
     InvalidStableReference,
@@ -155,6 +158,9 @@ impl InteractionGraph {
     ) -> Result<(), GraphAdmissionError> {
         if !transition.safety.may_probe() {
             return Err(GraphAdmissionError::UnsafeAction);
+        }
+        if transition.elapsed_ms > bounds.deadline_ms {
+            return Err(GraphAdmissionError::DeadlineExceeded);
         }
         if !valid_stable_reference(&transition.target) {
             return Err(GraphAdmissionError::InvalidStableReference);
@@ -647,6 +653,7 @@ mod tests {
                     safety: SafetyClass::Unknown,
                     pre_state: state("/", 1, "a"),
                     resulting_state: state("/", 1, "b"),
+                    elapsed_ms: 10,
                     evidence_refs: vec![],
                 },
                 DiscoveryBounds::default(),
@@ -672,6 +679,7 @@ mod tests {
                     safety: SafetyClass::ExplicitlySafe,
                     pre_state: state("/", 1, "a"),
                     resulting_state: state("/", 1, "b"),
+                    elapsed_ms: 10,
                     evidence_refs: vec![],
                 },
                 bounds,
@@ -685,12 +693,40 @@ mod tests {
                     safety: SafetyClass::ExplicitlySafe,
                     pre_state: state("/", 1, "b"),
                     resulting_state: state("/", 1, "c"),
+                    elapsed_ms: 20,
                     evidence_refs: vec![],
                 },
                 bounds,
             )
             .unwrap_err();
         assert_eq!(error, GraphAdmissionError::EdgeBudgetExceeded);
+    }
+
+    #[test]
+    fn discovery_deadline_is_an_admission_boundary() {
+        let mut graph = InteractionGraph::default();
+        let bounds = DiscoveryBounds {
+            max_nodes: 8,
+            max_edges: 8,
+            max_route_states: 2,
+            deadline_ms: 100,
+        };
+        let error = graph
+            .record_live(
+                LiveTransition {
+                    action: InteractionActionKind::Click,
+                    target: "@e1".into(),
+                    safety: SafetyClass::ExplicitlySafe,
+                    pre_state: state("/", 1, "a"),
+                    resulting_state: state("/", 1, "b"),
+                    elapsed_ms: 101,
+                    evidence_refs: vec![],
+                },
+                bounds,
+            )
+            .unwrap_err();
+        assert_eq!(error, GraphAdmissionError::DeadlineExceeded);
+        assert_eq!(graph.live_edge_count(), 0);
     }
 
     #[test]
