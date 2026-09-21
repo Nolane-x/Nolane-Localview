@@ -296,11 +296,32 @@ const WAVE6_SCRIPT: &str = r##"
     };
     journey.initial = focusObservation(documentGeneration, 'initial');
     if (journey.initial.reference) journey.visited.add(journey.initial.reference);
+    let pendingTabDirection = null;
     document.addEventListener('keydown', event => {
-      if (event.key !== 'Escape' || !journey) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      cleanupJourney('escape');
+      if (!journey) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cleanupJourney('escape');
+        return;
+      }
+      if (event.key === 'Tab') {
+        pendingTabDirection = event.shiftKey ? 'shift_tab' : 'tab';
+      }
+    }, { capture: true, signal: abort.signal });
+    document.addEventListener('focusin', () => {
+      if (!journey || !pendingTabDirection) return;
+      const direction = pendingTabDirection;
+      pendingTabDirection = null;
+      recordKeyboardFocus({ documentGeneration: journey.generation, direction });
+    }, { capture: true, signal: abort.signal });
+    document.addEventListener('keyup', event => {
+      if (!journey || event.key !== 'Tab' || !pendingTabDirection) return;
+      const direction = pendingTabDirection;
+      pendingTabDirection = null;
+      queueMicrotask(() => {
+        if (journey) recordKeyboardFocus({ documentGeneration: journey.generation, direction });
+      });
     }, { capture: true, signal: abort.signal });
     journey.freezeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-localview-visual-freeze'] });
     renderFocusOverlay();
@@ -408,8 +429,7 @@ const WAVE6_SCRIPT: &str = r##"
   const classifySafety = reference => {
     const element = resolveStableRef(reference);
     if (!element) return 'unresolved';
-    if (element.matches('[data-localview-destructive="true"],[type="submit"]')) return 'destructive';
-    if (element.getAttribute('data-localview-safe-interaction') === 'true') return 'explicitly_safe';
+    if (element.matches('[type="submit"],[formaction]')) return 'destructive_or_unknown';
     if (element.matches('[readonly],[aria-readonly="true"]')) return 'read_only';
     return 'unknown';
   };
@@ -418,21 +438,28 @@ const WAVE6_SCRIPT: &str = r##"
     const cap = Math.max(1, Math.min(Number(maxTargets) || 0, MAX_DISCOVERY_TARGETS));
     const targets = [];
     let scanned = 0;
-    for (const element of document.querySelectorAll('[data-localview-safe-interaction="true"],[readonly],[aria-readonly="true"]')) {
+    for (const element of document.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')) {
       scanned += 1;
       if (scanned > 256 || targets.length >= cap) break;
       if (element.closest?.('[data-localview-owned]')) continue;
       const reference = base.refFor(element);
+      if (!validStableRef(reference)) continue;
       const safety = classifySafety(reference);
-      if (validStableRef(reference) && (safety === 'explicitly_safe' || safety === 'read_only')) targets.push({ reference, safety });
+      targets.push({
+        reference,
+        safety,
+        probe_allowed: safety === 'read_only',
+      });
     }
     return targets;
   };
 
-  const beginFeedbackProbe = ({ reference, documentGeneration, deadlineMs = 800, delayedThresholdMs = 250 } = {}) => {
+  const beginFeedbackProbe = ({ reference, documentGeneration, safety, deadlineMs = 800, delayedThresholdMs = 250 } = {}) => {
     if (feedbackProbe) { feedbackProbe.observer.disconnect(); feedbackProbe = null; }
-    const safety = classifySafety(reference);
-    if (safety !== 'explicitly_safe' && safety !== 'read_only') return { status: 'skipped', reason: 'unsafe_or_unknown_action', safety };
+    const pageClassification = classifySafety(reference);
+    if (safety !== 'explicitly_safe' && safety !== 'read_only') {
+      return { status: 'skipped', reason: 'trusted_safety_required', safety: pageClassification };
+    }
     const element = resolveStableRef(reference);
     if (!element) return { status: 'inconclusive', reason: 'stable_ref_invalid' };
     const beforeState = stateIdentity(documentGeneration);
