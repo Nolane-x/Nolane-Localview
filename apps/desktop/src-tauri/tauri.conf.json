@@ -39,8 +39,8 @@
     "shortDescription": "AI-native localhost visual runtime",
     "longDescription": "Automatically discovers local web applications and exposes a lightweight native preview plus an AI-native observation and control plane.",
     "resources": {
-      "../node_modules/axe-core/axe.min.js": "wave6/axe.min.js",
-      "../node_modules/axe-core/LICENSE": "wave6/axe-core-LICENSE"
+      "resources/wave6/axe.min.js": "wave6/axe.min.js",
+      "resources/wave6/axe-core-LICENSE": "wave6/axe-core-LICENSE"
     }
   }
 }
