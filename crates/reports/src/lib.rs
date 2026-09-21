@@ -921,12 +921,15 @@ mod tests {
             session_id: "session".into(),
             revision: None,
             state_identity: "sha256:state".into(),
-            route: "/".into(),
+            route: "/?token=secret#fragment".into(),
             viewport: None,
             evidence_classes: BTreeMap::new(),
             evidence_ids: Vec::new(),
             diagnostics: DiagnosticReport::default(),
-            verification: serde_json::json!({"verdict": "pass"}),
+            verification: serde_json::json!({
+                "verdict": "pass",
+                "control_token": "must-not-leak"
+            }),
             baseline: BaselineComparison {
                 status: BaselineComparisonStatus::Created,
                 baseline_hash: None,
@@ -939,7 +942,22 @@ mod tests {
             git: GitAnnotation::default(),
             metadata: BTreeMap::new(),
         };
-        assert!(render_html(&report).contains("&lt;demo&gt;"));
+        let json = render_json(&report).expect("json report");
+        assert!(json.contains(r#""schema_version": 1"#));
+        assert!(json.contains(r#""route": "/""#));
+        assert!(!json.contains("must-not-leak"));
+        assert!(!json.contains("token=secret"));
+        assert!(json.contains("<redacted>"));
+
+        let markdown = render_markdown(&report);
+        assert!(markdown.contains("&lt;demo&gt;"));
+        assert!(markdown.contains("## Verification"));
+        assert!(markdown.contains("## Baseline"));
+
+        let html = render_html(&report);
+        assert!(html.contains("&lt;demo&gt;"));
+        assert!(html.contains("<h2>Verification</h2>"));
+        assert!(!html.contains("must-not-leak"));
     }
 
     #[test]
@@ -960,7 +978,7 @@ mod tests {
     #[test]
     fn route_query_and_fragment_are_not_reported() {
         let bundle = produce_wave8_report_bundle(&wave8_report()).expect("bundle");
-        assert!(bundle.json.contains("\\"route\\": \\"/settings\\""));
+        assert!(bundle.json.contains(r#""route": "/settings""#));
         assert!(!bundle.json.contains("secret"));
         assert!(!bundle.json.contains("fragment"));
     }
