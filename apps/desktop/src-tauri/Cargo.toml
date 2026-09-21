@@ -27,6 +27,7 @@ chrono.workspace = true
 dirs.workspace = true
 localview-artifacts = { path = "../../../crates/artifacts" }
 localview-capture = { path = "../../../crates/capture" }
+localview-counterfactual = { path = "../../../crates/counterfactual" }
 localview-instrumentation = { path = "../../../crates/instrumentation" }
 localview-live-bridge = { path = "../../../crates/live-bridge" }
 localview-native-capture = { path = "../../../crates/native-capture" }
@@ -34,6 +35,7 @@ localview-protocol = { path = "../../../crates/protocol" }
 localview-resource-governor = { path = "../../../crates/resource-governor" }
 localview-responsive = { path = "../../../crates/responsive" }
 localview-token-budget = { path = "../../../crates/token-budget" }
+localview-verification = { path = "../../../crates/verification" }
 localview-visual = { path = "../../../crates/visual" }
 reqwest.workspace = true
 serde.workspace = true

@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod affected;
+pub use affected::*;
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};

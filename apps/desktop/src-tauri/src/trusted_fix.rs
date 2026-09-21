@@ -918,6 +918,106 @@ fn apply_fix_transaction_inner(
     }
 }
 
+
+pub fn wave9_candidate_from_pending_proposal(
+    proposal: &FixProposalRecord,
+    exact_base_revision: &str,
+    isolation: localview_counterfactual::IsolationLevel,
+) -> Result<localview_counterfactual::CounterfactualCandidate, String> {
+    if proposal.status != FixProposalStatus::Pending || proposal.expires_at <= Instant::now() {
+        return Err("trusted Fix proposal is not pending for Wave 9 verification".into());
+    }
+    if !matches!(exact_base_revision.len(), 40 | 64)
+        || !exact_base_revision
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("Wave 9 requires an exact git object id".into());
+    }
+
+    reject_symlink_path_components(&proposal.project_root, &proposal.display_file)?;
+    let canonical = fs::canonicalize(&proposal.canonical_file)
+        .map_err(|_| "trusted Fix source is unavailable".to_string())?;
+    if !canonical.starts_with(&proposal.project_root) {
+        return Err("trusted Fix source outside project".into());
+    }
+    let current = fs::read(&canonical)
+        .map_err(|_| "trusted Fix source is unavailable".to_string())?;
+    if current != proposal.preimage {
+        return Err("trusted Fix source changed since proposal".into());
+    }
+
+    let overlay = localview_counterfactual::SourceOverlay {
+        file: proposal.display_file.clone(),
+        base_hash: localview_counterfactual::sha256_bytes(&proposal.preimage),
+        patch: proposal.diff.clone(),
+    };
+    let candidate = localview_counterfactual::CounterfactualCandidate {
+        id: Uuid::new_v4(),
+        name: format!("trusted-fix:{}", proposal.proposal_id),
+        base_revision: exact_base_revision.to_owned(),
+        overlays: vec![overlay],
+        isolation,
+        disposable: true,
+        evidence_ids: vec![format!("trusted-fix-proposal:{}", proposal.proposal_id)],
+        metrics: std::collections::BTreeMap::new(),
+        hard_failures: std::collections::BTreeSet::new(),
+    };
+    candidate
+        .validate()
+        .map_err(|_| "Wave 9 candidate failed counterfactual validation".to_string())?;
+    Ok(candidate)
+}
+
+pub fn validate_wave9_candidate_for_human_apply(
+    proposal: &FixProposalRecord,
+    candidate: &localview_counterfactual::CounterfactualCandidate,
+    receipt: &localview_verification::AutonomousVerificationReceipt,
+    current_exact_revision: &str,
+) -> Result<(), String> {
+    trusted_verify::validate_wave9_verified_handoff(receipt, current_exact_revision)?;
+
+    if proposal.status != FixProposalStatus::Pending || proposal.expires_at <= Instant::now() {
+        return Err("trusted Fix proposal is no longer pending".into());
+    }
+    if candidate.id.to_string() != receipt.candidate_id
+        || candidate.base_revision != receipt.base_revision
+        || localview_counterfactual::patch_digest(&candidate.overlays) != receipt.patch_digest
+    {
+        return Err("Wave 9 receipt does not bind the pending candidate".into());
+    }
+    if candidate.base_revision != current_exact_revision
+        || !candidate.disposable
+        || candidate.overlays.len() != 1
+    {
+        return Err("Wave 9 candidate no longer matches trusted apply authority".into());
+    }
+
+    let overlay = &candidate.overlays[0];
+    if overlay.file != proposal.display_file
+        || overlay.base_hash != localview_counterfactual::sha256_bytes(&proposal.preimage)
+        || overlay.patch != proposal.diff
+    {
+        return Err("Wave 9 candidate does not bind the pending trusted Fix proposal".into());
+    }
+
+    reject_symlink_path_components(&proposal.project_root, &proposal.display_file)?;
+    let canonical = fs::canonicalize(&proposal.canonical_file)
+        .map_err(|_| "trusted Fix source is unavailable".to_string())?;
+    if !canonical.starts_with(&proposal.project_root) {
+        return Err("trusted Fix source outside project".into());
+    }
+    let current = fs::read(&canonical)
+        .map_err(|_| "trusted Fix source is unavailable".to_string())?;
+    if current != proposal.preimage {
+        return Err("trusted Fix source changed since Wave 9 verification".into());
+    }
+
+    // This function intentionally does not call begin_apply/apply_fix_transaction.
+    // It only validates a proof handoff; the existing human-approved Apply path remains authoritative.
+    Ok(())
+}
+
 #[cfg(test)]
 mod trusted_fix_tests {
     use super::*;

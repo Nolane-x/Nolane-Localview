@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod autonomous_verification;
+pub use autonomous_verification::*;
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use localview_evidence::EvidenceKind;
