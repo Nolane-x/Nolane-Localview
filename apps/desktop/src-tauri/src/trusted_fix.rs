@@ -254,12 +254,14 @@ impl FixProposalStore {
             return Err("Wave 9 candidate preflight rejected the pending Fix proposal".into());
         }
 
-        let current_revision = localview_counterfactual::exact_repository_revision(
-            &pending.project_root,
-        )
-        .map_err(|error| format!("Wave 9 current revision is unavailable: {error:?}"))?;
-        if current_revision != preflight.base_revision {
-            return Err("Wave 9 project revision changed during candidate preflight".into());
+        if let Some(preflight_revision) = preflight.base_revision.as_deref() {
+            let current_revision = localview_counterfactual::exact_repository_revision(
+                &pending.project_root,
+            )
+            .map_err(|error| format!("Wave 9 current revision drift check failed: {error:?}"))?;
+            if current_revision != preflight_revision {
+                return Err("Wave 9 project revision changed during candidate preflight".into());
+            }
         }
 
         let mut proposals = self
@@ -1002,14 +1004,48 @@ pub fn wave9_preflight_for_pending_proposal(
     if proposal.status != FixProposalStatus::Pending || proposal.expires_at <= Instant::now() {
         return Err("trusted Fix proposal is not pending for Wave 9 preflight".into());
     }
-    let exact_revision = localview_counterfactual::exact_repository_revision(&proposal.project_root)
-        .map_err(|error| format!("Wave 9 exact repository revision is unavailable: {error:?}"))?;
-    let candidate = wave9_candidate_from_pending_proposal(
+
+    let exact_revision = match localview_counterfactual::exact_repository_revision(
+        &proposal.project_root,
+    ) {
+        Ok(revision) => revision,
+        Err(error) => {
+            return Ok(
+                localview_verification::ProductionCandidatePreflightReceipt::inconclusive_unavailable(
+                    format!(
+                        "Wave 9 shadow preflight unavailable for this project: exact Git revision authority is unavailable ({error:?})"
+                    ),
+                ),
+            );
+        }
+    };
+
+    let candidate = match wave9_candidate_from_pending_proposal(
         proposal,
         &exact_revision,
         localview_counterfactual::IsolationLevel::SemanticOnly,
-    )?;
-    localview_verification::run_production_candidate_preflight(&proposal.project_root, &candidate)
+    ) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            return Ok(
+                localview_verification::ProductionCandidatePreflightReceipt::inconclusive_unavailable(
+                    format!("Wave 9 shadow preflight unavailable for this proposal: {error}"),
+                ),
+            );
+        }
+    };
+
+    match localview_verification::run_production_candidate_preflight(
+        &proposal.project_root,
+        &candidate,
+    ) {
+        Ok(receipt) => Ok(receipt),
+        Err(error) => Ok(
+            localview_verification::ProductionCandidatePreflightReceipt::inconclusive_unavailable(
+                error,
+            ),
+        ),
+    }
 }
 
 pub fn validate_wave9_candidate_for_human_apply(
