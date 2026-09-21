@@ -985,7 +985,7 @@ fn sanitize_text(value: &str, project_root: &str, max: usize) -> String {
     } else {
         value.replace(project_root, "<project>")
     };
-    bounded_text(&replaced.replace(['\r', '\n'], " "), max)
+    bounded_text(&replaced.replace('\r', " ").replace('\n', " "), max)
 }
 
 async fn visual_capture_verify(
@@ -1316,7 +1316,7 @@ fn emit_ci_annotations(report: &LocalViewReport) {
         report.diagnostics.heuristic,
         report.diagnostics.subjective
     );
-    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+    if std::env::var("GITHUB_ACTIONS").ok().as_deref() != Some("true") {
         return;
     }
     for issue in report
