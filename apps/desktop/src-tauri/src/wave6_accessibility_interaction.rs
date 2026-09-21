@@ -3,17 +3,16 @@
 use std::path::{Path, PathBuf};
 
 use localview_instrumentation::{
-    bootstrap_script, wave6::wave6_bootstrap_script, InstrumentationConfig,
+    InstrumentationConfig, bootstrap_script, wave6::wave6_bootstrap_script,
 };
 use localview_protocol::SessionId;
-use tauri::{path::BaseDirectory, Manager};
+use tauri::{Manager, path::BaseDirectory};
 
 const AXE_VERSION: &str = "4.13.0";
 const MAX_AXE_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 
 fn development_axe_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../node_modules/axe-core/axe.min.js")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../node_modules/axe-core/axe.min.js")
 }
 
 fn load_local_axe_source(app: &tauri::AppHandle) -> Result<String, String> {

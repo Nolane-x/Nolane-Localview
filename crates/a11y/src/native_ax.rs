@@ -1,7 +1,7 @@
 use localview_native_provider::NativeSemanticNodeObservation;
 use localview_protocol::{ElementRef, ProviderElementRealization, ProviderElementRef};
 
-use crate::{valid_stable_reference, NativeAxEvidence, MAX_NATIVE_AX_RECORDS};
+use crate::{MAX_NATIVE_AX_RECORDS, NativeAxEvidence, valid_stable_reference};
 
 const MAX_NATIVE_TEXT_BYTES: usize = 120;
 
@@ -139,7 +139,10 @@ mod tests {
             is_enabled: Some(true),
             is_offscreen: Some(false),
             attributes: BTreeMap::from([
-                ("windows_uia.selection_item.is_selected".into(), "true".into()),
+                (
+                    "windows_uia.selection_item.is_selected".into(),
+                    "true".into(),
+                ),
                 ("windows_uia.expand_collapse.state".into(), "1".into()),
             ]),
         }

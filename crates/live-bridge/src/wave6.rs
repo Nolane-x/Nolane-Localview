@@ -1,6 +1,6 @@
 use localview_flow::{
-    DiscoveryBounds, GraphAdmissionError, InteractionActionKind, InteractionGraph,
-    LiveTransition, ReplayStep, SafetyClass, StateIdentity,
+    DiscoveryBounds, GraphAdmissionError, InteractionActionKind, InteractionGraph, LiveTransition,
+    ReplayStep, SafetyClass, StateIdentity,
 };
 use localview_protocol::SessionId;
 use serde::{Deserialize, Serialize};
@@ -64,10 +64,7 @@ impl LiveBridge {
             .map_err(Wave6GraphError::from)
     }
 
-    pub async fn wave6_interaction_graph(
-        &self,
-        session_id: SessionId,
-    ) -> Option<InteractionGraph> {
+    pub async fn wave6_interaction_graph(&self, session_id: SessionId) -> Option<InteractionGraph> {
         self.wave6_graphs.read().await.get(&session_id).cloned()
     }
 

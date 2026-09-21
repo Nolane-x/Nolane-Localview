@@ -60,7 +60,13 @@ pub struct A11yFinding {
 }
 
 impl A11yFinding {
-    fn local(code: &str, reference: &str, message: String, deterministic: bool, confidence: u8) -> Self {
+    fn local(
+        code: &str,
+        reference: &str,
+        message: String,
+        deterministic: bool,
+        confidence: u8,
+    ) -> Self {
         Self {
             code: code.into(),
             reference: reference.into(),
@@ -106,11 +112,16 @@ fn walk(node: &SemanticNode, out: &mut Vec<A11yFinding>) {
         ));
     }
     if let Some(rect) = &node.rect {
-        if node.interactive && (rect.width < MIN_NOMINAL_TARGET_PX || rect.height < MIN_NOMINAL_TARGET_PX) {
+        if node.interactive
+            && (rect.width < MIN_NOMINAL_TARGET_PX || rect.height < MIN_NOMINAL_TARGET_PX)
+        {
             out.push(A11yFinding::local(
                 "small_nominal_hit_target",
                 &node.reference,
-                format!("Nominal hit target is {:.0}×{:.0}px", rect.width, rect.height),
+                format!(
+                    "Nominal hit target is {:.0}×{:.0}px",
+                    rect.width, rect.height
+                ),
                 false,
                 84,
             ));
@@ -198,9 +209,7 @@ pub struct NativeAxEnrichment {
     pub discrepancies: Vec<A11yDiscrepancy>,
 }
 
-pub fn native_ax_discrepancy_findings(
-    enrichments: &[NativeAxEnrichment],
-) -> Vec<A11yFinding> {
+pub fn native_ax_discrepancy_findings(enrichments: &[NativeAxEnrichment]) -> Vec<A11yFinding> {
     enrichments
         .iter()
         .filter(|entry| !entry.discrepancies.is_empty())
@@ -235,8 +244,10 @@ pub fn enrich_native_ax(
     dom: &[DomA11yEvidence],
     native: &[NativeAxEvidence],
 ) -> Vec<NativeAxEnrichment> {
-    let dom_by_ref: BTreeMap<&str, &DomA11yEvidence> =
-        dom.iter().map(|entry| (entry.reference.as_str(), entry)).collect();
+    let dom_by_ref: BTreeMap<&str, &DomA11yEvidence> = dom
+        .iter()
+        .map(|entry| (entry.reference.as_str(), entry))
+        .collect();
 
     native
         .iter()
@@ -290,7 +301,9 @@ pub fn enrich_native_ax(
                 dom_entry.offscreen,
                 native_entry.offscreen,
             );
-            if let (Some(dom_bounds), Some(native_bounds)) = (&dom_entry.bounds, &native_entry.bounds) {
+            if let (Some(dom_bounds), Some(native_bounds)) =
+                (&dom_entry.bounds, &native_entry.bounds)
+            {
                 let delta = (dom_bounds.x - native_bounds.x).abs()
                     + (dom_bounds.y - native_bounds.y).abs()
                     + (dom_bounds.width - native_bounds.width).abs()
@@ -480,7 +493,10 @@ fn bounded_text(value: &str, max_bytes: usize) -> String {
 }
 
 pub fn unique_finding_codes(findings: &[A11yFinding]) -> BTreeSet<String> {
-    findings.iter().map(|finding| finding.code.clone()).collect()
+    findings
+        .iter()
+        .map(|finding| finding.code.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -521,7 +537,12 @@ mod tests {
     #[test]
     fn small_target_is_nominal_geometry_suspicion_not_delivery_proof() {
         let mut target = node("@e3", "button", Some("Tiny"), true);
-        target.rect = Some(Rect { x: 0.0, y: 0.0, width: 12.0, height: 18.0 });
+        target.rect = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 12.0,
+            height: 18.0,
+        });
         let finding = audit(&target)
             .into_iter()
             .find(|finding| finding.code == "small_nominal_hit_target")
@@ -560,7 +581,11 @@ mod tests {
             .collect::<Vec<_>>();
         let findings = normalize_axe_findings(&input, usize::MAX);
         assert_eq!(findings.len(), MAX_AXE_FINDINGS);
-        assert!(findings.iter().all(|finding| finding.message.len() <= MAX_FINDING_MESSAGE_BYTES));
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.message.len() <= MAX_FINDING_MESSAGE_BYTES)
+        );
     }
 
     #[test]
@@ -589,8 +614,18 @@ mod tests {
         }];
         let enriched = enrich_native_ax(&dom, &native);
         assert_eq!(enriched.len(), 1);
-        assert!(enriched[0].discrepancies.iter().any(|item| item.field == "role"));
-        assert!(enriched[0].discrepancies.iter().any(|item| item.field == "expanded"));
+        assert!(
+            enriched[0]
+                .discrepancies
+                .iter()
+                .any(|item| item.field == "role")
+        );
+        assert!(
+            enriched[0]
+                .discrepancies
+                .iter()
+                .any(|item| item.field == "expanded")
+        );
     }
 
     #[test]
@@ -624,8 +659,18 @@ mod tests {
     fn geometry_only_occlusion_stays_suspected_not_deterministic() {
         let result = effective_hitbox(&HitboxEvidence {
             reference: "@eabc".into(),
-            nominal: Rect { x: 0.0, y: 0.0, width: 20.0, height: 20.0 },
-            visible_clip: Some(Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 }),
+            nominal: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            visible_clip: Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            }),
             pointer_events: Some(true),
             occluders: vec!["@edef".into()],
             delivery_observed: None,
@@ -640,7 +685,12 @@ mod tests {
     fn browser_hit_test_can_prove_blocked_delivery() {
         let result = effective_hitbox(&HitboxEvidence {
             reference: "@eabc".into(),
-            nominal: Rect { x: 0.0, y: 0.0, width: 40.0, height: 40.0 },
+            nominal: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 40.0,
+            },
             visible_clip: None,
             pointer_events: Some(true),
             occluders: vec![],

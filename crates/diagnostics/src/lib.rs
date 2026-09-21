@@ -78,34 +78,36 @@ pub fn assemble(
         evidence: None,
     }));
 
-    issues.extend(accessibility.iter().map(|issue| DiagnosticIssue {
-        category: "accessibility".into(),
-        code: issue.code.clone(),
-        message: issue.message.clone(),
-        severity: 2,
-        confidence: issue.confidence,
-        class: match issue.evidence_kind {
-            A11yEvidenceKind::LocalDeterministic if issue.deterministic => {
-                DiagnosticClass::Deterministic
-            }
-            A11yEvidenceKind::LocalDeterministic
-            | A11yEvidenceKind::AxeRule
-            | A11yEvidenceKind::NativeAx
-            | A11yEvidenceKind::Heuristic => DiagnosticClass::Heuristic,
-        },
-        refs: (!issue.reference.is_empty())
-            .then(|| vec![issue.reference.clone()])
-            .unwrap_or_default(),
-        evidence: Some(match issue.evidence_kind {
-            A11yEvidenceKind::LocalDeterministic => "local_deterministic".into(),
-            A11yEvidenceKind::AxeRule => issue
-                .rule_id
-                .as_deref()
-                .map(|rule| format!("axe_rule:{rule}"))
-                .unwrap_or_else(|| "axe_rule".into()),
-            A11yEvidenceKind::NativeAx => "native_ax".into(),
-            A11yEvidenceKind::Heuristic => "heuristic".into(),
-        }),
+    issues.extend(accessibility.iter().map(|issue| {
+        DiagnosticIssue {
+            category: "accessibility".into(),
+            code: issue.code.clone(),
+            message: issue.message.clone(),
+            severity: 2,
+            confidence: issue.confidence,
+            class: match issue.evidence_kind {
+                A11yEvidenceKind::LocalDeterministic if issue.deterministic => {
+                    DiagnosticClass::Deterministic
+                }
+                A11yEvidenceKind::LocalDeterministic
+                | A11yEvidenceKind::AxeRule
+                | A11yEvidenceKind::NativeAx
+                | A11yEvidenceKind::Heuristic => DiagnosticClass::Heuristic,
+            },
+            refs: (!issue.reference.is_empty())
+                .then(|| vec![issue.reference.clone()])
+                .unwrap_or_default(),
+            evidence: Some(match issue.evidence_kind {
+                A11yEvidenceKind::LocalDeterministic => "local_deterministic".into(),
+                A11yEvidenceKind::AxeRule => issue
+                    .rule_id
+                    .as_deref()
+                    .map(|rule| format!("axe_rule:{rule}"))
+                    .unwrap_or_else(|| "axe_rule".into()),
+                A11yEvidenceKind::NativeAx => "native_ax".into(),
+                A11yEvidenceKind::Heuristic => "heuristic".into(),
+            }),
+        }
     }));
 
     issues.extend(performance.iter().map(|issue| DiagnosticIssue {
@@ -173,7 +175,10 @@ mod tests {
         assert_eq!(report.deterministic, 0);
         assert_eq!(report.heuristic, 1);
         assert!(report.issues[0].refs.is_empty());
-        assert_eq!(report.issues[0].evidence.as_deref(), Some("axe_rule:button-name"));
+        assert_eq!(
+            report.issues[0].evidence.as_deref(),
+            Some("axe_rule:button-name")
+        );
     }
 
     #[test]

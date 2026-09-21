@@ -194,7 +194,9 @@ impl InteractionGraph {
                 && edge.resulting_state == transition.resulting_state
         }) {
             let mut transition = transition;
-            transition.evidence_refs.truncate(MAX_EVIDENCE_REFS_PER_EDGE);
+            transition
+                .evidence_refs
+                .truncate(MAX_EVIDENCE_REFS_PER_EDGE);
             edges.push(transition);
         }
         Ok(())
@@ -493,21 +495,61 @@ pub fn replay_receipt(
     let mut passed = 0usize;
     for (index, step) in plan.iter().enumerate() {
         if refs_valid.get(index).copied() != Some(true) {
-            return failed_replay(plan, observed, &evidence_refs, index, passed, "stable_ref_invalid");
+            return failed_replay(
+                plan,
+                observed,
+                &evidence_refs,
+                index,
+                passed,
+                "stable_ref_invalid",
+            );
         }
         let Some(before) = observed.get(index) else {
-            return failed_replay(plan, observed, &evidence_refs, index, passed, "missing_before_state");
+            return failed_replay(
+                plan,
+                observed,
+                &evidence_refs,
+                index,
+                passed,
+                "missing_before_state",
+            );
         };
         if !step.expected_before.compatible_with(before) {
-            return failed_replay(plan, observed, &evidence_refs, index, passed, "pre_state_mismatch");
+            return failed_replay(
+                plan,
+                observed,
+                &evidence_refs,
+                index,
+                passed,
+                "pre_state_mismatch",
+            );
         }
         let Some(after) = observed.get(index + 1) else {
-            return failed_replay(plan, observed, &evidence_refs, index, passed, "missing_after_state");
+            return failed_replay(
+                plan,
+                observed,
+                &evidence_refs,
+                index,
+                passed,
+                "missing_after_state",
+            );
         };
         if !step.expected_after.compatible_with(after) {
-            return failed_replay(plan, observed, &evidence_refs, index, passed, "post_state_mismatch");
+            return failed_replay(
+                plan,
+                observed,
+                &evidence_refs,
+                index,
+                passed,
+                "post_state_mismatch",
+            );
         }
-        evidence_refs.extend(step.evidence_refs.iter().take(MAX_EVIDENCE_REFS_PER_EDGE).cloned());
+        evidence_refs.extend(
+            step.evidence_refs
+                .iter()
+                .take(MAX_EVIDENCE_REFS_PER_EDGE)
+                .cloned(),
+        );
         passed += 1;
     }
 
@@ -730,7 +772,12 @@ mod tests {
             })
             .collect();
         let result = analyze_keyboard_journey(initial, transitions, 64);
-        assert!(result.issues.iter().any(|issue| issue.kind == FocusIssueKind::FocusTrap));
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| issue.kind == FocusIssueKind::FocusTrap)
+        );
     }
 
     #[test]
@@ -765,12 +812,18 @@ mod tests {
             },
         ];
         let result = analyze_keyboard_journey(initial, transitions, 64);
-        assert!(result.issues.iter().any(|issue| {
-            issue.kind == FocusIssueKind::HiddenOrOffscreenFocused
-        }));
-        assert!(result.issues.iter().any(|issue| {
-            issue.kind == FocusIssueKind::LostToDocument
-        }));
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| { issue.kind == FocusIssueKind::HiddenOrOffscreenFocused })
+        );
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| { issue.kind == FocusIssueKind::LostToDocument })
+        );
     }
 
     #[test]
@@ -785,35 +838,52 @@ mod tests {
             is_body_or_document: false,
         };
         let transitions = vec![
-            FocusObservation { transition_index: 1, reference: Some("@e2".into()), route: "/".into(), document_generation: 1, tabindex: Some(0), hidden_or_offscreen: false, is_body_or_document: false },
-            FocusObservation { transition_index: 2, reference: Some("@e3".into()), route: "/".into(), document_generation: 1, tabindex: Some(0), hidden_or_offscreen: false, is_body_or_document: false },
-            FocusObservation { transition_index: 4, reference: Some("@e1".into()), route: "/".into(), document_generation: 1, tabindex: Some(0), hidden_or_offscreen: false, is_body_or_document: false },
+            FocusObservation {
+                transition_index: 1,
+                reference: Some("@e2".into()),
+                route: "/".into(),
+                document_generation: 1,
+                tabindex: Some(0),
+                hidden_or_offscreen: false,
+                is_body_or_document: false,
+            },
+            FocusObservation {
+                transition_index: 2,
+                reference: Some("@e3".into()),
+                route: "/".into(),
+                document_generation: 1,
+                tabindex: Some(0),
+                hidden_or_offscreen: false,
+                is_body_or_document: false,
+            },
+            FocusObservation {
+                transition_index: 4,
+                reference: Some("@e1".into()),
+                route: "/".into(),
+                document_generation: 1,
+                tabindex: Some(0),
+                hidden_or_offscreen: false,
+                is_body_or_document: false,
+            },
         ];
         let result = analyze_keyboard_journey(initial, transitions, 64);
-        assert!(result.issues.iter().any(|issue| issue.kind == FocusIssueKind::Loop));
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| issue.kind == FocusIssueKind::Loop)
+        );
     }
 
     #[test]
     fn missing_feedback_is_not_promoted_to_dead_click() {
-        let receipt = classify_feedback(
-            true,
-            200,
-            800,
-            250,
-            FeedbackSignals::default(),
-        );
+        let receipt = classify_feedback(true, 200, 800, 250, FeedbackSignals::default());
         assert_eq!(receipt.verdict, FeedbackVerdict::NoObservedFeedback);
     }
 
     #[test]
     fn expired_observation_window_is_inconclusive_even_without_feedback() {
-        let receipt = classify_feedback(
-            true,
-            801,
-            800,
-            250,
-            FeedbackSignals::default(),
-        );
+        let receipt = classify_feedback(true, 801, 800, 250, FeedbackSignals::default());
         assert_eq!(receipt.verdict, FeedbackVerdict::Inconclusive);
     }
 
@@ -842,11 +912,7 @@ mod tests {
             expected_after: state("/", 3, "b"),
             evidence_refs: vec!["evidence-1".into()],
         }];
-        let receipt = replay_receipt(
-            &plan,
-            &[state("/", 3, "a"), state("/", 3, "b")],
-            &[true],
-        );
+        let receipt = replay_receipt(&plan, &[state("/", 3, "a"), state("/", 3, "b")], &[true]);
         assert_eq!(receipt.status, ReplayStatus::Complete);
         assert_eq!(receipt.steps_passed, 1);
         assert_eq!(receipt.first_failed_step, None);
@@ -882,11 +948,7 @@ mod tests {
             expected_after: state("/", 3, "b"),
             evidence_refs: vec![],
         }];
-        let receipt = replay_receipt(
-            &plan,
-            &[state("/", 3, "a"), state("/", 3, "b")],
-            &[false],
-        );
+        let receipt = replay_receipt(&plan, &[state("/", 3, "a"), state("/", 3, "b")], &[false]);
         assert_eq!(receipt.reason.as_deref(), Some("stable_ref_invalid"));
     }
 }
