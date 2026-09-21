@@ -259,7 +259,6 @@ impl ArtifactStore {
     }
 }
 
-
 fn read_regular_file(path: &Path) -> Result<Vec<u8>> {
     let before = fs::symlink_metadata(path).context("inspect artifact path")?;
     if before.file_type().is_symlink() || !before.is_file() {
@@ -279,7 +278,8 @@ fn read_regular_file(path: &Path) -> Result<Vec<u8>> {
     }
 
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).context("read retained artifact")?;
+    file.read_to_end(&mut bytes)
+        .context("read retained artifact")?;
     Ok(bytes)
 }
 
@@ -378,7 +378,11 @@ mod tests {
         tokio::fs::write(dir.join(&id), b"wrong").await.unwrap();
 
         let mut store = ArtifactStore::open(&dir, 1024).await.unwrap();
-        let error = store.put("text", b"expected").await.unwrap_err().to_string();
+        let error = store
+            .put("text", b"expected")
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("collision"));
         assert_eq!(tokio::fs::read(dir.join(id)).await.unwrap(), b"wrong");
         let _ = tokio::fs::remove_dir_all(dir).await;
@@ -432,5 +436,4 @@ mod tests {
         assert_eq!(disk_bytes(&dir).await, used);
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
-
 }
