@@ -1,11 +1,14 @@
 use std::{
     collections::BTreeMap,
+    fs,
+    io::Write,
     path::{Component, Path, PathBuf},
     process::Stdio,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use atomic_write_file::AtomicWriteFile;
 use clap::{Args, ValueEnum};
 use localview_artifacts::ArtifactStore;
 use localview_attestation::{DigestAttestationPayload, digest_attestation};
@@ -472,9 +475,10 @@ async fn run_inner(
         .relevant_source_files
         .truncate(MAX_RELEVANT_FILES);
 
-    let state_root = project_root.join(".localview").join("wave8-ci");
-    let artifact_root = state_root.join("artifacts");
-    tokio::fs::create_dir_all(&artifact_root).await?;
+    let state_root =
+        ensure_project_directory(project_root, Path::new(".localview/wave8-ci")).await?;
+    let artifact_root =
+        ensure_project_directory(project_root, Path::new(".localview/wave8-ci/artifacts")).await?;
     let budget_bytes = args
         .artifact_budget_mib
         .checked_mul(1024 * 1024)
@@ -1286,7 +1290,8 @@ async fn compare_and_retain_baseline(
     retain_allowed: bool,
     update: bool,
 ) -> Result<(BaselineComparison, Option<ArtifactReference>)> {
-    tokio::fs::create_dir_all(state_root).await?;
+    revalidate_canonical_directory(state_root, "headless state root")?;
+    revalidate_canonical_directory(artifact_root, "headless artifact root")?;
     let index_path = state_root.join("baseline-index.json");
     let mut index = load_baseline_index(&index_path).await?;
     let candidate_hash = candidate.canonical_hash();
@@ -1386,31 +1391,27 @@ async fn compare_and_retain_baseline(
 }
 
 async fn load_baseline_index(path: &Path) -> Result<BaselineIndex> {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => {
-            if bytes.len() as u64 > MAX_BASELINE_BYTES {
-                bail!("baseline index exceeds bounded size policy");
-            }
+    match read_optional_regular_leaf(path, MAX_BASELINE_BYTES)? {
+        Some(bytes) => {
             let index: BaselineIndex = serde_json::from_slice(&bytes)?;
             if index.schema_version != 0 && index.schema_version != 1 {
                 bail!("unsupported baseline index schema version");
             }
             Ok(index)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BaselineIndex {
+        None => Ok(BaselineIndex {
             schema_version: 1,
             states: BTreeMap::new(),
         }),
-        Err(error) => Err(error.into()),
     }
 }
 
 async fn write_baseline_index(path: &Path, index: &BaselineIndex) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(index)?;
-    let temp = path.with_extension("json.tmp");
-    tokio::fs::write(&temp, bytes).await?;
-    tokio::fs::rename(&temp, path).await?;
-    Ok(())
+    if bytes.len() as u64 > MAX_BASELINE_BYTES {
+        bail!("baseline index exceeds bounded size policy");
+    }
+    atomic_replace_regular(path, &bytes)
 }
 
 async fn load_retained_baseline(
@@ -1420,16 +1421,13 @@ async fn load_retained_baseline(
     if !valid_physical_artifact_id(&locator.storage_id) {
         return Err("baseline locator has invalid physical artifact id".into());
     }
-    let path = artifact_root.join(&locator.storage_id);
-    let metadata = tokio::fs::metadata(&path)
-        .await
-        .map_err(|_| "retained baseline artifact is missing under bounded retention".to_owned())?;
-    if metadata.len() > MAX_BASELINE_BYTES {
-        return Err("retained baseline artifact exceeds bounded size policy".into());
+    if let Err(error) = revalidate_canonical_directory(artifact_root, "headless artifact root") {
+        return Err(format!("retained baseline artifact root is unsafe: {error}"));
     }
-    let bytes = tokio::fs::read(path)
-        .await
-        .map_err(|_| "retained baseline artifact is unreadable".to_owned())?;
+    let path = artifact_root.join(&locator.storage_id);
+    let bytes = read_optional_regular_leaf(&path, MAX_BASELINE_BYTES)
+        .map_err(|_| "retained baseline artifact is unsafe or unreadable".to_owned())?
+        .ok_or_else(|| "retained baseline artifact is missing under bounded retention".to_owned())?;
     let baseline: BaselineEnvelope = serde_json::from_slice(&bytes)
         .map_err(|_| "retained baseline artifact is invalid JSON".to_owned())?;
     if baseline.canonical_hash() != locator.content_hash {
@@ -1444,26 +1442,142 @@ fn valid_physical_artifact_id(value: &str) -> bool {
         && value[3..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-async fn resolve_output_dir(project_root: &Path, requested: Option<&Path>) -> Result<PathBuf> {
-    let path = requested.map(Path::to_path_buf).unwrap_or_else(|| {
-        project_root
-            .join(".localview")
-            .join("wave8-ci")
-            .join("reports")
-    });
-    let path = if path.is_absolute() {
-        path
-    } else {
-        project_root.join(path)
-    };
-    validate_lexically_contained(project_root, &path)?;
-    tokio::fs::create_dir_all(&path).await?;
-    let canonical = tokio::fs::canonicalize(&path).await?;
-    let canonical_root = tokio::fs::canonicalize(project_root).await?;
-    if !canonical.starts_with(&canonical_root) {
-        bail!("output directory must remain inside project root");
+fn revalidate_canonical_directory(path: &Path, label: &str) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("{label} is unavailable: {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("{label} must be a real directory");
     }
-    Ok(canonical)
+    let canonical = fs::canonicalize(path)
+        .with_context(|| format!("{label} cannot be canonicalized: {}", path.display()))?;
+    if canonical != path {
+        bail!("{label} identity changed or resolves through a reparse/symlink path");
+    }
+    Ok(())
+}
+
+async fn ensure_project_directory(project_root: &Path, requested: &Path) -> Result<PathBuf> {
+    let resolved = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        project_root.join(requested)
+    };
+    validate_lexically_contained(project_root, &resolved)?;
+    let relative = resolved
+        .strip_prefix(project_root)
+        .map_err(|_| anyhow!("path must remain inside project root"))?;
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        bail!("path escapes project root");
+    }
+
+    let canonical_root = tokio::fs::canonicalize(project_root)
+        .await
+        .context("project root is unavailable")?;
+    let mut current = canonical_root.clone();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            continue;
+        };
+        revalidate_canonical_directory(&current, "project directory")?;
+        let next = current.join(part);
+        match tokio::fs::symlink_metadata(&next).await {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    bail!("project-contained directory component is not a real directory");
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match tokio::fs::create_dir(&next).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+        let metadata = tokio::fs::symlink_metadata(&next).await?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!("project-contained directory component changed during creation");
+        }
+        let canonical = tokio::fs::canonicalize(&next).await?;
+        if !canonical.starts_with(&canonical_root) {
+            bail!("project-contained directory resolves outside canonical project root");
+        }
+        current = canonical;
+    }
+    Ok(current)
+}
+
+fn read_optional_regular_leaf(path: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("bounded persistence path has no parent"))?;
+    revalidate_canonical_directory(parent, "persistence parent")?;
+    let before = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if before.file_type().is_symlink() || !before.is_file() {
+        bail!("persistence leaf must be a regular file");
+    }
+    if before.len() > max_bytes {
+        bail!("persistence leaf exceeds bounded size policy");
+    }
+    let bytes = fs::read(path)?;
+    let after = fs::symlink_metadata(path)?;
+    if after.file_type().is_symlink() || !after.is_file() || after.len() != before.len() {
+        bail!("persistence leaf identity changed during read");
+    }
+    Ok(Some(bytes))
+}
+
+fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("bounded persistence path has no parent"))?;
+    revalidate_canonical_directory(parent, "persistence parent")?;
+
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            bail!("refusing to replace non-regular persistence leaf")
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    let mut file = AtomicWriteFile::open(path)
+        .with_context(|| format!("open atomic persistence file {}", path.display()))?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+
+    revalidate_canonical_directory(parent, "persistence parent")?;
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && (metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        file.discard()?;
+        bail!("persistence leaf changed to a non-regular entry before commit");
+    }
+    file.commit()?;
+
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("atomic persistence did not produce a regular file");
+    }
+    Ok(())
+}
+
+async fn resolve_output_dir(project_root: &Path, requested: Option<&Path>) -> Result<PathBuf> {
+    let requested = requested
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(".localview/wave8-ci/reports"));
+    ensure_project_directory(project_root, &requested).await
 }
 
 async fn write_bundle<T: Serialize>(
@@ -1471,14 +1585,14 @@ async fn write_bundle<T: Serialize>(
     report: &LocalViewReport,
     attestation: &T,
 ) -> Result<()> {
-    tokio::fs::write(output_dir.join("report.json"), render_json(report)?).await?;
-    tokio::fs::write(output_dir.join("report.md"), render_markdown(report)).await?;
-    tokio::fs::write(output_dir.join("report.html"), render_html(report)).await?;
-    tokio::fs::write(
-        output_dir.join("attestation.json"),
-        serde_json::to_string_pretty(attestation)?,
-    )
-    .await?;
+    revalidate_canonical_directory(output_dir, "headless report output")?;
+    atomic_replace_regular(&output_dir.join("report.json"), render_json(report)?.as_bytes())?;
+    atomic_replace_regular(&output_dir.join("report.md"), render_markdown(report).as_bytes())?;
+    atomic_replace_regular(&output_dir.join("report.html"), render_html(report).as_bytes())?;
+    atomic_replace_regular(
+        &output_dir.join("attestation.json"),
+        serde_json::to_string_pretty(attestation)?.as_bytes(),
+    )?;
     Ok(())
 }
 
@@ -2390,4 +2504,126 @@ mod tests {
             (ReportStatus::Failed, EXIT_HARD_FAILURE)
         );
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn state_root_rejects_localview_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let project = std::env::temp_dir().join(format!("lv-headless-project-{}", Uuid::new_v4()));
+        let outside = std::env::temp_dir().join(format!("lv-headless-outside-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&project).await.unwrap();
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+        symlink(&outside, project.join(".localview")).unwrap();
+
+        assert!(
+            ensure_project_directory(&project, Path::new(".localview/wave8-ci"))
+                .await
+                .is_err()
+        );
+        assert!(!outside.join("wave8-ci").exists());
+        let _ = tokio::fs::remove_dir_all(project).await;
+        let _ = tokio::fs::remove_dir_all(outside).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn state_root_rejects_wave8_and_artifact_symlink_escapes() {
+        use std::os::unix::fs::symlink;
+
+        let project = std::env::temp_dir().join(format!("lv-headless-project-{}", Uuid::new_v4()));
+        let outside = std::env::temp_dir().join(format!("lv-headless-outside-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(project.join(".localview")).await.unwrap();
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+        symlink(&outside, project.join(".localview/wave8-ci")).unwrap();
+        assert!(
+            ensure_project_directory(&project, Path::new(".localview/wave8-ci/artifacts"))
+                .await
+                .is_err()
+        );
+        assert!(!outside.join("artifacts").exists());
+        tokio::fs::remove_file(project.join(".localview/wave8-ci")).await.unwrap();
+
+        let state = ensure_project_directory(&project, Path::new(".localview/wave8-ci"))
+            .await
+            .unwrap();
+        symlink(&outside, state.join("artifacts")).unwrap();
+        assert!(
+            ensure_project_directory(&project, Path::new(".localview/wave8-ci/artifacts"))
+                .await
+                .is_err()
+        );
+
+        let _ = tokio::fs::remove_dir_all(project).await;
+        let _ = tokio::fs::remove_dir_all(outside).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn baseline_index_leaf_symlink_is_rejected_and_fixed_temp_name_is_unused() {
+        use std::os::unix::fs::symlink;
+
+        let project = std::env::temp_dir().join(format!("lv-headless-project-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&project).await.unwrap();
+        let state = ensure_project_directory(&project, Path::new(".localview/wave8-ci"))
+            .await
+            .unwrap();
+        let outside = std::env::temp_dir().join(format!("lv-headless-outside-{}", Uuid::new_v4()));
+        tokio::fs::write(&outside, b"outside").await.unwrap();
+
+        let index_path = state.join("baseline-index.json");
+        symlink(&outside, &index_path).unwrap();
+        assert!(
+            write_baseline_index(
+                &index_path,
+                &BaselineIndex {
+                    schema_version: 1,
+                    states: BTreeMap::new(),
+                },
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
+        tokio::fs::remove_file(&index_path).await.unwrap();
+
+        let legacy_temp = state.join("baseline-index.json.tmp");
+        symlink(&outside, &legacy_temp).unwrap();
+        write_baseline_index(
+            &index_path,
+            &BaselineIndex {
+                schema_version: 1,
+                states: BTreeMap::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
+        assert!(tokio::fs::symlink_metadata(&legacy_temp).await.unwrap().file_type().is_symlink());
+
+        let _ = tokio::fs::remove_dir_all(project).await;
+        let _ = tokio::fs::remove_file(outside).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn report_leaf_symlink_cannot_overwrite_outside_target() {
+        use std::os::unix::fs::symlink;
+
+        let project = std::env::temp_dir().join(format!("lv-headless-project-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&project).await.unwrap();
+        let reports = ensure_project_directory(&project, Path::new(".localview/wave8-ci/reports"))
+            .await
+            .unwrap();
+        let outside = std::env::temp_dir().join(format!("lv-headless-outside-{}", Uuid::new_v4()));
+        tokio::fs::write(&outside, b"outside").await.unwrap();
+        symlink(&outside, reports.join("report.json")).unwrap();
+
+        assert!(atomic_replace_regular(&reports.join("report.json"), b"new").is_err());
+        assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
+
+        let _ = tokio::fs::remove_dir_all(project).await;
+        let _ = tokio::fs::remove_file(outside).await;
+    }
+
 }
