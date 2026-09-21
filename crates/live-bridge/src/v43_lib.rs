@@ -196,6 +196,7 @@ pub struct LiveBridge {
     legacy: legacy::LiveBridge,
     continuity: Arc<RwLock<HashMap<SessionId, ProviderContinuityState>>>,
     action_envelopes: Arc<RwLock<HashMap<Uuid, CanonicalActionEnvelope>>>,
+    wave6_graphs: Arc<RwLock<HashMap<SessionId, localview_flow::InteractionGraph>>>,
     action_gate: Arc<Mutex<()>>,
 }
 
@@ -205,6 +206,7 @@ impl LiveBridge {
             legacy: legacy::LiveBridge::new(event_capacity, action_capacity),
             continuity: Arc::new(RwLock::new(HashMap::new())),
             action_envelopes: Arc::new(RwLock::new(HashMap::new())),
+            wave6_graphs: Arc::new(RwLock::new(HashMap::new())),
             action_gate: Arc::new(Mutex::new(())),
         }
     }
@@ -504,6 +506,7 @@ impl LiveBridge {
             .write()
             .await
             .retain(|_, envelope| envelope.session_id != session_id);
+        self.wave6_graphs.write().await.remove(&session_id);
         self.legacy.release_session(session_id).await;
     }
 }
