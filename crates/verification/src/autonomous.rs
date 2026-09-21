@@ -147,6 +147,7 @@ pub struct AutonomousVerificationReceipt {
     pub candidate_id: String,
     pub patch_digest: String,
     pub isolation_type: IsolationLevel,
+    pub external_side_effect_containment: ExternalSideEffectContainment,
     pub affected_state_plan_hash: ObjectHash,
     pub contracts_evaluated: ContractEvaluationSummary,
     pub mutation_results: Vec<MutationChallengeResult>,
@@ -167,6 +168,10 @@ pub struct AutonomousVerificationReceipt {
 impl AutonomousVerificationReceipt {
     pub fn digest(&self) -> ObjectHash {
         object_hash(self)
+    }
+
+    pub fn shadow_side_effect_containment(&self) -> ExternalSideEffectContainment {
+        self.external_side_effect_containment
     }
 
     pub fn hard_contract_failures(&self) -> Vec<String> {
@@ -362,6 +367,7 @@ pub fn build_autonomous_receipt(
         candidate_id: input.affected.change.candidate_id.clone(),
         patch_digest: input.affected.change.patch_digest.clone(),
         isolation_type: input.shadow_proof.isolation,
+        external_side_effect_containment: input.shadow_proof.external_side_effect_containment,
         affected_state_plan_hash,
         contracts_evaluated: input.contracts,
         mutation_results: input.mutations,
