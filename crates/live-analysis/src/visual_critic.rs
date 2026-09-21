@@ -7,8 +7,8 @@ use localview_design_grammar::{
 use localview_live_bridge::{ObserverEvent, ObserverEventKind};
 use localview_protocol::Rect;
 use localview_quality::{
-    CriticNode, CriticSourceHint, DesignGrammarBaseline, SourceHintAuthority,
-    VisualCriticReport, analyze_visual_critic, build_design_baseline,
+    CriticNode, CriticSourceHint, DesignGrammarBaseline, SourceHintAuthority, VisualCriticReport,
+    analyze_visual_critic, build_design_baseline,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -176,13 +176,7 @@ fn project_node(
                 *truncated = true;
                 break;
             }
-            project_node(
-                child,
-                retained_reference,
-                depth + 1,
-                projected,
-                truncated,
-            );
+            project_node(child, retained_reference, depth + 1, projected, truncated);
         }
     }
 }
@@ -370,10 +364,7 @@ fn parse_rect(value: &Value) -> Option<Rect> {
     let y = value.get("y")?.as_f64()?;
     let width = value.get("width")?.as_f64()?;
     let height = value.get("height")?.as_f64()?;
-    if [x, y, width, height]
-        .iter()
-        .any(|value| !value.is_finite())
-    {
+    if [x, y, width, height].iter().any(|value| !value.is_finite()) {
         return None;
     }
     Some(Rect {
@@ -385,16 +376,11 @@ fn parse_rect(value: &Value) -> Option<Rect> {
 }
 
 fn parse_padding(style: &serde_json::Map<String, Value>) -> Vec<f64> {
-    [
-        "paddingTop",
-        "paddingRight",
-        "paddingBottom",
-        "paddingLeft",
-    ]
-    .into_iter()
-    .filter_map(|key| style_px(style, key))
-    .filter(|value| *value >= 0.0)
-    .collect()
+    ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]
+        .into_iter()
+        .filter_map(|key| style_px(style, key))
+        .filter(|value| *value >= 0.0)
+        .collect()
 }
 
 fn parse_gaps(style: &serde_json::Map<String, Value>) -> Vec<f64> {
@@ -483,8 +469,7 @@ fn vertical_overlap_ratio(left: &Rect, right: &Rect) -> f64 {
 }
 
 fn horizontal_overlap_ratio(left: &Rect, right: &Rect) -> f64 {
-    let overlap =
-        ((left.x + left.width).min(right.x + right.width) - left.x.max(right.x)).max(0.0);
+    let overlap = ((left.x + left.width).min(right.x + right.width) - left.x.max(right.x)).max(0.0);
     let smaller = left.width.min(right.width);
     if smaller <= 0.0 {
         0.0
