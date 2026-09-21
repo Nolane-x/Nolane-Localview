@@ -46,6 +46,8 @@ pub struct HeadlessArgs {
     #[arg(long)]
     pub fixture: Option<PathBuf>,
     #[arg(long)]
+    pub allow_fixture_command: bool,
+    #[arg(long)]
     pub output_dir: Option<PathBuf>,
     #[arg(long)]
     pub visual: bool,
@@ -148,6 +150,7 @@ struct EvidenceSummary {
     classes: BTreeMap<String, usize>,
     ids: Vec<String>,
     hashes: Vec<String>,
+    source_files: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -172,6 +175,11 @@ pub async fn run(client: &Client, control: &str, token: &str, args: HeadlessArgs
         None => None,
     };
     if let Some(spec) = &fixture {
+        if (spec.setup.is_some() || spec.cleanup.is_some()) && !args.allow_fixture_command {
+            bail!(
+                "fixture setup/cleanup commands require explicit --allow-fixture-command policy"
+            );
+        }
         if let Some(command) = &spec.setup {
             run_fixture_command(&project_root, command, "setup").await?;
         }
@@ -314,7 +322,13 @@ async fn run_inner(
     .await?;
     let evidence = summarize_evidence(&evidence);
 
-    let git = read_git_annotation(client, control, token, session.id, &diagnostics).await;
+    let mut git = read_git_annotation(client, control, token, session.id, &diagnostics).await;
+    git.annotation
+        .relevant_source_files
+        .extend(evidence.source_files.iter().cloned());
+    git.annotation.relevant_source_files.sort();
+    git.annotation.relevant_source_files.dedup();
+    git.annotation.relevant_source_files.truncate(MAX_RELEVANT_FILES);
     let revision = git.working_tree_id.clone().or_else(|| {
         verification
             .get("revision")
@@ -859,11 +873,13 @@ fn summarize_evidence(value: &Value) -> EvidenceSummary {
     let mut classes = BTreeMap::new();
     let mut ids = Vec::new();
     let mut hashes = Vec::new();
+    let mut source_files = std::collections::BTreeSet::new();
     let Some(items) = value.as_array() else {
         return EvidenceSummary {
             classes,
             ids,
             hashes,
+            source_files: Vec::new(),
         };
     };
     for item in items.iter().rev().take(MAX_EVIDENCE).rev() {
@@ -895,6 +911,11 @@ fn summarize_evidence(value: &Value) -> EvidenceSummary {
             payload_hash: object_hash(item.get("payload").unwrap_or(&Value::Null)),
         };
         hashes.push(object_hash(&safe));
+        collect_evidence_source_files(
+            item.get("payload").unwrap_or(&Value::Null),
+            &mut source_files,
+            0,
+        );
     }
     ids.sort();
     ids.dedup();
@@ -904,6 +925,37 @@ fn summarize_evidence(value: &Value) -> EvidenceSummary {
         classes,
         ids,
         hashes,
+        source_files: source_files.into_iter().collect(),
+    }
+}
+
+fn collect_evidence_source_files(
+    value: &Value,
+    output: &mut std::collections::BTreeSet<String>,
+    depth: usize,
+) {
+    if depth > 6 || output.len() >= MAX_RELEVANT_FILES {
+        return;
+    }
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if matches!(key.as_str(), "file" | "source_file" | "sourceFile") {
+                    if let Some(path) = value.as_str() {
+                        if safe_relative_report_path(path) {
+                            output.insert(bounded_text(path, 512));
+                        }
+                    }
+                }
+                collect_evidence_source_files(value, output, depth + 1);
+            }
+        }
+        Value::Array(values) => {
+            for value in values.iter().take(128) {
+                collect_evidence_source_files(value, output, depth + 1);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1617,6 +1669,7 @@ mod tests {
             session: None,
             analysis: HeadlessAnalysis::Diagnose,
             fixture: None,
+            allow_fixture_command: false,
             output_dir: None,
             visual: false,
             chromium: false,
@@ -1686,6 +1739,31 @@ mod tests {
             two.id
         );
         assert!(resolve_session(&[two], Some(Uuid::new_v4())).is_err());
+    }
+
+    #[test]
+    fn fixture_commands_require_explicit_execution_policy() {
+        let fixture = FixtureSpec {
+            schema_version: 1,
+            route: "/".into(),
+            viewport: FixtureViewport {
+                width: 1280,
+                height: 720,
+                device_scale_factor: 1.0,
+            },
+            stable_state: "ready".into(),
+            allow_visual: false,
+            allow_chromium: false,
+            setup: Some(FixtureCommand {
+                executable: "node".into(),
+                args: vec!["fixture.mjs".into()],
+                cwd: None,
+                timeout_ms: 1000,
+            }),
+            cleanup: None,
+        };
+        assert!(fixture.setup.is_some());
+        assert!(!args().allow_fixture_command);
     }
 
     #[test]
