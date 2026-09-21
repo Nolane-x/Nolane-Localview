@@ -1,0 +1,104 @@
+name: Wave 9 autonomous verification
+
+on:
+  pull_request:
+    paths:
+      - "crates/contracts/**"
+      - "crates/verification/**"
+      - "crates/mutation/**"
+      - "crates/counterfactual/**"
+      - "crates/state-space/**"
+      - "crates/postcondition-contracts/**"
+      - "crates/planner/**"
+      - "apps/desktop/src-tauri/src/trusted_fix.rs"
+      - "apps/desktop/src-tauri/src/trusted_verify.rs"
+      - "apps/desktop/src-tauri/tests/wave9_autonomous_verification_contract.rs"
+      - "tools/wave9-autonomous-verification/**"
+      - "docs/superpowers/specs/2026-09-21-wave9-autonomous-verification-design.md"
+      - ".github/workflows/wave9-autonomous-verification.yml"
+  push:
+    branches:
+      - "feat/wave9-autonomous-verification"
+
+concurrency:
+  group: wave9-autonomous-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Exact checked-out head
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Rustfmt owned Wave 9 Rust
+        run: |
+          rustfmt --edition 2024 --check             crates/contracts/src/lib.rs             crates/contracts/src/autonomous.rs             crates/verification/src/lib.rs             crates/verification/src/autonomous.rs             crates/mutation/src/lib.rs             crates/mutation/src/autonomous.rs             crates/counterfactual/src/lib.rs             crates/counterfactual/src/shadow.rs             crates/counterfactual/tests/shadow_candidate.rs             crates/state-space/src/lib.rs             crates/state-space/src/affected.rs             crates/postcondition-contracts/src/lib.rs             crates/planner/src/lib.rs             crates/planner/src/autonomous_verification.rs
+
+      - name: Contracts
+        run: cargo test -p localview-contracts --all-targets -- --nocapture
+
+      - name: Verification
+        run: cargo test -p localview-verification --all-targets -- --nocapture
+
+      - name: Mutation
+        run: cargo test -p localview-mutation --all-targets -- --nocapture
+
+      - name: Counterfactual isolated shadow fixture
+        run: cargo test -p localview-counterfactual --all-targets -- --nocapture
+
+      - name: State-space
+        run: cargo test -p localview-state-space --all-targets -- --nocapture
+
+      - name: Postcondition contracts
+        run: cargo test -p localview-postcondition-contracts --all-targets -- --nocapture
+
+      - name: Planner
+        run: cargo test -p localview-planner --all-targets -- --nocapture
+
+      - name: Cargo check owned crates
+        run: |
+          cargo check             -p localview-contracts             -p localview-verification             -p localview-mutation             -p localview-counterfactual             -p localview-state-space             -p localview-postcondition-contracts             -p localview-planner             --all-targets
+
+      - name: Clippy owned crates
+        run: |
+          cargo clippy             -p localview-contracts             -p localview-verification             -p localview-mutation             -p localview-counterfactual             -p localview-state-space             -p localview-postcondition-contracts             -p localview-planner             --all-targets -- -D warnings
+
+      - name: Assert fixture left no worktrees
+        run: |
+          test "$(git worktree list --porcelain | grep '^worktree ' | wc -l)" -eq 1
+          test -z "$(git status --porcelain=v1)"
+
+  desktop-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native workspace system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Trusted Fix Verify Wave 5 regression guard
+        run: cargo test -p localview-desktop --test wave5_fix_affected_region_verification_contract -- --nocapture
+      - name: Wave 9 desktop authority contract
+        run: |
+          if test -f apps/desktop/src-tauri/tests/wave9_autonomous_verification_contract.rs; then
+            cargo test -p localview-desktop --test wave9_autonomous_verification_contract -- --nocapture
+          fi
+      - name: Desktop cargo check
+        run: cargo check -p localview-desktop --all-targets
