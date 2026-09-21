@@ -16,6 +16,7 @@ on:
   push:
     branches:
       - "feat/wave4-content-locale-stress"
+      - "chore/wave4-wave5-*"
 
 concurrency:
   group: wave4-content-locale-stress-${{ github.ref }}
