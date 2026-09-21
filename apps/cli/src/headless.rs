@@ -2326,6 +2326,8 @@ mod tests {
         ));
         let artifact_root = root.join("artifacts");
         tokio::fs::create_dir_all(&artifact_root).await.unwrap();
+        let root = tokio::fs::canonicalize(&root).await.unwrap();
+        let artifact_root = tokio::fs::canonicalize(&artifact_root).await.unwrap();
         let candidate = BaselineEnvelope {
             schema_version: 1,
             state_identity: "sha256:state".into(),
