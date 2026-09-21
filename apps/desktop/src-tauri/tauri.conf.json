@@ -35,7 +35,7 @@
         "object-src": "'none'",
         "base-uri": "'none'",
         "frame-ancestors": "'none'",
-        "frame-src": "'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*"
+        "frame-src": "'self' http://localhost:* http://127.0.0.1:* http://[::1]:* https://localhost:* https://127.0.0.1:* https://[::1]:*"
       },
       "capabilities": [
         "main-capability",
