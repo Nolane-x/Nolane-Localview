@@ -147,16 +147,8 @@ pub fn extract_project_grammar(
     ProjectDesignGrammar {
         spacing_families: extract(&samples.spacing, policy.spacing_epsilon, policy),
         type_size_families: extract(&samples.font_sizes, policy.type_size_epsilon, policy),
-        font_weight_families: extract(
-            &samples.font_weights,
-            policy.font_weight_epsilon,
-            policy,
-        ),
-        line_height_families: extract(
-            &samples.line_heights,
-            policy.line_height_epsilon,
-            policy,
-        ),
+        font_weight_families: extract(&samples.font_weights, policy.font_weight_epsilon, policy),
+        line_height_families: extract(&samples.line_heights, policy.line_height_epsilon, policy),
         control_height_families: extract(
             &samples.control_heights,
             policy.control_height_epsilon,
@@ -225,8 +217,7 @@ fn extract(
 }
 
 fn family(cluster: Vec<DesignMetricSample>, total: usize, max_refs: usize) -> ScaleFamily {
-    let center =
-        cluster.iter().map(|sample| sample.value).sum::<f64>() / cluster.len() as f64;
+    let center = cluster.iter().map(|sample| sample.value).sum::<f64>() / cluster.len() as f64;
     let minimum = cluster
         .iter()
         .map(|sample| sample.value)
