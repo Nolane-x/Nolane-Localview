@@ -151,39 +151,43 @@ The Wave 3 fault layer is intentionally not a general proxy: arbitrary internet 
 
 ## Wave 4 — Layout + responsive intelligence
 
-Landed foundation:
+Software closure landed:
 
-- canonical four-preset responsive sweep/contact-sheet execution over the exact LocalView-owned preview, with bounded native-pixel capture/redaction and restore-before-persistence authority.
+- live bounded layout projection now carries computed grid/flex, overflow and position evidence into deterministic layout analysis;
+- overflow/container clipping, sibling overlap and bounded fixed/sticky collision checks are connected to live snapshots with fail-closed authority when geometry or stacking evidence is insufficient;
+- spacing rhythm and local alignment families are connected to live evidence with explicit heuristic/deterministic classification and subpixel tolerance;
+- canonical four-preset responsive sweep/contact-sheet execution remains the native-pixel evidence baseline with exact preview restoration before persistence;
+- adaptive responsive execution is live with at most 12 unique widths, bounded candidate downsampling, fixed route/state/height authority, observed transition bracketing and bounded binary refinement;
+- responsive issue evidence covers overflow, clipping, disappearance, collisions, large layout jumps, out-of-viewport controls/text, breakpoint-local regression and nearby instability without claiming aesthetic quality;
+- transactional content/locale stress is live through four bounded synthetic profiles on the exact managed surface, with exact session/route/document-generation authority, privacy-safe mutation, deterministic overflow/collision/disappearance comparison, serialized capture ownership and mandatory restoration proof.
 
-Still required:
+Truth boundaries:
 
-- computed grid/flex data.
-- overflow/occlusion/sticky collision detection beyond the bounded visibility packet.
-- spacing rhythm and alignment families connected to live snapshots.
-- breakpoint adaptive/binary search execution.
-- content stress matrix and locale expansion.
-- deeper responsive issue intelligence beyond evidence acquisition.
+- adaptive results are observed responsive transitions, not claimed CSS media-query/source breakpoints;
+- contradictory, truncated or non-monotonic responsive evidence is inconclusive;
+- content-stress profiles are synthetic expansion/locale-shape probes, not translations and not retained source text;
+- W10 mixed-DPI physical hardware proof remains an independent deferred hardware gate and is not part of Wave 4 software closure.
 
 ## Wave 5 — Source intelligence
 
-Landed foundation:
+Software closure landed:
 
-- stack/data-source ranking primitives;
-- source-region/dependency graph primitives;
-- live explicit `data-source` / `data-component-source` propagation into semantic nodes;
-- progressive component targeting consumes corroborated explicit `source.component` ancestry without fabricating ownership from tag/class/depth heuristics.
-- `localview-source-map` now contains a bounded Source Map v3 consumer with checked Base64 VLQ decoding, exact generated-line lookup, deterministic unmapped-region failure, strict source/name/mapping/coordinate caps, normalized `sourceRoot` references and no `sourcesContent` retention.
-- project-owned Source Map runtime authority is connected through authenticated exact-session resolution. The daemon derives the project root from session authority, accepts only project-relative generated files and bounded generated positions, discovers only deterministic sibling `.map` files, canonicalizes generated/map/original source paths under the exact project root, rejects traversal/symlink/remote-source escapes, caps map input before parse, and returns only project-relative source identity without `sourcesContent` or absolute project paths.
-- trusted live RuntimeError position correlation is connected to that project-owned resolver through authenticated exact-session `POST /v1/sessions/{id}/runtime-source/resolve`. Callers supply only retained `event_seq`; LocalView derives the same-server generated URL/line/column from bounded RuntimeError evidence, enforces loopback + exact scheme/effective-port authority, normalizes browser 1-based columns to Source Map generated coordinates, rejects encoded/remote/mismatched sources, and returns only the bounded project-relative source resolution without runtime message/stack/query/source content.
-- bounded React live component ownership is connected to fresh semantic projection. Explicit `data-component-source` remains higher authority; otherwise LocalView performs read-only exact-element host-fiber discovery with `fiber.stateNode === element`, bounded host-key/probe/owner depth, React <=18 `_debugSource` support and a bounded same-origin React 19 `_debugStack` fallback. Retained ownership contains only bounded component/source identity, never props/state/context/hooks, and real Chromium + React 19.2.8/Vite proof covers ownership, explicit-source precedence, privacy, plain-DOM isolation and fake-fiber rejection.
-- bounded Svelte 5 live ownership is landed: exact-element own-data `__svelte_meta` → `loc` evidence is read without invoking accessors, accepts only bounded project-relative `.svelte` file identity with true compiler line/column, retains no props/state/context/reactive values, and projects deterministic Svelte component ownership into fresh semantic snapshots. Real Svelte 5.57.1 + Vite + Chromium proof covers ownership, explicit-source precedence, privacy, accessor isolation and unsafe-path rejection.
+- stack/data-source ranking, source-region/dependency graph primitives and explicit `data-source` / `data-component-source` propagation remain the highest explicit source authority;
+- the bounded Source Map v3 consumer and authenticated exact-session project-owned Source Map runtime resolve only contained project sources and retain no `sourcesContent`;
+- trusted retained RuntimeError positions correlate through the same project-owned authority from caller-supplied `event_seq` only;
+- coordinate-independent `ComponentOwnership` is live across bounded React, Svelte and Vue exact-element evidence with explicit-source precedence and no retained props/state/context/hooks;
+- Vue compiler paths are canonicalized under backend-owned project authority before retention;
+- bounded CSS declaration trace and fail-closed author-cascade evidence are live; supported author winners remain explicitly narrower than final browser-computed provenance;
+- CSS source authority can promote a same-origin stylesheet hint to verified project file and exact declaration line/column only when a unique bounded parse or exact project-owned Source Map segment proves it;
+- direct human point-select is live on the exact managed WebView: pointer hit-testing yields a stable LocalView `ElementRef`, suppresses the selection click, cleans up one-shot overlay/listeners, fences route/session/document-generation drift and feeds the existing Measure/Open Source/Ask AI/Fix/Verify flows;
+- trusted Fix now reaches HMR-aware settle, fresh semantic/source validation, bounded affected-region evidence and deterministic Verify receipts.
 
-Remaining integration:
+Truth boundaries:
 
-- Vue ownership foundation and backend-safe absolute-path correlation; bounded Svelte ownership is landed.
-- CSS declaration/specificity tracing.
-- issue → element → component → source resolution.
-- save/HMR/affected-region validation loop.
+- LocalView never fabricates file/line/column, component ownership, selector authority or root cause;
+- ambiguous CSS declarations, unsafe/remote source maps, cross-origin content and unsupported runtime contexts fail closed;
+- the bounded author-cascade subset is not claimed to be the browser's complete cascade winner model;
+- direct point selection requires the exact LocalView-managed/instrumented surface; opaque cross-origin frame contents are not traversed.
 
 ## Wave 6 — Accessibility + interaction
 
