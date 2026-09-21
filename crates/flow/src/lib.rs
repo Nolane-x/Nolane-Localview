@@ -734,6 +734,26 @@ mod tests {
     }
 
     #[test]
+    fn focus_loop_is_distinct_from_immediate_repeat() {
+        let initial = FocusObservation {
+            transition_index: 0,
+            reference: Some("@e1".into()),
+            route: "/".into(),
+            document_generation: 1,
+            tabindex: Some(0),
+            hidden_or_offscreen: false,
+            is_body_or_document: false,
+        };
+        let transitions = vec![
+            FocusObservation { transition_index: 1, reference: Some("@e2".into()), route: "/".into(), document_generation: 1, tabindex: Some(0), hidden_or_offscreen: false, is_body_or_document: false },
+            FocusObservation { transition_index: 2, reference: Some("@e3".into()), route: "/".into(), document_generation: 1, tabindex: Some(0), hidden_or_offscreen: false, is_body_or_document: false },
+            FocusObservation { transition_index: 4, reference: Some("@e1".into()), route: "/".into(), document_generation: 1, tabindex: Some(0), hidden_or_offscreen: false, is_body_or_document: false },
+        ];
+        let result = analyze_keyboard_journey(initial, transitions, 64);
+        assert!(result.issues.iter().any(|issue| issue.kind == FocusIssueKind::Loop));
+    }
+
+    #[test]
     fn missing_feedback_is_not_promoted_to_dead_click() {
         let receipt = classify_feedback(
             true,
@@ -743,6 +763,18 @@ mod tests {
             FeedbackSignals::default(),
         );
         assert_eq!(receipt.verdict, FeedbackVerdict::NoObservedFeedback);
+    }
+
+    #[test]
+    fn expired_observation_window_is_inconclusive_even_without_feedback() {
+        let receipt = classify_feedback(
+            true,
+            801,
+            800,
+            250,
+            FeedbackSignals::default(),
+        );
+        assert_eq!(receipt.verdict, FeedbackVerdict::Inconclusive);
     }
 
     #[test]
@@ -758,6 +790,26 @@ mod tests {
             },
         );
         assert_eq!(receipt.verdict, FeedbackVerdict::DelayedFeedback);
+    }
+
+    #[test]
+    fn replay_succeeds_only_with_exact_states_and_valid_stable_ref() {
+        let plan = vec![ReplayStep {
+            index: 0,
+            action: InteractionActionKind::Click,
+            target: "@e1".into(),
+            expected_before: state("/", 3, "a"),
+            expected_after: state("/", 3, "b"),
+            evidence_refs: vec!["evidence-1".into()],
+        }];
+        let receipt = replay_receipt(
+            &plan,
+            &[state("/", 3, "a"), state("/", 3, "b")],
+            &[true],
+        );
+        assert_eq!(receipt.status, ReplayStatus::Complete);
+        assert_eq!(receipt.steps_passed, 1);
+        assert_eq!(receipt.first_failed_step, None);
     }
 
     #[test]
