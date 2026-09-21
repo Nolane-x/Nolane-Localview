@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod visual_critic;
+
+pub use visual_critic::*;
+
 use std::collections::{BTreeMap, BTreeSet};
 use localview_protocol::{ElementRef, Rect, SourceLocation};
 use serde::{Deserialize, Serialize};
