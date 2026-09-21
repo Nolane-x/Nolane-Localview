@@ -6,5 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+localview-design-grammar = { path = "../design-grammar" }
 localview-protocol = { path = "../protocol" }
 serde.workspace = true
