@@ -13,6 +13,7 @@ chrono.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
 localview-protocol = { path = "../protocol" }
+localview-flow = { path = "../flow" }
 localview-token-budget = { path = "../token-budget" }
 serde.workspace = true
 serde_json.workspace = true

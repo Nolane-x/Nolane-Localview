@@ -26,7 +26,10 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": ["main-capability", "preview-bridge-capability"]
+      "capabilities": [
+        "main-capability",
+        "preview-bridge-capability"
+      ]
     }
   },
   "bundle": {
@@ -34,6 +37,10 @@
     "targets": "all",
     "category": "DeveloperTool",
     "shortDescription": "AI-native localhost visual runtime",
-    "longDescription": "Automatically discovers local web applications and exposes a lightweight native preview plus an AI-native observation and control plane."
+    "longDescription": "Automatically discovers local web applications and exposes a lightweight native preview plus an AI-native observation and control plane.",
+    "resources": {
+      "resources/wave6/axe.min.js": "wave6/axe.min.js",
+      "resources/wave6/axe-core-LICENSE": "wave6/axe-core-LICENSE"
+    }
   }
 }

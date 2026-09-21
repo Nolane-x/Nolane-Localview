@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use localview_a11y::A11yFinding;
+use localview_a11y::{A11yEvidenceKind, A11yFinding};
 use localview_layout::{LayoutIssue, LayoutIssueClass, Severity};
 use localview_network::{NetworkFinding, NetworkIssueKind};
 use localview_performance::PerformanceFinding;
@@ -78,19 +78,38 @@ pub fn assemble(
         evidence: None,
     }));
 
-    issues.extend(accessibility.iter().map(|issue| DiagnosticIssue {
-        category: "accessibility".into(),
-        code: issue.code.clone(),
-        message: issue.message.clone(),
-        severity: 2,
-        confidence: issue.confidence,
-        class: if issue.deterministic {
-            DiagnosticClass::Deterministic
-        } else {
-            DiagnosticClass::Heuristic
-        },
-        refs: vec![issue.reference.clone()],
-        evidence: None,
+    issues.extend(accessibility.iter().map(|issue| {
+        DiagnosticIssue {
+            category: "accessibility".into(),
+            code: issue.code.clone(),
+            message: issue.message.clone(),
+            severity: 2,
+            confidence: issue.confidence,
+            class: match issue.evidence_kind {
+                A11yEvidenceKind::LocalDeterministic if issue.deterministic => {
+                    DiagnosticClass::Deterministic
+                }
+                A11yEvidenceKind::LocalDeterministic
+                | A11yEvidenceKind::AxeRule
+                | A11yEvidenceKind::NativeAx
+                | A11yEvidenceKind::Heuristic => DiagnosticClass::Heuristic,
+            },
+            refs: if issue.reference.is_empty() {
+                Vec::new()
+            } else {
+                vec![issue.reference.clone()]
+            },
+            evidence: Some(match issue.evidence_kind {
+                A11yEvidenceKind::LocalDeterministic => "local_deterministic".into(),
+                A11yEvidenceKind::AxeRule => issue
+                    .rule_id
+                    .as_deref()
+                    .map(|rule| format!("axe_rule:{rule}"))
+                    .unwrap_or_else(|| "axe_rule".into()),
+                A11yEvidenceKind::NativeAx => "native_ax".into(),
+                A11yEvidenceKind::Heuristic => "heuristic".into(),
+            }),
+        }
     }));
 
     issues.extend(performance.iter().map(|issue| DiagnosticIssue {
@@ -139,6 +158,29 @@ mod tests {
         let report = assemble(&[], &[], &[], &[]);
         assert!(report.issues.is_empty());
         assert_eq!(report.deterministic, 0);
+    }
+
+    #[test]
+    fn axe_evidence_is_not_promoted_to_deterministic_truth() {
+        let accessibility = vec![A11yFinding {
+            code: "button-name".into(),
+            reference: String::new(),
+            message: "axe rule evidence".into(),
+            deterministic: false,
+            confidence: 99,
+            evidence_kind: A11yEvidenceKind::AxeRule,
+            target_resolution: localview_a11y::TargetResolution::Unresolved,
+            rule_id: Some("button-name".into()),
+            discrepancies: vec![],
+        }];
+        let report = assemble(&[], &[], &accessibility, &[]);
+        assert_eq!(report.deterministic, 0);
+        assert_eq!(report.heuristic, 1);
+        assert!(report.issues[0].refs.is_empty());
+        assert_eq!(
+            report.issues[0].evidence.as_deref(),
+            Some("axe_rule:button-name")
+        );
     }
 
     #[test]

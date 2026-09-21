@@ -6,6 +6,7 @@ mod point_select;
 mod trusted_ai;
 mod trusted_fix;
 mod trusted_verify;
+mod wave6_accessibility_interaction;
 pub mod visual_capture;
 pub mod workspace_surface;
 
@@ -16,7 +17,6 @@ use std::{
     process::Command,
 };
 
-use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
     ActionCancellationSignal, BridgeAction, BridgeActionKind, BridgeActionResult, IngestReport,
     NetworkFaultControlRequest, NetworkFaultControlResult, ObserverBatch, ObserverEvent,
@@ -1994,11 +1994,8 @@ async fn open_preview(
         label.clone(),
     );
     let reservation = workspace_surface::surface_resource::reserve_surface(session).await?;
-    let initialization_script = format!(
-        "{}\n{}",
-        bootstrap_script(&InstrumentationConfig::default()),
-        preview_bridge_script(session)
-    );
+    let initialization_script =
+        wave6_accessibility_interaction::managed_initialization_script(&app, session)?;
 
     let window = match WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed))
         .title(format!("{title} — LocalView"))
