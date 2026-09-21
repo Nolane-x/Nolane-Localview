@@ -416,9 +416,23 @@ fn ensure_secure_state_root(state_root: &Path) -> Result<()> {
 
     #[cfg(unix)]
     {
-        fs::set_permissions(state_root, fs::Permissions::from_mode(0o700))
+        let directory = fs::File::open(state_root).context("open LocalView state directory")?;
+        let opened = directory
+            .metadata()
+            .context("inspect opened LocalView state directory")?;
+        let after = fs::symlink_metadata(state_root)
+            .context("revalidate LocalView state directory")?;
+        if after.file_type().is_symlink()
+            || !after.is_dir()
+            || opened.dev() != after.dev()
+            || opened.ino() != after.ino()
+        {
+            anyhow::bail!("LocalView state directory identity changed during secure open");
+        }
+        directory
+            .set_permissions(fs::Permissions::from_mode(0o700))
             .context("secure LocalView state directory permissions")?;
-        let mode = fs::symlink_metadata(state_root)?.permissions().mode() & 0o777;
+        let mode = directory.metadata()?.permissions().mode() & 0o777;
         if mode & 0o077 != 0 {
             anyhow::bail!("LocalView state directory is not owner-only");
         }
@@ -437,12 +451,6 @@ fn read_existing_token(path: &Path) -> Result<Option<String>> {
         anyhow::bail!("control token must be a regular file and may not be a symlink/reparse entry");
     }
 
-    #[cfg(unix)]
-    {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .context("secure control token permissions")?;
-    }
-
     let mut file = fs::File::open(path).context("open control token")?;
     let opened = file.metadata().context("inspect opened control token")?;
     let after = fs::symlink_metadata(path).context("revalidate control token path")?;
@@ -455,7 +463,9 @@ fn read_existing_token(path: &Path) -> Result<Option<String>> {
         if opened.dev() != after.dev() || opened.ino() != after.ino() {
             anyhow::bail!("control token identity changed during secure open");
         }
-        let mode = opened.permissions().mode() & 0o777;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .context("secure control token permissions")?;
+        let mode = file.metadata()?.permissions().mode() & 0o777;
         if mode & 0o077 != 0 {
             anyhow::bail!("control token is not owner-only");
         }
@@ -505,7 +515,6 @@ fn state_dir() -> Result<PathBuf> {
         .map(|path| path.join("LocalView"))
         .context("no local data directory")
 }
-
 
 #[cfg(test)]
 mod security_tests {
