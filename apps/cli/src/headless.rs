@@ -1558,11 +1558,17 @@ fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
     file.sync_all()?;
 
     revalidate_canonical_directory(parent, "persistence parent")?;
-    if let Ok(metadata) = fs::symlink_metadata(path)
-        && (metadata.file_type().is_symlink() || !metadata.is_file())
-    {
-        file.discard()?;
-        bail!("persistence leaf changed to a non-regular entry before commit");
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            file.discard()?;
+            bail!("persistence leaf changed to a non-regular entry before commit");
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            file.discard()?;
+            return Err(error.into());
+        }
     }
     file.commit()?;
 
