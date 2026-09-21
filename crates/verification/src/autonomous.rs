@@ -181,18 +181,55 @@ pub fn run_production_candidate_preflight(
     candidate: &CounterfactualCandidate,
 ) -> Result<ProductionCandidatePreflightReceipt, String> {
     let expected_patch_digest = patch_digest(&candidate.overlays);
+    let identity = || {
+        (
+            Some(candidate.id.to_string()),
+            Some(candidate.base_revision.clone()),
+            Some(expected_patch_digest.clone()),
+        )
+    };
     let mut shadow = ShadowWorkspace::prepare(repository_root, candidate)
         .map_err(|error| format!("Wave 9 shadow preparation failed: {error:?}"))?;
+
     let proof = match shadow.proof() {
         Ok(proof) => proof,
         Err(error) => {
-            let _ = shadow.cleanup();
-            return Err(format!("Wave 9 shadow proof failed: {error:?}"));
+            let cleanup = shadow.cleanup().ok();
+            let (candidate_id, base_revision, patch_digest) = identity();
+            let mut reasons = vec![format!("Wave 9 shadow proof failed: {error:?}")];
+            if cleanup
+                .as_ref()
+                .is_none_or(|proof| !(proof.attempted && proof.worktree_removed && proof.directory_absent))
+            {
+                reasons.push("shadow cleanup proof is unavailable or incomplete after proof failure".into());
+            }
+            return Ok(ProductionCandidatePreflightReceipt {
+                candidate_id,
+                base_revision,
+                patch_digest,
+                shadow_proof: None,
+                cleanup_proof: cleanup,
+                verdict: ProductionCandidatePreflightVerdict::Rejected,
+                reasons,
+            });
         }
     };
-    let cleanup = shadow
-        .cleanup()
-        .map_err(|error| format!("Wave 9 shadow cleanup failed: {error:?}"))?;
+
+    let cleanup = match shadow.cleanup() {
+        Ok(cleanup) => cleanup,
+        Err(error) => {
+            let (candidate_id, base_revision, patch_digest) = identity();
+            return Ok(ProductionCandidatePreflightReceipt {
+                candidate_id,
+                base_revision,
+                patch_digest,
+                shadow_proof: Some(proof),
+                cleanup_proof: None,
+                verdict: ProductionCandidatePreflightVerdict::Rejected,
+                reasons: vec![format!("Wave 9 shadow cleanup failed: {error:?}")],
+            });
+        }
+    };
 
     let mut reasons = Vec::new();
     let identity_matches = proof.candidate_id == candidate.id
