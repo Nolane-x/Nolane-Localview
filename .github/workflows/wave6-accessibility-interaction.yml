@@ -22,14 +22,14 @@ on:
       - "feat/wave6-accessibility-interaction"
 
 concurrency:
-  group: wave6-accessibility-interaction-\${{ github.ref }}
+  group: wave6-accessibility-interaction-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
-  WAVE6_EXACT_HEAD: \${{ github.event.pull_request.head.sha || github.sha }}
+  WAVE6_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   contracts:
@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: \${{ env.WAVE6_EXACT_HEAD }}
+          ref: ${{ env.WAVE6_EXACT_HEAD }}
           fetch-depth: 1
 
       - name: Assert exact head
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: \${{ env.WAVE6_EXACT_HEAD }}
+          ref: ${{ env.WAVE6_EXACT_HEAD }}
           fetch-depth: 1
 
       - name: Assert exact head
