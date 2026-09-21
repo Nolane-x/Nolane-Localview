@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod native_ax;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use localview_protocol::{ElementRef, Rect, SemanticNode};
