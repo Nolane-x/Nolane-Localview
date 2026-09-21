@@ -25,6 +25,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{process::Command, time::timeout};
 
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
@@ -1550,8 +1558,16 @@ fn read_optional_regular_leaf(path: &Path, max_bytes: u64) -> Result<Option<Vec<
     if before.len() > max_bytes {
         bail!("persistence leaf exceeds bounded size policy");
     }
-    let mut file = fs::File::open(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let mut file = options.open(path)?;
     let opened = file.metadata()?;
+    #[cfg(windows)]
+    if opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        bail!("persistence leaf handle resolves to a reparse point");
+    }
     let after = fs::symlink_metadata(path)?;
     if after.file_type().is_symlink() || !after.is_file() || after.len() != before.len() {
         bail!("persistence leaf identity changed during read");
