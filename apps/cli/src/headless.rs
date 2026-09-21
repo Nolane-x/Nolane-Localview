@@ -1214,7 +1214,7 @@ async fn compare_and_retain_baseline(
             Err(reason) => {
                 comparison.status = BaselineComparisonStatus::Incompatible;
                 comparison.reasons.push(reason);
-                should_store = true;
+                should_store = update;
             }
         }
     }
@@ -1924,6 +1924,68 @@ mod tests {
             ),
             BoundedRequestDisposition::Unavailable("native_visual_diff_failed".into())
         );
+    }
+
+    #[tokio::test]
+    async fn missing_retained_baseline_requires_explicit_update() {
+        let root = std::env::temp_dir().join(format!(
+            "localview-wave8-missing-baseline-{}",
+            Uuid::new_v4()
+        ));
+        let artifact_root = root.join("artifacts");
+        tokio::fs::create_dir_all(&artifact_root).await.unwrap();
+        let candidate = BaselineEnvelope {
+            schema_version: 1,
+            state_identity: "sha256:state".into(),
+            route: "/".into(),
+            viewport: (1280, 720),
+            evidence_hashes: vec!["sha256:evidence".into()],
+            design_baseline_hash: None,
+            created_revision: Some("abc".into()),
+            provenance: BTreeMap::new(),
+        }
+        .normalized();
+
+        let mut store = ArtifactStore::open(&artifact_root, 1024 * 1024)
+            .await
+            .unwrap();
+        let (created, _) = compare_and_retain_baseline(
+            &root,
+            &artifact_root,
+            &mut store,
+            &candidate,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.status, BaselineComparisonStatus::Created);
+
+        let index = load_baseline_index(&root.join("baseline-index.json"))
+            .await
+            .unwrap();
+        let locator = index.states.get(&candidate.state_identity).unwrap();
+        tokio::fs::remove_file(artifact_root.join(&locator.storage_id))
+            .await
+            .unwrap();
+
+        let mut reopened = ArtifactStore::open(&artifact_root, 1024 * 1024)
+            .await
+            .unwrap();
+        let (comparison, replacement) = compare_and_retain_baseline(
+            &root,
+            &artifact_root,
+            &mut reopened,
+            &candidate,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(comparison.status, BaselineComparisonStatus::Incompatible);
+        assert!(replacement.is_none());
+
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]
