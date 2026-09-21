@@ -185,12 +185,17 @@ fn overlay_model_preserves_class_and_suppresses_capture() {
     );
     let overlay = overlay_model(&report, Some("missing"));
     assert!(overlay.suppress_during_evidence_capture);
-    assert!(
-        overlay
-            .items
+    assert_eq!(overlay.items.len(), report.findings.len());
+    for item in &overlay.items {
+        let source = report
+            .findings
             .iter()
-            .all(|item| item.class == CriticEvidenceClass::Deterministic)
-    );
+            .find(|finding| finding.id == item.finding_id)
+            .expect("overlay item must map to a critic finding");
+        assert_eq!(item.class, source.class);
+        assert_eq!(item.confidence, source.confidence);
+        assert_eq!(item.affected_refs, source.affected_refs);
+    }
 }
 
 #[test]
