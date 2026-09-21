@@ -1210,19 +1210,28 @@ enum BoundedRequestDisposition {
 }
 
 fn classify_control_status(status: StatusCode, value: &Value) -> BoundedRequestDisposition {
-    if status == StatusCode::TOO_MANY_REQUESTS
-        && value.get("error").and_then(Value::as_str) == Some("resource_governor_denied")
-    {
+    let error = value.get("error").and_then(Value::as_str);
+    if status == StatusCode::TOO_MANY_REQUESTS && error == Some("resource_governor_denied") {
         return BoundedRequestDisposition::ResourceDenied;
     }
-    if matches!(
-        status,
-        StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT | StatusCode::SERVICE_UNAVAILABLE
-    ) {
-        let reason = value
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("visual_or_chromium_unavailable");
+    let bounded_optional_unavailable = matches!(
+        error,
+        Some(
+            "chromium_executor_unavailable"
+                | "perception_budget_exhausted"
+                | "perception_budget_exceeded"
+                | "perception_executor_unavailable"
+                | "perception_cycle_step_limit"
+                | "invalid_chromium_target"
+        )
+    );
+    if bounded_optional_unavailable
+        || matches!(
+            status,
+            StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT | StatusCode::SERVICE_UNAVAILABLE
+        )
+    {
+        let reason = error.unwrap_or("visual_or_chromium_unavailable");
         return BoundedRequestDisposition::Unavailable(bounded_text(reason, 160));
     }
     if !status.is_success() {
@@ -2084,6 +2093,27 @@ mod tests {
             ),
             BoundedRequestDisposition::Unavailable("native_visual_diff_failed".into())
         );
+        assert_eq!(
+            classify_control_status(
+                StatusCode::CONFLICT,
+                &json!({"error":"chromium_executor_unavailable"})
+            ),
+            BoundedRequestDisposition::Unavailable("chromium_executor_unavailable".into())
+        );
+        assert_eq!(
+            classify_control_status(
+                StatusCode::CONFLICT,
+                &json!({"error":"perception_budget_exhausted"})
+            ),
+            BoundedRequestDisposition::Unavailable("perception_budget_exhausted".into())
+        );
+        assert!(matches!(
+            classify_control_status(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &json!({"error":"invalid_fixture_contract"})
+            ),
+            BoundedRequestDisposition::Fatal(_)
+        ));
     }
 
     #[tokio::test]
