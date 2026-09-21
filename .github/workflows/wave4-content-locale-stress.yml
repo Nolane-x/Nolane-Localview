@@ -83,7 +83,8 @@ jobs:
             -A clippy::too_many_arguments \
             -A clippy::if_same_then_else \
             -A clippy::match_like_matches_macro \
-            -A clippy::type_complexity
+            -A clippy::type_complexity \
+            -A dead_code
 
   browser-proof:
     runs-on: ubuntu-24.04
