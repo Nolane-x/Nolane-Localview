@@ -4,6 +4,8 @@ mod consequential_recovery;
 mod process_metrics;
 
 use std::{
+    fs,
+    io::{Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{
@@ -45,6 +47,9 @@ use localview_windows_observe_runtime::{
 use localview_windows_uia_provider::WindowsUiaWorkerConfig;
 use tokio::time::MissedTickBehavior;
 use tracing::{info, warn};
+
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
 const SURFACE_OWNER_REAP_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -386,24 +391,185 @@ fn spawn_windows_consequential_recovery_loop(
     });
 }
 
-async fn load_or_create_token(state_root: &Path) -> Result<String> {
-    tokio::fs::create_dir_all(state_root).await?;
-    let path = state_root.join("control.token");
-    if let Ok(existing) = tokio::fs::read_to_string(&path).await {
-        let token = existing.trim();
-        if !token.is_empty() {
-            return Ok(token.to_owned());
+fn ensure_secure_state_root(state_root: &Path) -> Result<()> {
+    match fs::symlink_metadata(state_root) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                anyhow::bail!("LocalView state root must be a real directory, not a symlink/reparse path");
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            match builder.create(state_root) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error).context("create LocalView state directory"),
+            }
+        }
+        Err(error) => return Err(error).context("inspect LocalView state directory"),
+    }
+
+    let metadata = fs::symlink_metadata(state_root).context("inspect LocalView state directory")?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        anyhow::bail!("LocalView state root must remain a real directory");
+    }
+
+    #[cfg(unix)]
+    {
+        fs::set_permissions(state_root, fs::Permissions::from_mode(0o700))
+            .context("secure LocalView state directory permissions")?;
+        let mode = fs::symlink_metadata(state_root)?.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            anyhow::bail!("LocalView state directory is not owner-only");
         }
     }
+
+    Ok(())
+}
+
+fn read_existing_token(path: &Path) -> Result<Option<String>> {
+    let before = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("inspect control token"),
+    };
+    if before.file_type().is_symlink() || !before.is_file() {
+        anyhow::bail!("control token must be a regular file and may not be a symlink/reparse entry");
+    }
+
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .context("secure control token permissions")?;
+    }
+
+    let mut file = fs::File::open(path).context("open control token")?;
+    let opened = file.metadata().context("inspect opened control token")?;
+    let after = fs::symlink_metadata(path).context("revalidate control token path")?;
+    if after.file_type().is_symlink() || !after.is_file() {
+        anyhow::bail!("control token path changed during secure open");
+    }
+
+    #[cfg(unix)]
+    {
+        if opened.dev() != after.dev() || opened.ino() != after.ino() {
+            anyhow::bail!("control token identity changed during secure open");
+        }
+        let mode = opened.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            anyhow::bail!("control token is not owner-only");
+        }
+    }
+
+    let mut existing = String::new();
+    file.read_to_string(&mut existing)
+        .context("read control token")?;
+    let token = existing.trim();
+    if token.is_empty() {
+        anyhow::bail!("control token exists but is empty; refusing implicit credential rotation");
+    }
+    Ok(Some(token.to_owned()))
+}
+
+fn create_new_token(path: &Path, token: &str) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)?;
+    file.write_all(token.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
+}
+
+async fn load_or_create_token(state_root: &Path) -> Result<String> {
+    ensure_secure_state_root(state_root)?;
+    let path = state_root.join("control.token");
+    if let Some(existing) = read_existing_token(&path)? {
+        return Ok(existing);
+    }
+
     let token = generate_control_token();
-    tokio::fs::write(&path, &token)
-        .await
-        .context("write control token")?;
-    Ok(token)
+    match create_new_token(&path, &token) {
+        Ok(()) => Ok(token),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_existing_token(&path)?
+                .ok_or_else(|| anyhow::anyhow!("control token raced with another creator"))
+        }
+        Err(error) => Err(error).context("create control token"),
+    }
 }
 
 fn state_dir() -> Result<PathBuf> {
     dirs::data_local_dir()
         .map(|path| path.join("LocalView"))
         .context("no local data directory")
+}
+
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn test_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("localview-daemon-{name}-{}", Uuid::new_v4()))
+    }
+
+    #[tokio::test]
+    async fn control_token_is_stable_across_reopen() {
+        let root = test_root("token-stable");
+        let first = load_or_create_token(&root).await.unwrap();
+        let second = load_or_create_token(&root).await.unwrap();
+        assert_eq!(first, second);
+        assert!(!first.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn control_token_and_state_root_are_owner_only() {
+        let root = test_root("token-mode");
+        load_or_create_token(&root).await.unwrap();
+        let root_mode = fs::symlink_metadata(&root).unwrap().permissions().mode() & 0o777;
+        let token_mode = fs::symlink_metadata(root.join("control.token"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(root_mode & 0o077, 0);
+        assert_eq!(token_mode & 0o077, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn control_token_symlink_is_rejected_without_overwriting_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_root("token-symlink");
+        fs::create_dir_all(&root).unwrap();
+        let outside = test_root("token-outside");
+        fs::write(&outside, "outside-secret").unwrap();
+        symlink(&outside, root.join("control.token")).unwrap();
+
+        let error = load_or_create_token(&root).await.unwrap_err().to_string();
+        assert!(error.contains("regular file") || error.contains("symlink"));
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "outside-secret");
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_file(outside);
+    }
+
+    #[tokio::test]
+    async fn empty_existing_token_fails_closed_instead_of_rotating() {
+        let root = test_root("token-empty");
+        ensure_secure_state_root(&root).unwrap();
+        create_new_token(&root.join("control.token"), "").unwrap();
+        let error = load_or_create_token(&root).await.unwrap_err().to_string();
+        assert!(error.contains("empty"));
+        let _ = fs::remove_dir_all(root);
+    }
 }
