@@ -1517,6 +1517,18 @@ mod trusted_fix_tests {
         store.insert(proposal).unwrap();
         let applying = store.begin_apply(&id).unwrap();
         assert_eq!(applying.status, FixProposalStatus::Applying);
+        let preflight = applying.wave9_preflight.as_ref().expect("Wave 9 preflight");
+        assert_eq!(
+            preflight.verdict,
+            localview_verification::ProductionCandidatePreflightVerdict::Inconclusive
+        );
+        assert!(!preflight.has_shadow_proof());
+        assert!(
+            preflight
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("exact Git revision authority is unavailable"))
+        );
         std::thread::sleep(Duration::from_millis(20));
         store.reap_expired().unwrap();
         store.complete_apply(&id).unwrap();
