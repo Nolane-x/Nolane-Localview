@@ -471,6 +471,11 @@ fn command_palette_routes_every_surfaced_action_through_canonical_command_ids() 
         "sessionPauseDiscovery",
     ] {
         let marker = format!("COMMAND_IDS.{id}");
+        let registry_marker = format!("  {id}: '");
+        assert!(
+            commands.contains(&registry_marker),
+            "surfaced command is missing from the canonical command registry: {id}"
+        );
         assert!(
             tools.contains(&marker),
             "command palette is missing surfaced canonical command {marker}"
