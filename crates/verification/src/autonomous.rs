@@ -694,6 +694,40 @@ mod tests {
     }
 
     #[test]
+    fn route_drift_is_recorded_as_unexpected_actual_impact() {
+        let predicted = PredictedImpact {
+            targets: BTreeSet::from([ImpactTarget {
+                kind: ImpactKind::Route,
+                id: "/expected".into(),
+            }]),
+            evidence_ids: vec!["ev-predicted".into()],
+        };
+        let actual = ActualImpact {
+            targets: BTreeSet::from([ImpactTarget {
+                kind: ImpactKind::Route,
+                id: "/unexpected".into(),
+            }]),
+            evidence_ids: vec!["ev-actual".into()],
+            observation_scope_complete: true,
+        };
+        let comparison = compare_predicted_actual(&predicted, &actual);
+        assert_eq!(
+            comparison.unexpected_observed_impact,
+            vec![ImpactTarget {
+                kind: ImpactKind::Route,
+                id: "/unexpected".into(),
+            }]
+        );
+        assert_eq!(
+            comparison.predicted_but_not_observed,
+            vec![ImpactTarget {
+                kind: ImpactKind::Route,
+                id: "/expected".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn hard_contract_failure_rejects_candidate() {
         let candidate = Uuid::new_v4();
         let receipt = build_autonomous_receipt(input(
