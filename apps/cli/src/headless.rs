@@ -1038,3 +1038,346 @@ async fn compare_and_retain_baseline(
     let mut index = load_baseline_index(&index_path).await?;
     let candidate_hash = candidate.canonical_hash();
     let existing = index.states.get(&candidate.state_identity).cloned();
+
+    let mut comparison = BaselineComparison {
+        status: BaselineComparisonStatus::Created,
+        baseline_hash: None,
+        candidate_hash: Some(candidate_hash.clone()),
+        reasons: Vec::new(),
+    };
+    let mut should_store = existing.is_none();
+
+    if let Some(locator) = existing {
+        comparison.baseline_hash = Some(locator.content_hash.clone());
+        match load_retained_baseline(artifact_root, &locator).await {
+            Ok(baseline) => {
+                if baseline.state_identity != candidate.state_identity
+                    || baseline.route != candidate.route
+                    || baseline.viewport != candidate.viewport
+                {
+                    comparison.status = BaselineComparisonStatus::Incompatible;
+                    comparison
+                        .reasons
+                        .push("retained baseline identity/route/viewport is incompatible".into());
+                } else if baseline.evidence_hashes == candidate.evidence_hashes
+                    && baseline.design_baseline_hash == candidate.design_baseline_hash
+                {
+                    comparison.status = BaselineComparisonStatus::Match;
+                } else {
+                    comparison.status = BaselineComparisonStatus::Changed;
+                    comparison
+                        .reasons
+                        .push("canonical evidence dependency set changed".into());
+                    should_store = update;
+                }
+            }
+            Err(reason) => {
+                comparison.status = BaselineComparisonStatus::Incompatible;
+                comparison.reasons.push(reason);
+                should_store = true;
+            }
+        }
+    }
+
+    if !should_store {
+        return Ok((comparison, None));
+    }
+
+    let bytes = serde_json::to_vec(candidate)?;
+    if bytes.len() as u64 > MAX_BASELINE_BYTES {
+        bail!("baseline envelope exceeds retained size policy");
+    }
+    let meta = store.put("wave8/baseline-json", &bytes).await?;
+    index.schema_version = 1;
+    index.states.insert(
+        candidate.state_identity.clone(),
+        BaselineLocator {
+            content_hash: candidate_hash.clone(),
+            storage_id: meta.id.clone(),
+        },
+    );
+    write_baseline_index(&index_path, &index).await?;
+    if update && comparison.status == BaselineComparisonStatus::Changed {
+        comparison
+            .reasons
+            .push("baseline updated by explicit --update-baseline policy".into());
+    }
+    Ok((
+        comparison,
+        Some(ArtifactReference {
+            kind: "baseline".into(),
+            storage_id: meta.id,
+            content_hash: candidate_hash,
+            bytes: meta.bytes,
+        }),
+    ))
+}
+
+async fn load_baseline_index(path: &Path) -> Result<BaselineIndex> {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            if bytes.len() as u64 > MAX_BASELINE_BYTES {
+                bail!("baseline index exceeds bounded size policy");
+            }
+            let index: BaselineIndex = serde_json::from_slice(&bytes)?;
+            if index.schema_version != 0 && index.schema_version != 1 {
+                bail!("unsupported baseline index schema version");
+            }
+            Ok(index)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BaselineIndex {
+            schema_version: 1,
+            states: BTreeMap::new(),
+        }),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn write_baseline_index(path: &Path, index: &BaselineIndex) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(index)?;
+    let temp = path.with_extension("json.tmp");
+    tokio::fs::write(&temp, bytes).await?;
+    tokio::fs::rename(&temp, path).await?;
+    Ok(())
+}
+
+async fn load_retained_baseline(
+    artifact_root: &Path,
+    locator: &BaselineLocator,
+) -> std::result::Result<BaselineEnvelope, String> {
+    if !valid_physical_artifact_id(&locator.storage_id) {
+        return Err("baseline locator has invalid physical artifact id".into());
+    }
+    let path = artifact_root.join(&locator.storage_id);
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|_| "retained baseline artifact is missing under bounded retention".to_owned())?;
+    if metadata.len() > MAX_BASELINE_BYTES {
+        return Err("retained baseline artifact exceeds bounded size policy".into());
+    }
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| "retained baseline artifact is unreadable".to_owned())?;
+    let baseline: BaselineEnvelope = serde_json::from_slice(&bytes)
+        .map_err(|_| "retained baseline artifact is invalid JSON".to_owned())?;
+    if baseline.canonical_hash() != locator.content_hash {
+        return Err("retained baseline canonical hash does not match locator".into());
+    }
+    Ok(baseline)
+}
+
+fn valid_physical_artifact_id(value: &str) -> bool {
+    value.len() == 19
+        && value.starts_with("lv-")
+        && value[3..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+async fn resolve_output_dir(project_root: &Path, requested: Option<&Path>) -> Result<PathBuf> {
+    let path = requested
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| project_root.join(".localview").join("wave8-ci").join("reports"));
+    let path = if path.is_absolute() {
+        path
+    } else {
+        project_root.join(path)
+    };
+    validate_lexically_contained(project_root, &path)?;
+    tokio::fs::create_dir_all(&path).await?;
+    let canonical = tokio::fs::canonicalize(&path).await?;
+    let canonical_root = tokio::fs::canonicalize(project_root).await?;
+    if !canonical.starts_with(&canonical_root) {
+        bail!("output directory must remain inside project root");
+    }
+    Ok(canonical)
+}
+
+async fn write_bundle<T: Serialize>(
+    output_dir: &Path,
+    report: &LocalViewReport,
+    attestation: &T,
+) -> Result<()> {
+    tokio::fs::write(output_dir.join("report.json"), render_json(report)?).await?;
+    tokio::fs::write(output_dir.join("report.md"), render_markdown(report)).await?;
+    tokio::fs::write(output_dir.join("report.html"), render_html(report)).await?;
+    tokio::fs::write(
+        output_dir.join("attestation.json"),
+        serde_json::to_string_pretty(attestation)?,
+    )
+    .await?;
+    Ok(())
+}
+
+fn emit_ci_annotations(report: &LocalViewReport) {
+    println!(
+        "localview-ci status={:?} deterministic={} heuristic={} subjective={}",
+        report.status,
+        report.diagnostics.deterministic,
+        report.diagnostics.heuristic,
+        report.diagnostics.subjective
+    );
+    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+        return;
+    }
+    for issue in report
+        .diagnostics
+        .issues
+        .iter()
+        .filter(|issue| issue.class == DiagnosticClass::Deterministic && issue.severity >= 3)
+        .take(20)
+    {
+        let message = github_command_escape(&format!("{}: {}", issue.code, issue.message));
+        println!("::error title=LocalView deterministic gate::{message}");
+    }
+    for reason in report.inconclusive_reasons.iter().take(20) {
+        println!(
+            "::warning title=LocalView inconclusive::{}",
+            github_command_escape(reason)
+        );
+    }
+}
+
+fn github_command_escape(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+        .replace(':', "%3A")
+        .replace(',', "%2C")
+}
+
+async fn authed_get(client: &Client, base: &str, token: &str, path: &str) -> Result<Response> {
+    let response = authed_get_raw(client, base, token, path).await?;
+    check_control_status(response).await
+}
+
+async fn authed_get_value(client: &Client, base: &str, token: &str, path: &str) -> Result<Value> {
+    authed_get(client, base, token, path)
+        .await?
+        .json()
+        .await
+        .context("invalid control JSON response")
+}
+
+async fn authed_post_value(
+    client: &Client,
+    base: &str,
+    token: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> Result<Value> {
+    let response = authed_post_raw(client, base, token, path, body).await?;
+    check_control_status(response)
+        .await?
+        .json()
+        .await
+        .context("invalid control JSON response")
+}
+
+async fn authed_get_raw(client: &Client, base: &str, token: &str, path: &str) -> Result<Response> {
+    client
+        .get(format!("{base}{path}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .context("cannot reach LocalView control plane")
+}
+
+async fn authed_post_raw(
+    client: &Client,
+    base: &str,
+    token: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> Result<Response> {
+    let request = client.post(format!("{base}{path}")).bearer_auth(token);
+    let request = if let Some(body) = body {
+        request.json(body)
+    } else {
+        request
+    };
+    request
+        .send()
+        .await
+        .context("cannot reach LocalView control plane")
+}
+
+async fn check_control_status(response: Response) -> Result<Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    if status == StatusCode::UNAUTHORIZED {
+        bail!("LocalView control authentication failed");
+    }
+    let value = response.json::<Value>().await.unwrap_or(Value::Null);
+    bail!(
+        "LocalView control request failed with HTTP {status}: {}",
+        compact_status(&value)
+    )
+}
+
+fn compact_status(value: &Value) -> String {
+    value
+        .get("error")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("verdict").and_then(Value::as_str))
+        .or_else(|| value.get("completion").and_then(Value::as_str))
+        .map(|value| bounded_text(value, 160))
+        .unwrap_or_else(|| {
+            if value.is_null() {
+                "none".into()
+            } else {
+                "available".into()
+            }
+        })
+}
+
+fn contained_existing_path(project_root: &Path, requested: &Path) -> Result<PathBuf> {
+    let joined = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        project_root.join(requested)
+    };
+    validate_lexically_contained(project_root, &joined)?;
+    let canonical_root =
+        std::fs::canonicalize(project_root).context("project root is unavailable")?;
+    let canonical = std::fs::canonicalize(&joined)
+        .with_context(|| format!("project-contained path is unavailable: {}", joined.display()))?;
+    if !canonical.starts_with(&canonical_root) {
+        bail!("path escapes project root");
+    }
+    Ok(canonical)
+}
+
+fn validate_relative_path(path: &Path) -> Result<()> {
+    if path.is_absolute() {
+        bail!("fixture cwd must be project-relative");
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        bail!("fixture cwd may not escape project root");
+    }
+    Ok(())
+}
+
+fn validate_lexically_contained(project_root: &Path, path: &Path) -> Result<()> {
+    if !path.is_absolute() || !project_root.is_absolute() {
+        bail!("project-bound paths must be absolute after resolution");
+    }
+    let relative = path
+        .strip_prefix(project_root)
+        .map_err(|_| anyhow!("path must remain inside project root"))?;
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        bail!("path escapes project root");
+    }
+    Ok(())
+}
