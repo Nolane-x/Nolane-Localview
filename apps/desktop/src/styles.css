@@ -407,6 +407,12 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .fix-proposal-meta span,.fix-proposal-meta code{color:#8793a1}
 .fix-status span,.verify-result>span,.verify-result>small,.verify-result ul,
 .verify-advisory span,.verify-advisory p{color:#8793a1}
+.fix-preflight-note{
+  display:block;
+  font-size:10px;
+  line-height:1.5;
+  color:#d4b978
+}
 
 /* Coarse-pointer disclosure: labels are visible before a tool is chosen, then yield to the panel. */
 @media (hover:none) and (pointer:coarse) and (max-width:620px){
