@@ -63,10 +63,10 @@ pub fn plan_partial_revalidation(input: &PartialRevalidationInput) -> PartialRev
         }
     }
 
-    let mut routes = input.affected.impacted_routes.iter().cloned().collect();
-    let mut regions = input.affected.impacted_regions.iter().cloned().collect();
-    let mut refs = input.affected.impacted_refs.iter().cloned().collect();
-    let mut contracts = input.affected.impacted_contracts.iter().cloned().collect();
+    let mut routes: BTreeSet<String> = input.affected.impacted_routes.iter().cloned().collect();
+    let mut regions: BTreeSet<String> = input.affected.impacted_regions.iter().cloned().collect();
+    let mut refs: BTreeSet<String> = input.affected.impacted_refs.iter().cloned().collect();
+    let mut contracts: BTreeSet<String> = input.affected.impacted_contracts.iter().cloned().collect();
     let mut flow_checkpoints = input.impacted_flow_checkpoints.clone();
     let mut visual_baselines = input.relevant_visual_baselines.clone();
     let mut source_semantic_checks = input.source_semantic_checks.clone();
