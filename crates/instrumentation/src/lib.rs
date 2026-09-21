@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod wave6;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
