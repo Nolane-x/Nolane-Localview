@@ -814,3 +814,17 @@ fn rendered_closure_requires_readable_operational_copy_and_touch_disclosure() {
         assert!(capture.contains(marker), "rendered closure is missing {marker}");
     }
 }
+
+
+#[test]
+fn fix_success_discloses_wave9_preflight_non_verification_boundary() {
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let i18n = include_str!("../../src/i18n.ts");
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    assert!(tools.contains("fix-preflight-note"));
+    assert!(tools.contains("translate(locale, 'fix.preflightInconclusive')"));
+    assert!(i18n.contains("'fix.preflightInconclusive'"));
+    assert!(capture.contains("fix:apply-success-wave9-preflight-truthful"));
+    assert!(capture.contains("fix:vi-apply-wave9-preflight-truthful"));
+}
