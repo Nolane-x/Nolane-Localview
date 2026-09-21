@@ -29,36 +29,62 @@ fn permission_commands(permission: &str) -> BTreeSet<String> {
 
 fn invoke_names(source: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    for quote in ['\'', '"'] {
-        let marker = format!("invoke({quote}");
-        let mut tail = source;
-        while let Some(index) = tail.find(&marker) {
-            let rest = &tail[index + marker.len()..];
-            if let Some(end) = rest.find(quote) {
-                out.insert(rest[..end].to_owned());
-                tail = &rest[end + quote.len_utf8()..];
-            } else {
-                break;
+    let mut offset = 0;
+    while let Some(relative) = source[offset..].find("invoke") {
+        let invoke_start = offset + relative;
+        let mut cursor = invoke_start + "invoke".len();
+        while source[cursor..].starts_with(char::is_whitespace) {
+            cursor += source[cursor..].chars().next().unwrap().len_utf8();
+        }
+
+        if source[cursor..].starts_with('<') {
+            let mut depth = 0_u32;
+            let mut closed = None;
+            for (relative, ch) in source[cursor..].char_indices() {
+                match ch {
+                    '<' => depth += 1,
+                    '>' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            closed = Some(cursor + relative + ch.len_utf8());
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(next) = closed else {
+                offset = invoke_start + "invoke".len();
+                continue;
+            };
+            cursor = next;
+            while source[cursor..].starts_with(char::is_whitespace) {
+                cursor += source[cursor..].chars().next().unwrap().len_utf8();
             }
         }
-    }
-    out
-}
 
-fn api_invoke_names(source: &str) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    for line in source.lines() {
-        let Some(invoke) = line.find("invoke") else { continue };
-        let tail = &line[invoke + "invoke".len()..];
-        let Some(open) = tail.find('(') else { continue };
-        let rest = tail[open + 1..].trim_start();
-        let Some(quote) = rest.chars().next().filter(|ch| matches!(ch, '\'' | '"')) else {
+        if !source[cursor..].starts_with('(') {
+            offset = invoke_start + "invoke".len();
+            continue;
+        }
+        cursor += 1;
+        while source[cursor..].starts_with(char::is_whitespace) {
+            cursor += source[cursor..].chars().next().unwrap().len_utf8();
+        }
+
+        let Some(quote) = source[cursor..]
+            .chars()
+            .next()
+            .filter(|ch| matches!(ch, '\'' | '"'))
+        else {
+            offset = invoke_start + "invoke".len();
             continue;
         };
-        let quoted = &rest[quote.len_utf8()..];
-        if let Some(end) = quoted.find(quote) {
-            out.insert(quoted[..end].to_owned());
+        cursor += quote.len_utf8();
+        if let Some(end) = source[cursor..].find(quote) {
+            out.insert(source[cursor..cursor + end].to_owned());
         }
+        offset = invoke_start + "invoke".len();
     }
     out
 }
@@ -115,7 +141,7 @@ fn preview_bridge_invokes_are_registered_and_least_privilege_allowed() {
 #[test]
 fn bundled_frontend_invokes_are_registered_and_main_capability_allowed() {
     let api = include_str!("../../src/api.ts");
-    let invokes = api_invoke_names(api);
+    let invokes = invoke_names(api);
     let handlers = registered_handlers();
     let main = permission_commands("maincommands");
 
