@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod autonomous;
+pub use autonomous::*;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
