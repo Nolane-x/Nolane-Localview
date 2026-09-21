@@ -7,6 +7,7 @@ const reports = read('crates/reports/src/lib.rs');
 const artifacts = read('crates/artifacts/src/lib.rs');
 const content = read('crates/content-addressed/src/lib.rs');
 const attestation = read('crates/attestation/src/lib.rs');
+const workflow = read('.github/workflows/wave8-headless-ci.yml');
 
 const requireText = (source, needle, reason) => {
   if (!source.includes(needle)) throw new Error(reason + ': missing ' + needle);
@@ -27,6 +28,7 @@ requireText(cli, 'CONTROL_REQUEST_TIMEOUT', 'headless control transport must be 
 requireText(cli, 'cleanup after setup failure', 'failed fixture setup must still attempt cleanup compensation');
 requireText(cli, 'state_stable', 'baseline authority must be bound to stable end state');
 requireText(cli, 'safe_route', 'route transport must strip secret query/fragment data');
+requireText(workflow, '--all-targets --no-deps -- -D warnings', 'Wave 8 Clippy must stay scoped to owned packages');
 
 requireText(reports, 'pub enum ReportStatus', 'report status contract missing');
 requireText(reports, 'pub struct BaselineComparison', 'baseline comparison missing from reports');
