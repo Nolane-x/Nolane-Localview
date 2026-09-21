@@ -63,6 +63,97 @@ async function assertNoPageErrors(page, state) {
   invariant(errors.length === 0, `${state}:no-page-errors`, { errors });
 }
 
+async function assertMeaningfulTextReadability(page, state) {
+  const selector = [
+    '.capture-status span', '.capture-status code',
+    '.measure-status span', '.measure-status code',
+    '.source-open-status span', '.source-open-status code',
+    '.responsive-result', '.responsive-result-viewports span', '.responsive-failure',
+    '.stream-status', '.stream-empty p', '.network-summary strong',
+    '.ai-status.failure', '.fix-status span',
+    '.verify-result>span', '.verify-result>small', '.verify-result li',
+    '.verify-advisory span', '.verify-advisory p',
+  ].join(',');
+
+  const samples = await page.locator(selector).evaluateAll((nodes) => {
+    const parseColor = (value) => {
+      const match = value.match(/rgba?\(([^)]+)\)/i);
+      if (!match) return null;
+      const parts = match[1].split(/[ ,/]+/).filter(Boolean).map(Number);
+      if (parts.length < 3 || parts.slice(0, 3).some((part) => !Number.isFinite(part))) return null;
+      return { r: parts[0], g: parts[1], b: parts[2], a: Number.isFinite(parts[3]) ? parts[3] : 1 };
+    };
+    const composite = (front, back) => {
+      const alpha = front.a + back.a * (1 - front.a);
+      if (alpha <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+      return {
+        r: (front.r * front.a + back.r * back.a * (1 - front.a)) / alpha,
+        g: (front.g * front.a + back.g * back.a * (1 - front.a)) / alpha,
+        b: (front.b * front.a + back.b * back.a * (1 - front.a)) / alpha,
+        a: alpha,
+      };
+    };
+    const luminance = (color) => {
+      const channel = (value) => {
+        const v = Math.max(0, Math.min(255, value)) / 255;
+        return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b);
+    };
+    const contrast = (left, right) => {
+      const a = luminance(left);
+      const b = luminance(right);
+      return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    };
+    const renderedBackground = (node) => {
+      const chain = [];
+      let current = node.parentElement;
+      while (current) {
+        chain.push(current);
+        current = current.parentElement;
+      }
+      chain.reverse();
+      let background = { r: 7, g: 9, b: 13, a: 1 };
+      for (const ancestor of chain) {
+        const parsed = parseColor(getComputedStyle(ancestor).backgroundColor);
+        if (parsed && parsed.a > 0) background = composite(parsed, background);
+      }
+      return background;
+    };
+
+    return nodes
+      .filter((node) => {
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity) > 0
+          && rect.width > 0
+          && rect.height > 0
+          && (node.textContent?.trim()?.length ?? 0) > 0;
+      })
+      .map((node) => {
+        const style = getComputedStyle(node);
+        const foreground = parseColor(style.color);
+        const background = renderedBackground(node);
+        const renderedForeground = foreground ? composite(foreground, background) : null;
+        return {
+          selectorHint: node.className || node.tagName,
+          text: (node.textContent ?? '').trim().slice(0, 120),
+          fontSize: Number.parseFloat(style.fontSize),
+          contrast: renderedForeground ? contrast(renderedForeground, background) : null,
+          color: style.color,
+          background,
+        };
+      });
+  });
+
+  const undersized = samples.filter((sample) => sample.fontSize < 10);
+  const lowContrast = samples.filter((sample) => sample.contrast !== null && sample.contrast < 4.5);
+  invariant(undersized.length === 0, `${state}:meaningful-text-min-10px`, { undersized });
+  invariant(lowContrast.length === 0, `${state}:meaningful-text-contrast-estimate`, { lowContrast });
+}
+
 async function assertPrimaryControlsInViewport(page, state) {
   const result = await page.locator('.top-pill, .floating-rail').evaluateAll((nodes) => {
     const width = window.innerWidth;
@@ -148,6 +239,7 @@ async function shot(page, filename, state = filename) {
   await assertNoHorizontalOverflow(page, state);
   await assertVisibleButtonsNamed(page, state);
   await assertNoPageErrors(page, state);
+  await assertMeaningfulTextReadability(page, state);
   await page.screenshot({ path: `human-first-ui-v2-render/${filename}`, fullPage: true });
   audit.screenshots.push({ filename, state });
 }
@@ -670,6 +762,22 @@ async function pageFor(
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(String(error)));
   await init(page, locale, overrides, liveState, dashboardState, rawPreferences, storageFault, failedCommands, captureDelayMs, measureDelayMs, sourceOpenDelayMs, sourceOpenFailure, aiOptions, fixOptions, verifyOptions, responsiveOptions, correlationOptions);
+  await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  return page;
+}
+
+async function touchPageFor(browser, viewport = { width: 390, height: 844 }, locale = 'en') {
+  const page = await browser.newPage({
+    viewport,
+    deviceScaleFactor: 1,
+    hasTouch: true,
+    isMobile: true,
+  });
+  const errors = [];
+  pageErrors.set(page, errors);
+  page.on('pageerror', (error) => errors.push(String(error)));
+  await init(page, locale);
   await page.goto('http://127.0.0.1:1420/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   return page;
@@ -4332,6 +4440,72 @@ await page.waitForTimeout(80);
 const macSettingsShortcut = await page.locator('.panel-command').getByRole('button', { name: /Settings/ }).locator('kbd').innerText();
 invariant(macSettingsShortcut === '⌘,', 'ui-audit:mac-settings-shortcut', { macSettingsShortcut });
 await shot(page, '167-macos-shortcut-labels.png', 'ui-audit-macos-shortcut-labels');
+await page.close();
+
+page = await touchPageFor(browser);
+const touchTooltips = await page.locator('.floating-rail .rail-tooltip').evaluateAll((nodes) =>
+  nodes.map((node) => {
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return {
+      opacity: Number(style.opacity),
+      text: node.textContent?.trim() ?? '',
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    };
+  })
+);
+const disclosedTouchLabels = touchTooltips.filter((entry) => entry.opacity > 0.9);
+invariant(
+  disclosedTouchLabels.length >= 6
+    && disclosedTouchLabels.every((entry) =>
+      entry.left >= 0
+      && entry.top >= 0
+      && entry.right <= entry.viewportWidth
+      && entry.bottom <= entry.viewportHeight
+    ),
+  'ui-audit:touch-tool-labels-discoverable',
+  { disclosedTouchLabels },
+);
+await shot(page, '168-touch-tool-labels.png', 'ui-audit-touch-tool-labels');
+await page.locator('.floating-rail').getByRole('button', { name: 'Inspect' }).tap();
+await page.waitForTimeout(100);
+await assertVisible(page, '.panel-inspect', 'ui-audit-touch-inspect-panel');
+const visibleTouchLabelsAfterOpen = await page.locator('.floating-rail .rail-tooltip').evaluateAll((nodes) =>
+  nodes.filter((node) => Number(getComputedStyle(node).opacity) > 0.9).length
+);
+invariant(
+  visibleTouchLabelsAfterOpen === 0,
+  'ui-audit:touch-labels-yield-to-active-panel',
+  { visibleTouchLabelsAfterOpen },
+);
+await shot(page, '169-touch-inspect-panel.png', 'ui-audit-touch-inspect-panel');
+await page.close();
+
+page = await fixPageFor(browser, { width: 390, height: 844 }, 'vi');
+await page.keyboard.press('i');
+await page.waitForTimeout(100);
+await page.locator('.fix-action').click();
+await page.waitForTimeout(100);
+await page.locator('.fix-generate-action').click();
+await page.waitForTimeout(120);
+await assertVisible(page, '.fix-diff', 'ui-audit-vi-narrow-fix');
+await assertNoHorizontalOverflow(page, 'ui-audit-vi-narrow-fix');
+await assertPrimaryControlsInViewport(page, 'ui-audit-vi-narrow-fix');
+await shot(page, '170-vi-narrow-fix-review.png', 'ui-audit-vi-narrow-fix');
+await page.close();
+
+page = await pageFor(browser, { width: 390, height: 844 }, 'zh-CN');
+await page.locator('.floating-rail .rail-button').filter({ has: page.locator('svg') }).nth(5).click();
+await page.waitForTimeout(100);
+await assertVisible(page, '.panel-settings', 'ui-audit-zh-narrow-settings');
+await assertNoHorizontalOverflow(page, 'ui-audit-zh-narrow-settings');
+await assertPrimaryControlsInViewport(page, 'ui-audit-zh-narrow-settings');
+await shot(page, '171-zh-narrow-settings.png', 'ui-audit-zh-narrow-settings');
 await page.close();
 
 const auditPath = 'human-first-ui-v2-render/audit.json';
