@@ -84,9 +84,13 @@ jobs:
         run: |
           cargo clippy             -p localview-contracts             -p localview-verification             -p localview-mutation             -p localview-counterfactual             -p localview-state-space             -p localview-postcondition-contracts             -p localview-planner             --all-targets -- -D warnings
 
-      - name: Assert fixture left no worktrees
+      - name: Assert fixture left no worktrees or source mutations
         run: |
           test "$(git worktree list --porcelain | grep '^worktree ' | wc -l)" -eq 1
+          if test -f Cargo.lock && ! git ls-files --error-unmatch Cargo.lock >/dev/null 2>&1; then
+            rm -f Cargo.lock
+          fi
+          git diff --exit-code
           test -z "$(git status --porcelain=v1)"
 
   desktop-boundary:
