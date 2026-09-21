@@ -8,9 +8,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use atomic_write_file::AtomicWriteFile;
 use clap::{Args, ValueEnum};
-use localview_artifacts::ArtifactStore;
+use localview_artifacts::{ArtifactStore, atomic_replace_regular};
 use localview_attestation::{DigestAttestationPayload, digest_attestation};
 use localview_content_addressed::{BaselineEnvelope, object_hash};
 use localview_diagnostics::{DiagnosticClass, DiagnosticIssue, DiagnosticReport};
@@ -1582,48 +1581,6 @@ fn read_optional_regular_leaf(path: &Path, max_bytes: u64) -> Result<Option<Vec<
         bail!("persistence leaf exceeds bounded size policy");
     }
     Ok(Some(bytes))
-}
-
-fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("bounded persistence path has no parent"))?;
-    revalidate_canonical_directory(parent, "persistence parent")?;
-
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            bail!("refusing to replace non-regular persistence leaf")
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-
-    let mut file = AtomicWriteFile::open(path)
-        .with_context(|| format!("open atomic persistence file {}", path.display()))?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-
-    revalidate_canonical_directory(parent, "persistence parent")?;
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            file.discard()?;
-            bail!("persistence leaf changed to a non-regular entry before commit");
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            file.discard()?;
-            return Err(error.into());
-        }
-    }
-    file.commit()?;
-
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        bail!("atomic persistence did not produce a regular file");
-    }
-    Ok(())
 }
 
 async fn resolve_output_dir(project_root: &Path, requested: Option<&Path>) -> Result<PathBuf> {
