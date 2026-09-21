@@ -145,11 +145,11 @@ pub enum ProductionCandidatePreflightVerdict {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProductionCandidatePreflightReceipt {
-    pub candidate_id: String,
-    pub base_revision: String,
-    pub patch_digest: String,
-    pub shadow_proof: ShadowCandidateProof,
-    pub cleanup_proof: ShadowCleanupProof,
+    pub candidate_id: Option<String>,
+    pub base_revision: Option<String>,
+    pub patch_digest: Option<String>,
+    pub shadow_proof: Option<ShadowCandidateProof>,
+    pub cleanup_proof: Option<ShadowCleanupProof>,
     pub verdict: ProductionCandidatePreflightVerdict,
     pub reasons: Vec<String>,
 }
@@ -157,6 +157,22 @@ pub struct ProductionCandidatePreflightReceipt {
 impl ProductionCandidatePreflightReceipt {
     pub fn digest(&self) -> ObjectHash {
         object_hash(self)
+    }
+
+    pub fn inconclusive_unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            candidate_id: None,
+            base_revision: None,
+            patch_digest: None,
+            shadow_proof: None,
+            cleanup_proof: None,
+            verdict: ProductionCandidatePreflightVerdict::Inconclusive,
+            reasons: vec![reason.into()],
+        }
+    }
+
+    pub fn has_shadow_proof(&self) -> bool {
+        self.shadow_proof.is_some() && self.cleanup_proof.is_some()
     }
 }
 
@@ -208,11 +224,11 @@ pub fn run_production_candidate_preflight(
     };
 
     Ok(ProductionCandidatePreflightReceipt {
-        candidate_id: candidate.id.to_string(),
-        base_revision: candidate.base_revision.clone(),
-        patch_digest: expected_patch_digest,
-        shadow_proof: proof,
-        cleanup_proof: cleanup,
+        candidate_id: Some(candidate.id.to_string()),
+        base_revision: Some(candidate.base_revision.clone()),
+        patch_digest: Some(expected_patch_digest),
+        shadow_proof: Some(proof),
+        cleanup_proof: Some(cleanup),
         verdict,
         reasons,
     })
