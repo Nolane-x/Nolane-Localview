@@ -10,6 +10,40 @@ use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DigestAttestationPayload {
+    pub schema_version: u32,
+    pub report_hash: String,
+    pub revision: Option<String>,
+    pub state_identity: String,
+    pub evidence_hashes: Vec<String>,
+    pub proof_hashes: Vec<String>,
+    pub gate_status: String,
+    pub environment_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DigestAttestation {
+    pub kind: String,
+    pub digest: String,
+    pub payload: DigestAttestationPayload,
+}
+
+pub fn digest_attestation(mut payload: DigestAttestationPayload) -> DigestAttestation {
+    payload.evidence_hashes.sort();
+    payload.evidence_hashes.dedup();
+    payload.proof_hashes.sort();
+    payload.proof_hashes.dedup();
+    let canonical = canonical_value(serde_json::to_value(&payload).unwrap_or(Value::Null));
+    let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
+    let digest = format!("sha256:{}", hex::encode(Sha256::digest(bytes)));
+    DigestAttestation {
+        kind: "digest_attestation".into(),
+        digest,
+        payload,
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiptVerdict { Pass, Fail, Inconclusive }
@@ -122,6 +156,27 @@ mod tests {
 
     fn payload() -> ProofReceiptPayload {
         ProofReceiptPayload { schema_version: 1, project: "LocalView".into(), baseline_revision: "a".into(), candidate_revision: "b".into(), environment_hash: "env".into(), plan_hash: "plan".into(), evidence_hashes: vec!["ev".into()], contract_hashes: vec![], mutation_run_hash: None, verdict: ReceiptVerdict::Pass, created_at: DateTime::<Utc>::from_timestamp(1, 0).expect("timestamp") }
+    }
+
+    #[test]
+    fn digest_attestation_is_stable_without_claiming_a_signature() {
+        let payload = DigestAttestationPayload {
+            schema_version: 1,
+            report_hash: "sha256:report".into(),
+            revision: Some("abc".into()),
+            state_identity: "sha256:state".into(),
+            evidence_hashes: vec!["sha256:b".into(), "sha256:a".into()],
+            proof_hashes: vec!["sha256:p".into()],
+            gate_status: "passed".into(),
+            environment_fingerprint: "sha256:env".into(),
+        };
+        let first = digest_attestation(payload.clone());
+        let mut reordered = payload;
+        reordered.evidence_hashes.reverse();
+        let second = digest_attestation(reordered);
+        assert_eq!(first.digest, second.digest);
+        assert_eq!(first.kind, "digest_attestation");
+        assert!(first.digest.starts_with("sha256:"));
     }
 
     #[test]
