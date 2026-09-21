@@ -415,7 +415,7 @@ mod tests {
         EvidenceObject {
             id: format!("ev-{revision}"),
             kind: EvidenceKind::Contract,
-            session_id: SessionId::new(),
+            session_id: SessionId::new_v4(),
             region: None,
             payload,
             provenance: Provenance {
