@@ -10,7 +10,8 @@ use clap::{Args, ValueEnum};
 use localview_artifacts::ArtifactStore;
 use localview_attestation::{DigestAttestationPayload, digest_attestation};
 use localview_content_addressed::{BaselineEnvelope, object_hash};
-use localview_diagnostics::{DiagnosticClass, DiagnosticReport};
+use localview_diagnostics::{DiagnosticClass, DiagnosticIssue, DiagnosticReport};
+use localview_live_analysis::{FindingClass, LiveDiagnosis};
 use localview_protocol::{PageSnapshot, Session, SessionId};
 use localview_reports::{
     ArtifactReference, BaselineComparison, BaselineComparisonStatus, GitAnnotation, LocalViewReport,
@@ -240,7 +241,7 @@ async fn run_inner(
         }
     }
 
-    let diagnostics: DiagnosticReport = authed_get(
+    let diagnosis: LiveDiagnosis = authed_get(
         client,
         control,
         token,
@@ -249,8 +250,18 @@ async fn run_inner(
     .await?
     .json()
     .await
-    .context("invalid LocalView diagnostic report")?;
-    let diagnostics = sanitize_diagnostics(diagnostics, project_root);
+    .context("invalid LocalView live diagnosis")?;
+    for unknown in &diagnosis.unknowns {
+        incomplete_reasons.push(format!(
+            "{}: {}",
+            bounded_text(&unknown.statement, 256),
+            bounded_text(&unknown.reason, 256)
+        ));
+    }
+    let diagnostics = sanitize_diagnostics(
+        diagnostic_report_from_live(&diagnosis),
+        project_root,
+    );
     let analysis_result = match args.analysis {
         HeadlessAnalysis::Diagnose => "diagnose".to_owned(),
         HeadlessAnalysis::Full => {
@@ -858,6 +869,40 @@ fn summarize_evidence(value: &Value) -> EvidenceSummary {
         classes,
         ids,
         hashes,
+    }
+}
+
+fn diagnostic_report_from_live(diagnosis: &LiveDiagnosis) -> DiagnosticReport {
+    let issues = diagnosis
+        .findings
+        .iter()
+        .map(|finding| DiagnosticIssue {
+            category: finding.category.clone(),
+            code: finding.code.clone(),
+            message: finding.message.clone(),
+            severity: finding.severity,
+            confidence: finding.confidence,
+            class: match finding.class {
+                FindingClass::Deterministic => DiagnosticClass::Deterministic,
+                FindingClass::Heuristic => DiagnosticClass::Heuristic,
+            },
+            refs: Vec::new(),
+            evidence: None,
+        })
+        .collect::<Vec<_>>();
+    let deterministic = issues
+        .iter()
+        .filter(|issue| issue.class == DiagnosticClass::Deterministic)
+        .count();
+    let heuristic = issues
+        .iter()
+        .filter(|issue| issue.class == DiagnosticClass::Heuristic)
+        .count();
+    DiagnosticReport {
+        issues,
+        deterministic,
+        heuristic,
+        subjective: 0,
     }
 }
 
