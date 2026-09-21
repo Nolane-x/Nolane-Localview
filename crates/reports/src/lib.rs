@@ -865,7 +865,12 @@ fn markdown_text(input: &str) -> String {
 }
 
 fn markdown_code(input: &str) -> String {
-    bounded_text(input).replace('`', "'").replace('\n', " ")
+    bounded_text(input)
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('`', "'")
+        .replace('\n', " ")
 }
 
 fn html_escape(input: &str) -> String {
