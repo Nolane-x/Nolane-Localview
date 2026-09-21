@@ -137,6 +137,14 @@ await page.evaluate(() => window.__LOCALVIEW_WAVE6__.beginKeyboardJourney({ docu
 await page.keyboard.press('Escape');
 assert.equal(await overlay.count(), 0);
 
+await page.evaluate(() => window.__LOCALVIEW_WAVE6__.beginKeyboardJourney({
+  documentGeneration: 11,
+  deadlineMs: 100,
+}));
+assert.equal(await overlay.count(), 1);
+await page.waitForTimeout(150);
+assert.equal(await overlay.count(), 0, 'deadline must remove the transient focus overlay');
+
 const safeTargets = await page.evaluate(() => window.__LOCALVIEW_WAVE6__.safeDiscoveryTargets(32));
 const unsafeRef = await ref('#unsafe');
 const unsafeCandidate = safeTargets.find(item => item.reference === unsafeRef);
@@ -219,6 +227,7 @@ console.log(JSON.stringify({
     'focus-trap-observation',
     'overlay-semantic-exclusion',
     'overlay-freeze-cleanup',
+    'overlay-deadline-cleanup',
     'route-generation-drift',
     'safe-discovery-skip',
     'feedback-observed-delayed-none-inconclusive',
