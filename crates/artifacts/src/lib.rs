@@ -211,7 +211,10 @@ impl ArtifactStore {
 
     async fn revalidate_root(&self) -> Result<()> {
         let metadata = tokio::fs::symlink_metadata(&self.root).await?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        if metadata.file_type().is_symlink()
+            || metadata_is_reparse_point(&metadata)
+            || !metadata.is_dir()
+        {
             anyhow::bail!("artifact root identity is no longer a real directory");
         }
         let canonical = tokio::fs::canonicalize(&self.root).await?;
@@ -272,10 +275,10 @@ impl ArtifactStore {
             self.revalidate_root().await?;
             match tokio::fs::symlink_metadata(&meta.path).await {
                 Ok(metadata)
-                    if metadata.file_type().is_symlink()
-                        || metadata_is_reparse_point(&metadata)
-                        || !metadata.is_file() =>
-                {
+            if metadata.file_type().is_symlink()
+                || metadata_is_reparse_point(&metadata)
+                || !metadata.is_file() =>
+        {
                     anyhow::bail!("artifact GC refuses non-regular retained entry {}", meta.id)
                 }
                 Ok(_) => {}
@@ -303,10 +306,10 @@ pub fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
 
     match fs::symlink_metadata(path) {
         Ok(metadata)
-                    if metadata.file_type().is_symlink()
-                        || metadata_is_reparse_point(&metadata)
-                        || !metadata.is_file() =>
-                {
+            if metadata.file_type().is_symlink()
+                || metadata_is_reparse_point(&metadata)
+                || !metadata.is_file() =>
+        {
             anyhow::bail!("refusing to replace non-regular persistence leaf")
         }
         Ok(_) => {}
@@ -322,10 +325,10 @@ pub fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
     revalidate_atomic_parent(parent)?;
     match fs::symlink_metadata(path) {
         Ok(metadata)
-                    if metadata.file_type().is_symlink()
-                        || metadata_is_reparse_point(&metadata)
-                        || !metadata.is_file() =>
-                {
+            if metadata.file_type().is_symlink()
+                || metadata_is_reparse_point(&metadata)
+                || !metadata.is_file() =>
+        {
             file.discard()?;
             anyhow::bail!("persistence leaf changed to a non-regular entry before commit");
         }
@@ -350,7 +353,10 @@ pub fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
 
 fn revalidate_atomic_parent(parent: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(parent).context("inspect atomic persistence parent")?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata.file_type().is_symlink()
+        || metadata_is_reparse_point(&metadata)
+        || !metadata.is_dir()
+    {
         anyhow::bail!("atomic persistence parent must be a real directory");
     }
     let canonical = fs::canonicalize(parent).context("canonicalize atomic persistence parent")?;
