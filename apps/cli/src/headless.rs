@@ -35,6 +35,18 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+fn metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 pub const EXIT_PASS: i32 = 0;
 pub const EXIT_HARD_FAILURE: i32 = 2;
 pub const EXIT_INCONCLUSIVE: i32 = 3;
@@ -1427,7 +1439,11 @@ async fn write_baseline_index(path: &Path, index: &BaselineIndex) -> Result<()> 
     // still treated as an unsafe state rather than silently ignored.
     let legacy_temp = path.with_extension("json.tmp");
     match fs::symlink_metadata(&legacy_temp) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata)
+            if metadata.file_type().is_symlink()
+                || metadata_is_reparse_point(&metadata)
+                || !metadata.is_file() =>
+        {
             bail!("baseline index temp leaf is an unsafe non-regular entry");
         }
         Ok(_) => {}
@@ -1473,7 +1489,9 @@ fn valid_physical_artifact_id(value: &str) -> bool {
 fn revalidate_canonical_directory(path: &Path, label: &str) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("{label} is unavailable: {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata.file_type().is_symlink()
+        || metadata_is_reparse_point(&metadata)
+        || !metadata.is_dir() {
         bail!("{label} must be a real directory");
     }
     let canonical = fs::canonicalize(path)
@@ -1515,7 +1533,9 @@ async fn ensure_project_directory(project_root: &Path, requested: &Path) -> Resu
         let next = current.join(part);
         match tokio::fs::symlink_metadata(&next).await {
             Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                if metadata.file_type().is_symlink()
+        || metadata_is_reparse_point(&metadata)
+        || !metadata.is_dir() {
                     bail!("project-contained directory component is not a real directory");
                 }
             }
@@ -1529,7 +1549,9 @@ async fn ensure_project_directory(project_root: &Path, requested: &Path) -> Resu
             Err(error) => return Err(error.into()),
         }
         let metadata = tokio::fs::symlink_metadata(&next).await?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        if metadata.file_type().is_symlink()
+        || metadata_is_reparse_point(&metadata)
+        || !metadata.is_dir() {
             bail!("project-contained directory component changed during creation");
         }
         let canonical = tokio::fs::canonicalize(&next).await?;
@@ -1551,7 +1573,9 @@ fn read_optional_regular_leaf(path: &Path, max_bytes: u64) -> Result<Option<Vec<
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if before.file_type().is_symlink() || !before.is_file() {
+    if before.file_type().is_symlink()
+        || metadata_is_reparse_point(&before)
+        || !before.is_file() {
         bail!("persistence leaf must be a regular file");
     }
     if before.len() > max_bytes {
@@ -1568,7 +1592,11 @@ fn read_optional_regular_leaf(path: &Path, max_bytes: u64) -> Result<Option<Vec<
         bail!("persistence leaf handle resolves to a reparse point");
     }
     let after = fs::symlink_metadata(path)?;
-    if after.file_type().is_symlink() || !after.is_file() || after.len() != before.len() {
+    if after.file_type().is_symlink()
+        || metadata_is_reparse_point(&after)
+        || !after.is_file()
+        || after.len() != before.len()
+    {
         bail!("persistence leaf identity changed during read");
     }
     #[cfg(unix)]
