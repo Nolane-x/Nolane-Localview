@@ -119,6 +119,27 @@ fn registered_handlers() -> BTreeSet<String> {
 }
 
 #[test]
+fn invoke_parser_catches_multiline_and_generic_calls() {
+    let source = r#"
+        invoke<Receipt>(
+            'generic_multiline',
+            { value: true },
+        );
+        invoke (
+            "spaced_multiline",
+            {},
+        );
+    "#;
+    assert_eq!(
+        invoke_names(source),
+        BTreeSet::from([
+            "generic_multiline".to_owned(),
+            "spaced_multiline".to_owned(),
+        ])
+    );
+}
+
+#[test]
 fn preview_bridge_invokes_are_registered_and_least_privilege_allowed() {
     let source = include_str!("../src/lib.rs");
     let bridge = source
