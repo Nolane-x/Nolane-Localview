@@ -22,6 +22,7 @@ requireText(cli, 'resource_governor_denied', 'governor denial must be represente
 requireText(cli, 'multiple LocalView sessions are active', 'ambiguous sessions must fail closed');
 requireText(cli, 'headless mode refuses non-loopback session target', 'headless target must remain loopback');
 requireText(cli, 'shell interpreters are not allowed', 'fixture shell execution must be rejected');
+requireText(cli, 'allow_fixture_command', 'fixture command execution must require explicit policy opt-in');
 requireText(cli, 'state_stable', 'baseline authority must be bound to stable end state');
 requireText(cli, 'safe_route', 'route transport must strip secret query/fragment data');
 
@@ -34,6 +35,7 @@ requireText(reports, 'markdown_text', 'Markdown output must escape project conte
 
 requireText(artifacts, 'pub struct CanonicalArtifactMeta', 'physical/canonical artifact identity split missing');
 requireText(artifacts, 'put_canonical', 'canonical artifact retention helper missing');
+requireText(cli, 'put_canonical', 'headless baseline retention must bind canonical hash to physical storage');
 requireText(content, 'pub struct BaselineEnvelope', 'content-addressed baseline envelope missing');
 requireText(content, 'dependency_closure', 'baseline dependency closure primitive missing');
 requireText(attestation, 'pub struct DigestAttestation', 'digest attestation missing');
@@ -66,6 +68,11 @@ function workflowOwnedPaths() {
     'crates/attestation/',
     'tools/wave8-headless-ci/',
   ];
+}
+
+const fixture = JSON.parse(read('tools/wave8-headless-ci/fixture.json'));
+if (fixture.schema_version !== 1 || fixture.route !== '/' || fixture.viewport.width !== 1280 || fixture.viewport.height !== 720) {
+  throw new Error('deterministic Wave 8 fixture is invalid');
 }
 
 console.log('Wave 8 headless/CI authority contract: PASS');
