@@ -353,7 +353,40 @@ impl VerificationStore {
         self.discard_verification(verification_id)
     }
 
-    #[cfg(test)]
+    
+pub fn validate_wave9_verified_handoff(
+    receipt: &localview_verification::AutonomousVerificationReceipt,
+    expected_base_revision: &str,
+) -> Result<(), String> {
+    use localview_verification::AutonomousVerificationVerdict;
+
+    if expected_base_revision.trim().is_empty() || receipt.base_revision != expected_base_revision {
+        return Err("Wave 9 receipt base revision does not match the current trusted revision".into());
+    }
+    if receipt.final_verdict != AutonomousVerificationVerdict::Verified {
+        return Err("Wave 9 receipt is not verified".into());
+    }
+    if !receipt.cleanup_proof.complete() || !receipt.resource_budget.within_budget() {
+        return Err("Wave 9 receipt lacks complete cleanup/resource proof".into());
+    }
+    if !receipt.hard_contract_failures().is_empty()
+        || !receipt.contracts_evaluated.hard_unknowns.is_empty()
+    {
+        return Err("Wave 9 receipt has unresolved hard contract evidence".into());
+    }
+    if !receipt.surviving_mutations().is_empty() {
+        return Err("Wave 9 receipt has surviving mutation challenges".into());
+    }
+    if !receipt.unexpected_impact.is_empty()
+        || !receipt.impact_comparison.inconclusive.is_empty()
+        || !receipt.stale_evidence_ids.is_empty()
+    {
+        return Err("Wave 9 receipt has unresolved impact or stale evidence".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
     fn retained_visual_bytes_for_test(&self) -> usize {
         self.records
             .lock()
