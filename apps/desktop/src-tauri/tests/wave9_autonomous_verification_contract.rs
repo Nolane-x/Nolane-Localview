@@ -64,15 +64,10 @@ fn trusted_verify_requires_verified_complete_clean_receipt() {
     assert!(body.contains("stale_evidence_ids"));
 }
 
-
 #[test]
 fn production_apply_authority_runs_wave9_shadow_preflight_before_applying() {
     let trusted_fix = source("src/trusted_fix.rs");
-    let begin_apply = function_body(
-        &trusted_fix,
-        "pub fn begin_apply",
-        "pub fn complete_apply",
-    );
+    let begin_apply = function_body(&trusted_fix, "pub fn begin_apply", "pub fn complete_apply");
     assert!(begin_apply.contains("wave9_preflight_for_pending_proposal(&pending)"));
     assert!(begin_apply.contains("ProductionCandidatePreflightVerdict::Rejected"));
     assert!(begin_apply.contains("project revision changed during candidate preflight"));
