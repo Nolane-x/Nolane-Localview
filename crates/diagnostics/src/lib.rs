@@ -94,9 +94,11 @@ pub fn assemble(
                 | A11yEvidenceKind::NativeAx
                 | A11yEvidenceKind::Heuristic => DiagnosticClass::Heuristic,
             },
-            refs: (!issue.reference.is_empty())
-                .then(|| vec![issue.reference.clone()])
-                .unwrap_or_default(),
+            refs: if issue.reference.is_empty() {
+                Vec::new()
+            } else {
+                vec![issue.reference.clone()]
+            },
             evidence: Some(match issue.evidence_kind {
                 A11yEvidenceKind::LocalDeterministic => "local_deterministic".into(),
                 A11yEvidenceKind::AxeRule => issue
