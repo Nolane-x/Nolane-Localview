@@ -116,15 +116,21 @@ fn real_isolated_shadow_candidate_never_mutates_dirty_worktree_and_cleans_up() {
     let mut shadow = ShadowWorkspace::prepare(&fixture.root, &candidate).unwrap();
 
     assert_eq!(
-        fs::read_to_string(shadow.root().join("src/app.txt")).unwrap(),
+        fs::read_to_string(shadow.root().join("src/app.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "after\n"
     );
     assert_eq!(
-        fs::read_to_string(fixture.root.join("src/app.txt")).unwrap(),
+        fs::read_to_string(fixture.root.join("src/app.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "before\n"
     );
     assert_eq!(
-        fs::read_to_string(fixture.root.join("dirty.txt")).unwrap(),
+        fs::read_to_string(fixture.root.join("dirty.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "keep-me\n"
     );
 
