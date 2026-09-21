@@ -11,6 +11,7 @@ localview-content-addressed = { path = "../content-addressed" }
 localview-contracts = { path = "../contracts" }
 localview-state-space = { path = "../state-space" }
 localview-planner = { path = "../planner" }
+localview-postcondition-contracts = { path = "../postcondition-contracts" }
 localview-mutation = { path = "../mutation" }
 localview-counterfactual = { path = "../counterfactual" }
 localview-evidence = { path = "../evidence" }
