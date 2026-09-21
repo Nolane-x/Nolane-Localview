@@ -25,57 +25,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  format-wave9:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Canonical-format Wave 9 owned files
-        run: |
-          rustfmt --edition 2024 \
-            crates/contracts/src/autonomous.rs \
-            crates/verification/src/autonomous.rs \
-            crates/mutation/src/autonomous.rs \
-            crates/counterfactual/src/shadow.rs \
-            crates/counterfactual/tests/shadow_candidate.rs \
-            crates/state-space/src/affected.rs \
-            crates/planner/src/autonomous_verification.rs \
-            apps/desktop/src-tauri/tests/wave9_autonomous_verification_contract.rs
-      - name: Commit formatting only when needed
-        run: |
-          if test -n "$(git status --porcelain=v1 -- \
-            crates/contracts/src/autonomous.rs \
-            crates/verification/src/autonomous.rs \
-            crates/mutation/src/autonomous.rs \
-            crates/counterfactual/src/shadow.rs \
-            crates/counterfactual/tests/shadow_candidate.rs \
-            crates/state-space/src/affected.rs \
-            crates/planner/src/autonomous_verification.rs \
-            apps/desktop/src-tauri/tests/wave9_autonomous_verification_contract.rs)"; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add \
-              crates/contracts/src/autonomous.rs \
-              crates/verification/src/autonomous.rs \
-              crates/mutation/src/autonomous.rs \
-              crates/counterfactual/src/shadow.rs \
-              crates/counterfactual/tests/shadow_candidate.rs \
-              crates/state-space/src/affected.rs \
-              crates/planner/src/autonomous_verification.rs \
-              apps/desktop/src-tauri/tests/wave9_autonomous_verification_contract.rs
-            git commit -m "style(wave9): canonical rustfmt owned files"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
-
   core:
-    needs: format-wave9
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -137,7 +90,6 @@ jobs:
           test -z "$(git status --porcelain=v1)"
 
   desktop-boundary:
-    needs: format-wave9
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
