@@ -4314,7 +4314,7 @@ invariant(
 );
 await page.keyboard.press('Control+k');
 await page.waitForTimeout(80);
-const windowsSettingsShortcut = await page.getByRole('button', { name: /Settings/ }).locator('kbd').innerText();
+const windowsSettingsShortcut = await page.locator('.panel-command').getByRole('button', { name: /Settings/ }).locator('kbd').innerText();
 invariant(windowsSettingsShortcut === 'Ctrl+,', 'ui-audit:windows-settings-shortcut', { windowsSettingsShortcut });
 await shot(page, '166-windows-shortcut-labels.png', 'ui-audit-windows-shortcut-labels');
 await page.close();
@@ -4329,7 +4329,7 @@ const macShortcut = await page.locator('.empty-command kbd').allInnerTexts();
 invariant(macShortcut.join('') === '⌘K', 'ui-audit:mac-shortcut-presentation', { macShortcut });
 await page.keyboard.press('Meta+k');
 await page.waitForTimeout(80);
-const macSettingsShortcut = await page.getByRole('button', { name: /Settings/ }).locator('kbd').innerText();
+const macSettingsShortcut = await page.locator('.panel-command').getByRole('button', { name: /Settings/ }).locator('kbd').innerText();
 invariant(macSettingsShortcut === '⌘,', 'ui-audit:mac-settings-shortcut', { macSettingsShortcut });
 await shot(page, '167-macos-shortcut-labels.png', 'ui-audit-macos-shortcut-labels');
 await page.close();
