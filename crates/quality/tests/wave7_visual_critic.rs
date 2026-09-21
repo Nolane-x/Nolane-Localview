@@ -48,16 +48,8 @@ fn grammar() -> ProjectDesignGrammar {
                 sample(24.0, "e"),
                 sample(24.0, "f"),
             ],
-            font_weights: vec![
-                sample(400.0, "a"),
-                sample(400.0, "b"),
-                sample(400.0, "c"),
-            ],
-            control_heights: vec![
-                sample(40.0, "a"),
-                sample(40.0, "b"),
-                sample(40.0, "c"),
-            ],
+            font_weights: vec![sample(400.0, "a"), sample(400.0, "b"), sample(400.0, "c")],
+            control_heights: vec![sample(40.0, "a"), sample(40.0, "b"), sample(40.0, "c")],
             ..Default::default()
         },
         ExtractionPolicy::default(),
@@ -239,8 +231,10 @@ fn baseline_real_drift_is_reported() {
 
 #[test]
 fn missing_evidence_is_inconclusive_not_zero() {
-    let baseline =
-        build_design_baseline(ProjectDesignGrammar::default(), &VisualCriticReport::default());
+    let baseline = build_design_baseline(
+        ProjectDesignGrammar::default(),
+        &VisualCriticReport::default(),
+    );
     let diff = diff_design_baselines(&baseline, &baseline);
     assert!(
         diff.inconclusive
