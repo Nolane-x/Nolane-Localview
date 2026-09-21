@@ -17,10 +17,6 @@ on:
       - "tools/wave6-accessibility-interaction/**"
       - "docs/superpowers/specs/2026-09-21-wave6-accessibility-interaction-intelligence-design.md"
       - ".github/workflows/wave6-accessibility-interaction.yml"
-  push:
-    branches:
-      - "feat/wave6-accessibility-interaction"
-
 concurrency:
   group: wave6-accessibility-interaction-${{ github.ref }}
   cancel-in-progress: true
