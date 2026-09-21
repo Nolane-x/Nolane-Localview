@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "route": "/",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1.0
+  },
+  "stable_state": "ready",
+  "allow_visual": false,
+  "allow_chromium": false
+}
