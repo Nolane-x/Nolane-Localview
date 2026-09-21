@@ -196,6 +196,14 @@ impl ArtifactStore {
         }
         drop(file);
 
+        let retained = read_regular_file(&path)
+            .context("revalidate newly persisted artifact before indexing")?;
+        if retained != bytes {
+            anyhow::bail!(
+                "artifact destination changed during persistence; refusing to index mismatched bytes"
+            );
+        }
+
         let meta = ArtifactMeta {
             id: id.clone(),
             kind: kind.into(),
@@ -347,6 +355,10 @@ pub fn atomic_replace_regular(path: &Path, bytes: &[u8]) -> Result<()> {
         || !metadata.is_file()
     {
         anyhow::bail!("atomic persistence did not produce a regular file");
+    }
+    let retained = read_regular_file(path).context("revalidate committed persistence bytes")?;
+    if retained != bytes {
+        anyhow::bail!("atomic persistence commit bytes do not match requested content");
     }
     Ok(())
 }
@@ -539,6 +551,28 @@ mod tests {
         let error = store.put("text", bytes).await.unwrap_err().to_string();
         assert!(error.contains("refusing overwrite"));
         assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
+        let _ = tokio::fs::remove_dir_all(dir).await;
+        let _ = tokio::fs::remove_file(outside).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn atomic_replace_refuses_leaf_symlink_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = test_dir("atomic-symlink");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let outside = test_dir("atomic-symlink-outside");
+        tokio::fs::write(&outside, b"outside").await.unwrap();
+        let destination = dir.join("report.json");
+        symlink(&outside, &destination).unwrap();
+
+        let error = atomic_replace_regular(&destination, b"replacement")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("non-regular") || error.contains("symlink"));
+        assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"outside");
+
         let _ = tokio::fs::remove_dir_all(dir).await;
         let _ = tokio::fs::remove_file(outside).await;
     }
