@@ -914,13 +914,11 @@ fn baseline_evidence_ids(
         for step in steps {
             if step.pointer("/execution/kind").and_then(Value::as_str)
                 == Some("chromium_compatibility")
-            {
-                if let Some(id) = step
+                && let Some(id) = step
                     .pointer("/execution/evidence_id")
                     .and_then(Value::as_str)
-                {
-                    ids.insert(id.to_owned());
-                }
+            {
+                ids.insert(id.to_owned());
             }
         }
     }
