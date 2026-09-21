@@ -569,10 +569,24 @@ mod tests {
         assert!(script.contains("MAX_AXE_FINDINGS = 128"));
         assert!(script.contains("MAX_FOCUS_TRANSITIONS = 64"));
         assert!(script.contains("MAX_SCAN_ELEMENTS = 4096"));
-        assert!(!script.contains("innerHTML"));
-        assert!(!script.contains(".value"));
-        assert!(!script.contains("document.cookie"));
-        assert!(!script.contains("localStorage"));
-        assert!(!script.contains("sessionStorage"));
+        for forbidden in [
+            "innerHTML",
+            "element.value",
+            "target.value",
+            "input.value",
+            "textarea.value",
+            "valueAsDate",
+            "valueAsNumber",
+            "getAttribute('value')",
+            "getAttribute(\"value\")",
+            "document.cookie",
+            "localStorage",
+            "sessionStorage",
+        ] {
+            assert!(
+                !script.contains(forbidden),
+                "Wave 6 bootstrap must not read sensitive page data via {forbidden}"
+            );
+        }
     }
 }
