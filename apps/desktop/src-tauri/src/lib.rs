@@ -17,7 +17,6 @@ use std::{
     process::Command,
 };
 
-use localview_instrumentation::{bootstrap_script, InstrumentationConfig};
 use localview_live_bridge::{
     ActionCancellationSignal, BridgeAction, BridgeActionKind, BridgeActionResult, IngestReport,
     NetworkFaultControlRequest, NetworkFaultControlResult, ObserverBatch, ObserverEvent,
