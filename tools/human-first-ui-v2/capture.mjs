@@ -111,7 +111,7 @@ async function assertMinimumChromeHitAreas(page, state) {
     };
   }));
   const undersized = targets.filter((target) => target.width < 40 || target.height < 40);
-  invariant(targets.length > 0 && undersized.length === 0, `${state}:minimum-chrome-hit-area`, {
+  invariant(targets.length > 0 && undersized.length === 0, `ui-audit:minimum-chrome-hit-area:${state}`, {
     targetCount: targets.length,
     undersized,
   });
@@ -134,7 +134,7 @@ async function assertRailTargetsDoNotOverlap(page, state) {
       if (width > 0.5 && height > 0.5) overlaps.push({ left: left.label, right: right.label, width, height });
     }
   }
-  invariant(overlaps.length === 0, `${state}:rail-targets-no-overlap`, { overlaps });
+  invariant(overlaps.length === 0, `ui-audit:rail-targets-no-overlap:${state}`, { overlaps });
 }
 
 async function readStoredPreferences(page) {
@@ -4199,7 +4199,7 @@ for (const testCase of interactiveCases) {
 await page.locator('.chrome-layer').focus();
 await page.keyboard.press('a');
 await page.waitForTimeout(90);
-await assertVisible(page, '.panel-ai', 'ui-audit-single-key-safe-scope');
+await assertVisible(page, '.panel-ai', 'ui-audit:single-key-safe-scope');
 await page.keyboard.press('Escape');
 await page.waitForTimeout(60);
 
