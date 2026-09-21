@@ -160,28 +160,28 @@ impl InteractionGraph {
             return Err(GraphAdmissionError::InvalidStableReference);
         }
         let all_states = self.live_states();
-        if !all_states.contains(&transition.pre_state.key())
-            && all_states.len() >= bounds.max_nodes
-        {
-            return Err(GraphAdmissionError::NodeBudgetExceeded);
-        }
-        if !all_states.contains(&transition.resulting_state.key())
-            && all_states.len().saturating_add(1) > bounds.max_nodes
-        {
+        let mut next_states = all_states.clone();
+        next_states.insert(transition.pre_state.key());
+        next_states.insert(transition.resulting_state.key());
+        if next_states.len() > bounds.max_nodes {
             return Err(GraphAdmissionError::NodeBudgetExceeded);
         }
         if self.live_edge_count() >= bounds.max_edges {
             return Err(GraphAdmissionError::EdgeBudgetExceeded);
         }
-        let routes = self
+        let mut next_routes = self
             .live_edges
             .values()
             .flatten()
-            .flat_map(|edge| [&edge.pre_state.route, &edge.resulting_state.route])
+            .flat_map(|edge| {
+                [
+                    edge.pre_state.route.clone(),
+                    edge.resulting_state.route.clone(),
+                ]
+            })
             .collect::<BTreeSet<_>>();
-        let mut next_routes = routes;
-        next_routes.insert(&transition.pre_state.route);
-        next_routes.insert(&transition.resulting_state.route);
+        next_routes.insert(transition.pre_state.route.clone());
+        next_routes.insert(transition.resulting_state.route.clone());
         if next_routes.len() > bounds.max_route_states {
             return Err(GraphAdmissionError::RouteStateBudgetExceeded);
         }
@@ -296,7 +296,7 @@ pub fn analyze_keyboard_journey(
             });
             return KeyboardJourneyReceipt {
                 initial,
-                transitions: bounded,
+                transitions: bounded.clone(),
                 issues,
                 complete: false,
                 stopped_reason: Some("route_drift".into()),
@@ -310,7 +310,7 @@ pub fn analyze_keyboard_journey(
             });
             return KeyboardJourneyReceipt {
                 initial,
-                transitions: bounded,
+                transitions: bounded.clone(),
                 issues,
                 complete: false,
                 stopped_reason: Some("document_generation_drift".into()),
