@@ -1381,3 +1381,312 @@ fn validate_lexically_contained(project_root: &Path, path: &Path) -> Result<()> 
     }
     Ok(())
 }
+
+fn safe_relative_report_path(value: &str) -> bool {
+    let path = Path::new(value);
+    !value.is_empty()
+        && value.len() <= 512
+        && !path.is_absolute()
+        && !path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+}
+
+fn bounded_text(value: &str, max: usize) -> String {
+    if value.len() <= max {
+        value.to_owned()
+    } else {
+        let mut end = max;
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &value[..end])
+    }
+}
+
+fn generated_at() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("unix:{seconds}")
+}
+
+fn display_project_relative(project_root: &Path, path: &Path) -> String {
+    path.strip_prefix(project_root)
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "<project-output>".into())
+}
+
+fn default_device_scale_factor() -> f64 {
+    1.0
+}
+
+fn default_command_timeout_ms() -> u64 {
+    DEFAULT_COMMAND_TIMEOUT_MS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use localview_diagnostics::DiagnosticIssue;
+    use uuid::Uuid;
+
+    fn session(id: Uuid) -> Session {
+        serde_json::from_value(json!({
+            "id": id,
+            "endpoint": {"host":"127.0.0.1","port":5173,"scheme":"http"},
+            "classification": {
+                "kind":"frontend_dev_server",
+                "confidence":1.0,
+                "framework":null,
+                "title":null,
+                "hmr_detected":false,
+                "evidence":[]
+            },
+            "project": {
+                "key":"project",
+                "display_name":"Project",
+                "cwd": std::env::temp_dir().to_string_lossy(),
+                "git_root": null,
+                "pid": null,
+                "command": null
+            },
+            "status":"active",
+            "first_seen":"1970-01-01T00:00:01Z",
+            "last_seen":"1970-01-01T00:00:01Z",
+            "disconnected_at":null,
+            "preview_visible":false
+        }))
+        .expect("session fixture")
+    }
+
+    fn args() -> HeadlessArgs {
+        HeadlessArgs {
+            session: None,
+            analysis: HeadlessAnalysis::Diagnose,
+            fixture: None,
+            output_dir: None,
+            visual: false,
+            chromium: false,
+            update_baseline: false,
+            require_baseline_match: false,
+            require_verification_pass: false,
+            fail_on_heuristic: false,
+            deterministic_severity: 3,
+            visual_max_changed_ratio: 0.01,
+            artifact_budget_mib: 64,
+        }
+    }
+
+    #[test]
+    fn headless_session_resolution_is_exact_and_ambiguous_without_id() {
+        assert!(resolve_session(&[], None).is_err());
+        let one = session(Uuid::new_v4());
+        assert_eq!(
+            resolve_session(std::slice::from_ref(&one), None)
+                .unwrap()
+                .id,
+            one.id
+        );
+        let two = session(Uuid::new_v4());
+        assert!(resolve_session(&[one.clone(), two.clone()], None).is_err());
+        assert_eq!(
+            resolve_session(&[one, two.clone()], Some(two.id))
+                .unwrap()
+                .id,
+            two.id
+        );
+        assert!(resolve_session(&[two], Some(Uuid::new_v4())).is_err());
+    }
+
+    #[test]
+    fn fixture_commands_reject_shells_paths_and_unbounded_timeout() {
+        let mut command = FixtureCommand {
+            executable: "bash".into(),
+            args: vec!["-c".into(), "echo nope".into()],
+            cwd: None,
+            timeout_ms: 1000,
+        };
+        assert!(validate_fixture_command(&command).is_err());
+        command.executable = "./script".into();
+        assert!(validate_fixture_command(&command).is_err());
+        command.executable = "node".into();
+        command.timeout_ms = MAX_COMMAND_TIMEOUT_MS + 1;
+        assert!(validate_fixture_command(&command).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fixture_timeout_is_enforced_without_shell_interpolation() {
+        let command = FixtureCommand {
+            executable: "sleep".into(),
+            args: vec!["1".into()],
+            cwd: None,
+            timeout_ms: 1,
+        };
+        let error = run_fixture_command(&std::env::temp_dir(), &command, "test")
+            .await
+            .expect_err("sleep must time out");
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn fixture_state_identity_is_stable() {
+        let input = StateIdentityInput {
+            project_key: "project",
+            route: "/checkout",
+            viewport: (1280, 720),
+            fixture_hash: Some("sha256:fixture"),
+            stable_state: Some("ready"),
+        };
+        assert_eq!(object_hash(&input), object_hash(&input));
+    }
+
+    #[test]
+    fn fixture_policy_disables_visual_and_chromium_explicitly() {
+        let fixture = FixtureSpec {
+            schema_version: 1,
+            route: "/".into(),
+            viewport: FixtureViewport {
+                width: 1280,
+                height: 720,
+                device_scale_factor: 1.0,
+            },
+            stable_state: "ready".into(),
+            allow_visual: false,
+            allow_chromium: false,
+            setup: None,
+            cleanup: None,
+        };
+        assert!(!visual_permitted(Some(&fixture)));
+        assert!(!chromium_permitted(Some(&fixture)));
+    }
+
+    #[test]
+    fn resource_denial_and_unavailable_visual_are_classified_separately() {
+        assert_eq!(
+            classify_control_status(
+                StatusCode::TOO_MANY_REQUESTS,
+                &json!({"error":"resource_governor_denied"})
+            ),
+            BoundedRequestDisposition::ResourceDenied
+        );
+        assert_eq!(
+            classify_control_status(
+                StatusCode::BAD_GATEWAY,
+                &json!({"error":"native_visual_diff_failed"})
+            ),
+            BoundedRequestDisposition::Unavailable("native_visual_diff_failed".into())
+        );
+    }
+
+    #[test]
+    fn physical_storage_id_is_not_confused_with_canonical_hash() {
+        assert!(valid_physical_artifact_id("lv-0123456789abcdef"));
+        assert!(!valid_physical_artifact_id("sha256:0123456789abcdef"));
+    }
+
+    #[test]
+    fn secret_tainted_evidence_is_excluded_from_report_hash_inputs() {
+        let value = json!([
+            {"id":"ev_secret","kind":"semantic","secret_taint":true,"payload":{"token":"secret"}},
+            {"id":"ev_safe","kind":"layout","secret_taint":false,"uncertainty":"observed","provenance":{"source":"native","revision":"abc"}}
+        ]);
+        let summary = summarize_evidence(&value);
+        assert_eq!(summary.ids, vec!["ev_safe"]);
+        assert_eq!(summary.hashes.len(), 1);
+    }
+
+    #[test]
+    fn secret_paths_are_redacted_from_diagnostics() {
+        let root = std::env::temp_dir().join("wave8-secret-root");
+        let root_text = root.to_string_lossy().into_owned();
+        let report = DiagnosticReport {
+            issues: vec![DiagnosticIssue {
+                category: "source".into(),
+                code: "path".into(),
+                message: format!("failure at {root_text}/src/main.rs"),
+                severity: 3,
+                confidence: 100,
+                class: DiagnosticClass::Deterministic,
+                refs: vec![format!("{root_text}/src/main.rs")],
+                evidence: Some(format!("{root_text}/secret.txt")),
+            }],
+            deterministic: 1,
+            heuristic: 0,
+            subjective: 0,
+        };
+        let safe = sanitize_diagnostics(report, &root);
+        let encoded = serde_json::to_string(&safe).unwrap();
+        assert!(!encoded.contains(&root_text));
+        assert!(encoded.contains("<project>"));
+    }
+
+    #[test]
+    fn route_and_output_paths_cannot_escape_project() {
+        assert!(validate_relative_path(Path::new("fixtures/app")).is_ok());
+        assert!(validate_relative_path(Path::new("../outside")).is_err());
+    }
+
+    #[test]
+    fn heuristic_only_findings_do_not_fail_default_policy() {
+        let diagnostics = DiagnosticReport {
+            issues: vec![DiagnosticIssue {
+                category: "layout".into(),
+                code: "heuristic".into(),
+                message: "heuristic only".into(),
+                severity: 3,
+                confidence: 90,
+                class: DiagnosticClass::Heuristic,
+                refs: Vec::new(),
+                evidence: None,
+            }],
+            deterministic: 0,
+            heuristic: 1,
+            subjective: 0,
+        };
+        assert_eq!(
+            evaluate_exit_policy(
+                &args(),
+                &diagnostics,
+                "pass",
+                BaselineComparisonStatus::Match,
+                false
+            ),
+            (ReportStatus::Passed, EXIT_PASS)
+        );
+    }
+
+    #[test]
+    fn deterministic_hard_failure_has_stable_exit_code() {
+        let diagnostics = DiagnosticReport {
+            issues: vec![DiagnosticIssue {
+                category: "layout".into(),
+                code: "overflow".into(),
+                message: "deterministic failure".into(),
+                severity: 3,
+                confidence: 100,
+                class: DiagnosticClass::Deterministic,
+                refs: Vec::new(),
+                evidence: None,
+            }],
+            deterministic: 1,
+            heuristic: 0,
+            subjective: 0,
+        };
+        assert_eq!(
+            evaluate_exit_policy(
+                &args(),
+                &diagnostics,
+                "pass",
+                BaselineComparisonStatus::Match,
+                false
+            ),
+            (ReportStatus::Failed, EXIT_HARD_FAILURE)
+        );
+    }
+}
