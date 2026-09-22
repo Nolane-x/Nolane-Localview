@@ -734,6 +734,25 @@ fn ui_audit_requires_safe_keyboard_scope_focus_restore_and_truthful_toggle_seman
 }
 
 #[test]
+fn production_closure_restores_focus_on_every_panel_close_and_reconciles_pending_native_url() {
+    let shell = include_str!("../../src/app/LocalViewShell.tsx");
+    let surface = include_str!("../../src/app/WorkspaceSurface.tsx");
+
+    let toggle = between(shell, "const togglePanel = useCallback(", "const togglePause = useCallback(");
+    assert!(toggle.contains("restorePanelFocus()"));
+    assert!(!toggle.contains("panelFocusOriginRef.current = null"));
+
+    let cancel = between(shell, "const cancelPointSelect = useCallback(", "const beginPointSelect = useCallback(");
+    assert!(cancel.contains("restorePanelFocus()"));
+
+    assert!(surface.contains("desiredUrlRef"));
+    assert!(surface.contains("await api.navigateWorkspaceSurface(sessionId, desiredUrl)"));
+    assert!(surface.contains("supportsNativeManagedSurface(url)"));
+    assert!(surface.contains("parsed.protocol === 'http:'"));
+    assert!(surface.contains("parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'"));
+}
+
+#[test]
 fn ui_audit_requires_platform_shortcuts_minimum_hit_areas_and_iframe_sandbox() {
     let surface = include_str!("../../src/app/WorkspaceSurface.tsx");
     let tools = include_str!("../../src/features/FloatingTools.tsx");

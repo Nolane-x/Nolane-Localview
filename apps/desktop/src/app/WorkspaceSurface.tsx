@@ -11,6 +11,19 @@ interface WorkspaceSurfaceProps {
   locale: SupportedLocale;
 }
 
+export function supportsNativeManagedSurface(url?: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:'
+      && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1')
+      && parsed.username.length === 0
+      && parsed.password.length === 0;
+  } catch {
+    return false;
+  }
+}
+
 function readBounds(element: HTMLElement): WorkspaceBounds | undefined {
   const rect = element.getBoundingClientRect();
   if (!Number.isFinite(rect.x) || !Number.isFinite(rect.y) || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return undefined;
@@ -27,7 +40,12 @@ export function WorkspaceSurface({ current, url, support, locale }: WorkspaceSur
   const [nativeFailedFor, setNativeFailedFor] = useState<string>();
 
   const wantsNative = useMemo(
-    () => support.compiled && support.default_mode === 'native' && !!current && !!url && nativeFailedFor !== current.id,
+    () => support.compiled
+      && support.default_mode === 'native'
+      && !!current
+      && !!url
+      && supportsNativeManagedSurface(url)
+      && nativeFailedFor !== current.id,
     [support.compiled, support.default_mode, current?.id, url, nativeFailedFor],
   );
 

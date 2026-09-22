@@ -106,6 +106,9 @@ fn tool_definitions() -> Vec<Value> {
         json!({"name":"session.project_state","description":"Read Git branch, commit, dirty files and working-tree identity without mutating the repository","inputSchema":session_schema()}),
         json!({"name":"session.analysis","description":"Analyze retained live console, network and performance evidence","inputSchema":session_schema()}),
         json!({"name":"session.diagnose","description":"Return evidence-first findings, uncertainty and recommended next checks","inputSchema":session_schema()}),
+        json!({"name":"session.performance_lite","description":"Read the bounded live performance-lite packet for one session","inputSchema":session_schema()}),
+        json!({"name":"session.capture_settle","description":"Read the current bounded capture-settle decision for one session without capturing pixels","inputSchema":session_schema()}),
+        json!({"name":"action.correlation","description":"Read bounded action→request→UI-response correlation for one exact action id","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"actionId":{"type":"string"}},"required":["session","actionId"]}}),
         json!({"name":"session.verify","description":"Verify the current UI using revision-bound fresh evidence; inconclusive is never promoted to pass","inputSchema":session_schema()}),
         json!({"name":"session.coverage","description":"Report strict current-target coverage without inventing a project denominator","inputSchema":session_schema()}),
         json!({"name":"session.proof","description":"Create and persist a content-addressed verification proof for the current session","inputSchema":session_schema()}),
@@ -169,6 +172,19 @@ async fn call_tool(params: &Value) -> Result<Value> {
         "session.project_state" => session_get(&client, &base, &token, &args, "project-state").await?,
         "session.analysis" => session_get(&client, &base, &token, &args, "analysis").await?,
         "session.diagnose" => session_get(&client, &base, &token, &args, "diagnose").await?,
+        "session.performance_lite" => session_get(&client, &base, &token, &args, "performance-lite").await?,
+        "session.capture_settle" => session_get(&client, &base, &token, &args, "capture-settle").await?,
+        "action.correlation" => {
+            let session = string_arg(&args, "session")?;
+            let action_id = string_arg(&args, "actionId")?;
+            authed_get(
+                &client,
+                &base,
+                &token,
+                &format!("/v1/sessions/{session}/actions/{action_id}/correlation"),
+            )
+            .await?
+        }
         "session.verify" => session_get(&client, &base, &token, &args, "verify").await?,
         "session.coverage" => session_get(&client, &base, &token, &args, "coverage").await?,
         "session.proof" => session_post(&client, &base, &token, &args, "proof").await?,
@@ -524,6 +540,9 @@ mod tests {
             .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_owned))
             .collect::<Vec<_>>();
         assert!(names.contains(&"action.snapshot".to_owned()));
+        assert!(names.contains(&"session.performance_lite".to_owned()));
+        assert!(names.contains(&"session.capture_settle".to_owned()));
+        assert!(names.contains(&"action.correlation".to_owned()));
         for forbidden in [
             "action.click",
             "action.type",
