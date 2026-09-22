@@ -602,8 +602,7 @@ fn apply_overlay(shadow_root: &Path, overlay: &SourceOverlay) -> Result<(), Shad
                 path: overlay.file.clone(),
             })?;
         drop(stdin);
-        let status =
-            wait_child_with_timeout(&mut child).ok_or(ShadowError::GitUnavailable)?;
+        let status = wait_child_with_timeout(&mut child).ok_or(ShadowError::GitUnavailable)?;
         if !status.success() {
             return Err(ShadowError::PatchRejected {
                 path: overlay.file.clone(),
@@ -618,7 +617,11 @@ fn trusted_git_program() -> Option<PathBuf> {
     let candidates = ["/usr/bin/git", "/bin/git", "/usr/local/bin/git"];
 
     #[cfg(target_os = "macos")]
-    let candidates = ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"];
+    let candidates = [
+        "/usr/bin/git",
+        "/opt/homebrew/bin/git",
+        "/usr/local/bin/git",
+    ];
 
     #[cfg(target_os = "windows")]
     let candidates = [
@@ -730,8 +733,7 @@ fn git_output_bytes(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<String> {
-    git_output_bytes(root, args)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    git_output_bytes(root, args).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn git_bytes(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
