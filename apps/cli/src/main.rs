@@ -2,7 +2,7 @@
 
 mod headless;
 
-use std::path::PathBuf;
+use std::{net::Ipv4Addr, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -48,24 +48,6 @@ enum Command {
     EvidenceGet { evidence_id: String },
     EvidenceTrace { evidence_id: String },
     ProofStaleness { evidence_id: String },
-    Click { session: SessionId, reference: String },
-    Type {
-        session: SessionId,
-        reference: String,
-        text: String,
-        #[arg(long)]
-        clear_first: bool,
-    },
-    Key {
-        session: SessionId,
-        key: String,
-        #[arg(long)]
-        reference: Option<String>,
-        #[arg(long = "modifier")]
-        modifiers: Vec<String>,
-    },
-    Scroll { session: SessionId, x: f64, y: f64 },
-    Focus { session: SessionId, reference: String },
     Snapshot { session: SessionId },
     ActionResults {
         session: SessionId,
@@ -82,8 +64,9 @@ struct QueueActionRequest {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let client = Client::new();
+    let mut cli = Cli::parse();
+    cli.control = canonical_control_origin(&cli.control)?;
+    let client = control_client()?;
 
     match cli.command {
         Command::Headless(args) => {
@@ -229,60 +212,6 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
-        Command::Click { session, reference } => {
-            queue_action(&client, &cli.control, session, Some(reference), BridgeActionKind::Click)
-                .await?;
-        }
-        Command::Type {
-            session,
-            reference,
-            text,
-            clear_first,
-        } => {
-            queue_action(
-                &client,
-                &cli.control,
-                session,
-                Some(reference),
-                BridgeActionKind::TypeText { text, clear_first },
-            )
-            .await?;
-        }
-        Command::Key {
-            session,
-            key,
-            reference,
-            modifiers,
-        } => {
-            queue_action(
-                &client,
-                &cli.control,
-                session,
-                reference,
-                BridgeActionKind::Key { key, modifiers },
-            )
-            .await?;
-        }
-        Command::Scroll { session, x, y } => {
-            queue_action(
-                &client,
-                &cli.control,
-                session,
-                None,
-                BridgeActionKind::Scroll { x, y },
-            )
-            .await?;
-        }
-        Command::Focus { session, reference } => {
-            queue_action(
-                &client,
-                &cli.control,
-                session,
-                Some(reference),
-                BridgeActionKind::Focus,
-            )
-            .await?;
-        }
         Command::Snapshot { session } => {
             queue_action(
                 &client,
@@ -403,6 +332,39 @@ async fn authed_post_json<T: Serialize + ?Sized>(
         .error_for_status()?)
 }
 
+fn canonical_control_origin(raw: &str) -> Result<String> {
+    let url = reqwest::Url::parse(raw.trim())
+        .context("LocalView control origin is invalid")?;
+    if url.scheme() != "http"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!("LocalView control origin must be a bare loopback HTTP origin");
+    }
+
+    if url.port_or_known_default() != Some(45454) {
+        anyhow::bail!("LocalView control origin must use the daemon control port");
+    }
+
+    let host = url
+        .host_str()
+        .context("LocalView control origin is missing a host")?;
+    if host.parse::<Ipv4Addr>().ok() != Some(Ipv4Addr::LOCALHOST) {
+        anyhow::bail!("LocalView control origin must use the daemon IPv4 loopback address");
+    }
+
+    Ok(url.origin().ascii_serialization())
+}
+
+fn control_client() -> Result<Client> {
+    Ok(Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?)
+}
+
 async fn read_token() -> Result<String> {
     let path = state_dir()?.join("control.token");
     Ok(tokio::fs::read_to_string(&path)
@@ -421,4 +383,93 @@ fn state_dir() -> Result<PathBuf> {
 fn print_json<T: Serialize + ?Sized>(value: &T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+        time::Duration,
+    };
+
+    #[test]
+    fn cli_does_not_advertise_legacy_consequential_dom_actions() {
+        use clap::Parser as _;
+
+        assert!(Cli::try_parse_from(["localview", "snapshot", "550e8400-e29b-41d4-a716-446655440000"]).is_ok());
+        for forbidden in ["click", "type", "key", "scroll", "focus"] {
+            let parsed = Cli::try_parse_from(["localview", forbidden]);
+            assert!(
+                parsed.is_err(),
+                "legacy consequential command must stay unavailable: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn control_origin_is_exact_loopback_http_origin() {
+        for allowed in ["http://127.0.0.1:45454", "http://127.0.0.1:45454/"] {
+            assert!(canonical_control_origin(allowed).is_ok(), "{allowed}");
+        }
+
+        for rejected in [
+            "https://127.0.0.1:45454",
+            "http://localhost:45454",
+            "http://[::1]:45454",
+            "http://127.0.0.1:45455",
+            "http://127.0.0.1",
+            "http://localhost",
+            "http://127.0.0.2:45454",
+            "http://10.0.0.2:45454",
+            "http://example.com:45454",
+            "http://user:secret@127.0.0.1:45454",
+            "http://127.0.0.1:45454/v1",
+            "http://127.0.0.1:45454/?token=secret",
+            "http://127.0.0.1:45454/#fragment",
+        ] {
+            let error = canonical_control_origin(rejected).expect_err(rejected);
+            assert!(!error.to_string().contains("secret"));
+        }
+    }
+
+    #[tokio::test]
+    async fn control_client_never_redirects_authorization_to_another_origin() {
+        let target = TcpListener::bind(("127.0.0.1", 0)).expect("bind redirect target");
+        target.set_nonblocking(true).unwrap();
+        let target_port = target.local_addr().unwrap().port();
+
+        let source = TcpListener::bind(("127.0.0.1", 0)).expect("bind redirect source");
+        let source_port = source.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = source.accept().expect("accept source request");
+            let mut bytes = [0_u8; 4096];
+            let read = stream.read(&mut bytes).expect("read source request");
+            let request = String::from_utf8_lossy(&bytes[..read]).into_owned();
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            request
+        });
+
+        let client = control_client().unwrap();
+        let response = client
+            .get(format!("http://127.0.0.1:{source_port}/v1/sessions"))
+            .bearer_auth("CONTROL_TOKEN_MUST_NOT_LEAK")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+
+        let source_request = server.join().unwrap();
+        assert!(source_request.contains("Authorization: Bearer CONTROL_TOKEN_MUST_NOT_LEAK"));
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            matches!(target.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect target must receive no request at all"
+        );
+    }
 }
