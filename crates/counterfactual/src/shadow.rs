@@ -2,10 +2,12 @@ use std::{
     collections::BTreeSet,
     fmt::Write as _,
     fs,
-    io::Write,
+    io::{Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +21,8 @@ pub const MAX_SHADOW_PATCH_BYTES: usize = 512 * 1024;
 pub const MAX_SHADOW_FILE_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_SHADOW_STARTUP_MS: u64 = 20_000;
 pub const MAX_SHADOW_LIFETIME_MS: u64 = 120_000;
+const MAX_GIT_RUNTIME_MS: u64 = 10_000;
+const MAX_GIT_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 const SENSITIVE_BASENAMES: &[&str] = &[
     ".env",
@@ -95,6 +99,7 @@ pub enum ShadowError {
 #[derive(Debug)]
 pub struct ShadowWorkspace {
     repository_root: PathBuf,
+    shadow_parent: PathBuf,
     shadow_root: PathBuf,
     candidate_id: Uuid,
     base_revision: String,
@@ -179,25 +184,35 @@ impl ShadowWorkspace {
         let original_status = git_output(&repository_root, &["status", "--porcelain=v1"])
             .ok_or(ShadowError::GitUnavailable)?;
 
-        let shadow_root = std::env::temp_dir().join(format!(
-            "localview-wave9-shadow-{}-{}",
-            std::process::id(),
-            Uuid::new_v4()
-        ));
-        let status = safe_git_command()
+        let shadow_parent = create_private_shadow_parent()?;
+        let shadow_root = shadow_parent.join("worktree");
+        let mut command = safe_git_command().ok_or(ShadowError::GitUnavailable)?;
+        command
             .arg("-C")
             .arg(&repository_root)
             .args(["worktree", "add", "--detach", "--no-checkout"])
             .arg(&shadow_root)
-            .arg(&candidate.base_revision)
-            .status()
-            .map_err(|_| ShadowError::GitUnavailable)?;
+            .arg(&candidate.base_revision);
+        let status = run_git_status(command).ok_or(ShadowError::GitUnavailable)?;
         if !status.success() {
+            let _ = fs::remove_dir(&shadow_parent);
+            return Err(ShadowError::ShadowWorktreeCreateFailed);
+        }
+        if ensure_private_shadow_permissions(&shadow_root).is_err() {
+            let mut cleanup = safe_git_command().ok_or(ShadowError::GitUnavailable)?;
+            cleanup
+                .arg("-C")
+                .arg(&repository_root)
+                .args(["worktree", "remove", "--force"])
+                .arg(&shadow_root);
+            let _ = run_git_status(cleanup);
+            let _ = fs::remove_dir(&shadow_parent);
             return Err(ShadowError::ShadowWorktreeCreateFailed);
         }
 
         let mut workspace = Self {
             repository_root,
+            shadow_parent,
             shadow_root,
             candidate_id: candidate.id,
             base_revision: candidate.base_revision.clone(),
@@ -252,17 +267,20 @@ impl ShadowWorkspace {
             return Ok(ShadowCleanupProof {
                 attempted: true,
                 worktree_removed: true,
-                directory_absent: !self.shadow_root.exists(),
+                directory_absent: !self.shadow_root.exists() && !self.shadow_parent.exists(),
             });
         }
-        let status = safe_git_command()
+        let mut command = safe_git_command().ok_or(ShadowError::GitUnavailable)?;
+        command
             .arg("-C")
             .arg(&self.repository_root)
             .args(["worktree", "remove", "--force"])
-            .arg(&self.shadow_root)
-            .status()
-            .map_err(|_| ShadowError::GitUnavailable)?;
-        let directory_absent = !self.shadow_root.exists();
+            .arg(&self.shadow_root);
+        let status = run_git_status(command).ok_or(ShadowError::GitUnavailable)?;
+        if status.success() {
+            let _ = fs::remove_dir(&self.shadow_parent);
+        }
+        let directory_absent = !self.shadow_root.exists() && !self.shadow_parent.exists();
         self.cleaned = status.success() && directory_absent;
         let proof = ShadowCleanupProof {
             attempted: true,
@@ -558,7 +576,7 @@ fn materialize_overlay_base(
 
 fn apply_overlay(shadow_root: &Path, overlay: &SourceOverlay) -> Result<(), ShadowError> {
     for check_only in [true, false] {
-        let mut command = safe_git_command();
+        let mut command = safe_git_command().ok_or(ShadowError::GitUnavailable)?;
         command
             .arg("-C")
             .arg(shadow_root)
@@ -572,17 +590,20 @@ fn apply_overlay(shadow_root: &Path, overlay: &SourceOverlay) -> Result<(), Shad
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         let mut child = command.spawn().map_err(|_| ShadowError::GitUnavailable)?;
-        child
+        let mut stdin = child
             .stdin
             .take()
             .ok_or_else(|| ShadowError::PatchRejected {
                 path: overlay.file.clone(),
-            })?
+            })?;
+        stdin
             .write_all(overlay.patch.as_bytes())
             .map_err(|_| ShadowError::PatchRejected {
                 path: overlay.file.clone(),
             })?;
-        let status = child.wait().map_err(|_| ShadowError::GitUnavailable)?;
+        drop(stdin);
+        let status =
+            wait_child_with_timeout(&mut child).ok_or(ShadowError::GitUnavailable)?;
         if !status.success() {
             return Err(ShadowError::PatchRejected {
                 path: overlay.file.clone(),
@@ -592,39 +613,154 @@ fn apply_overlay(shadow_root: &Path, overlay: &SourceOverlay) -> Result<(), Shad
     Ok(())
 }
 
-fn safe_git_command() -> Command {
-    let mut command = Command::new("git");
+fn trusted_git_program() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    let candidates = ["/usr/bin/git", "/bin/git", "/usr/local/bin/git"];
+
+    #[cfg(target_os = "macos")]
+    let candidates = ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"];
+
+    #[cfg(target_os = "windows")]
+    let candidates = [
+        r"C:\Program Files\Git\cmd\git.exe",
+        r"C:\Program Files\Git\bin\git.exe",
+        r"C:\Program Files (x86)\Git\cmd\git.exe",
+    ];
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let candidates: [&str; 0] = [];
+
+    candidates
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_absolute() && path.is_file())
+        .and_then(|path| fs::canonicalize(path).ok())
+}
+
+fn safe_git_command() -> Option<Command> {
+    let program = trusted_git_program()?;
+    let mut command = Command::new(&program);
+    if let Some(parent) = program.parent() {
+        command.current_dir(parent);
+    }
+    for variable in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_COUNT",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+    ] {
+        command.env_remove(variable);
+    }
     command
         .arg("-c")
         .arg("core.hooksPath=")
         .arg("-c")
         .arg("core.fsmonitor=false")
-        .env_remove("GIT_EXTERNAL_DIFF")
+        .arg("-c")
+        .arg("diff.external=")
         .env("GIT_LFS_SKIP_SMUDGE", "1");
+    Some(command)
+}
+
+fn wait_child_with_timeout(child: &mut Child) -> Option<ExitStatus> {
+    let deadline = Instant::now() + Duration::from_millis(MAX_GIT_RUNTIME_MS);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+fn run_git_status(mut command: Command) -> Option<ExitStatus> {
     command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().ok()?;
+    wait_child_with_timeout(&mut child)
+}
+
+fn git_output_bytes(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let mut command = safe_git_command()?;
+    command
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take((MAX_GIT_OUTPUT_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        Some(bytes)
+    });
+    let status = wait_child_with_timeout(&mut child)?;
+    let bytes = reader.join().ok()??;
+    if !status.success() || bytes.len() > MAX_GIT_OUTPUT_BYTES {
+        return None;
+    }
+    Some(bytes)
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<String> {
-    let output = safe_git_command()
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    git_output_bytes(root, args)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn git_bytes(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = safe_git_command()
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .ok()?;
-    output.status.success().then_some(output.stdout)
+    git_output_bytes(root, args)
+}
+
+fn create_private_shadow_parent() -> Result<PathBuf, ShadowError> {
+    let parent = std::env::temp_dir().join(format!(
+        "localview-wave9-shadow-{}-{}",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
+    fs::create_dir(&parent).map_err(|_| ShadowError::ShadowWorktreeCreateFailed)?;
+    if ensure_private_shadow_permissions(&parent).is_err() {
+        let _ = fs::remove_dir(&parent);
+        return Err(ShadowError::ShadowWorktreeCreateFailed);
+    }
+    Ok(parent)
+}
+
+fn ensure_private_shadow_permissions(path: &Path) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = fs::metadata(path)?.permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
 }
 
 fn is_exact_object_id(value: &str) -> bool {
@@ -719,5 +855,24 @@ mod tests {
         assert!(is_sensitive_path("config/credentials.json"));
         assert!(validate_relative_path("../escape.rs").is_err());
         assert!(validate_relative_path("/absolute.rs").is_err());
+    }
+
+    #[test]
+    fn production_git_resolution_is_absolute_when_available() {
+        if let Some(program) = trusted_git_program() {
+            assert!(program.is_absolute());
+            assert!(program.is_file());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shadow_parent_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = create_private_shadow_parent().unwrap();
+        let mode = fs::metadata(&parent).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        fs::remove_dir(parent).unwrap();
     }
 }
