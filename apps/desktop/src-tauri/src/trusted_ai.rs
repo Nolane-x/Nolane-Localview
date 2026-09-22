@@ -667,6 +667,58 @@ mod trusted_ai_tests {
         }
     }
 
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read as _;
+
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .expect("set provider read timeout");
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 2048];
+        let mut expected_total = None;
+
+        while request.len() < 16 * 1024 {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    request.extend_from_slice(&chunk[..read]);
+                    if expected_total.is_none() {
+                        if let Some(header_offset) =
+                            request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            let header_end = header_offset + 4;
+                            let headers = String::from_utf8_lossy(&request[..header_end]);
+                            let content_length = headers
+                                .lines()
+                                .filter_map(|line| line.split_once(':'))
+                                .find_map(|(name, value)| {
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().ok())
+                                        .flatten()
+                                })
+                                .unwrap_or(0);
+                            expected_total = Some(header_end + content_length);
+                        }
+                    }
+                    if expected_total.is_some_and(|expected| request.len() >= expected) {
+                        break;
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("read provider request: {error}"),
+            }
+        }
+
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
     #[test]
     fn trusted_ai_question_validator_is_bounded_but_preserves_human_text() {
         assert_eq!(
@@ -716,7 +768,7 @@ mod trusted_ai_tests {
     #[tokio::test]
     async fn trusted_ai_provider_redirect_never_forwards_context_or_token() {
         use std::{
-            io::{Read, Write},
+            io::Write,
             net::TcpListener,
             thread,
             time::Duration as StdDuration,
@@ -730,9 +782,7 @@ mod trusted_ai_tests {
         let source_port = source.local_addr().unwrap().port();
         let source_server = thread::spawn(move || {
             let (mut stream, _) = source.accept().expect("accept provider request");
-            let mut bytes = [0_u8; 8192];
-            let read = stream.read(&mut bytes).expect("read provider request");
-            let request = String::from_utf8_lossy(&bytes[..read]).into_owned();
+            let request = read_http_request(&mut stream);
             let response = format!(
                 "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             );
