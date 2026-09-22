@@ -122,7 +122,7 @@ fn unsupported() -> String {
 }
 
 #[tauri::command]
-pub async fn workspace_surface_open(
+pub(crate) async fn workspace_surface_open(
     app: tauri::AppHandle,
     registry: tauri::State<'_, surface_registry::DesktopSurfaceRegistry>,
     bridge_authority: tauri::State<'_, super::PreviewBridgeAuthority>,
@@ -194,7 +194,7 @@ pub async fn workspace_surface_navigate(
 }
 
 #[tauri::command]
-pub async fn workspace_surface_close(
+pub(crate) async fn workspace_surface_close(
     app: tauri::AppHandle,
     registry: tauri::State<'_, surface_registry::DesktopSurfaceRegistry>,
     bridge_authority: tauri::State<'_, super::PreviewBridgeAuthority>,
