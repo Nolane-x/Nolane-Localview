@@ -14,6 +14,7 @@ fn desktop_bundles_and_bootstraps_daemon_without_frontend_shell_authority() {
     let capability = source("capabilities/default.json");
     let package = source("../package.json");
     let prepare = source("../scripts/prepare-sidecar.mjs");
+    let build = source("build.rs");
 
     assert!(cargo.contains(r#"tauri-plugin-shell = "2.3.6""#));
     assert!(lib.contains(".plugin(tauri_plugin_shell::init())"));
@@ -30,6 +31,9 @@ fn desktop_bundles_and_bootstraps_daemon_without_frontend_shell_authority() {
     assert!(prepare.contains("rustc"));
     assert!(prepare.contains("--print"));
     assert!(prepare.contains("host-tuple"));
+    assert!(build.contains("ensure_sidecar_manifest_placeholder"));
+    assert!(build.contains("localview-daemon-{target}{extension}"));
+    assert!(build.contains("if !sidecar.exists()"));
 
     assert!(runtime.contains("http://127.0.0.1:45454/health"));
     assert!(runtime.contains("Policy::none()"));
