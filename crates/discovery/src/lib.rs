@@ -1,6 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, net::IpAddr, process::Stdio, time::Duration};
+use std::{
+    collections::HashSet,
+    net::IpAddr,
+    path::PathBuf,
+    process::Stdio,
+    time::Duration,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
@@ -20,30 +26,89 @@ pub struct CommandListenerSource;
 #[async_trait]
 impl ListenerSource for CommandListenerSource {
     async fn listeners(&self) -> Result<Vec<ListenerCandidate>> {
-        #[cfg(target_os = "windows")]
-        let (program, args) = ("netstat", vec!["-ano", "-p", "tcp"]);
-        #[cfg(target_os = "linux")]
-        let (program, args) = ("ss", vec!["-ltnpH"]);
-        #[cfg(target_os = "macos")]
-        let (program, args) = ("lsof", vec!["-nP", "-iTCP", "-sTCP:LISTEN"]);
-        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-        return Ok(Vec::new());
+        let Some((program, args)) = trusted_listener_command() else {
+            return Ok(Vec::new());
+        };
 
-        let output = Command::new(program)
+        let output = Command::new(&program)
             .args(args)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .env_remove("LD_PRELOAD")
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("DYLD_INSERT_LIBRARIES")
+            .env_remove("DYLD_LIBRARY_PATH")
             .output()
             .await
-            .with_context(|| format!("failed to execute listener source {program}"))?;
+            .with_context(|| {
+                format!(
+                    "failed to execute trusted listener source {}",
+                    program.display()
+                )
+            })?;
         let text = String::from_utf8_lossy(&output.stdout);
         #[cfg(target_os = "windows")]
-        return Ok(parse_windows_netstat(&text));
+        let listeners = parse_windows_netstat(&text);
         #[cfg(target_os = "linux")]
-        return Ok(parse_linux_ss(&text));
+        let listeners = parse_linux_ss(&text);
         #[cfg(target_os = "macos")]
-        return Ok(parse_macos_lsof(&text));
+        let listeners = parse_macos_lsof(&text);
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+        let listeners = Vec::new();
+        Ok(listeners)
     }
+}
+
+const MAX_DISCOVERY_REDIRECTS: usize = 2;
+
+fn discovery_request_url_allowed(url: &reqwest::Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return false;
+    }
+    url.host_str().is_some_and(is_loopback_host)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn first_existing_absolute(candidates: &[&str]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|candidate| candidate.is_absolute() && candidate.is_file())
+}
+
+#[cfg(target_os = "windows")]
+fn trusted_listener_command() -> Option<(PathBuf, Vec<&'static str>)> {
+    let root = std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("WINDIR"))
+        .map(PathBuf::from)?;
+    if !root.is_absolute() {
+        return None;
+    }
+    let program = root.join("System32").join("netstat.exe");
+    program
+        .is_file()
+        .then_some((program, vec!["-ano", "-p", "tcp"]))
+}
+
+#[cfg(target_os = "linux")]
+fn trusted_listener_command() -> Option<(PathBuf, Vec<&'static str>)> {
+    first_existing_absolute(&["/usr/bin/ss", "/bin/ss"])
+        .map(|program| (program, vec!["-ltnpH"]))
+}
+
+#[cfg(target_os = "macos")]
+fn trusted_listener_command() -> Option<(PathBuf, Vec<&'static str>)> {
+    first_existing_absolute(&["/usr/sbin/lsof"])
+        .map(|program| (program, vec!["-nP", "-iTCP", "-sTCP:LISTEN"]))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+fn trusted_listener_command() -> Option<(PathBuf, Vec<&'static str>)> {
+    None
 }
 
 pub struct HttpClassifier { client: Client }
@@ -53,13 +118,26 @@ impl HttpClassifier {
         Ok(Self {
             client: Client::builder()
                 .timeout(timeout)
-                .redirect(reqwest::redirect::Policy::limited(2))
+                .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                    if !discovery_request_url_allowed(attempt.url()) {
+                        return attempt.error(
+                            "LocalView discovery redirect escaped the loopback HTTP(S) boundary",
+                        );
+                    }
+                    if attempt.previous().len() > MAX_DISCOVERY_REDIRECTS {
+                        return attempt.error("LocalView discovery redirect limit exceeded");
+                    }
+                    attempt.follow()
+                }))
                 .build()?,
         })
     }
 
     pub async fn classify(&self, candidate: &ListenerCandidate) -> Result<Classification> {
         let url = candidate.endpoint.url()?;
+        if !discovery_request_url_allowed(&url) {
+            anyhow::bail!("LocalView discovery candidate is outside the loopback HTTP(S) boundary");
+        }
         let response = self.client
             .get(url)
             .header("user-agent", "LocalView/0.2 discovery")
@@ -207,6 +285,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn listener_source_never_resolves_tools_from_relative_path_entries() {
+        for candidate in ["ss", "./ss", "netstat.exe", "../bin/lsof"] {
+            assert!(
+                first_existing_absolute(&[candidate]).is_none(),
+                "relative listener executable must never be trusted: {candidate}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_windows_listener() {
         let rows = parse_windows_netstat("  TCP    127.0.0.1:5173   0.0.0.0:0   LISTENING   4242\n");
         assert_eq!(rows[0].endpoint.port, 5173);
@@ -228,5 +316,106 @@ mod tests {
         let mut headers = http::HeaderMap::new();
         headers.insert(http::header::CONTENT_TYPE, "application/json".parse().unwrap());
         assert_eq!(classify_response(200, &headers, "{\"ok\":true}").kind, ServerKind::ApiServer);
+    }
+
+    fn fixture_candidate(port: u16) -> ListenerCandidate {
+        ListenerCandidate {
+            endpoint: Endpoint {
+                host: "127.0.0.1".into(),
+                port,
+                scheme: "http".into(),
+            },
+            pid: None,
+            process_name: None,
+            command: None,
+            cwd: None,
+        }
+    }
+
+    fn spawn_http_fixture(
+        responses: Vec<String>,
+    ) -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind fixture");
+        let port = listener.local_addr().expect("fixture address").port();
+        let handle = std::thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept fixture request");
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write fixture response");
+            }
+        });
+        (port, handle)
+    }
+
+    fn redirect(location: &str) -> String {
+        format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    fn html_ok() -> String {
+        let body = "<!doctype html><title>Fixture</title>";
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn discovery_redirect_cannot_escape_to_external_or_private_networks() {
+        for target in ["http://192.0.2.10/escape", "http://10.0.0.10/private"] {
+            let (port, server) = spawn_http_fixture(vec![redirect(target)]);
+            let classifier = HttpClassifier::new(Duration::from_secs(2)).unwrap();
+            classifier
+                .classify(&fixture_candidate(port))
+                .await
+                .expect_err("redirect escape must fail before target request");
+            server.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn discovery_redirect_allows_bounded_loopback_chain() {
+        let (target_port, target) = spawn_http_fixture(vec![html_ok()]);
+        let (source_port, source) = spawn_http_fixture(vec![redirect(&format!(
+            "http://127.0.0.1:{target_port}/landing"
+        ))]);
+        let classifier = HttpClassifier::new(Duration::from_secs(2)).unwrap();
+        let classification = classifier
+            .classify(&fixture_candidate(source_port))
+            .await
+            .expect("loopback redirect should remain supported");
+        assert_eq!(classification.kind, ServerKind::StaticSite);
+        source.join().unwrap();
+        target.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn discovery_redirect_limit_and_scheme_change_fail_closed() {
+        let (port, server) = spawn_http_fixture(vec![
+            redirect("/one"),
+            redirect("/two"),
+            redirect("/three"),
+        ]);
+        let classifier = HttpClassifier::new(Duration::from_secs(2)).unwrap();
+        classifier
+            .classify(&fixture_candidate(port))
+            .await
+            .expect_err("third redirect must exceed bounded discovery policy");
+        server.join().unwrap();
+
+        let (scheme_port, scheme_server) =
+            spawn_http_fixture(vec![redirect("ftp://127.0.0.1/not-http")]);
+        classifier
+            .classify(&fixture_candidate(scheme_port))
+            .await
+            .expect_err("scheme-changing redirect must fail");
+        scheme_server.join().unwrap();
     }
 }
