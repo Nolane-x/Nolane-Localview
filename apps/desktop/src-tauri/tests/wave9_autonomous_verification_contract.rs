@@ -92,7 +92,6 @@ fn production_preflight_is_reachable_and_never_mints_verified() {
 
     let verification = source("../../../crates/verification/src/autonomous.rs");
 
-
     assert!(verification.contains("compile_affected_state_plan"));
     assert!(verification.contains("dependency_graph_complete: false"));
     assert!(verification.contains("denominator_known: false"));
