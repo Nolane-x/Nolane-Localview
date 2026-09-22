@@ -82,13 +82,21 @@ pub fn validate_workspace_bounds(bounds: WorkspaceBounds) -> Result<WorkspaceBou
 }
 
 pub fn workspace_navigation_allowed(url: &url::Url) -> bool {
-    let loopback = match url.host() {
+    if url.scheme() != "http" || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+
+    match url.host() {
         Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    };
-    loopback && matches!(url.scheme(), "http" | "https")
+        Some(url::Host::Ipv4(address)) => address == std::net::Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(_)) | None => false,
+    }
+}
+
+pub fn workspace_navigation_matches_origin(expected: &url::Url, candidate: &url::Url) -> bool {
+    workspace_navigation_allowed(expected)
+        && workspace_navigation_allowed(candidate)
+        && expected.origin().ascii_serialization() == candidate.origin().ascii_serialization()
 }
 
 fn surface_label(prefix: &str, session_id: SessionId, max_id_chars: usize) -> String {
@@ -117,6 +125,7 @@ fn unsupported() -> String {
 pub async fn workspace_surface_open(
     app: tauri::AppHandle,
     registry: tauri::State<'_, surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, super::PreviewBridgeAuthority>,
     session_id: SessionId,
     url: String,
     bounds: WorkspaceBounds,
@@ -126,12 +135,20 @@ pub async fn workspace_surface_open(
 
     #[cfg(feature = "native-workspace")]
     {
-        open_native(&app, registry.inner(), session_id, parsed, bounds).await
+        open_native(
+            &app,
+            registry.inner(),
+            bridge_authority.inner(),
+            session_id,
+            parsed,
+            bounds,
+        )
+        .await
     }
 
     #[cfg(not(feature = "native-workspace"))]
     {
-        let _ = (app, registry, session_id, parsed, bounds);
+        let _ = (app, registry, bridge_authority, session_id, parsed, bounds);
         Err(unsupported())
     }
 }
@@ -180,16 +197,23 @@ pub async fn workspace_surface_navigate(
 pub async fn workspace_surface_close(
     app: tauri::AppHandle,
     registry: tauri::State<'_, surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, super::PreviewBridgeAuthority>,
     session_id: SessionId,
 ) -> Result<(), String> {
     #[cfg(feature = "native-workspace")]
     {
-        close_native(&app, registry.inner(), session_id).await
+        close_native(
+            &app,
+            registry.inner(),
+            bridge_authority.inner(),
+            session_id,
+        )
+        .await
     }
 
     #[cfg(not(feature = "native-workspace"))]
     {
-        let _ = (app, registry, session_id);
+        let _ = (app, registry, bridge_authority, session_id);
         Err(unsupported())
     }
 }
@@ -198,6 +222,7 @@ pub async fn workspace_surface_close(
 async fn open_native(
     app: &tauri::AppHandle,
     registry: &surface_registry::DesktopSurfaceRegistry,
+    bridge_authority: &super::PreviewBridgeAuthority,
     session_id: SessionId,
     url: url::Url,
     bounds: WorkspaceBounds,
@@ -216,12 +241,19 @@ async fn open_native(
             .ok_or_else(|| {
                 "native workspace platform child exists without desktop owner truth".to_string()
             })?;
+        if !bridge_authority.contains_identity(&current.identity) {
+            return Err("native workspace platform child exists without bridge authority".into());
+        }
         webview
             .set_position(LogicalPosition::new(bounds.x, bounds.y))
             .map_err(|error| error.to_string())?;
         webview
             .set_size(LogicalSize::new(bounds.width, bounds.height))
             .map_err(|error| error.to_string())?;
+        let current_url = webview.url().map_err(|error| error.to_string())?;
+        if !workspace_navigation_matches_origin(&current_url, &url) {
+            return Err("LocalView workspace refuses cross-origin loopback navigation".into());
+        }
         webview.navigate(url).map_err(|error| error.to_string())?;
         webview.show().map_err(|error| error.to_string())?;
         let visibility_update = registry.set_visibility(
@@ -253,11 +285,25 @@ async fn open_native(
         label.clone(),
     );
     let reservation = surface_resource::reserve_surface(session_id).await?;
-    let initialization_script =
-        super::wave6_accessibility_interaction::managed_initialization_script(app, session_id)?;
+    let attestation = bridge_authority.issue(&identity);
+    let initialization_script = match super::managed_surface_initialization_script(
+        app,
+        session_id,
+        &attestation,
+    ) {
+        Ok(script) => script,
+        Err(error) => {
+            bridge_authority.revoke(&identity);
+            let _ = surface_resource::cancel_surface_reservation(&reservation).await;
+            return Err(error);
+        }
+    };
+    let expected_navigation_url = url.clone();
     let builder = WebviewBuilder::new(label, WebviewUrl::External(url))
         .initialization_script(initialization_script)
-        .on_navigation(workspace_navigation_allowed);
+        .on_navigation(move |candidate| {
+            workspace_navigation_matches_origin(&expected_navigation_url, candidate)
+        });
 
     let webview = match parent.add_child(
         builder,
@@ -267,6 +313,7 @@ async fn open_native(
         Ok(webview) => webview,
         Err(error) => {
             let create_error = error.to_string();
+            bridge_authority.revoke(&identity);
             if let Err(cancel_error) =
                 surface_resource::cancel_surface_reservation(&reservation).await
             {
@@ -282,6 +329,7 @@ async fn open_native(
         identity.clone(),
         surface_registry::DesktopSurfaceVisibility::Visible,
     ) {
+        bridge_authority.revoke(&identity);
         if let Err(close_error) = webview.close() {
             return Err(format!(
                 "{}; failed to close native workspace surface after owner-record failure: {close_error}",
@@ -299,6 +347,7 @@ async fn open_native(
     )
     .await
     {
+        bridge_authority.revoke(&identity);
         if let Err(close_error) = webview.close() {
             return Err(format!(
                 "{error}; failed to close native workspace surface after activation failure: {close_error}"
@@ -340,16 +389,21 @@ fn navigate_native(
 ) -> Result<(), String> {
     use tauri::Manager;
 
-    app.get_webview(&workspace_label(session_id))
-        .ok_or_else(|| "native workspace surface is not open".to_string())?
-        .navigate(url)
-        .map_err(|error| error.to_string())
+    let webview = app
+        .get_webview(&workspace_label(session_id))
+        .ok_or_else(|| "native workspace surface is not open".to_string())?;
+    let current = webview.url().map_err(|error| error.to_string())?;
+    if !workspace_navigation_matches_origin(&current, &url) {
+        return Err("LocalView workspace refuses cross-origin loopback navigation".into());
+    }
+    webview.navigate(url).map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "native-workspace")]
 async fn close_native(
     app: &tauri::AppHandle,
     registry: &surface_registry::DesktopSurfaceRegistry,
+    bridge_authority: &super::PreviewBridgeAuthority,
     session_id: SessionId,
 ) -> Result<(), String> {
     use tauri::Manager;
@@ -375,6 +429,7 @@ async fn close_native(
     }
     let owner_close = registry.record_closed(&current.identity);
     owner_close.map_err(registry_error)?;
+    bridge_authority.revoke(&current.identity);
     surface_resource::release_surface(&current.identity).await
 }
 
@@ -395,19 +450,50 @@ mod tests {
     fn loopback_navigation_rejects_external_hosts_and_non_http_schemes() {
         for allowed in [
             "http://localhost:5173/",
-            "https://localhost:5173/app",
-            "http://127.0.0.1:3000/",
-            "http://[::1]:8080/",
+            "http://127.0.0.1:3000/app",
         ] {
             assert!(workspace_navigation_allowed(&url::Url::parse(allowed).unwrap()));
         }
         for rejected in [
+            "https://localhost:5173/app",
+            "https://127.0.0.1:3000/",
+            "http://[::1]:8080/",
+            "http://127.0.0.2:3000/",
+            "http://user:secret@127.0.0.1:3000/",
             "https://example.com/",
             "file:///tmp/index.html",
             "tauri://localhost/",
             "http://localhost.example.com/",
         ] {
             assert!(!workspace_navigation_allowed(&url::Url::parse(rejected).unwrap()));
+        }
+    }
+
+    #[test]
+    fn managed_navigation_is_bound_to_one_exact_loopback_origin() {
+        let expected = url::Url::parse("http://127.0.0.1:5173/app").unwrap();
+        for allowed in [
+            "http://127.0.0.1:5173/",
+            "http://127.0.0.1:5173/other?query=ok#fragment",
+        ] {
+            assert!(workspace_navigation_matches_origin(
+                &expected,
+                &url::Url::parse(allowed).unwrap()
+            ));
+        }
+        for rejected in [
+            "http://127.0.0.1:5174/",
+            "http://localhost:5173/",
+            "https://127.0.0.1:5173/",
+            "http://127.0.0.2:5173/",
+        ] {
+            assert!(
+                !workspace_navigation_matches_origin(
+                    &expected,
+                    &url::Url::parse(rejected).unwrap()
+                ),
+                "{rejected}"
+            );
         }
     }
 
