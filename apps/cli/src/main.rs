@@ -40,6 +40,12 @@ enum Command {
     PerformanceLite { session: Option<SessionId> },
     CaptureSettle { session: Option<SessionId> },
     ActionCorrelation { session: SessionId, action_id: String },
+    SourceMapResolve {
+        session: SessionId,
+        generated_file: String,
+        generated_line: u32,
+        generated_column: u32,
+    },
     Verify { session: Option<SessionId> },
     Coverage { session: Option<SessionId> },
     Proof { session: Option<SessionId> },
@@ -178,6 +184,27 @@ async fn main() -> Result<()> {
                 &format!("/v1/sessions/{session}/actions/{action_id}/correlation"),
             )
             .await?;
+        }
+        Command::SourceMapResolve {
+            session,
+            generated_file,
+            generated_line,
+            generated_column,
+        } => {
+            let value: Value = authed_post_json(
+                &client,
+                &cli.control,
+                &format!("/v1/sessions/{session}/source-map/resolve"),
+                &serde_json::json!({
+                    "generated_file": generated_file,
+                    "generated_line": generated_line,
+                    "generated_column": generated_column,
+                }),
+            )
+            .await?
+            .json()
+            .await?;
+            print_json(&value)?;
         }
         Command::Verify { session } => {
             print_session_endpoint(&client, &cli.control, session, "verify").await?;
@@ -465,6 +492,14 @@ mod tests {
             "action-correlation",
             "550e8400-e29b-41d4-a716-446655440000",
             "11111111-2222-3333-4444-555555555555",
+        ]).is_ok());
+        assert!(Cli::try_parse_from([
+            "localview",
+            "source-map-resolve",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "dist/app.js",
+            "42",
+            "7",
         ]).is_ok());
         for forbidden in ["click", "type", "key", "scroll", "focus"] {
             let parsed = Cli::try_parse_from(["localview", forbidden]);

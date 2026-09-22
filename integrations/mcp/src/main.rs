@@ -109,6 +109,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({"name":"session.performance_lite","description":"Read the bounded live performance-lite packet for one session","inputSchema":session_schema()}),
         json!({"name":"session.capture_settle","description":"Read the current bounded capture-settle decision for one session without capturing pixels","inputSchema":session_schema()}),
         json!({"name":"action.correlation","description":"Read bounded action→request→UI-response correlation for one exact action id","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"actionId":{"type":"string"}},"required":["session","actionId"]}}),
+        json!({"name":"source.resolve","description":"Resolve one generated JS/CSS position through a project-contained source map","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"generatedFile":{"type":"string"},"generatedLine":{"type":"integer","minimum":1},"generatedColumn":{"type":"integer","minimum":0}},"required":["session","generatedFile","generatedLine","generatedColumn"]}}),
         json!({"name":"session.verify","description":"Verify the current UI using revision-bound fresh evidence; inconclusive is never promoted to pass","inputSchema":session_schema()}),
         json!({"name":"session.coverage","description":"Report strict current-target coverage without inventing a project denominator","inputSchema":session_schema()}),
         json!({"name":"session.proof","description":"Create and persist a content-addressed verification proof for the current session","inputSchema":session_schema()}),
@@ -182,6 +183,24 @@ async fn call_tool(params: &Value) -> Result<Value> {
                 &base,
                 &token,
                 &format!("/v1/sessions/{session}/actions/{action_id}/correlation"),
+            )
+            .await?
+        },
+        "source.resolve" => {
+            let session = string_arg(&args, "session")?;
+            let generated_file = string_arg(&args, "generatedFile")?;
+            let generated_line = u32_arg(&args, "generatedLine")?;
+            let generated_column = u32_arg(&args, "generatedColumn")?;
+            authed_post_json(
+                &client,
+                &base,
+                &token,
+                &format!("/v1/sessions/{session}/source-map/resolve"),
+                &json!({
+                    "generated_file": generated_file,
+                    "generated_line": generated_line,
+                    "generated_column": generated_column,
+                }),
             )
             .await?
         }
@@ -402,6 +421,21 @@ async fn authed_post(
         .await?)
 }
 
+async fn authed_post_json(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    path: &str,
+    body: &Value,
+) -> Result<reqwest::Response> {
+    Ok(client
+        .post(format!("{base}{path}"))
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await?)
+}
+
 async fn post_action(
     client: &reqwest::Client,
     base: &str,
@@ -422,6 +456,14 @@ fn string_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str> {
     args.get(name)
         .and_then(Value::as_str)
         .with_context(|| format!("missing {name}"))
+}
+
+fn u32_arg(args: &Value, name: &str) -> Result<u32> {
+    let value = args
+        .get(name)
+        .and_then(Value::as_u64)
+        .with_context(|| format!("missing or invalid {name}"))?;
+    u32::try_from(value).with_context(|| format!("{name} exceeds u32 range"))
 }
 
 fn canonical_control_origin(raw: &str) -> Result<String> {
@@ -543,6 +585,7 @@ mod tests {
         assert!(names.contains(&"session.performance_lite".to_owned()));
         assert!(names.contains(&"session.capture_settle".to_owned()));
         assert!(names.contains(&"action.correlation".to_owned()));
+        assert!(names.contains(&"source.resolve".to_owned()));
         for forbidden in [
             "action.click",
             "action.type",
