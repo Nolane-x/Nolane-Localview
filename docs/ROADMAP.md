@@ -258,7 +258,7 @@ Production wiring now present on this branch:
 
 - human `apply_fix_proposal` reaches `FixProposalStore::begin_apply`;
 - `begin_apply` attempts to derive an exact Git revision and, when that authority exists and binds the reviewed preimage, executes a disposable `SemanticOnly` candidate through `run_production_candidate_preflight`;
-- for supported Git candidates, production preflight calls `ShadowWorkspace::prepare -> proof -> cleanup` before the existing real-file Apply transaction;
+- for supported Git candidates, production preflight calls `ShadowWorkspace::prepare -> proof -> cleanup` before the existing real-file Apply transaction, then binds the exact candidate/file to a bounded affected-state slice for the current canonical route/stable ref and derives predicted impact; dependency completeness and the affected-state denominator remain explicitly unknown, so this evidence cannot promote the preflight beyond `Inconclusive`;
 - when exact Git/shadow authority is unavailable, the preflight is explicitly recorded as `Inconclusive` with no shadow proof and the existing human-reviewed Trusted Fix authority remains usable;
 - the shadow worktree is source-only: LocalView materializes only validated candidate files from exact committed blobs, applies the bounded patch there, and never checks out or launches the project as part of this preflight;
 - Git commands issued by the shadow layer disable repository hooks/fsmonitor inheritance and external-diff inheritance;

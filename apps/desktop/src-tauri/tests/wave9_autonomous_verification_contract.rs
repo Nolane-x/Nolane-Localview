@@ -86,6 +86,14 @@ fn production_preflight_is_reachable_and_never_mints_verified() {
     assert!(preflight.contains("exact_repository_revision"));
     assert!(preflight.contains("IsolationLevel::SemanticOnly"));
     assert!(preflight.contains("run_production_candidate_preflight"));
+    assert!(preflight.contains("bind_production_affected_state"));
+    assert!(preflight.contains("&proposal.canonical_route"));
+    assert!(preflight.contains("Some(&proposal.reference)"));
+    assert!(verification.contains("compile_affected_state_plan"));
+    assert!(verification.contains("dependency_graph_complete: false"));
+    assert!(verification.contains("denominator_known: false"));
+    assert!(verification.contains("affected_state_plan_hash"));
+    assert!(verification.contains("predicted_impact"));
 
     let verification = source("../../../crates/verification/src/autonomous.rs");
     let body = function_body(
