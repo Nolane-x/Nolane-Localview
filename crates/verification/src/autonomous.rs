@@ -197,11 +197,12 @@ pub fn run_production_candidate_preflight(
             let cleanup = shadow.cleanup().ok();
             let (candidate_id, base_revision, patch_digest) = identity();
             let mut reasons = vec![format!("Wave 9 shadow proof failed: {error:?}")];
-            if cleanup
-                .as_ref()
-                .is_none_or(|proof| !(proof.attempted && proof.worktree_removed && proof.directory_absent))
-            {
-                reasons.push("shadow cleanup proof is unavailable or incomplete after proof failure".into());
+            if cleanup.as_ref().is_none_or(|proof| {
+                !(proof.attempted && proof.worktree_removed && proof.directory_absent)
+            }) {
+                reasons.push(
+                    "shadow cleanup proof is unavailable or incomplete after proof failure".into(),
+                );
             }
             return Ok(ProductionCandidatePreflightReceipt {
                 candidate_id,
