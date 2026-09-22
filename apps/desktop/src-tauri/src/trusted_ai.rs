@@ -747,13 +747,9 @@ mod trusted_ai_tests {
         )
         .unwrap();
         let request = serde_json::json!({"context":"BOUNDED_SOURCE_EXCERPT"});
-        let error = bridge_json::<_, serde_json::Value>(
-            &Client::new(),
-            &config,
-            &request,
-        )
-        .await
-        .expect_err("provider redirect must be refused");
+        let error = bridge_json::<_, serde_json::Value>(&Client::new(), &config, &request)
+            .await
+            .expect_err("provider redirect must be refused");
         assert_eq!(error, "trusted AI provider redirect refused");
 
         let source_request = source_server.join().unwrap();
