@@ -7,8 +7,8 @@ use std::{
 };
 
 use localview_counterfactual::{
-    CounterfactualCandidate, IsolationLevel, MAX_SHADOW_PATCH_BYTES, ShadowError, ShadowWorkspace,
-    SourceOverlay, patch_digest, sha256_bytes,
+    CounterfactualCandidate, ExternalSideEffectContainment, IsolationLevel, MAX_SHADOW_PATCH_BYTES,
+    ShadowError, ShadowWorkspace, SourceOverlay, patch_digest, sha256_bytes,
 };
 use uuid::Uuid;
 
@@ -137,6 +137,10 @@ fn real_isolated_shadow_candidate_never_mutates_dirty_worktree_and_cleans_up() {
     let proof = shadow.proof().unwrap();
     assert!(proof.original_worktree_dirty);
     assert!(proof.real_worktree_unchanged);
+    assert_eq!(
+        proof.external_side_effect_containment,
+        ExternalSideEffectContainment::NotProven
+    );
     assert_eq!(proof.base_revision, fixture.head);
     assert_eq!(proof.changed_files, vec!["src/app.txt"]);
     assert!(Path::new(&proof.shadow_path).exists());
@@ -151,6 +155,53 @@ fn real_isolated_shadow_candidate_never_mutates_dirty_worktree_and_cleans_up() {
         output(&fixture.root, &["status", "--porcelain=v1"]),
         before_status
     );
+}
+
+#[test]
+fn executable_shadow_levels_fail_closed_until_runtime_isolation_is_proven() {
+    let fixture = Fixture::new();
+    let overlay = fixture.overlay(
+        "src/app.txt",
+        normal_patch("src/app.txt", "before", "after"),
+    );
+    for isolation in [
+        IsolationLevel::NativeWebView,
+        IsolationLevel::ChromiumSandbox,
+    ] {
+        let mut candidate = fixture.candidate(overlay.clone());
+        candidate.isolation = isolation;
+        assert_eq!(
+            ShadowWorkspace::prepare(&fixture.root, &candidate).unwrap_err(),
+            ShadowError::UnsupportedIsolation
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn shadow_preparation_does_not_run_repository_checkout_hooks() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let hook = fixture.root.join(".git/hooks/post-checkout");
+    let sentinel = fixture.root.join("hook-fired");
+    fs::write(
+        &hook,
+        format!("#!/bin/sh\nprintf fired > '{}'\n", sentinel.display()),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&hook).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&hook, permissions).unwrap();
+
+    let candidate = fixture.candidate(fixture.overlay(
+        "src/app.txt",
+        normal_patch("src/app.txt", "before", "after"),
+    ));
+    let mut shadow = ShadowWorkspace::prepare(&fixture.root, &candidate).unwrap();
+    assert!(!sentinel.exists());
+    shadow.cleanup().unwrap();
+    assert!(!sentinel.exists());
 }
 
 #[test]

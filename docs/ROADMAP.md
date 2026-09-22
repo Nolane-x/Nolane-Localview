@@ -250,34 +250,51 @@ Truth boundaries:
 
 Closure PR: #196. Exact-head dedicated Wave 8 and full repository CI were green before merge.
 
-## Wave 9 — Autonomous verification — software scope closed
+## Wave 9 — Autonomous verification — production closure reopened
 
-Software closure landed:
+The 2026-09-22 production audit disproved the earlier end-to-end closure claim. PR #198 landed substantial Wave 9 libraries and contracts, but the live Trusted Fix/Verify call graph did not execute the complete autonomous pipeline. In particular, `ShadowWorkspace::prepare` and autonomous receipt construction were not reachable from the human Apply path before this audit.
 
-- bounded affected-state compilation with explicit incomplete/truncation authority;
-- project-contained candidate patches executed in isolated disposable shadow worktrees;
-- live hard/soft contract and invariant evaluation with Pass/Fail/Excepted/Unknown semantics;
-- safety-bounded mutation challenge execution with killed/survived/skipped/invalid results;
-- predicted-versus-actual impact comparison including unexpected observed impact;
-- partial revalidation that escalates when dependency/coverage authority is incomplete;
-- serializable autonomous verification proof receipts with cleanup/resource evidence;
-- trusted Fix/Verify handoff that does not let autonomous verification silently write the user's real working tree.
+Production wiring now present on this branch:
+
+- human `apply_fix_proposal` reaches `FixProposalStore::begin_apply`;
+- `begin_apply` attempts to derive an exact Git revision and, when that authority exists and binds the reviewed preimage, executes a disposable `SemanticOnly` candidate through `run_production_candidate_preflight`;
+- for supported Git candidates, production preflight calls `ShadowWorkspace::prepare -> proof -> cleanup` before the existing real-file Apply transaction;
+- when exact Git/shadow authority is unavailable, the preflight is explicitly recorded as `Inconclusive` with no shadow proof and the existing human-reviewed Trusted Fix authority remains usable;
+- the shadow worktree is source-only: LocalView materializes only validated candidate files from exact committed blobs, applies the bounded patch there, and never checks out or launches the project as part of this preflight;
+- Git commands issued by the shadow layer disable repository hooks/fsmonitor inheritance and external-diff inheritance;
+- cleanup and real-worktree equality remain explicit proof obligations;
+- external side-effect containment is represented as `not_proven` unless an actual isolation authority proves otherwise;
+- production preflight has no `Verified` state. With current platform authority, both a clean supported shadow and an unsupported/no-Git preflight are truthfully `Inconclusive`; once a shadow proof exists, identity, real-worktree, revision or cleanup failures reject/fail closed;
+- the existing Trusted Fix transaction remains the only human-reviewed real-file write authority;
+- the existing Trusted Verify path still performs fresh semantic/source/visual partial revalidation after Apply.
+
+Library capability that is implemented but **not yet production-orchestrated end-to-end**:
+
+- affected-state compilation;
+- execution of the applicable hard/soft contract set for the real candidate;
+- mutation challenges against that production candidate;
+- predicted-versus-actual affected-state comparison;
+- issuance of a production `AutonomousVerificationReceipt` backed by fresh evidence;
+- complete partial/escalated revalidation accounting tied into that receipt.
 
 Truth boundaries:
 
-- Unknown never becomes Pass;
-- surviving mutation challenges remain visible and block a verified handoff when policy requires;
-- candidate verification does not bypass user/trusted mutation authority for the real project;
+- a candidate is never called autonomous-`Verified` merely because Wave 9 libraries exist;
+- `external_side_effect_containment = not_proven` blocks the autonomous `Verified` verdict and the verified handoff;
+- a temp worktree, loopback address or source-only patch does **not** prove network/process/filesystem containment outside the shadow root;
+- unsupported executable isolation remains Inconclusive rather than being promoted to success;
+- the simpler human Trusted Verify receipt is not re-labelled as an autonomous proof receipt;
 - no root-cause claim is invented from correlation-only evidence.
 
-Closure integration PR: #198, merged as `bded849d7fdb4a640b4cd12c802381b783bc42c2`. Its exact head `e5f59b074fa2979b2e91f919e0e4258a8ccd1087` passed all 35 GitHub Actions workflows before merge, including the dedicated Wave 9 matrix, full cross-platform CI and Windows UIA smoke.
+Historical integration: PR #198 merged as `bded849d7fdb4a640b4cd12c802381b783bc42c2` after its exact head passed the then-current CI. That CI evidence remains evidence for the implemented Wave 9 library surface; it is not evidence that the complete pipeline was production-reachable.
 
-## Wave 1–9 software roadmap closure
+## Wave 1–9 roadmap status
 
-Waves 1–9 now have their software capability closures landed on the live product path. This closure means the roadmap's bounded software waves are implemented and verified; it does **not** mean every broader V1/V2/V3 umbrella capability, physical hardware gate or future research slice is complete.
+Waves 1–8 retain their bounded software closures. Wave 9 is **Partial at the live-product level** until the remaining production orchestration and isolation/evidence gates above are satisfied. The repository must not use the former “Waves 1–9 live closure” wording as a production fact.
 
-Independently open after this closure:
+Independently open:
 
+- Wave 9 full production orchestration and real isolation authority;
 - native workspace composition/focus/crash/DPI policy before promotion to the default surface;
 - V4.3 W10 physical mixed-DPI proof on PR #116, which remains deferred and unmeasured on hosted CI;
 - broader Partial capabilities explicitly retained in `docs/SPEC_COVERAGE.md`;

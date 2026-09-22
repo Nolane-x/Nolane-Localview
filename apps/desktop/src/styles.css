@@ -3,7 +3,7 @@
   color:#eef3f8;background:#07090d;font-synthesis:none;text-rendering:optimizeLegibility;
   --lv-bg:#07090d;--lv-surface:rgba(13,17,23,.86);--lv-surface-strong:rgba(10,13,18,.95);
   --lv-border:rgba(255,255,255,.105);--lv-border-strong:rgba(255,255,255,.18);
-  --lv-text:#f2f5f8;--lv-muted:#8b96a6;--lv-faint:#586271;--lv-accent:#9aa982;--lv-accent-soft:rgba(154,169,130,.12);
+  --lv-text:#f2f5f8;--lv-muted:#8b96a6;--lv-faint:#737f8d;--lv-accent:#9aa982;--lv-accent-soft:rgba(154,169,130,.12);
   --lv-success:#61dfa0;--lv-warning:#e4b765;--lv-danger:#f07984;
   --lv-shadow:0 24px 70px rgba(0,0,0,.38),0 4px 18px rgba(0,0,0,.22);
   --lv-radius:18px;--lv-blur:22px
@@ -368,4 +368,59 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
     min-height:40px
   }
   .floating-rail{width:50px;padding:4px}
+}
+
+
+/* Wave 9 rendered closure: readable operational/status copy without flattening visual hierarchy. */
+.panel-header>div>span{color:#788494}
+.capture-status span,.capture-status code,
+.measure-status span,.measure-status code,
+.source-open-status span,.source-open-status code{
+  font-size:10px;
+  color:#8b96a6
+}
+.responsive-result-viewports span{
+  font-size:10px;
+  color:#91a19a
+}
+.responsive-failure button{
+  min-height:40px;
+  font-size:10px
+}
+.viewport-list div span{font-size:9px;color:#7f8b99}
+.stream-toolbar .filter-chip,.stream-status{
+  font-size:10px;
+  color:#7f8b99
+}
+.stream-empty p{
+  font-size:10px;
+  color:#8b96a6
+}
+.network-summary span{font-size:9px;color:#7f8b99}
+.network-summary strong{font-size:10px}
+.ai-submit-action,.ai-retry-action,
+.fix-refresh-action,.fix-start-action,.fix-generate-action,.fix-apply-action,.fix-discard-action,
+.fix-again-action{
+  min-height:40px;
+  font-size:10px
+}
+.fix-proposal-meta span,.fix-proposal-meta code{color:#8793a1}
+.fix-status span,.verify-result>span,.verify-result>small,.verify-result ul,
+.verify-advisory span,.verify-advisory p{color:#8793a1}
+.fix-preflight-note{
+  display:block;
+  font-size:10px;
+  line-height:1.5;
+  color:#d4b978
+}
+
+/* Coarse-pointer disclosure: labels are visible before a tool is chosen, then yield to the panel. */
+@media (hover:none) and (pointer:coarse) and (max-width:620px){
+  .floating-rail:not(:has(.rail-button.active)) .rail-tooltip{
+    opacity:1;
+    transform:translate(0,-50%);
+    font-size:10px;
+    color:#e0e5ec
+  }
+  .floating-rail:not(:has(.rail-button.active)) .rail-tooltip kbd{display:none}
 }

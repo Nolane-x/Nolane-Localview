@@ -14,6 +14,14 @@ The correctness pipeline is:
 
 A successful receipt is evidence that a specific candidate was verified against a bounded, explicit state set. It is **not** permission to mutate the real working tree. Real Apply remains the existing Trusted Fix, human-reviewed authority.
 
+## Production reality — 2026-09-22 audit
+
+The original design is broader than the production call graph that landed in PR #198. The audit found the affected-state/contracts/mutation/impact/receipt pipeline present as library/test code, while human Apply did not call `ShadowWorkspace::prepare` or autonomous receipt construction.
+
+The production hardening path now runs a bounded **source-only preflight** from `FixProposalStore::begin_apply` before the existing Trusted Fix write transaction. The preflight binds the pending proposal to the exact repository revision, prepares a disposable `SemanticOnly` shadow, obtains a shadow proof, performs explicit cleanup, and re-checks revision drift. It has no `Verified` outcome. Current platforms do not prove process/network/external-filesystem isolation, so external side-effect containment is `not_proven` and a clean production preflight is `Inconclusive`.
+
+The complete autonomous pipeline below remains the target architecture. A production `Verified` receipt is not available until those stages are actually orchestrated with fresh evidence and a real containment authority.
+
 ## Non-goals
 
 Wave 9 does not persist reports/artifacts, replace Wave 7 visual criticism, discover Wave 6 accessibility/flows, rewrite source ownership, or turn LocalView into an uncontrolled autonomous editor.
@@ -68,20 +76,22 @@ Unknown denominator, dependency-graph incompleteness, compiler truncation, or mi
 
 Git projects use a detached temporary worktree at the exact candidate revision.
 
-Preparation order is security-sensitive:
+The production preflight intentionally does **not** checkout the project or launch project code. Preparation order is security-sensitive:
 
 1. validate exact repository root and HEAD;
 2. validate full object id;
 3. reject tracked secret paths;
 4. validate every overlay path/hash/type/size and patch path;
 5. snapshot the real worktree status;
-6. create detached disposable worktree;
-7. checkout exact base;
-8. run `git apply --check`;
-9. apply patch only in the shadow;
-10. assert the shadow diff contains only expected paths.
+6. create a detached disposable worktree with `--no-checkout`;
+7. materialize only each validated candidate file from the exact committed blob;
+8. run `git apply --check` and apply the bounded patch only to those materialized files;
+9. prove candidate identity and re-check the real worktree status;
+10. explicitly remove the registered worktree and prove the directory is absent.
 
-Cleanup removes the registered worktree and proves the directory is absent. Drop performs best-effort cleanup but a verification receipt is not considered clean unless explicit cleanup proof succeeds.
+LocalView-issued Git commands in this path disable repository hooks and fsmonitor inheritance and remove inherited external-diff authority. This narrows Git-triggered execution risk but is **not** an OS sandbox and does not prove that arbitrary future candidate processes cannot access the network, spawn children, read `$HOME`, or write outside the shadow root.
+
+Drop performs best-effort cleanup, but production preflight requires explicit cleanup proof.
 
 ## Candidate launch
 
@@ -137,7 +147,7 @@ Each challenge records:
 
 A skipped or invalid mutation is not silently removed from the proof population. A surviving mutation remains a first-class proof finding.
 
-External side effects are forbidden by the Wave 9 execution policy.
+External side effects are forbidden by Wave 9 policy, but policy intent is not proof. A receipt may claim external side-effect containment only when a concrete runtime authority proves it. The current production preflight records `not_proven`; it never upgrades a temp worktree or loopback bind into an isolation claim.
 
 ## Predicted versus actual impact
 
@@ -179,6 +189,7 @@ Every planned state must be either revalidated or explicitly skipped with a reas
 - candidate id;
 - patch digest;
 - isolation type;
+- external side-effect containment status;
 - affected-state-plan hash;
 - evaluated contracts and hard/soft classification;
 - mutation results;
@@ -194,7 +205,7 @@ Every planned state must be either revalidated or explicitly skipped with a reas
 
 Final verdicts are:
 
-- `verified`: all hard proof obligations resolved, isolation/cleanup complete, budget satisfied, no surviving/skipped-invalid mutation challenge, no unresolved unexpected/inconclusive impact, and revalidation may claim complete coverage;
+- `verified`: all hard proof obligations resolved, external side-effect containment is proven, cleanup is complete, budget is satisfied, no surviving/skipped-invalid mutation challenge remains, no unexpected/inconclusive impact is unresolved, and revalidation may claim complete coverage;
 - `rejected`: identity binding fails, the real worktree changed, a hard contract fails, or cleanup/isolation proof fails;
 - `inconclusive`: hard facts are unknown, dependency/coverage remains incomplete, mutation survives/is skipped/invalid, stale evidence exists, resource admission fails, impact is unresolved, or planned states are unaccounted.
 
@@ -204,7 +215,9 @@ Soft warnings are reported but alone do not convert an otherwise complete proof 
 
 `trusted_fix.rs` can compile a pending human Fix proposal into a disposable counterfactual candidate. The overlay is bound to the proposal's exact preimage SHA-256 and review diff.
 
-`trusted_verify.rs` accepts a Wave 9 handoff only when the receipt is Verified at the caller-supplied exact current revision and all cleanup/resource/hard-contract/mutation/impact/freshness checks remain clean.
+Production human Apply now calls a source-only Wave 9 preflight through `FixProposalStore::begin_apply` before entering the existing Trusted Fix real-file transaction. The preflight is stored with the applying proposal, is revision-bound, and is only `Inconclusive` or `Rejected`; it is not an autonomous proof receipt.
+
+`trusted_verify.rs` accepts a future Wave 9 verified handoff only when the receipt is Verified at the caller-supplied exact current revision, external side-effect containment is proven, and all cleanup/resource/hard-contract/mutation/impact/freshness checks remain clean. The current production path does not satisfy that gate.
 
 The final Trusted Fix handoff revalidates:
 
@@ -251,8 +264,11 @@ The Wave 9 tests cover or gate:
 - stale evidence;
 - cleanup failure;
 - resource denial;
-- absence of external mutation side effects;
-- a real deterministic git-worktree candidate fixture.
+- unproven external side-effect containment forcing Inconclusive;
+- executable shadow levels failing closed without runtime isolation authority;
+- repository checkout hooks not executing during source-only shadow preparation;
+- a real deterministic git-worktree candidate fixture;
+- a production-preflight integration test over a real temporary Git repository.
 
 ## Known inconclusive boundaries
 
