@@ -127,6 +127,13 @@ impl HttpClassifier {
                     if attempt.previous().len() > MAX_DISCOVERY_REDIRECTS {
                         return attempt.error("LocalView discovery redirect limit exceeded");
                     }
+                    if let Some(initial) = attempt.previous().first()
+                        && initial.origin() != attempt.url().origin()
+                    {
+                        return attempt.error(
+                            "LocalView discovery redirect changed managed-surface origin",
+                        );
+                    }
                     attempt.follow()
                 }))
                 .build()?,
@@ -381,19 +388,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discovery_redirect_allows_bounded_loopback_chain() {
-        let (target_port, target) = spawn_http_fixture(vec![html_ok()]);
-        let (source_port, source) = spawn_http_fixture(vec![redirect(&format!(
-            "http://127.0.0.1:{target_port}/landing"
-        ))]);
+    async fn discovery_redirect_allows_bounded_same_origin_chain() {
+        let (port, server) = spawn_http_fixture(vec![redirect("/landing"), html_ok()]);
         let classifier = HttpClassifier::new(Duration::from_secs(2)).unwrap();
         let classification = classifier
-            .classify(&fixture_candidate(source_port))
+            .classify(&fixture_candidate(port))
             .await
-            .expect("loopback redirect should remain supported");
+            .expect("same-origin loopback redirect should remain supported");
         assert_eq!(classification.kind, ServerKind::StaticSite);
-        source.join().unwrap();
-        target.join().unwrap();
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn discovery_redirect_rejects_loopback_origin_change() {
+        let (port, server) = spawn_http_fixture(vec![redirect(
+            "http://127.0.0.1:1/different-origin",
+        )]);
+        let classifier = HttpClassifier::new(Duration::from_secs(2)).unwrap();
+        classifier
+            .classify(&fixture_candidate(port))
+            .await
+            .expect_err("cross-port loopback redirect must fail before target request");
+        server.join().unwrap();
     }
 
     #[tokio::test]

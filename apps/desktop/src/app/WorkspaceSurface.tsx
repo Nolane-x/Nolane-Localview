@@ -23,12 +23,17 @@ export function WorkspaceSurface({ current, url, support, locale }: WorkspaceSur
   const slotRef = useRef<HTMLElement>(null);
   const openedSessionRef = useRef<string | null>(null);
   const lastUrlRef = useRef<string | null>(null);
+  const desiredUrlRef = useRef<string | null>(url ?? null);
   const [nativeFailedFor, setNativeFailedFor] = useState<string>();
 
   const wantsNative = useMemo(
     () => support.compiled && support.default_mode === 'native' && !!current && !!url && nativeFailedFor !== current.id,
     [support.compiled, support.default_mode, current?.id, url, nativeFailedFor],
   );
+
+  useEffect(() => {
+    desiredUrlRef.current = url ?? null;
+  }, [url]);
 
   useEffect(() => {
     if (!wantsNative || !current || !url) return;
@@ -42,13 +47,23 @@ export function WorkspaceSurface({ current, url, support, locale }: WorkspaceSur
     if (!bounds) return;
 
     void api.openWorkspaceSurface(sessionId, initialUrl, bounds)
-      .then(() => {
+      .then(async () => {
         if (disposed) {
           void api.closeWorkspaceSurface(sessionId).catch(() => undefined);
           return;
         }
         openedSessionRef.current = sessionId;
         lastUrlRef.current = initialUrl;
+
+        const desiredUrl = desiredUrlRef.current;
+        if (desiredUrl && desiredUrl !== initialUrl) {
+          lastUrlRef.current = desiredUrl;
+          try {
+            await api.navigateWorkspaceSurface(sessionId, desiredUrl);
+          } catch {
+            if (!disposed) setNativeFailedFor(sessionId);
+          }
+        }
       })
       .catch(() => {
         if (!disposed) setNativeFailedFor(sessionId);
