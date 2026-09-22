@@ -510,7 +510,7 @@ pub(crate) fn provider_label(config: &AiBridgeConfig) -> &str {
 }
 
 pub(crate) async fn bridge_json<TRequest, TResponse>(
-    client: &Client,
+    _client: &Client,
     config: &AiBridgeConfig,
     request: &TRequest,
 ) -> Result<TResponse, String>
@@ -518,6 +518,14 @@ where
     TRequest: Serialize + ?Sized,
     TResponse: DeserializeOwned,
 {
+    // Provider transport owns its redirect policy. Callers cannot accidentally
+    // supply a client that forwards bounded LocalView context or provider
+    // credentials beyond the configured loopback origin.
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "trusted AI provider transport unavailable".to_string())?;
+
     let mut builder = client
         .post(config.endpoint.clone())
         .timeout(Duration::from_secs(AI_PROVIDER_TIMEOUT_SECS))
@@ -526,10 +534,15 @@ where
         builder = builder.bearer_auth(token);
     }
 
-    builder
+    let response = builder
         .send()
         .await
-        .map_err(|_| "trusted AI provider unavailable".to_string())?
+        .map_err(|_| "trusted AI provider unavailable".to_string())?;
+    if response.status().is_redirection() {
+        return Err("trusted AI provider redirect refused".into());
+    }
+
+    response
         .error_for_status()
         .map_err(|_| "trusted AI provider request failed".to_string())?
         .json::<TResponse>()
@@ -654,6 +667,60 @@ mod trusted_ai_tests {
         }
     }
 
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read as _;
+
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .expect("set provider read timeout");
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 2048];
+        let mut expected_total = None;
+
+        while request.len() < 16 * 1024 {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    request.extend_from_slice(&chunk[..read]);
+                    if expected_total.is_none() {
+                        if let Some(header_offset) =
+                            request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            let header_end = header_offset + 4;
+                            let headers = String::from_utf8_lossy(&request[..header_end]);
+                            let content_length = headers
+                                .lines()
+                                .filter_map(|line| line.split_once(':'))
+                                .find_map(|(name, value)| {
+                                    if name.eq_ignore_ascii_case("content-length") {
+                                        value.trim().parse::<usize>().ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(0);
+                            expected_total = Some(header_end + content_length);
+                        }
+                    }
+                    if expected_total.is_some_and(|expected| request.len() >= expected) {
+                        break;
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("read provider request: {error}"),
+            }
+        }
+
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
     #[test]
     fn trusted_ai_question_validator_is_bounded_but_preserves_human_text() {
         assert_eq!(
@@ -698,6 +765,49 @@ mod trusted_ai_tests {
                 "{invalid}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn trusted_ai_provider_redirect_never_forwards_context_or_token() {
+        use std::{io::Write, net::TcpListener, thread, time::Duration as StdDuration};
+
+        let target = TcpListener::bind(("127.0.0.1", 0)).expect("bind redirect target");
+        target.set_nonblocking(true).unwrap();
+        let target_port = target.local_addr().unwrap().port();
+
+        let source = TcpListener::bind(("127.0.0.1", 0)).expect("bind provider source");
+        let source_port = source.local_addr().unwrap().port();
+        let source_server = thread::spawn(move || {
+            let (mut stream, _) = source.accept().expect("accept provider request");
+            let request = read_http_request(&mut stream);
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            request
+        });
+
+        let config = provider_config_from_values(
+            Some(format!("http://127.0.0.1:{source_port}/ask")),
+            Some("PROVIDER_TOKEN_MUST_NOT_LEAK".into()),
+            None,
+        )
+        .unwrap();
+        let request = serde_json::json!({"context":"BOUNDED_SOURCE_EXCERPT"});
+        let error = bridge_json::<_, serde_json::Value>(&Client::new(), &config, &request)
+            .await
+            .expect_err("provider redirect must be refused");
+        assert_eq!(error, "trusted AI provider redirect refused");
+
+        let source_request = source_server.join().unwrap();
+        assert!(source_request.contains("PROVIDER_TOKEN_MUST_NOT_LEAK"));
+        assert!(source_request.contains("BOUNDED_SOURCE_EXCERPT"));
+
+        std::thread::sleep(StdDuration::from_millis(100));
+        assert!(
+            matches!(target.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect target must receive no provider request"
+        );
     }
 
     #[test]

@@ -11,10 +11,12 @@ pub mod visual_capture;
 pub mod workspace_surface;
 
 use std::{
+    collections::HashMap,
     ffi::OsString,
     io::{BufRead, BufReader},
     path::{Component, Path, PathBuf},
     process::Command,
+    sync::Mutex,
 };
 
 use localview_live_bridge::{
@@ -27,6 +29,189 @@ use serde::{Deserialize, Serialize};
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+#[derive(Debug, Clone)]
+struct PreviewBridgeAuthorityRecord {
+    identity: workspace_surface::surface_registry::DesktopSurfaceIdentity,
+    attestation: String,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct PreviewBridgeAuthority {
+    entries: Mutex<HashMap<String, PreviewBridgeAuthorityRecord>>,
+}
+
+impl PreviewBridgeAuthority {
+    fn issue(
+        &self,
+        identity: &workspace_surface::surface_registry::DesktopSurfaceIdentity,
+    ) -> String {
+        let attestation = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let record = PreviewBridgeAuthorityRecord {
+            identity: identity.clone(),
+            attestation: attestation.clone(),
+        };
+        self.entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(identity.label.clone(), record);
+        attestation
+    }
+
+    fn verify(
+        &self,
+        identity: &workspace_surface::surface_registry::DesktopSurfaceIdentity,
+        attestation: &str,
+    ) -> Result<(), String> {
+        let entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(record) = entries.get(&identity.label) else {
+            return Err("preview bridge authority is not live".into());
+        };
+        if record.identity != *identity || record.attestation != attestation {
+            return Err("preview bridge attestation rejected".into());
+        }
+        Ok(())
+    }
+
+    fn contains_identity(
+        &self,
+        identity: &workspace_surface::surface_registry::DesktopSurfaceIdentity,
+    ) -> bool {
+        self.entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&identity.label)
+            .is_some_and(|record| record.identity == *identity)
+    }
+
+    fn revoke(
+        &self,
+        identity: &workspace_surface::surface_registry::DesktopSurfaceIdentity,
+    ) {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if entries
+            .get(&identity.label)
+            .is_some_and(|record| record.identity == *identity)
+        {
+            entries.remove(&identity.label);
+        }
+    }
+}
+
+#[cfg(test)]
+mod preview_bridge_authority_tests {
+    use super::*;
+    use workspace_surface::surface_registry::{
+        DesktopSurfaceIdentity, DesktopSurfaceKind,
+    };
+
+    fn identity(
+        session_id: SessionId,
+        label: &str,
+        incarnation: u64,
+        owner_instance_id: uuid::Uuid,
+    ) -> DesktopSurfaceIdentity {
+        DesktopSurfaceIdentity {
+            session_id,
+            kind: if label.starts_with("preview-") {
+                DesktopSurfaceKind::PreviewWindow
+            } else {
+                DesktopSurfaceKind::WorkspaceChild
+            },
+            label: label.to_owned(),
+            incarnation,
+            owner_instance_id,
+        }
+    }
+
+    #[test]
+    fn bridge_attestation_is_exact_identity_scoped_and_rotates_on_recreation() {
+        let authority = PreviewBridgeAuthority::default();
+        let owner = uuid::Uuid::new_v4();
+        let session = uuid::Uuid::new_v4();
+        let label = workspace_surface::preview_surface_label(session);
+        let first = identity(session, &label, 1, owner);
+        let first_secret = authority.issue(&first);
+
+        assert_eq!(first_secret.len(), 64);
+        assert!(authority.verify(&first, &first_secret).is_ok());
+        assert!(authority.verify(&first, "wrong").is_err());
+
+        let second = identity(session, &label, 2, owner);
+        let second_secret = authority.issue(&second);
+        assert_ne!(first_secret, second_secret);
+        assert!(authority.verify(&first, &first_secret).is_err());
+        assert!(authority.verify(&second, &first_secret).is_err());
+        assert!(authority.verify(&second, &second_secret).is_ok());
+
+        authority.revoke(&first);
+        assert!(
+            authority.verify(&second, &second_secret).is_ok(),
+            "stale destroy/revoke must not erase a newer incarnation"
+        );
+        authority.revoke(&second);
+        assert!(authority.verify(&second, &second_secret).is_err());
+    }
+
+    #[test]
+    fn bridge_attestation_cannot_cross_session_or_surface_identity() {
+        let authority = PreviewBridgeAuthority::default();
+        let owner = uuid::Uuid::new_v4();
+        let first_session = uuid::Uuid::new_v4();
+        let second_session = uuid::Uuid::new_v4();
+        let first = identity(
+            first_session,
+            &workspace_surface::preview_surface_label(first_session),
+            1,
+            owner,
+        );
+        let second = identity(
+            second_session,
+            &workspace_surface::preview_surface_label(second_session),
+            1,
+            owner,
+        );
+        let secret = authority.issue(&first);
+        assert!(authority.verify(&first, &secret).is_ok());
+        assert!(authority.verify(&second, &secret).is_err());
+    }
+
+    #[test]
+    fn bridge_script_uses_captured_invoke_and_attestation_for_every_ipc() {
+        let script = preview_bridge_script(uuid::Uuid::new_v4());
+        assert!(!script.contains("window.__TAURI__"));
+        assert!(script.contains("installBridge((invoke, bridgeAttestation) =>"));
+        for command in [
+            "preview_ingest",
+            "preview_take_actions",
+            "preview_take_network_fault_controls",
+            "preview_complete_network_fault_control",
+            "preview_complete_action",
+            "preview_complete_content_stress",
+            "preview_complete_point_select",
+            "preview_action_cancellation",
+            "preview_ack_action_cancellation",
+        ] {
+            let marker = format!("invoke('{command}'");
+            let offset = script.find(&marker).expect("bridge command must be present");
+            let tail = &script[offset..script.len().min(offset + 500)];
+            assert!(
+                tail.contains("attestation: bridgeAttestation"),
+                "{command} must carry bridge attestation"
+            );
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct DashboardState {
@@ -121,7 +306,7 @@ enum SourceOpenLauncher {
 #[derive(Debug, Clone)]
 struct TrustedSourceLaunchPlan {
     launcher: SourceOpenLauncher,
-    program: &'static str,
+    program: PathBuf,
     args: Vec<OsString>,
 }
 
@@ -311,7 +496,7 @@ fn trusted_source_launch_plan(
     {
         return Ok(TrustedSourceLaunchPlan {
             launcher: SourceOpenLauncher::MacOpen,
-            program: "/usr/bin/open",
+            program: PathBuf::from("/usr/bin/open"),
             args: vec![target.canonical_file.clone().into_os_string()],
         });
     }
@@ -320,16 +505,23 @@ fn trusted_source_launch_plan(
     {
         return Ok(TrustedSourceLaunchPlan {
             launcher: SourceOpenLauncher::LinuxXdgOpen,
-            program: "xdg-open",
+            program: PathBuf::from("/usr/bin/xdg-open"),
             args: vec![target.canonical_file.clone().into_os_string()],
         });
     }
 
     #[cfg(target_os = "windows")]
     {
+        let system_root = std::env::var_os("SystemRoot")
+            .or_else(|| std::env::var_os("WINDIR"))
+            .map(PathBuf::from)
+            .ok_or_else(|| "trusted source launcher unavailable".to_string())?;
+        if !system_root.is_absolute() {
+            return Err("trusted source launcher unavailable".into());
+        }
         return Ok(TrustedSourceLaunchPlan {
             launcher: SourceOpenLauncher::WindowsFileProtocolHandler,
-            program: "rundll32.exe",
+            program: system_root.join("System32").join("rundll32.exe"),
             args: vec![
                 OsString::from("url.dll,FileProtocolHandler"),
                 target.canonical_file.clone().into_os_string(),
@@ -355,7 +547,7 @@ where
 
 fn launch_trusted_source(target: &TrustedSourceTarget) -> Result<SourceOpenLauncher, String> {
     launch_trusted_source_with(target, |plan| {
-        Command::new(plan.program)
+        Command::new(&plan.program)
             .args(&plan.args)
             .spawn()
             .map(|_| ())
@@ -1586,8 +1778,12 @@ mod trusted_source_validation_tests {
 
         let plan = trusted_source_launch_plan(&target).expect("launch plan");
         assert!(
+            plan.program.is_absolute(),
+            "trusted source launcher must never resolve through PATH"
+        );
+        assert!(
             !matches!(
-                plan.program.to_ascii_lowercase().as_str(),
+                plan.program.to_string_lossy().to_ascii_lowercase().as_str(),
                 "sh" | "bash" | "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh"
             ),
             "trusted source launcher must never route through a shell"
@@ -1600,19 +1796,20 @@ mod trusted_source_validation_tests {
         #[cfg(target_os = "linux")]
         {
             assert_eq!(plan.launcher, SourceOpenLauncher::LinuxXdgOpen);
-            assert_eq!(plan.program, "xdg-open");
+            assert_eq!(plan.program, PathBuf::from("/usr/bin/xdg-open"));
             assert_eq!(plan.args, vec![target.canonical_file.clone().into_os_string()]);
         }
         #[cfg(target_os = "macos")]
         {
             assert_eq!(plan.launcher, SourceOpenLauncher::MacOpen);
-            assert_eq!(plan.program, "/usr/bin/open");
+            assert_eq!(plan.program, PathBuf::from("/usr/bin/open"));
             assert_eq!(plan.args, vec![target.canonical_file.clone().into_os_string()]);
         }
         #[cfg(target_os = "windows")]
         {
             assert_eq!(plan.launcher, SourceOpenLauncher::WindowsFileProtocolHandler);
-            assert_eq!(plan.program, "rundll32.exe");
+            assert!(plan.program.is_absolute());
+            assert_eq!(plan.program.file_name().and_then(|name| name.to_str()), Some("rundll32.exe"));
             assert_eq!(plan.args[0], OsString::from("url.dll,FileProtocolHandler"));
             assert_eq!(plan.args[1], target.canonical_file.clone().into_os_string());
         }
@@ -1643,7 +1840,7 @@ mod trusted_source_validation_tests {
         );
         assert!(
             !matches!(
-                plan.program.to_ascii_lowercase().as_str(),
+                plan.program.to_string_lossy().to_ascii_lowercase().as_str(),
                 "sh" | "bash" | "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh"
             )
         );
@@ -1675,14 +1872,14 @@ mod trusted_source_validation_tests {
         )
         .expect("trusted target");
 
-        let observed = RefCell::new(None::<(String, Vec<OsString>)>);
+        let observed = RefCell::new(None::<(PathBuf, Vec<OsString>)>);
         let launcher = launch_trusted_source_with(&target, |plan| {
-            *observed.borrow_mut() = Some((plan.program.to_owned(), plan.args.clone()));
+            *observed.borrow_mut() = Some((plan.program.clone(), plan.args.clone()));
             Ok(())
         })
         .expect("fake launcher success");
         let observed = observed.into_inner().expect("fake launcher observed plan");
-        assert!(!observed.0.is_empty());
+        assert!(!observed.0.as_os_str().is_empty());
         assert!(observed.1.iter().any(|arg| arg.as_os_str() == target.canonical_file.as_os_str()));
 
         let error = launch_trusted_source_with(&target, |_plan| Err(()))
@@ -1948,6 +2145,7 @@ async fn resume_runtime() -> Result<(), String> {
 async fn open_preview(
     app: tauri::AppHandle,
     registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
     session_id: String,
     url: String,
     title: String,
@@ -1963,6 +2161,9 @@ async fn open_preview(
             &label,
         )
         .ok_or_else(|| "preview platform window exists without desktop owner truth".to_string())?;
+        if !bridge_authority.contains_identity(&current.identity) {
+            return Err("preview platform window exists without bridge authority".into());
+        }
         window.show().map_err(err)?;
         registry
             .set_visibility(&current.identity, DesktopSurfaceVisibility::Visible)
@@ -1994,20 +2195,38 @@ async fn open_preview(
         label.clone(),
     );
     let reservation = workspace_surface::surface_resource::reserve_surface(session).await?;
-    let initialization_script =
-        wave6_accessibility_interaction::managed_initialization_script(&app, session)?;
+    let attestation = bridge_authority.issue(&identity);
+    let initialization_script = match managed_surface_initialization_script(
+        &app,
+        session,
+        &attestation,
+    ) {
+        Ok(script) => script,
+        Err(error) => {
+            bridge_authority.revoke(&identity);
+            let _ = workspace_surface::surface_resource::cancel_surface_reservation(&reservation).await;
+            return Err(error);
+        }
+    };
 
+    let expected_navigation_url = parsed.clone();
     let window = match WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed))
         .title(format!("{title} — LocalView"))
         .inner_size(1280.0, 820.0)
         .min_inner_size(640.0, 480.0)
         .initialization_script(initialization_script)
-        .on_navigation(preview_navigation_allowed)
+        .on_navigation(move |candidate| {
+            workspace_surface::workspace_navigation_matches_origin(
+                &expected_navigation_url,
+                candidate,
+            )
+        })
         .build()
     {
         Ok(window) => window,
         Err(error) => {
             let create_error = err(error);
+            bridge_authority.revoke(&identity);
             if let Err(cancel_error) =
                 workspace_surface::surface_resource::cancel_surface_reservation(&reservation).await
             {
@@ -2023,6 +2242,7 @@ async fn open_preview(
         identity.clone(),
         DesktopSurfaceVisibility::Visible,
     ) {
+        bridge_authority.revoke(&identity);
         if let Err(close_error) = window.close() {
             return Err(format!(
                 "{}; failed to close preview window after owner-record failure: {close_error}",
@@ -2040,6 +2260,7 @@ async fn open_preview(
     )
     .await;
     if let Err(error) = activation_result {
+        bridge_authority.revoke(&identity);
         if let Err(close_error) = window.close() {
             return Err(format!(
                 "{error}; failed to close preview window after activation failure: {close_error}"
@@ -2069,6 +2290,7 @@ fn install_preview_surface_destroyed_reconciler(
         if registry.record_closed(&identity).is_err() {
             return;
         }
+        app.state::<PreviewBridgeAuthority>().revoke(&identity);
         let identity = identity.clone();
         tauri::async_runtime::spawn(async move {
             if let Err(error) =
@@ -2113,9 +2335,18 @@ fn preview_registry_error(
 #[tauri::command]
 async fn preview_ingest(
     webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
     batch: ObserverBatch,
+    attestation: String,
 ) -> Result<IngestReport, String> {
-    ensure_preview_caller(&webview_window, batch.session_id)?;
+    ensure_preview_caller(
+        &webview_window,
+        registry.inner(),
+        bridge_authority.inner(),
+        batch.session_id,
+        &attestation,
+    )?;
     let token = read_token().await?;
     control_client()?
         .post(format!(
@@ -2137,9 +2368,18 @@ async fn preview_ingest(
 #[tauri::command]
 async fn preview_take_actions(
     webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
     session_id: SessionId,
+    attestation: String,
 ) -> Result<Vec<serde_json::Value>, String> {
-    ensure_preview_caller(&webview_window, session_id)?;
+    ensure_preview_caller(
+        &webview_window,
+        registry.inner(),
+        bridge_authority.inner(),
+        session_id,
+        &attestation,
+    )?;
     let token = read_token().await?;
     let client = control_client()?;
 
@@ -2184,9 +2424,12 @@ async fn preview_take_actions(
 async fn preview_take_network_fault_controls(
     webview_window: tauri::WebviewWindow,
     registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
     session_id: SessionId,
+    attestation: String,
 ) -> Result<Vec<NetworkFaultControlRequest>, String> {
-    network_fault_preview_surface(registry.inner(), &webview_window, session_id)?;
+    let surface = network_fault_preview_surface(registry.inner(), &webview_window, session_id)?;
+    bridge_authority.verify(&surface.identity, &attestation)?;
     let token = read_token().await?;
     control_client()?
         .get(format!(
@@ -2207,10 +2450,13 @@ async fn preview_take_network_fault_controls(
 async fn preview_complete_network_fault_control(
     webview_window: tauri::WebviewWindow,
     registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
     session_id: SessionId,
     mut result: NetworkFaultControlResult,
+    attestation: String,
 ) -> Result<(), String> {
     let surface = network_fault_preview_surface(registry.inner(), &webview_window, session_id)?;
+    bridge_authority.verify(&surface.identity, &attestation)?;
     if let Some(payload) = result.payload.as_object_mut() {
         payload.insert(
             "surface_incarnation".into(),
@@ -2235,10 +2481,19 @@ async fn preview_complete_network_fault_control(
 #[tauri::command]
 async fn preview_action_cancellation(
     webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
     session_id: SessionId,
     action_id: uuid::Uuid,
+    attestation: String,
 ) -> Result<bool, String> {
-    ensure_preview_caller(&webview_window, session_id)?;
+    ensure_preview_caller(
+        &webview_window,
+        registry.inner(),
+        bridge_authority.inner(),
+        session_id,
+        &attestation,
+    )?;
     let token = read_token().await?;
     let response = control_client()?
         .get(format!(
@@ -2266,10 +2521,19 @@ async fn preview_action_cancellation(
 #[tauri::command]
 async fn preview_ack_action_cancellation(
     webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
     session_id: SessionId,
     action_id: uuid::Uuid,
+    attestation: String,
 ) -> Result<(), String> {
-    ensure_preview_caller(&webview_window, session_id)?;
+    ensure_preview_caller(
+        &webview_window,
+        registry.inner(),
+        bridge_authority.inner(),
+        session_id,
+        &attestation,
+    )?;
     let token = read_token().await?;
     control_client()?
         .post(format!(
@@ -2287,10 +2551,19 @@ async fn preview_ack_action_cancellation(
 #[tauri::command]
 async fn preview_complete_action(
     webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
     session_id: SessionId,
     result: BridgeActionResult,
+    attestation: String,
 ) -> Result<(), String> {
-    ensure_preview_caller(&webview_window, session_id)?;
+    ensure_preview_caller(
+        &webview_window,
+        registry.inner(),
+        bridge_authority.inner(),
+        session_id,
+        &attestation,
+    )?;
     let token = read_token().await?;
     let response = control_client()?
         .post(format!(
@@ -2308,6 +2581,58 @@ async fn preview_complete_action(
     Ok(())
 }
 
+#[tauri::command]
+async fn preview_complete_content_stress(
+    webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
+    state: tauri::State<'_, content_stress::ContentStressState>,
+    session_id: SessionId,
+    completion: content_stress::PreviewContentStressCompletion,
+    attestation: String,
+) -> Result<(), String> {
+    ensure_preview_caller(
+        &webview_window,
+        registry.inner(),
+        bridge_authority.inner(),
+        session_id,
+        &attestation,
+    )?;
+    content_stress::complete_content_stress_from_managed_bridge(
+        webview_window,
+        state,
+        session_id,
+        completion,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn preview_complete_point_select(
+    webview_window: tauri::WebviewWindow,
+    registry: tauri::State<'_, workspace_surface::surface_registry::DesktopSurfaceRegistry>,
+    bridge_authority: tauri::State<'_, PreviewBridgeAuthority>,
+    state: tauri::State<'_, point_select::PointSelectState>,
+    session_id: SessionId,
+    completion: point_select::PreviewPointSelectCompletion,
+    attestation: String,
+) -> Result<(), String> {
+    ensure_preview_caller(
+        &webview_window,
+        registry.inner(),
+        bridge_authority.inner(),
+        session_id,
+        &attestation,
+    )?;
+    point_select::complete_point_select_from_managed_bridge(
+        webview_window,
+        state,
+        session_id,
+        completion,
+    )
+    .await
+}
+
 fn network_fault_preview_surface(
     registry: &workspace_surface::surface_registry::DesktopSurfaceRegistry,
     webview_window: &tauri::WebviewWindow,
@@ -2316,6 +2641,12 @@ fn network_fault_preview_surface(
     use workspace_surface::surface_registry::DesktopSurfaceKind;
 
     let label = workspace_surface::preview_surface_label(session_id);
+    let caller = webview_window
+        .url()
+        .map_err(|_| "network fault preview caller URL unavailable".to_string())?;
+    if !workspace_surface::workspace_navigation_allowed(&caller) {
+        return Err("network fault preview caller URL is outside managed capability policy".into());
+    }
     if webview_window.label() != label {
         return Err("network fault control requires the exact LocalView preview surface".into());
     }
@@ -2331,12 +2662,37 @@ fn network_fault_preview_surface(
 
 fn ensure_preview_caller(
     webview_window: &tauri::WebviewWindow,
+    registry: &workspace_surface::surface_registry::DesktopSurfaceRegistry,
+    bridge_authority: &PreviewBridgeAuthority,
     session_id: SessionId,
-) -> Result<(), String> {
-    if !workspace_surface::bridge_surface_label_allowed(webview_window.label(), session_id) {
+    attestation: &str,
+) -> Result<workspace_surface::surface_registry::DesktopSurfaceSnapshot, String> {
+    use workspace_surface::surface_registry::DesktopSurfaceKind;
+
+    let label = webview_window.label();
+    let kind = if label == workspace_surface::preview_surface_label(session_id) {
+        DesktopSurfaceKind::PreviewWindow
+    } else if label == workspace_surface::workspace_label(session_id) {
+        DesktopSurfaceKind::WorkspaceChild
+    } else {
         return Err("preview bridge session/window mismatch".into());
+    };
+
+    let caller = webview_window
+        .url()
+        .map_err(|_| "preview bridge caller URL unavailable".to_string())?;
+    if !workspace_surface::workspace_navigation_allowed(&caller) {
+        return Err("preview bridge caller URL is outside managed capability policy".into());
     }
-    Ok(())
+
+    let current = registry
+        .current(session_id, kind, label)
+        .ok_or_else(|| "preview bridge surface is not live in desktop owner registry".to_string())?;
+    if current.identity.owner_instance_id != registry.owner_instance_id() {
+        return Err("preview bridge surface owner mismatch".into());
+    }
+    bridge_authority.verify(&current.identity, attestation)?;
+    Ok(current)
 }
 
 fn preview_label(session_id: SessionId) -> String {
@@ -2363,6 +2719,7 @@ async fn post_control(path: &str) -> Result<(), String> {
 fn control_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(err)
 }
@@ -2403,6 +2760,39 @@ fn native_engine() -> &'static str {
     }
 }
 
+fn managed_surface_initialization_script(
+    app: &tauri::AppHandle,
+    session_id: SessionId,
+    attestation: &str,
+) -> Result<String, String> {
+    let managed =
+        wave6_accessibility_interaction::managed_initialization_script(app, session_id)?;
+    let attestation = serde_json::to_string(attestation)
+        .map_err(|error| error.to_string())?;
+    let bootstrap = format!(
+        r#"(() => {{
+  const core = window.__TAURI__?.core;
+  const rawInvoke = core?.invoke;
+  if (typeof rawInvoke !== 'function') return;
+  const invoke = rawInvoke.bind(core);
+  const attestation = {attestation};
+  Object.defineProperty(window, '__LOCALVIEW_INSTALL_NATIVE_BRIDGE__', {{
+    configurable: true,
+    enumerable: false,
+    writable: false,
+    value: (install) => {{
+      try {{
+        if (typeof install === 'function') install(invoke, attestation);
+      }} finally {{
+        Reflect.deleteProperty(window, '__LOCALVIEW_INSTALL_NATIVE_BRIDGE__');
+      }}
+    }},
+  }});
+}})();"#
+    );
+    Ok(format!("{bootstrap}\n{managed}"))
+}
+
 fn preview_bridge_script(session_id: SessionId) -> String {
     let session = serde_json::to_string(&session_id.to_string())
         .expect("session UUID serializes to JSON string");
@@ -2411,6 +2801,11 @@ fn preview_bridge_script(session_id: SessionId) -> String {
 
 const PREVIEW_BRIDGE_SCRIPT: &str = r#"
 (() => {
+  const installBridge = window.__LOCALVIEW_INSTALL_NATIVE_BRIDGE__;
+  if (typeof installBridge !== 'function') return;
+  installBridge((invoke, bridgeAttestation) => {
+  const localviewApi = window.__LOCALVIEW__;
+  if (!localviewApi) return;
   if (window.__LOCALVIEW_NATIVE_BRIDGE__) return;
   const sessionId = __LOCALVIEW_SESSION_ID__;
   const generation = Date.now();
@@ -2462,7 +2857,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
 
   const resolveRef = (reference) => {
     if (!reference) return null;
-    const api = window.__LOCALVIEW__;
+    const api = localviewApi;
     if (!api?.refFor) return null;
     const active = document.activeElement;
     if (active && api.refFor(active) === reference) return active;
@@ -2615,36 +3010,36 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
         target.focus?.({ preventScroll: true });
         return { reference: queued.reference };
       case 'snapshot':
-        return window.__LOCALVIEW__?.snapshot?.() ?? null;
+        return localviewApi?.snapshot?.() ?? null;
       case 'freeze_visuals': {
         const requestedLeaseMs = Number(queued.private_capture?.visual_freeze_lease_ms);
         const leaseMs = Number.isFinite(requestedLeaseMs) ? requestedLeaseMs : 8000;
-        const frozen = await window.__LOCALVIEW__?.freezeVisuals?.(queued.id, leaseMs) ?? null;
+        const frozen = await localviewApi?.freezeVisuals?.(queued.id, leaseMs) ?? null;
         if (!frozen) throw new Error('visual_freeze_ack_missing');
         try {
           const geometry = privateMaskGeometry(queued.private_capture?.mask_selectors || []);
           return { ...frozen, ...geometry };
         } catch (error) {
-          try { window.__LOCALVIEW__?.restoreVisuals?.(queued.id); } catch (_) {}
+          try { localviewApi?.restoreVisuals?.(queued.id); } catch (_) {}
           throw error;
         }
       }
       case 'capture_scroll_to': {
-        const scrolled = await window.__LOCALVIEW__?.captureScrollTo?.(action.token, action.y) ?? null;
+        const scrolled = await localviewApi?.captureScrollTo?.(action.token, action.y) ?? null;
         if (!scrolled) throw new Error('capture_scroll_ack_missing');
         return scrolled;
       }
       case 'capture_tile_probe': {
-        const probe = await window.__LOCALVIEW__?.captureTileProbe?.(action.token) ?? null;
+        const probe = await localviewApi?.captureTileProbe?.(action.token) ?? null;
         if (!probe) throw new Error('capture_tile_probe_ack_missing');
         const geometry = privateMaskGeometry(queued.private_capture?.mask_selectors || []);
         return { ...probe, ...geometry };
       }
       case 'restore_visuals':
-        return window.__LOCALVIEW__?.restoreVisuals?.(String(action.token || '')) ?? null;
+        return localviewApi?.restoreVisuals?.(String(action.token || '')) ?? null;
       case 'measure': {
         if (!queued.reference) throw new Error('measure requires an element reference');
-        const api = window.__LOCALVIEW__;
+        const api = localviewApi;
         const inspected = api?.inspect?.(queued.reference) ?? null;
         if (!inspected) throw new Error('measure element reference unavailable');
         return {
@@ -2659,7 +3054,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
       }
       case 'inspect': {
         if (!queued.reference) throw new Error('inspect requires an element reference');
-        const api = window.__LOCALVIEW__;
+        const api = localviewApi;
         return api?.inspect?.(queued.reference) ?? null;
       }
       default:
@@ -2670,6 +3065,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
   const complete = async (invoke, action, ok, payload, error) => {
     await invoke('preview_complete_action', {
       sessionId,
+      attestation: bridgeAttestation,
       result: {
         action_id: action.id,
         ok,
@@ -2689,6 +3085,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     if (isInternalCaptureAction(action)) return false;
     return !!(await invoke('preview_action_cancellation', {
       sessionId,
+      attestation: bridgeAttestation,
       actionId: action.id,
     }));
   };
@@ -2696,6 +3093,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
   const acknowledgeCancellation = async (invoke, action) => {
     await invoke('preview_ack_action_cancellation', {
       sessionId,
+      attestation: bridgeAttestation,
       actionId: action.id,
     });
   };
@@ -2730,7 +3128,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
   };
 
   const executeNetworkFaultControl = (control) => {
-    const api = window.__LOCALVIEW__;
+    const api = localviewApi;
     if (!api?.installNetworkFaultPlan || !api?.clearNetworkFaultPlan || !api?.networkFaultState) {
       throw new Error('network_fault_runtime_unavailable');
     }
@@ -2764,6 +3162,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
 
     await invoke('preview_complete_network_fault_control', {
       sessionId,
+      attestation: bridgeAttestation,
       result: {
         request_id: control.id,
         ok: entry.ok,
@@ -2822,17 +3221,13 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
 
   const tick = async () => {
     if (!running || busy) return;
-    const invoke = window.__TAURI__?.core?.invoke;
-    if (!invoke) {
-      setTimeout(tick, 250);
-      return;
-    }
     busy = true;
     try {
-      const api = window.__LOCALVIEW__;
+      const api = localviewApi;
       const normalized = normalizeEvents(api?.drain?.(256) || []);
       if (normalized.length) {
         await invoke('preview_ingest', {
+          attestation: bridgeAttestation,
           batch: { session_id: sessionId, generation, events: normalized },
         });
       }
@@ -2841,6 +3236,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
       for (const completion of pointSelectCompletions) {
         await invoke('preview_complete_point_select', {
           sessionId,
+          attestation: bridgeAttestation,
           completion: {
             requestToken: String(completion?.requestToken || ''),
             route: String(completion?.route || ''),
@@ -2856,6 +3252,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
       for (const completion of contentStressCompletions) {
         await invoke('preview_complete_content_stress', {
           sessionId,
+          attestation: bridgeAttestation,
           completion: {
             requestToken: String(completion?.requestToken || ''),
             route: String(completion?.route || ''),
@@ -2870,7 +3267,10 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
       }
 
       if (pendingNetworkFaultControls.size === 0) {
-        const controls = await invoke('preview_take_network_fault_controls', { sessionId });
+        const controls = await invoke('preview_take_network_fault_controls', {
+          sessionId,
+          attestation: bridgeAttestation,
+        });
         rememberTakenNetworkFaultControls(controls);
       }
 
@@ -2883,7 +3283,10 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
       }
 
       if (pendingActions.size === 0) {
-        const actions = await invoke('preview_take_actions', { sessionId });
+        const actions = await invoke('preview_take_actions', {
+          sessionId,
+          attestation: bridgeAttestation,
+        });
         rememberTakenActions(actions);
       }
 
@@ -2908,6 +3311,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
     stop() { running = false; },
   });
   setTimeout(tick, 80);
+  });
 })();
 "#;
 
@@ -2920,6 +3324,7 @@ pub fn run() {
             let _ = app.manage(trusted_fix::FixProposalStore::default());
             let _ = app.manage(trusted_verify::VerificationStore::default());
             let _ = app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
+            let _ = app.manage(PreviewBridgeAuthority::default());
             native_executor_worker::spawn(app.handle().clone());
             let menu = MenuBuilder::new(app)
                 .text("show", "Open LocalView")
@@ -2979,8 +3384,8 @@ pub fn run() {
             preview_action_cancellation,
             preview_ack_action_cancellation,
             preview_complete_action,
-            content_stress::preview_complete_content_stress,
-            point_select::preview_complete_point_select,
+            preview_complete_content_stress,
+            preview_complete_point_select,
             visual_capture::capture_responsive_sweep,
             visual_capture::capture_full_page,
             visual_capture::capture_viewport,

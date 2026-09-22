@@ -235,5 +235,113 @@ fn production_csp_is_non_null_and_script_policy_stays_strict() {
     assert!(!frame_src.contains("http: *"));
     assert!(!frame_src.contains("https: *"));
     assert_eq!(security["devCsp"], serde_json::Value::Null);
-    assert_eq!(config["app"]["withGlobalTauri"], true, "preview bridge currently requires window.__TAURI__");
+    assert_eq!(
+        config["app"]["withGlobalTauri"],
+        true,
+        "the managed initialization bootstrap captures Tauri invoke before untrusted page code"
+    );
+}
+
+#[test]
+fn remote_preview_bridge_requires_rust_owned_attestation() {
+    let source = include_str!("../src/lib.rs");
+    let bridge = source
+        .split("const PREVIEW_BRIDGE_SCRIPT: &str = r#\"")
+        .nth(1)
+        .expect("preview bridge script must exist")
+        .split("\"#;")
+        .next()
+        .expect("preview bridge script terminator");
+
+    assert!(
+        !bridge.contains("window.__TAURI__"),
+        "managed bridge must use the captured invoke primitive rather than re-reading a page global"
+    );
+    assert_eq!(
+        bridge.matches("window.__LOCALVIEW__").count(),
+        1,
+        "managed bridge may capture the trusted instrumentation object once, but must never re-read the page-replaceable global"
+    );
+    assert!(
+        bridge.contains("const localviewApi = window.__LOCALVIEW__;"),
+        "managed bridge must capture the trusted instrumentation object before application scripts run"
+    );
+    assert!(
+        bridge.contains("const api = localviewApi;"),
+        "bridge event draining must use the captured instrumentation authority"
+    );
+    assert!(bridge.contains("installBridge((invoke, bridgeAttestation) =>"));
+    assert!(source.contains("struct PreviewBridgeAuthority"));
+    assert!(source.contains("bridge_authority.verify(&current.identity, attestation)?"));
+
+    for command in [
+        "preview_ingest",
+        "preview_take_actions",
+        "preview_take_network_fault_controls",
+        "preview_complete_network_fault_control",
+        "preview_complete_action",
+        "preview_complete_content_stress",
+        "preview_complete_point_select",
+        "preview_action_cancellation",
+        "preview_ack_action_cancellation",
+    ] {
+        let marker = format!("invoke('{command}'");
+        let offset = bridge
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{command} invocation must remain in the managed bridge"));
+        let tail = &bridge[offset..bridge.len().min(offset + 512)];
+        assert!(
+            tail.contains("attestation: bridgeAttestation"),
+            "{command} must carry the non-page bridge attestation"
+        );
+    }
+}
+
+#[test]
+fn managed_remote_navigation_matches_tauri_bridge_url_authority() {
+    let surface = include_str!("../src/workspace_surface.rs");
+    let preview: serde_json::Value =
+        serde_json::from_str(include_str!("../capabilities/preview-bridge.json")).unwrap();
+    let urls = preview["remote"]["urls"]
+        .as_array()
+        .expect("preview remote URL patterns")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        urls,
+        vec!["http://localhost:*/*", "http://127.0.0.1:*/*"]
+    );
+    assert!(surface.contains("url.scheme() != \"http\""));
+    assert!(surface.contains("address == std::net::Ipv4Addr::LOCALHOST"));
+    assert!(surface.contains("Some(url::Host::Ipv6(_)) | None => false"));
+}
+
+
+#[test]
+fn bridge_completion_helpers_are_not_independent_tauri_commands() {
+    let desktop = include_str!("../src/lib.rs");
+    let content_stress = include_str!("../src/content_stress.rs");
+    let point_select = include_str!("../src/point_select.rs");
+
+    assert!(
+        desktop.contains("#[tauri::command]\nasync fn preview_complete_content_stress("),
+        "attested content-stress wrapper must remain the registered Tauri command"
+    );
+    assert!(
+        desktop.contains("#[tauri::command]\nasync fn preview_complete_point_select("),
+        "attested point-select wrapper must remain the registered Tauri command"
+    );
+
+    assert!(
+        content_stress.contains("pub(super) async fn complete_content_stress_from_managed_bridge(")
+            && !content_stress.contains("#[tauri::command]\npub async fn preview_complete_content_stress("),
+        "content-stress helper must not expose an unattested Tauri IPC surface"
+    );
+    assert!(
+        point_select.contains("pub(super) async fn complete_point_select_from_managed_bridge(")
+            && !point_select.contains("#[tauri::command]\npub async fn preview_complete_point_select("),
+        "point-select helper must not expose an unattested Tauri IPC surface"
+    );
 }

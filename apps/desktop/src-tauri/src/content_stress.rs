@@ -732,8 +732,7 @@ pub async fn capture_content_locale_stress(
     })
 }
 
-#[tauri::command]
-pub async fn preview_complete_content_stress(
+pub(super) async fn complete_content_stress_from_managed_bridge(
     webview_window: tauri::WebviewWindow,
     state: tauri::State<'_, ContentStressState>,
     session_id: SessionId,
