@@ -13,8 +13,8 @@ jobs:
   verified-input-contracts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Run pure verified input contract
         run: cargo test -p localview-windows-uia-provider --test verified_input_contract -- --nocapture
       - name: Run verified input authority binding contract
@@ -35,8 +35,8 @@ jobs:
   windows-verified-input-backend:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Run Windows verified input backend contract
         run: cargo test -p localview-windows-uia-provider --test windows_verified_input_backend_contract -- --nocapture
       - name: Run exact UIA worker verified input boundary contract

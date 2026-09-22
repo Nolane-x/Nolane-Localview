@@ -25,20 +25,20 @@ jobs:
   contract:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Verify trusted Capture V2.1 contract
         run: cargo test -p localview-desktop --test human_first_trusted_capture_v21_contract -- --nocapture
       - name: Verify trusted Capture geometry and scale-factor unit tests
         run: cargo test -p localview-desktop trusted_capture_v21_tests --lib -- --nocapture
       - name: Verify existing native capture contract remains green
         run: cargo test -p localview-desktop --test native_capture_contract -- --nocapture
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
       - name: Install frontend dependencies
