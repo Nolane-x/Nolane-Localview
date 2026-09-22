@@ -165,7 +165,7 @@ async fn get_json(state: ControlState, uri: String) -> (StatusCode, Vec<u8>, Val
     (status, bytes, value)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn absolute_vue_path_is_canonicalized_before_fresh_results_and_evidence_are_retained() {
     let root =
         std::env::temp_dir().join(format!("localview-vue-http-authority-{}", Uuid::new_v4()));
