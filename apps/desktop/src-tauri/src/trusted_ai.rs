@@ -692,9 +692,11 @@ mod trusted_ai_tests {
                                 .lines()
                                 .filter_map(|line| line.split_once(':'))
                                 .find_map(|(name, value)| {
-                                    name.eq_ignore_ascii_case("content-length")
-                                        .then(|| value.trim().parse::<usize>().ok())
-                                        .flatten()
+                                    if name.eq_ignore_ascii_case("content-length") {
+                                        value.trim().parse::<usize>().ok()
+                                    } else {
+                                        None
+                                    }
                                 })
                                 .unwrap_or(0);
                             expected_total = Some(header_end + content_length);
