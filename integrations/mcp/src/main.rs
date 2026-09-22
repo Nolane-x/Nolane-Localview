@@ -454,6 +454,49 @@ async fn read_token() -> Result<String> {
 mod tests {
     use super::*;
 
+    fn read_http_headers(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read as _;
+
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("set source read timeout");
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        while request.len() < 8192 {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    request.extend_from_slice(&chunk[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("read source request: {error}"),
+            }
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
+    fn assert_bearer_header(request: &str, expected: &str) {
+        let value = request
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find_map(|(name, value)| {
+                name.eq_ignore_ascii_case("authorization")
+                    .then_some(value.trim())
+            })
+            .expect("source request must carry authorization");
+        assert_eq!(value, expected);
+    }
+
     #[test]
     fn semantic_node_lookup_walks_nested_snapshot() {
         let snapshot = json!({
@@ -520,7 +563,7 @@ mod tests {
     #[tokio::test]
     async fn control_client_never_redirects_bearer_authority() {
         use std::{
-            io::{Read, Write},
+            io::Write,
             net::TcpListener,
             thread,
         };
@@ -533,9 +576,7 @@ mod tests {
         let source_port = source.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             let (mut stream, _) = source.accept().expect("accept source request");
-            let mut bytes = [0_u8; 4096];
-            let read = stream.read(&mut bytes).expect("read source request");
-            let request = String::from_utf8_lossy(&bytes[..read]).into_owned();
+            let request = read_http_headers(&mut stream);
             let response = format!(
                 "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             );
@@ -552,7 +593,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::FOUND);
         let source_request = server.join().unwrap();
-        assert!(source_request.contains("Authorization: Bearer CONTROL_TOKEN_MUST_NOT_LEAK"));
+        assert_bearer_header(&source_request, "Bearer CONTROL_TOKEN_MUST_NOT_LEAK");
 
         thread::sleep(Duration::from_millis(100));
         assert!(
