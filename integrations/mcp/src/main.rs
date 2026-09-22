@@ -2,6 +2,7 @@
 
 use std::{
     io::{self, BufRead, Write},
+    net::Ipv4Addr,
     time::Duration,
 };
 
@@ -118,11 +119,6 @@ fn tool_definitions() -> Vec<Value> {
         json!({"name":"observer.recent","description":"Read recent in-page observer events for one session","inputSchema":session_schema()}),
         json!({"name":"page.snapshot","description":"Return a completed privacy-bounded semantic, ARIA, style and geometry snapshot from the active LocalView page bridge","inputSchema":session_schema()}),
         json!({"name":"page.inspect","description":"Return one element from a fresh semantic snapshot using its stable LocalView reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"}},"required":["session","reference"]}}),
-        json!({"name":"action.click","description":"Queue a click against a stable LocalView element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"}},"required":["session","reference"]}}),
-        json!({"name":"action.type","description":"Queue text input against a stable element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"},"text":{"type":"string"},"clear_first":{"type":"boolean","default":false}},"required":["session","reference","text"]}}),
-        json!({"name":"action.key","description":"Queue a keyboard event","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"},"key":{"type":"string"},"modifiers":{"type":"array","items":{"type":"string"}}},"required":["session","key"]}}),
-        json!({"name":"action.scroll","description":"Queue a deterministic scroll offset","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}},"required":["session","x","y"]}}),
-        json!({"name":"action.focus","description":"Queue focus for a stable element reference","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"}},"required":["session","reference"]}}),
         json!({"name":"action.snapshot","description":"Queue a privacy-scrubbed semantic/layout snapshot without waiting for completion","inputSchema":session_schema()}),
         json!({"name":"action.results","description":"Read recent page action results","inputSchema":session_schema()}),
     ]
@@ -137,10 +133,11 @@ async fn call_tool(params: &Value) -> Result<Value> {
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let base = std::env::var("LOCALVIEW_CONTROL")
+    let raw_base = std::env::var("LOCALVIEW_CONTROL")
         .unwrap_or_else(|_| "http://127.0.0.1:45454".into());
+    let base = canonical_control_origin(&raw_base)?;
+    let client = control_client()?;
     let token = read_token().await?;
-    let client = reqwest::Client::new();
 
     if name == "page.snapshot" {
         let session = string_arg(&args, "session")?;
@@ -213,82 +210,6 @@ async fn call_tool(params: &Value) -> Result<Value> {
         "runtime.resume" => authed_post(&client, &base, &token, "/v1/runtime/resume").await?,
         "events.recent" => authed_get(&client, &base, &token, "/v1/events/recent").await?,
         "observer.recent" => session_get(&client, &base, &token, &args, "observer/recent").await?,
-        "action.click" => {
-            let session = string_arg(&args, "session")?;
-            let reference = string_arg(&args, "reference")?;
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                Some(reference),
-                json!({"type":"click"}),
-            )
-            .await?
-        }
-        "action.type" => {
-            let session = string_arg(&args, "session")?;
-            let reference = string_arg(&args, "reference")?;
-            let text = string_arg(&args, "text")?;
-            let clear_first = args
-                .get("clear_first")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                Some(reference),
-                json!({"type":"type_text","text":text,"clear_first":clear_first}),
-            )
-            .await?
-        }
-        "action.key" => {
-            let session = string_arg(&args, "session")?;
-            let key = string_arg(&args, "key")?;
-            let reference = args.get("reference").and_then(Value::as_str);
-            let modifiers = args
-                .get("modifiers")
-                .cloned()
-                .unwrap_or_else(|| json!([]));
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                reference,
-                json!({"type":"key","key":key,"modifiers":modifiers}),
-            )
-            .await?
-        }
-        "action.scroll" => {
-            let session = string_arg(&args, "session")?;
-            let x = number_arg(&args, "x")?;
-            let y = number_arg(&args, "y")?;
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                None,
-                json!({"type":"scroll","x":x,"y":y}),
-            )
-            .await?
-        }
-        "action.focus" => {
-            let session = string_arg(&args, "session")?;
-            let reference = string_arg(&args, "reference")?;
-            post_action(
-                &client,
-                &base,
-                &token,
-                session,
-                Some(reference),
-                json!({"type":"focus"}),
-            )
-            .await?
-        }
         "action.snapshot" => {
             let session = string_arg(&args, "session")?;
             post_action(
@@ -487,10 +408,36 @@ fn string_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str> {
         .with_context(|| format!("missing {name}"))
 }
 
-fn number_arg(args: &Value, name: &str) -> Result<f64> {
-    args.get(name)
-        .and_then(Value::as_f64)
-        .with_context(|| format!("missing {name}"))
+fn canonical_control_origin(raw: &str) -> Result<String> {
+    let url = reqwest::Url::parse(raw.trim()).context("LocalView control origin is invalid")?;
+    if url.scheme() != "http"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!("LocalView control origin must be a bare loopback HTTP origin");
+    }
+
+    if url.port_or_known_default() != Some(45454) {
+        anyhow::bail!("LocalView control origin must use the daemon control port");
+    }
+
+    let host = url
+        .host_str()
+        .context("LocalView control origin is missing a host")?;
+    if host.parse::<Ipv4Addr>().ok() != Some(Ipv4Addr::LOCALHOST) {
+        anyhow::bail!("LocalView control origin must use the daemon IPv4 loopback address");
+    }
+
+    Ok(url.origin().ascii_serialization())
+}
+
+fn control_client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?)
 }
 
 async fn read_token() -> Result<String> {
@@ -525,5 +472,92 @@ mod tests {
             Some("button")
         );
         assert!(find_semantic_node(&snapshot, "@missing").is_none());
+    }
+
+    #[test]
+    fn advertised_action_tools_never_expose_legacy_consequential_mutations() {
+        let names = tool_definitions()
+            .into_iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_owned))
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"action.snapshot".to_owned()));
+        for forbidden in [
+            "action.click",
+            "action.type",
+            "action.key",
+            "action.scroll",
+            "action.focus",
+        ] {
+            assert!(!names.contains(&forbidden.to_owned()), "{forbidden}");
+        }
+    }
+
+    #[test]
+    fn control_origin_is_exact_loopback_http_origin_and_errors_do_not_echo_secrets() {
+        for allowed in ["http://127.0.0.1:45454", "http://127.0.0.1:45454/"] {
+            assert!(canonical_control_origin(allowed).is_ok(), "{allowed}");
+        }
+        for rejected in [
+            "https://127.0.0.1:45454",
+            "http://localhost:45454",
+            "http://[::1]:45454",
+            "http://127.0.0.1:45455",
+            "http://127.0.0.1",
+            "http://localhost",
+            "http://127.0.0.2:45454",
+            "http://10.0.0.2:45454",
+            "http://example.com:45454",
+            "http://user:CONTROL_SECRET@127.0.0.1:45454",
+            "http://127.0.0.1:45454/v1",
+            "http://127.0.0.1:45454/?token=CONTROL_SECRET",
+            "http://127.0.0.1:45454/#CONTROL_SECRET",
+        ] {
+            let error = canonical_control_origin(rejected).expect_err(rejected);
+            assert!(!error.to_string().contains("CONTROL_SECRET"));
+        }
+    }
+
+    #[tokio::test]
+    async fn control_client_never_redirects_bearer_authority() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let target = TcpListener::bind(("127.0.0.1", 0)).expect("bind redirect target");
+        target.set_nonblocking(true).unwrap();
+        let target_port = target.local_addr().unwrap().port();
+
+        let source = TcpListener::bind(("127.0.0.1", 0)).expect("bind redirect source");
+        let source_port = source.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = source.accept().expect("accept source request");
+            let mut bytes = [0_u8; 4096];
+            let read = stream.read(&mut bytes).expect("read source request");
+            let request = String::from_utf8_lossy(&bytes[..read]).into_owned();
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            request
+        });
+
+        let client = control_client().unwrap();
+        let response = client
+            .get(format!("http://127.0.0.1:{source_port}/v1/sessions"))
+            .bearer_auth("CONTROL_TOKEN_MUST_NOT_LEAK")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+        let source_request = server.join().unwrap();
+        assert!(source_request.contains("Authorization: Bearer CONTROL_TOKEN_MUST_NOT_LEAK"));
+
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            matches!(target.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect target must receive no request at all"
+        );
     }
 }
