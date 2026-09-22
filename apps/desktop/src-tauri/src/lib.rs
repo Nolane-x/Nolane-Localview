@@ -3446,6 +3446,11 @@ pub fn run() {
             workspace_surface::workspace_surface_navigate,
             workspace_surface::workspace_surface_close
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running LocalView desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building LocalView desktop")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                daemon_sidecar::stop_owned_daemon(app);
+            }
+        });
 }
