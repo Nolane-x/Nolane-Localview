@@ -787,3 +787,44 @@ fn ui_audit_keeps_reduced_motion_and_preference_recovery_regressions_registered(
         assert!(capture.contains(marker), "existing regression marker disappeared: {marker}");
     }
 }
+
+
+#[test]
+fn rendered_closure_requires_readable_operational_copy_and_touch_disclosure() {
+    let styles = include_str!("../../src/styles.css");
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    assert!(styles.contains("--lv-faint:#737f8d"));
+    assert!(styles.contains(".responsive-result-viewports span"));
+    assert!(styles.contains("font-size:10px"));
+    assert!(styles.contains("@media (hover:none) and (pointer:coarse) and (max-width:620px)"));
+    assert!(styles.contains(".floating-rail:not(:has(.rail-button.active)) .rail-tooltip"));
+
+    for marker in [
+        "assertMeaningfulTextReadability",
+        "meaningful-text-min-10px",
+        "meaningful-text-contrast-estimate",
+        "ui-audit:touch-tool-labels-discoverable",
+        "ui-audit:touch-labels-yield-to-active-panel",
+        "168-touch-tool-labels.png",
+        "169-touch-inspect-panel.png",
+        "170-vi-narrow-fix-review.png",
+        "171-zh-narrow-settings.png",
+    ] {
+        assert!(capture.contains(marker), "rendered closure is missing {marker}");
+    }
+}
+
+
+#[test]
+fn fix_success_discloses_wave9_preflight_non_verification_boundary() {
+    let tools = include_str!("../../src/features/FloatingTools.tsx");
+    let i18n = include_str!("../../src/i18n.ts");
+    let capture = include_str!("../../../../tools/human-first-ui-v2/capture.mjs");
+
+    assert!(tools.contains("fix-preflight-note"));
+    assert!(tools.contains("translate(locale, 'fix.preflightInconclusive')"));
+    assert!(i18n.contains("'fix.preflightInconclusive'"));
+    assert!(capture.contains("fix:apply-success-wave9-preflight-truthful"));
+    assert!(capture.contains("fix:vi-apply-wave9-preflight-truthful"));
+}

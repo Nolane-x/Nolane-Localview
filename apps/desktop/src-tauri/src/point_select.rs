@@ -414,8 +414,7 @@ pub async fn point_select_cancel(
     Ok(status)
 }
 
-#[tauri::command]
-pub async fn preview_complete_point_select(
+pub(super) async fn complete_point_select_from_managed_bridge(
     webview_window: tauri::WebviewWindow,
     state: tauri::State<'_, PointSelectState>,
     session_id: SessionId,

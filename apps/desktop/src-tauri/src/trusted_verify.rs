@@ -386,6 +386,11 @@ pub fn validate_wave9_verified_handoff(
     if !receipt.surviving_mutations().is_empty() {
         return Err("Wave 9 receipt has surviving mutation challenges".into());
     }
+    if receipt.shadow_side_effect_containment()
+        != localview_counterfactual::ExternalSideEffectContainment::ProvenBlocked
+    {
+        return Err("Wave 9 receipt lacks proven external side-effect containment".into());
+    }
     if !receipt.unexpected_impact.is_empty()
         || !receipt.impact_comparison.inconclusive.is_empty()
         || !receipt.stale_evidence_ids.is_empty()

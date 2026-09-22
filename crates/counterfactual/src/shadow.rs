@@ -36,6 +36,13 @@ const SENSITIVE_BASENAMES: &[&str] = &[
     ".pypirc",
 ];
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalSideEffectContainment {
+    ProvenBlocked,
+    NotProven,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShadowCandidateProof {
     pub candidate_id: Uuid,
@@ -46,7 +53,7 @@ pub struct ShadowCandidateProof {
     pub shadow_path: String,
     pub original_worktree_dirty: bool,
     pub real_worktree_unchanged: bool,
-    pub external_side_effects_blocked: bool,
+    pub external_side_effect_containment: ExternalSideEffectContainment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -79,6 +86,7 @@ pub enum ShadowError {
     PatchRejected { path: String },
     ShadowWorktreeCreateFailed,
     ShadowCheckoutFailed,
+    ShadowMaterializationFailed { path: String },
     ShadowDiffFailed,
     UnexpectedChangedFile { path: String },
     CleanupFailed,
@@ -108,12 +116,7 @@ impl ShadowWorkspace {
         if !candidate.disposable {
             return Err(ShadowError::NotDisposable);
         }
-        if !matches!(
-            candidate.isolation,
-            IsolationLevel::NativeWebView
-                | IsolationLevel::ChromiumSandbox
-                | IsolationLevel::SemanticOnly
-        ) {
+        if candidate.isolation != IsolationLevel::SemanticOnly {
             return Err(ShadowError::UnsupportedIsolation);
         }
         if candidate.overlays.is_empty() {
@@ -181,7 +184,7 @@ impl ShadowWorkspace {
             std::process::id(),
             Uuid::new_v4()
         ));
-        let status = Command::new("git")
+        let status = safe_git_command()
             .arg("-C")
             .arg(&repository_root)
             .args(["worktree", "add", "--detach", "--no-checkout"])
@@ -205,40 +208,20 @@ impl ShadowWorkspace {
             cleaned: false,
         };
 
-        let checkout = Command::new("git")
-            .arg("-C")
-            .arg(&workspace.shadow_root)
-            .args(["checkout", "--force", &workspace.base_revision, "--", "."])
-            .status()
-            .map_err(|_| ShadowError::GitUnavailable)?;
-        if !checkout.success() {
-            let _ = workspace.cleanup();
-            return Err(ShadowError::ShadowCheckoutFailed);
-        }
-
         for overlay in &candidate.overlays {
+            if let Err(error) = materialize_overlay_base(
+                &workspace.repository_root,
+                &workspace.shadow_root,
+                &workspace.base_revision,
+                overlay,
+            ) {
+                let _ = workspace.cleanup();
+                return Err(error);
+            }
             if let Err(error) = apply_overlay(&workspace.shadow_root, overlay) {
                 let _ = workspace.cleanup();
                 return Err(error);
             }
-        }
-
-        let actual = git_output(&workspace.shadow_root, &["diff", "--name-only", "--"])
-            .ok_or(ShadowError::ShadowDiffFailed)?;
-        let actual_files = actual
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(str::to_owned)
-            .collect::<BTreeSet<_>>();
-        let expected = workspace
-            .changed_files
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if let Some(path) = actual_files.difference(&expected).next() {
-            let error = ShadowError::UnexpectedChangedFile { path: path.clone() };
-            let _ = workspace.cleanup();
-            return Err(error);
         }
 
         Ok(workspace)
@@ -260,7 +243,7 @@ impl ShadowWorkspace {
             shadow_path: self.shadow_root.to_string_lossy().into_owned(),
             original_worktree_dirty: !self.original_status.trim().is_empty(),
             real_worktree_unchanged: current_status == self.original_status,
-            external_side_effects_blocked: true,
+            external_side_effect_containment: ExternalSideEffectContainment::NotProven,
         })
     }
 
@@ -272,7 +255,7 @@ impl ShadowWorkspace {
                 directory_absent: !self.shadow_root.exists(),
             });
         }
-        let status = Command::new("git")
+        let status = safe_git_command()
             .arg("-C")
             .arg(&self.repository_root)
             .args(["worktree", "remove", "--force"])
@@ -369,6 +352,25 @@ pub fn authorize_shadow_launch(
         return Err(ShadowLaunchBlocker::InvalidLifetime);
     }
     Ok(())
+}
+
+pub fn exact_repository_revision(repository_root: &Path) -> Result<String, ShadowError> {
+    let repository_root =
+        fs::canonicalize(repository_root).map_err(|_| ShadowError::NonGitProject)?;
+    let top = git_output(&repository_root, &["rev-parse", "--show-toplevel"])
+        .ok_or(ShadowError::NonGitProject)?;
+    let canonical_top = fs::canonicalize(top.trim()).map_err(|_| ShadowError::NonGitProject)?;
+    if canonical_top != repository_root {
+        return Err(ShadowError::NonGitProject);
+    }
+    let head = git_output(&repository_root, &["rev-parse", "HEAD"])
+        .ok_or(ShadowError::GitUnavailable)?
+        .trim()
+        .to_owned();
+    if !is_exact_object_id(&head) {
+        return Err(ShadowError::BaseRevisionNotExact);
+    }
+    Ok(head)
 }
 
 pub fn patch_digest(overlays: &[SourceOverlay]) -> String {
@@ -527,9 +529,36 @@ fn validate_patch_paths(overlay: &SourceOverlay) -> Result<(), ShadowError> {
     Ok(())
 }
 
+fn materialize_overlay_base(
+    repository_root: &Path,
+    shadow_root: &Path,
+    base_revision: &str,
+    overlay: &SourceOverlay,
+) -> Result<(), ShadowError> {
+    let bytes = git_bytes(
+        repository_root,
+        &["show", &format!("{base_revision}:{}", overlay.file)],
+    )
+    .ok_or_else(|| ShadowError::ShadowMaterializationFailed {
+        path: overlay.file.clone(),
+    })?;
+    let target = shadow_root.join(&overlay.file);
+    let parent = target
+        .parent()
+        .ok_or_else(|| ShadowError::ShadowMaterializationFailed {
+            path: overlay.file.clone(),
+        })?;
+    fs::create_dir_all(parent).map_err(|_| ShadowError::ShadowMaterializationFailed {
+        path: overlay.file.clone(),
+    })?;
+    fs::write(&target, bytes).map_err(|_| ShadowError::ShadowMaterializationFailed {
+        path: overlay.file.clone(),
+    })
+}
+
 fn apply_overlay(shadow_root: &Path, overlay: &SourceOverlay) -> Result<(), ShadowError> {
     for check_only in [true, false] {
-        let mut command = Command::new("git");
+        let mut command = safe_git_command();
         command
             .arg("-C")
             .arg(shadow_root)
@@ -563,8 +592,20 @@ fn apply_overlay(shadow_root: &Path, overlay: &SourceOverlay) -> Result<(), Shad
     Ok(())
 }
 
+fn safe_git_command() -> Command {
+    let mut command = Command::new("git");
+    command
+        .arg("-c")
+        .arg("core.hooksPath=")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .env_remove("GIT_EXTERNAL_DIFF")
+        .env("GIT_LFS_SKIP_SMUDGE", "1");
+    command
+}
+
 fn git_output(root: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = safe_git_command()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -577,7 +618,7 @@ fn git_output(root: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn git_bytes(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = Command::new("git")
+    let output = safe_git_command()
         .arg("-C")
         .arg(root)
         .args(args)

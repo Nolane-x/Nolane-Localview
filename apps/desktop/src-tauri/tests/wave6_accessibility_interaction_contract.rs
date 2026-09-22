@@ -8,11 +8,17 @@ fn wave6_is_wired_only_into_managed_preview_and_workspace_initialization() {
 
     assert!(desktop.contains("mod wave6_accessibility_interaction;"));
     assert!(desktop.contains(
-        "wave6_accessibility_interaction::managed_initialization_script(&app, session)?"
+        "wave6_accessibility_interaction::managed_initialization_script(app, session_id)?"
     ));
-    assert!(workspace.contains(
-        "super::wave6_accessibility_interaction::managed_initialization_script(app, session_id)?"
-    ));
+    assert!(
+        desktop.contains("fn managed_surface_initialization_script(")
+            && desktop.contains("__LOCALVIEW_INSTALL_NATIVE_BRIDGE__"),
+        "Wave 6 initialization must remain composed behind the attested managed-surface bootstrap"
+    );
+    assert!(
+        workspace.contains("super::managed_surface_initialization_script("),
+        "native workspace initialization must use the same attested managed-surface composition"
+    );
 
     assert!(adapter.contains("BaseDirectory::Resource"));
     assert!(adapter.contains("wave6/axe.min.js"));

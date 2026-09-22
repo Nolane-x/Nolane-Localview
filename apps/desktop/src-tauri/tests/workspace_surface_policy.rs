@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
 use localview_desktop::workspace_surface::{
-    bridge_surface_label_allowed, validate_workspace_bounds, workspace_label, WorkspaceBounds,
+    bridge_surface_label_allowed, validate_workspace_bounds, workspace_label,
+    workspace_navigation_matches_origin, WorkspaceBounds,
 };
 use localview_protocol::SessionId;
 
@@ -33,6 +34,30 @@ fn bridge_surface_label_requires_exact_session_ownership() {
     assert!(!bridge_surface_label_allowed(&workspace_label(first), second));
     assert!(!bridge_surface_label_allowed("main", first));
     assert!(!bridge_surface_label_allowed("workspace-*", first));
+}
+
+#[test]
+fn managed_workspace_navigation_cannot_cross_loopback_origins() {
+    let expected = url::Url::parse("http://127.0.0.1:5173/app").unwrap();
+    assert!(workspace_navigation_matches_origin(
+        &expected,
+        &url::Url::parse("http://127.0.0.1:5173/next?x=1#ok").unwrap()
+    ));
+
+    for rejected in [
+        "http://127.0.0.1:5174/",
+        "http://localhost:5173/",
+        "https://127.0.0.1:5173/",
+        "http://127.0.0.2:5173/",
+    ] {
+        assert!(
+            !workspace_navigation_matches_origin(
+                &expected,
+                &url::Url::parse(rejected).unwrap()
+            ),
+            "{rejected}"
+        );
+    }
 }
 
 #[test]

@@ -6,7 +6,12 @@ fn preview_bridge_normalizes_semantic_and_geometry_events() {
     assert!(source.contains("geometry_changed: 'layout'"));
     assert!(source.contains("semantic_snapshot: 'semantic_snapshot'"));
     assert!(source.contains("case 'snapshot':"));
-    assert!(source.contains("window.__LOCALVIEW__?.snapshot?.()"));
+    assert!(source.contains("const localviewApi = window.__LOCALVIEW__;"));
+    assert!(source.contains("return localviewApi?.snapshot?.() ?? null;"));
+    assert!(
+        !source.contains("case 'snapshot':\n        return window.__LOCALVIEW__?.snapshot?.()"),
+        "managed bridge must use the instrumentation object captured before page code"
+    );
 }
 
 #[test]

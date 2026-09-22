@@ -1,8 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use localview_content_addressed::{ObjectHash, object_hash};
 use localview_contracts::{ContractEvaluationSummary, ContractStrength, ContractVerdict};
-use localview_counterfactual::{IsolationLevel, ShadowCandidateProof, ShadowCleanupProof};
+use localview_counterfactual::{
+    CounterfactualCandidate, ExternalSideEffectContainment, IsolationLevel, ShadowCandidateProof,
+    ShadowCleanupProof, ShadowWorkspace, patch_digest,
+};
 use localview_mutation::{MutationChallengeResult, MutationVerdict};
 use localview_planner::PartialRevalidationPlan;
 use localview_state_space::AffectedStatePlan;
@@ -132,6 +138,142 @@ impl VerificationCleanupProof {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum ProductionCandidatePreflightVerdict {
+    Rejected,
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProductionCandidatePreflightReceipt {
+    pub candidate_id: Option<String>,
+    pub base_revision: Option<String>,
+    pub patch_digest: Option<String>,
+    pub shadow_proof: Option<ShadowCandidateProof>,
+    pub cleanup_proof: Option<ShadowCleanupProof>,
+    pub verdict: ProductionCandidatePreflightVerdict,
+    pub reasons: Vec<String>,
+}
+
+impl ProductionCandidatePreflightReceipt {
+    pub fn digest(&self) -> ObjectHash {
+        object_hash(self)
+    }
+
+    pub fn inconclusive_unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            candidate_id: None,
+            base_revision: None,
+            patch_digest: None,
+            shadow_proof: None,
+            cleanup_proof: None,
+            verdict: ProductionCandidatePreflightVerdict::Inconclusive,
+            reasons: vec![reason.into()],
+        }
+    }
+
+    pub fn has_shadow_proof(&self) -> bool {
+        self.shadow_proof.is_some() && self.cleanup_proof.is_some()
+    }
+}
+
+pub fn run_production_candidate_preflight(
+    repository_root: &Path,
+    candidate: &CounterfactualCandidate,
+) -> Result<ProductionCandidatePreflightReceipt, String> {
+    let expected_patch_digest = patch_digest(&candidate.overlays);
+    let identity = || {
+        (
+            Some(candidate.id.to_string()),
+            Some(candidate.base_revision.clone()),
+            Some(expected_patch_digest.clone()),
+        )
+    };
+    let mut shadow = ShadowWorkspace::prepare(repository_root, candidate)
+        .map_err(|error| format!("Wave 9 shadow preparation failed: {error:?}"))?;
+
+    let proof = match shadow.proof() {
+        Ok(proof) => proof,
+        Err(error) => {
+            let cleanup = shadow.cleanup().ok();
+            let (candidate_id, base_revision, patch_digest) = identity();
+            let mut reasons = vec![format!("Wave 9 shadow proof failed: {error:?}")];
+            if cleanup.as_ref().is_none_or(|proof| {
+                !(proof.attempted && proof.worktree_removed && proof.directory_absent)
+            }) {
+                reasons.push(
+                    "shadow cleanup proof is unavailable or incomplete after proof failure".into(),
+                );
+            }
+            return Ok(ProductionCandidatePreflightReceipt {
+                candidate_id,
+                base_revision,
+                patch_digest,
+                shadow_proof: None,
+                cleanup_proof: cleanup,
+                verdict: ProductionCandidatePreflightVerdict::Rejected,
+                reasons,
+            });
+        }
+    };
+
+    let cleanup = match shadow.cleanup() {
+        Ok(cleanup) => cleanup,
+        Err(error) => {
+            let (candidate_id, base_revision, patch_digest) = identity();
+            return Ok(ProductionCandidatePreflightReceipt {
+                candidate_id,
+                base_revision,
+                patch_digest,
+                shadow_proof: Some(proof),
+                cleanup_proof: None,
+                verdict: ProductionCandidatePreflightVerdict::Rejected,
+                reasons: vec![format!("Wave 9 shadow cleanup failed: {error:?}")],
+            });
+        }
+    };
+
+    let mut reasons = Vec::new();
+    let identity_matches = proof.candidate_id == candidate.id
+        && proof.base_revision == candidate.base_revision
+        && proof.patch_digest == expected_patch_digest;
+    if !identity_matches {
+        reasons.push("shadow proof identity does not bind the candidate".into());
+    }
+    if !proof.real_worktree_unchanged {
+        reasons.push("real working tree changed while the shadow candidate was prepared".into());
+    }
+    if !(cleanup.attempted && cleanup.worktree_removed && cleanup.directory_absent) {
+        reasons.push("shadow cleanup proof is incomplete".into());
+    }
+    if proof.external_side_effect_containment != ExternalSideEffectContainment::ProvenBlocked {
+        reasons.push(
+            "external side-effect containment is not proven; candidate preflight is inconclusive"
+                .into(),
+        );
+    }
+
+    let rejected = !identity_matches
+        || !proof.real_worktree_unchanged
+        || !(cleanup.attempted && cleanup.worktree_removed && cleanup.directory_absent);
+    let verdict = if rejected {
+        ProductionCandidatePreflightVerdict::Rejected
+    } else {
+        ProductionCandidatePreflightVerdict::Inconclusive
+    };
+
+    Ok(ProductionCandidatePreflightReceipt {
+        candidate_id: Some(candidate.id.to_string()),
+        base_revision: Some(candidate.base_revision.clone()),
+        patch_digest: Some(expected_patch_digest),
+        shadow_proof: Some(proof),
+        cleanup_proof: Some(cleanup),
+        verdict,
+        reasons,
+    })
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AutonomousVerificationVerdict {
     Verified,
     Rejected,
@@ -145,6 +287,7 @@ pub struct AutonomousVerificationReceipt {
     pub candidate_id: String,
     pub patch_digest: String,
     pub isolation_type: IsolationLevel,
+    pub external_side_effect_containment: ExternalSideEffectContainment,
     pub affected_state_plan_hash: ObjectHash,
     pub contracts_evaluated: ContractEvaluationSummary,
     pub mutation_results: Vec<MutationChallengeResult>,
@@ -165,6 +308,10 @@ pub struct AutonomousVerificationReceipt {
 impl AutonomousVerificationReceipt {
     pub fn digest(&self) -> ObjectHash {
         object_hash(self)
+    }
+
+    pub fn shadow_side_effect_containment(&self) -> ExternalSideEffectContainment {
+        self.external_side_effect_containment
     }
 
     pub fn hard_contract_failures(&self) -> Vec<String> {
@@ -218,6 +365,12 @@ pub fn build_autonomous_receipt(
     }
     if !input.shadow_proof.real_worktree_unchanged {
         reasons.push("real working tree changed during candidate verification".into());
+    }
+    let external_side_effect_containment_unproven =
+        input.shadow_proof.external_side_effect_containment
+            != ExternalSideEffectContainment::ProvenBlocked;
+    if external_side_effect_containment_unproven {
+        reasons.push("external side-effect containment is not proven".into());
     }
 
     if !input.contracts.hard_failures.is_empty() {
@@ -335,7 +488,8 @@ pub fn build_autonomous_receipt(
         || input.affected.incomplete
         || !input.stale_evidence_ids.is_empty()
         || !input.resource_budget.within_budget()
-        || !unaccounted.is_empty();
+        || !unaccounted.is_empty()
+        || external_side_effect_containment_unproven;
 
     let final_verdict = if rejected {
         AutonomousVerificationVerdict::Rejected
@@ -353,6 +507,7 @@ pub fn build_autonomous_receipt(
         candidate_id: input.affected.change.candidate_id.clone(),
         patch_digest: input.affected.change.patch_digest.clone(),
         isolation_type: input.shadow_proof.isolation,
+        external_side_effect_containment: input.shadow_proof.external_side_effect_containment,
         affected_state_plan_hash,
         contracts_evaluated: input.contracts,
         mutation_results: input.mutations,
@@ -555,7 +710,7 @@ mod tests {
             shadow_path: "/tmp/shadow".into(),
             original_worktree_dirty: true,
             real_worktree_unchanged: true,
-            external_side_effects_blocked: true,
+            external_side_effect_containment: ExternalSideEffectContainment::ProvenBlocked,
         }
     }
 
@@ -663,6 +818,14 @@ mod tests {
             resource_budget: budget(true),
             cleanup_proof: cleanup(true),
         }
+    }
+
+    #[test]
+    fn production_preflight_has_no_verified_state() {
+        assert_ne!(
+            ProductionCandidatePreflightVerdict::Inconclusive,
+            ProductionCandidatePreflightVerdict::Rejected
+        );
     }
 
     #[test]
@@ -812,6 +975,28 @@ mod tests {
         );
         assert_eq!(receipt.surviving_mutations().len(), 1);
         assert_eq!(receipt.unexpected_impact.len(), 1);
+    }
+
+    #[test]
+    fn unproven_external_side_effect_containment_is_inconclusive() {
+        let candidate = Uuid::new_v4();
+        let mut input = input(
+            candidate,
+            contracts(ContractVerdict::Pass, ContractStrength::Hard),
+        );
+        input.shadow_proof.external_side_effect_containment =
+            ExternalSideEffectContainment::NotProven;
+        let receipt = build_autonomous_receipt(input);
+        assert_eq!(
+            receipt.final_verdict,
+            AutonomousVerificationVerdict::Inconclusive
+        );
+        assert!(
+            receipt
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("containment is not proven"))
+        );
     }
 
     #[test]
