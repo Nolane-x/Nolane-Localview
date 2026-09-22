@@ -10,3 +10,5 @@ Thumbs.db
 !.env.example
 .localview/
 coverage/
+
+apps/desktop/src-tauri/binaries/localview-daemon-*

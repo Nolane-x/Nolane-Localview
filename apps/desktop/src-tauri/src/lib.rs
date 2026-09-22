@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod content_stress;
+mod daemon_sidecar;
 mod native_executor_worker;
 mod point_select;
 mod trusted_ai;
@@ -3359,6 +3360,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let _ = app.manage(visual_capture::VisualCaptureState::default());
             let _ = app.manage(content_stress::ContentStressState::default());
@@ -3367,6 +3369,8 @@ pub fn run() {
             let _ = app.manage(trusted_verify::VerificationStore::default());
             let _ = app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
             let _ = app.manage(PreviewBridgeAuthority::default());
+            let _ = app.manage(daemon_sidecar::ManagedDaemonSidecar::default());
+            daemon_sidecar::ensure_daemon(app.handle().clone())?;
             native_executor_worker::spawn(app.handle().clone());
             let menu = MenuBuilder::new(app)
                 .text("show", "Open LocalView")
@@ -3379,6 +3383,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
                     if event.id() == "quit" {
+                        daemon_sidecar::stop_owned_daemon(app);
                         app.exit(0);
                     }
                     if event.id() == "show" {

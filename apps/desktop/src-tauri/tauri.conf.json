@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "com.nolane.localview",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run prepare:sidecar:dev && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run prepare:sidecar",
     "frontendDist": "../dist"
   },
   "app": {
@@ -47,6 +47,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/localview-daemon"],
     "category": "DeveloperTool",
     "shortDescription": "AI-native localhost visual runtime",
     "longDescription": "Automatically discovers local web applications and exposes a lightweight native preview plus an AI-native observation and control plane.",
