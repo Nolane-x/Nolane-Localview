@@ -43,9 +43,9 @@ jobs:
   live-correlation:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Verify pure correlation policy
         run: cargo test -p localview-causal --test action_request_ui_correlation -- --nocapture
@@ -61,7 +61,7 @@ jobs:
           cargo check -p localview-live-bridge --all-targets
           cargo check -p localview-control --all-targets
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
 
@@ -79,8 +79,8 @@ jobs:
       run:
         working-directory: apps/desktop
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
       - name: Install frontend dependencies
@@ -112,7 +112,7 @@ jobs:
           cp ../../tools/human-first-ui-v2/capture.mjs ./capture-wave3-correlation.mjs
           node ./capture-wave3-correlation.mjs
           rm ./capture-wave3-correlation.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: localview-wave3-live-correlation
           path: apps/desktop/human-first-ui-v2-render/

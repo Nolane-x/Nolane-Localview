@@ -27,10 +27,10 @@ jobs:
       LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       LOCALVIEW_L7_HARNESS_MANIFEST: tools/validation-lab/linux-l7-real-provider-harness/Cargo.toml
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@3230091d7ef9483f601620abacc570c22cf44d22 # 1.85.0
       - name: Install real GTK/AT-SPI/X11 dependencies
         run: |
           sudo apt-get update
@@ -98,7 +98,7 @@ jobs:
           printf '{"candidate_sha":"%s","case_id":"L03"}\n' "$LOCALVIEW_CANDIDATE_SHA" > "$LOCALVIEW_L7_ARTIFACT_DIR/run-context.json"
       - name: Upload exact-head L03 evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: v43-l03-real-provider-${{ env.LOCALVIEW_CANDIDATE_SHA }}
           path: ${{ env.LOCALVIEW_L7_ARTIFACT_DIR }}
