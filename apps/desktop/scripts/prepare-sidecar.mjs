@@ -4,6 +4,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  renameSync,
 } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -37,7 +38,9 @@ const destination = path.join(
   binaryDir,
   `localview-daemon-${targetTriple}${extension}`,
 );
-copyFileSync(source, destination);
-if (process.platform !== 'win32') chmodSync(destination, 0o755);
+const staged = `${destination}.tmp-${process.pid}`;
+copyFileSync(source, staged);
+if (process.platform !== 'win32') chmodSync(staged, 0o755);
+renameSync(staged, destination);
 
 console.log(`Prepared LocalView daemon sidecar: ${destination}`);

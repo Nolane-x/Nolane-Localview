@@ -31,6 +31,8 @@ fn desktop_bundles_and_bootstraps_daemon_without_frontend_shell_authority() {
     assert!(prepare.contains("rustc"));
     assert!(prepare.contains("--print"));
     assert!(prepare.contains("host-tuple"));
+    assert!(prepare.contains("renameSync(staged, destination)"));
+    assert!(prepare.contains(".tmp-"));
     assert!(build.contains("ensure_sidecar_manifest_placeholder"));
     assert!(build.contains("localview-daemon-{target}{extension}"));
     assert!(build.contains("if !sidecar.exists()"));

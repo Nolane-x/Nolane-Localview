@@ -99,7 +99,7 @@ async fn ensure_daemon_async(app: AppHandle) -> Result<(), String> {
     let event_app = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
-            if matches!(event, CommandEvent::Terminated(_) | CommandEvent::Error(_)) {
+            if matches!(event, CommandEvent::Terminated(_)) {
                 let state = event_app.state::<ManagedDaemonSidecar>();
                 if let Ok(mut guard) = state.child.lock()
                     && guard.as_ref().is_some_and(|child| child.pid() == pid)
