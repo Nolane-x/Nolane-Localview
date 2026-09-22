@@ -22,6 +22,7 @@ fn desktop_bundles_and_bootstraps_daemon_without_frontend_shell_authority() {
     assert!(lib.contains("daemon_sidecar::stop_owned_daemon(app)"));
 
     assert!(config.contains(r#""externalBin": ["binaries/localview-daemon"]"#));
+    assert!(config.contains(r#""icons/128x128@2x.png""#));
     assert!(config.contains("npm run prepare:sidecar:dev && npm run dev"));
     assert!(config.contains("npm run build && npm run prepare:sidecar"));
 
