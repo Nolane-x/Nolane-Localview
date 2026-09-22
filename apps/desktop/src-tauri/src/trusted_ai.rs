@@ -769,12 +769,7 @@ mod trusted_ai_tests {
 
     #[tokio::test]
     async fn trusted_ai_provider_redirect_never_forwards_context_or_token() {
-        use std::{
-            io::Write,
-            net::TcpListener,
-            thread,
-            time::Duration as StdDuration,
-        };
+        use std::{io::Write, net::TcpListener, thread, time::Duration as StdDuration};
 
         let target = TcpListener::bind(("127.0.0.1", 0)).expect("bind redirect target");
         target.set_nonblocking(true).unwrap();
