@@ -510,7 +510,7 @@ pub(crate) fn provider_label(config: &AiBridgeConfig) -> &str {
 }
 
 pub(crate) async fn bridge_json<TRequest, TResponse>(
-    client: &Client,
+    _client: &Client,
     config: &AiBridgeConfig,
     request: &TRequest,
 ) -> Result<TResponse, String>
@@ -518,6 +518,14 @@ where
     TRequest: Serialize + ?Sized,
     TResponse: DeserializeOwned,
 {
+    // Provider transport owns its redirect policy. Callers cannot accidentally
+    // supply a client that forwards bounded LocalView context or provider
+    // credentials beyond the configured loopback origin.
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "trusted AI provider transport unavailable".to_string())?;
+
     let mut builder = client
         .post(config.endpoint.clone())
         .timeout(Duration::from_secs(AI_PROVIDER_TIMEOUT_SECS))
@@ -526,10 +534,15 @@ where
         builder = builder.bearer_auth(token);
     }
 
-    builder
+    let response = builder
         .send()
         .await
-        .map_err(|_| "trusted AI provider unavailable".to_string())?
+        .map_err(|_| "trusted AI provider unavailable".to_string())?;
+    if response.status().is_redirection() {
+        return Err("trusted AI provider redirect refused".into());
+    }
+
+    response
         .error_for_status()
         .map_err(|_| "trusted AI provider request failed".to_string())?
         .json::<TResponse>()
@@ -698,6 +711,60 @@ mod trusted_ai_tests {
                 "{invalid}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn trusted_ai_provider_redirect_never_forwards_context_or_token() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+            time::Duration as StdDuration,
+        };
+
+        let target = TcpListener::bind(("127.0.0.1", 0)).expect("bind redirect target");
+        target.set_nonblocking(true).unwrap();
+        let target_port = target.local_addr().unwrap().port();
+
+        let source = TcpListener::bind(("127.0.0.1", 0)).expect("bind provider source");
+        let source_port = source.local_addr().unwrap().port();
+        let source_server = thread::spawn(move || {
+            let (mut stream, _) = source.accept().expect("accept provider request");
+            let mut bytes = [0_u8; 8192];
+            let read = stream.read(&mut bytes).expect("read provider request");
+            let request = String::from_utf8_lossy(&bytes[..read]).into_owned();
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            request
+        });
+
+        let config = provider_config_from_values(
+            Some(format!("http://127.0.0.1:{source_port}/ask")),
+            Some("PROVIDER_TOKEN_MUST_NOT_LEAK".into()),
+            None,
+        )
+        .unwrap();
+        let request = serde_json::json!({"context":"BOUNDED_SOURCE_EXCERPT"});
+        let error = bridge_json::<_, serde_json::Value>(
+            &Client::new(),
+            &config,
+            &request,
+        )
+        .await
+        .expect_err("provider redirect must be refused");
+        assert_eq!(error, "trusted AI provider redirect refused");
+
+        let source_request = source_server.join().unwrap();
+        assert!(source_request.contains("PROVIDER_TOKEN_MUST_NOT_LEAK"));
+        assert!(source_request.contains("BOUNDED_SOURCE_EXCERPT"));
+
+        std::thread::sleep(StdDuration::from_millis(100));
+        assert!(
+            matches!(target.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect target must receive no provider request"
+        );
     }
 
     #[test]
