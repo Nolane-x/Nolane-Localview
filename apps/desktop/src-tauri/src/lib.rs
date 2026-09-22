@@ -1234,7 +1234,16 @@ async fn verify_fix_change(
             return Err("trusted Verify route changed during verification".into());
         }
 
-        Ok::<trusted_verify::HumanVerifyChangeReceipt, String>(
+        let advisory_context =
+            trusted_ai::build_trusted_ai_context(&session, &snapshot, &record.reference)?;
+
+        Ok::<
+            (
+                trusted_verify::HumanVerifyChangeReceipt,
+                trusted_ai::TrustedAiContext,
+            ),
+            String,
+        >((
             trusted_verify::HumanVerifyChangeReceipt {
                 verification_id: record.verification_id.clone(),
                 reference: record.reference.clone(),
@@ -1254,7 +1263,8 @@ async fn verify_fix_change(
                 advisory_summary: None,
                 verified_at_unix_ms: trusted_verify::now_unix_ms(),
             },
-        )
+            advisory_context,
+        ))
     })
     .await
     {
@@ -1263,7 +1273,39 @@ async fn verify_fix_change(
     };
 
     match result {
-        Ok(receipt) => {
+        Ok((mut receipt, advisory_context)) => {
+            if let Ok(config) = trusted_ai::provider_config_from_env() {
+                let semantic_summary = if receipt.semantic_changes.is_empty() {
+                    "none".to_string()
+                } else {
+                    receipt.semantic_changes.join(",")
+                };
+                let regression_summary = if receipt.regression_signals.is_empty() {
+                    "none".to_string()
+                } else {
+                    receipt.regression_signals.join(",")
+                };
+                let question = format!(
+                    "Advisory only. Deterministic LocalView Verify status is '{}'. Semantic changes: {}. Regression signals: {}. Explain the likely developer-facing meaning in at most three concise sentences. Do not override or relabel the deterministic status.",
+                    receipt.status.as_str(),
+                    semantic_summary,
+                    regression_summary,
+                );
+                if let Ok(Ok(answer)) = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    trusted_ai::ask_with_provider(
+                        &reqwest::Client::new(),
+                        &config,
+                        &advisory_context,
+                        &question,
+                    ),
+                )
+                .await
+                {
+                    receipt.provider_label = Some(answer.provider_label);
+                    receipt.advisory_summary = Some(answer.answer);
+                }
+            }
             verification_store.complete(&verification_id)?;
             Ok(receipt)
         }
