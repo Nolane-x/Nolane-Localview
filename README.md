@@ -128,6 +128,8 @@ npm install
 npm run tauri dev
 ```
 
+The Tauri desktop build now prepares and starts the matching bundled `localview-daemon` sidecar when no same-version runtime is already healthy. For distributable release-candidate bundles, run `npm run tauri build`. See `docs/PRODUCTION_RELEASE.md` for signing and publication gates.
+
 ## Security model
 
 LocalView's control API binds to `127.0.0.1`, requires a generated bearer token for agent/runtime data, and remote preview navigation is rejected by the Tauri command. Preview windows are intentionally excluded from the main Tauri command capability. Secrets are redacted before agent-facing surfaces whenever possible.
