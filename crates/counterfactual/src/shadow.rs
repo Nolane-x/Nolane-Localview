@@ -762,6 +762,8 @@ fn ensure_private_shadow_permissions(path: &Path) -> Result<(), std::io::Error> 
         permissions.set_mode(0o700);
         fs::set_permissions(path, permissions)?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
