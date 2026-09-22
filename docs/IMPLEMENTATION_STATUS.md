@@ -1,5 +1,20 @@
 # Implementation Status
 
+## Production closure R1
+
+Current R1 work closes product-operability gaps without overstating unfinished autonomous authority:
+
+- Tauri desktop builds prepare a target-specific `localview-daemon` sidecar for dev/release builds and bundle it through `bundle.externalBin`.
+- Desktop startup accepts an already-running same-version daemon or starts the bundled daemon, requires a matching ready `/health` receipt, retains ownership of the spawned child and terminates only the child it owns on app exit.
+- The dashboard WebView is not granted generic `shell:*` capability; sidecar launch stays Rust-owned.
+- A cross-platform **Desktop release candidate** workflow builds Windows/macOS/Linux Tauri bundles and fails closed when no bundle artifact exists.
+- Release-candidate artifacts remain explicitly unsigned. Windows signing, macOS signing/notarization, updater signing/channel, clean-machine install smoke and upgrade/rollback evidence remain publication gates.
+- Production Wave 9 preflight now binds exact candidate/file identity to a bounded canonical-route/stable-ref affected-state slice and predicted impact, while dependency completeness, denominator coverage, contract/mutation execution and external side-effect containment remain explicit unknowns. It therefore cannot mint a production autonomous `Verified` verdict.
+- Trusted Verify's optional provider assessment is production-reachable only after the deterministic result is fixed; provider timeout/error cannot change that deterministic status.
+- CLI/MCP expose bounded performance-lite, capture-settle, action correlation and project-contained source-map resolution. Consequential DOM mutation remains intentionally unavailable until a complete canonical confirmation/revalidation/postcondition path exists.
+
+
+
 LocalView is being implemented as a sequence of independently verifiable vertical slices against the expanded product specification. The repository deliberately separates compile/contracts from runtime proof: a capability is not marked complete merely because an adapter or model exists.
 
 ## Landed architecture
