@@ -11,7 +11,8 @@ use localview_counterfactual::{
     sha256_bytes,
 };
 use localview_verification::{
-    ProductionCandidatePreflightVerdict, run_production_candidate_preflight,
+    ImpactKind, ProductionCandidatePreflightVerdict, bind_production_affected_state,
+    run_production_candidate_preflight,
 };
 use uuid::Uuid;
 
@@ -71,6 +72,13 @@ fn production_preflight_uses_real_temp_git_shadow_without_mutating_source() {
     };
 
     let receipt = run_production_candidate_preflight(&root, &candidate).unwrap();
+    let receipt = bind_production_affected_state(
+        receipt,
+        &candidate,
+        "http://127.0.0.1:5173/settings",
+        Some("@e1"),
+    )
+    .unwrap();
 
     let candidate_id = candidate.id.to_string();
     assert_eq!(receipt.candidate_id.as_deref(), Some(candidate_id.as_str()));
@@ -84,6 +92,27 @@ fn production_preflight_uses_real_temp_git_shadow_without_mutating_source() {
     assert_eq!(
         receipt.verdict,
         ProductionCandidatePreflightVerdict::Inconclusive
+    );
+    assert!(receipt.affected_state_plan_hash.is_some());
+    assert!(
+        receipt
+            .affected_state_incomplete_reasons
+            .iter()
+            .any(|reason| reason.contains("denominator is unknown"))
+    );
+    let predicted = receipt.predicted_impact.as_ref().expect("predicted impact");
+    assert!(
+        predicted
+            .targets
+            .iter()
+            .any(|target| target.kind == ImpactKind::Route
+                && target.id == "http://127.0.0.1:5173/settings")
+    );
+    assert!(
+        predicted
+            .targets
+            .iter()
+            .any(|target| target.kind == ImpactKind::Reference && target.id == "@e1")
     );
     assert!(cleanup_proof.attempted);
     assert!(cleanup_proof.worktree_removed);

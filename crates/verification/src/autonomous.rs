@@ -296,9 +296,11 @@ pub fn bind_production_affected_state(
     canonical_route: &str,
     reference: Option<&str>,
 ) -> Result<ProductionCandidatePreflightReceipt, String> {
-    if receipt.candidate_id.as_deref() != Some(candidate.id.to_string().as_str())
+    let expected_candidate_id = candidate.id.to_string();
+    let expected_patch_digest = patch_digest(&candidate.overlays);
+    if receipt.candidate_id.as_deref() != Some(expected_candidate_id.as_str())
         || receipt.base_revision.as_deref() != Some(candidate.base_revision.as_str())
-        || receipt.patch_digest.as_deref() != Some(patch_digest(&candidate.overlays).as_str())
+        || receipt.patch_digest.as_deref() != Some(expected_patch_digest.as_str())
     {
         return Err("Wave 9 affected-state binding does not match the preflight candidate".into());
     }
@@ -311,7 +313,7 @@ pub fn bind_production_affected_state(
         .iter()
         .map(|overlay| overlay.file.clone())
         .collect::<Vec<_>>();
-    let mut impacted_routes = BTreeSet::from([canonical_route.to_owned()]);
+    let impacted_routes = BTreeSet::from([canonical_route.to_owned()]);
     let mut impacted_refs = BTreeSet::new();
     let mut dimensions = vec![StateDimension {
         id: "route".into(),
@@ -340,11 +342,11 @@ pub fn bind_production_affected_state(
     let affected = compile_affected_state_plan(&AffectedStateInput {
         base_revision: candidate.base_revision.clone(),
         change: AffectedChangeIdentity {
-            candidate_id: candidate.id.to_string(),
-            patch_digest: patch_digest(&candidate.overlays),
+            candidate_id: expected_candidate_id,
+            patch_digest: expected_patch_digest,
             changed_project_files,
         },
-        impacted_routes: std::mem::take(&mut impacted_routes),
+        impacted_routes,
         impacted_regions: BTreeSet::new(),
         impacted_refs,
         impacted_contracts: BTreeSet::new(),
