@@ -12,7 +12,9 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
-use localview_protocol::SessionId;
+use localview_protocol::{
+    EventContinuityState, ProviderIncarnationRef, SessionId, TargetIncarnationRef,
+};
 use localview_resource_governor::{
     LiveResourceLease, LiveSurfaceIdentity, ResourceAdmissionDenial, ResourceReservation,
     ResourceWorkKind, RuntimeResourceGovernor, RuntimeResourceSample, SurfaceVisibility,
@@ -21,7 +23,7 @@ use localview_sessions::SessionManager;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use localview_live_bridge::{BridgeActionResult, ManagedSurfaceActionCompletion};
+use localview_live_bridge::{BridgeActionResult, ProviderObservationBinding};
 
 use crate::{
     ControlState,
@@ -185,6 +187,9 @@ struct SurfaceActionCompleteRequest {
 #[derive(Debug, Clone)]
 struct ManagedSurfaceActionAuthority {
     authority_ref: String,
+    provider_incarnation_ref: ProviderIncarnationRef,
+    target_incarnation_ref: TargetIncarnationRef,
+    generation: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -654,6 +659,29 @@ async fn update_surface_visibility(
     StatusCode::NO_CONTENT.into_response()
 }
 
+fn managed_surface_refs(
+    owner_instance_id: Uuid,
+    session_id: SessionId,
+    identity: &LiveSurfaceIdentity,
+) -> (ProviderIncarnationRef, TargetIncarnationRef) {
+    let exact_surface = serde_json::json!({
+        "owner_instance_id": owner_instance_id,
+        "session_id": session_id,
+        "surface_kind": identity.surface_kind,
+        "label": identity.label,
+        "incarnation": identity.incarnation,
+    })
+    .to_string();
+    (
+        ProviderIncarnationRef::from(format!(
+            "provider:managed-webview:{exact_surface}"
+        )),
+        TargetIncarnationRef::from(format!(
+            "target:managed-webview:{exact_surface}"
+        )),
+    )
+}
+
 fn managed_surface_action_authority_ref(
     owner_instance_id: Uuid,
     session_id: SessionId,
@@ -720,6 +748,8 @@ fn validate_primary_surface_action_request(
     if primary_owner != proof.owner_instance_id || primary_identity != identity {
         return Err("surface_not_primary_action_authority");
     }
+    let (provider_incarnation_ref, target_incarnation_ref) =
+        managed_surface_refs(proof.owner_instance_id, request.session_id, &identity);
     Ok((
         identity.clone(),
         ManagedSurfaceActionAuthority {
@@ -728,8 +758,62 @@ fn validate_primary_surface_action_request(
                 request.session_id,
                 &identity,
             ),
+            provider_incarnation_ref,
+            target_incarnation_ref,
+            generation: identity.incarnation.max(1),
         },
     ))
+}
+
+async fn ensure_managed_surface_observation_binding(
+    state: &ControlState,
+    session_id: SessionId,
+    authority: &ManagedSurfaceActionAuthority,
+) -> Result<(), &'static str> {
+    state
+        .live
+        .ensure_managed_surface_action_authority(
+            session_id,
+            authority.authority_ref.clone(),
+        )
+        .await;
+
+    match state.live.observation_status(session_id).await {
+        Some(status)
+            if status.provider_incarnation_ref == authority.provider_incarnation_ref
+                && status.target_incarnation_ref == authority.target_incarnation_ref =>
+        {
+            return Ok(());
+        }
+        Some(status)
+            if !status
+                .provider_incarnation_ref
+                .as_str()
+                .starts_with("provider:managed-webview:") =>
+        {
+            // A native provider observation is independent authority. Managed
+            // WebView executor selection must never overwrite or launder it.
+            return Ok(());
+        }
+        Some(_) => {
+            state.live.release_provider_observation(session_id).await;
+        }
+        None => {}
+    }
+
+    state
+        .live
+        .bind_provider_observation(ProviderObservationBinding {
+            session_id,
+            generation: authority.generation,
+            provider_incarnation_ref: authority.provider_incarnation_ref.clone(),
+            target_incarnation_ref: authority.target_incarnation_ref.clone(),
+            initial_continuity: EventContinuityState::ReconciliationRequired,
+            sequence_baseline: None,
+        })
+        .await
+        .map(|_| ())
+        .map_err(|_| "managed_surface_observation_binding_stale")
 }
 
 async fn take_surface_actions(
@@ -756,17 +840,12 @@ async fn take_surface_actions(
         Ok(value) => value,
         Err(error) => return surface_conflict(error),
     };
-    Json(
-        state
-            .live
-            .take_managed_surface_actions(
-                request.session_id,
-                authority.authority_ref.clone(),
-                16,
-            )
-            .await,
-    )
-    .into_response()
+    if let Err(error) =
+        ensure_managed_surface_observation_binding(&state, request.session_id, &authority).await
+    {
+        return surface_conflict(error);
+    }
+    Json(state.live.take_public_actions(request.session_id, 16).await).into_response()
 }
 
 async fn complete_surface_action(
@@ -793,22 +872,47 @@ async fn complete_surface_action(
         Ok(value) => value,
         Err(error) => return surface_conflict(error),
     };
-    match state
-        .live
-        .complete_managed_surface_action(
-            request.surface.session_id,
-            &authority.authority_ref,
-            request.result,
-        )
-        .await
+    if ensure_managed_surface_observation_binding(
+        &state,
+        request.surface.session_id,
+        &authority,
+    )
+    .await
+    .is_err()
     {
-        ManagedSurfaceActionCompletion::Completed => StatusCode::NO_CONTENT.into_response(),
-        ManagedSurfaceActionCompletion::AuthorityStale => {
-            surface_conflict("managed_surface_action_authority_stale")
-        }
-        ManagedSurfaceActionCompletion::ActionNotInflight => {
-            surface_conflict("surface_action_not_inflight")
-        }
+        return surface_conflict("managed_surface_observation_binding_stale");
+    }
+    let Some(action) = state
+        .live
+        .claim_action(request.surface.session_id, request.result.action_id)
+        .await
+    else {
+        return surface_conflict("surface_action_not_inflight");
+    };
+    state.live.complete_action(&action, request.result).await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn retire_managed_surface_execution_binding(
+    state: &ControlState,
+    session_id: SessionId,
+) {
+    state
+        .live
+        .clear_managed_surface_action_authority(session_id)
+        .await;
+    if state
+        .live
+        .observation_status(session_id)
+        .await
+        .is_some_and(|status| {
+            status
+                .provider_incarnation_ref
+                .as_str()
+                .starts_with("provider:managed-webview:")
+        })
+    {
+        state.live.release_provider_observation(session_id).await;
     }
 }
 
@@ -831,7 +935,7 @@ async fn release_surface_resource(
     };
     let recovery = surface_recovery_journal_for_sessions(&state.sessions);
 
-    let lease = {
+    let (lease, released_primary) = {
         let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
         let mut entries = lock_surface_registry(registry);
         let Some(entry) = existing_surface_entry_mut(&mut entries, &state.sessions) else {
@@ -854,9 +958,19 @@ async fn release_surface_resource(
                 surface_conflict("surface_owner_incarnation_mismatch")
             };
         }
-        entry.live.remove(&key).expect("checked exact live surface")
+        let released_primary = primary_live_surface(entry, request.session_id)
+            .is_some_and(|(owner, primary)| {
+                owner == proof.owner_instance_id && primary == identity
+            });
+        (
+            entry.live.remove(&key).expect("checked exact live surface"),
+            released_primary,
+        )
     };
     drop(lease);
+    if released_primary {
+        retire_managed_surface_execution_binding(&state, request.session_id).await;
+    }
 
     let recovery_key = match SurfaceRecoveryKey::new(
         request.session_id,
