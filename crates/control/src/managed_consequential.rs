@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Write as _,
     sync::{Arc, Mutex as StdMutex, MutexGuard, OnceLock, Weak},
     time::{Duration, Instant},
@@ -12,11 +12,15 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
 };
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BoundCanonicalDispatchError,
-    BridgeActionKind, CanonicalQueuedAction, LiveBridge,
+    BridgeActionKind, BridgeActionResult, CanonicalQueuedAction, LiveBridge,
+};
+use localview_postcondition_contracts::{
+    PostconditionContractRegistry, RegisteredPostconditionContract,
+    WebSemanticPostconditionEvaluation,
 };
 use localview_protocol::{PageSnapshot, PrincipalRef, SemanticNode, SessionId};
 use localview_sessions::SessionManager;
@@ -39,6 +43,7 @@ const MAX_POSTCONDITION_CONTRACTS: usize = 8;
 const MAX_POSTCONDITION_CONTRACT_REF_BYTES: usize = 4 * 1024;
 const MAX_REFERENCE_BYTES: usize = 256;
 const CONFIRMATION_TTL: Duration = Duration::from_secs(30);
+const RECONCILIATION_RECORD_TTL: Duration = Duration::from_secs(5 * 60);
 const DECISION_PRINCIPAL_REF: &str =
     "principal:local-control:bearer-holder-explicit-confirmation-v1";
 const ACTING_PRINCIPAL_REF: &str = "principal:localview-daemon:managed-webview-v1";
@@ -65,9 +70,23 @@ struct PendingManagedConsequentialPlan {
     expires_at: Instant,
 }
 
+#[derive(Debug, Clone)]
+struct ManagedConsequentialReconciliation {
+    session_id: SessionId,
+    surface_authority: ManagedSurfaceActionAuthority,
+    expected_postcondition_contract_refs: Vec<String>,
+    status: &'static str,
+    proof_ref: Option<String>,
+    snapshot_version: Option<u64>,
+    snapshot_route: Option<String>,
+    detail: Option<String>,
+    expires_at: Instant,
+}
+
 #[derive(Clone)]
 struct ManagedConsequentialControlHandle {
     pending: Arc<Mutex<HashMap<Uuid, PendingManagedConsequentialPlan>>>,
+    reconciliations: Arc<Mutex<HashMap<Uuid, ManagedConsequentialReconciliation>>>,
     plan_gate: Arc<Mutex<()>>,
 }
 
@@ -91,6 +110,10 @@ pub(crate) fn router(state: ControlState) -> Router {
             "/v1/sessions/{id}/managed-consequential/{action_id}/confirm",
             post(confirm_managed_consequential_action),
         )
+        .route(
+            "/v1/sessions/{id}/managed-consequential/{action_id}/status",
+            get(managed_consequential_status),
+        )
         .with_state(state)
 }
 
@@ -107,6 +130,11 @@ pub async fn release_managed_consequential_control_session_for_sessions(
         .lock()
         .await
         .retain(|_, plan| plan.queued.action.session_id != session_id);
+    handle
+        .reconciliations
+        .lock()
+        .await
+        .retain(|_, record| record.session_id != session_id);
 }
 
 async fn plan_managed_consequential_action(
@@ -405,6 +433,28 @@ async fn confirm_managed_consequential_action(
         );
     }
 
+    let reconciliation = ManagedConsequentialReconciliation {
+        session_id,
+        surface_authority: plan.surface_authority.clone(),
+        expected_postcondition_contract_refs: plan
+            .queued
+            .envelope
+            .metadata
+            .expected_postcondition_contract_refs
+            .clone(),
+        status: "pending_executor_completion",
+        proof_ref: None,
+        snapshot_version: None,
+        snapshot_route: None,
+        detail: None,
+        expires_at: Instant::now() + RECONCILIATION_RECORD_TTL,
+    };
+    control
+        .reconciliations
+        .lock()
+        .await
+        .insert(action_id, reconciliation);
+
     match state
         .live
         .enqueue_bound_canonical_action_for_dispatch(plan.queued)
@@ -416,23 +466,258 @@ async fn confirm_managed_consequential_action(
                 "action_id": action_id,
                 "confirmation_consumed": true,
                 "queued_for_exact_managed_surface": true,
-                "postcondition_status": "pending_fresh_reconciliation",
+                "postcondition_status": "pending_executor_completion",
+                "status_endpoint": format!(
+                    "/v1/sessions/{session_id}/managed-consequential/{action_id}/status"
+                ),
                 "restart_restores_confirmation_authority": false,
             })),
         )
             .into_response(),
-        Err(error_code) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": dispatch_error_code(error_code),
-                "action_id": action_id,
-                "confirmation_consumed": true,
-                "dispatch_performed": false,
-                "retry_same_confirmation_allowed": false,
-            })),
-        )
-            .into_response(),
+        Err(error_code) => {
+            control.reconciliations.lock().await.remove(&action_id);
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": dispatch_error_code(error_code),
+                    "action_id": action_id,
+                    "confirmation_consumed": true,
+                    "dispatch_performed": false,
+                    "retry_same_confirmation_allowed": false,
+                })),
+            )
+                .into_response()
+        }
     }
+}
+
+
+async fn managed_consequential_status(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Path((session_id, action_id)): Path<(SessionId, Uuid)>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    let Some(control) = existing_control_for_sessions(&state.sessions) else {
+        return error(StatusCode::NOT_FOUND, "managed_consequential_status_not_found");
+    };
+    let records = control.reconciliations.lock().await;
+    let Some(record) = records.get(&action_id) else {
+        return error(StatusCode::NOT_FOUND, "managed_consequential_status_not_found");
+    };
+    if record.session_id != session_id {
+        return error(
+            StatusCode::CONFLICT,
+            "managed_consequential_status_session_mismatch",
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "action_id": action_id,
+            "postcondition_status": record.status,
+            "expected_postcondition_contract_refs": record.expected_postcondition_contract_refs,
+            "proof_ref": record.proof_ref,
+            "fresh_snapshot_version": record.snapshot_version,
+            "fresh_snapshot_route": record.snapshot_route,
+            "detail": record.detail,
+            "terminal": !matches!(
+                record.status,
+                "pending_executor_completion" | "pending_fresh_reconciliation"
+            ),
+        })),
+    )
+        .into_response()
+}
+
+pub(crate) fn schedule_managed_consequential_reconciliation(
+    state: ControlState,
+    session_id: SessionId,
+    result: BridgeActionResult,
+) {
+    let Some(control) = existing_control_for_sessions(&state.sessions) else {
+        return;
+    };
+    let action_id = result.action_id;
+    tokio::spawn(async move {
+        let initial = {
+            let mut records = control.reconciliations.lock().await;
+            let Some(record) = records.get_mut(&action_id) else {
+                return;
+            };
+            if record.session_id != session_id {
+                return;
+            }
+            record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
+            if !result.ok {
+                record.status = "executor_failed";
+                record.detail = result.error.map(|value| bounded_detail(&value));
+                return;
+            }
+            record.status = "pending_fresh_reconciliation";
+            record.clone()
+        };
+
+        if current_primary_managed_surface_action_authority_for_sessions(
+            &state.sessions,
+            session_id,
+        )
+        .ok()
+        .as_ref()
+            != Some(&initial.surface_authority)
+        {
+            set_reconciliation_required(
+                &control,
+                action_id,
+                "managed_surface_authority_changed_before_reconciliation",
+            )
+            .await;
+            return;
+        }
+
+        let observation_matches = state
+            .live
+            .observation_status(session_id)
+            .await
+            .is_some_and(|status| {
+                status.provider_incarnation_ref
+                    == initial.surface_authority.provider_incarnation_ref
+                    && status.target_incarnation_ref
+                        == initial.surface_authority.target_incarnation_ref
+            });
+        if !observation_matches {
+            set_reconciliation_required(
+                &control,
+                action_id,
+                "managed_observation_lineage_changed_before_reconciliation",
+            )
+            .await;
+            return;
+        }
+
+        let snapshot = match acquire_fresh_semantic_snapshot(&state, session_id).await {
+            Ok(snapshot) => snapshot,
+            Err(_) => {
+                set_reconciliation_required(
+                    &control,
+                    action_id,
+                    "fresh_post_dispatch_snapshot_unavailable",
+                )
+                .await;
+                return;
+            }
+        };
+
+        if current_primary_managed_surface_action_authority_for_sessions(
+            &state.sessions,
+            session_id,
+        )
+        .ok()
+        .as_ref()
+            != Some(&initial.surface_authority)
+        {
+            set_reconciliation_required(
+                &control,
+                action_id,
+                "managed_surface_authority_changed_during_reconciliation",
+            )
+            .await;
+            return;
+        }
+
+        let registry = PostconditionContractRegistry::standard();
+        let mut verdicts = Vec::with_capacity(initial.expected_postcondition_contract_refs.len());
+        let mut any_fail = false;
+        let mut any_unknown = false;
+        for contract_ref in &initial.expected_postcondition_contract_refs {
+            let verdict = match registry.evaluate_web_semantic(contract_ref, &snapshot) {
+                Ok(WebSemanticPostconditionEvaluation::VerifiedPass) => "verified_pass",
+                Ok(WebSemanticPostconditionEvaluation::VerifiedFail) => {
+                    any_fail = true;
+                    "verified_fail"
+                }
+                Ok(WebSemanticPostconditionEvaluation::Unknown) | Err(_) => {
+                    any_unknown = true;
+                    "unknown"
+                }
+            };
+            verdicts.push((contract_ref.as_str(), verdict));
+        }
+
+        let status = if any_fail {
+            "verified_unexpected"
+        } else if any_unknown {
+            "reconciliation_required"
+        } else {
+            "verified_expected"
+        };
+        let proof_ref = reconciliation_proof_ref(
+            action_id,
+            &snapshot,
+            &initial.surface_authority,
+            &verdicts,
+        );
+
+        let mut records = control.reconciliations.lock().await;
+        if let Some(record) = records.get_mut(&action_id) {
+            record.status = status;
+            record.proof_ref = proof_ref;
+            record.snapshot_version = Some(snapshot.version);
+            record.snapshot_route = Some(snapshot.route.clone());
+            record.detail = (status == "reconciliation_required")
+                .then(|| "one_or_more_postconditions_unresolved".to_owned());
+            record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
+        }
+    });
+}
+
+async fn set_reconciliation_required(
+    control: &ManagedConsequentialControlHandle,
+    action_id: Uuid,
+    detail: &'static str,
+) {
+    let mut records = control.reconciliations.lock().await;
+    if let Some(record) = records.get_mut(&action_id) {
+        record.status = "reconciliation_required";
+        record.detail = Some(detail.to_owned());
+        record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
+    }
+}
+
+fn reconciliation_proof_ref(
+    action_id: Uuid,
+    snapshot: &PageSnapshot,
+    authority: &ManagedSurfaceActionAuthority,
+    verdicts: &[(&str, &str)],
+) -> Option<String> {
+    let encoded = serde_json::to_vec(snapshot).ok()?;
+    let mut digest = Sha256::new();
+    digest.update(b"localview-managed-webview-postcondition-v1\0");
+    digest.update(action_id.as_bytes());
+    digest.update(b"\0");
+    digest.update(encoded);
+    digest.update(b"\0");
+    digest.update(authority.provider_incarnation_ref.as_str().as_bytes());
+    digest.update(b"\0");
+    digest.update(authority.target_incarnation_ref.as_str().as_bytes());
+    for (contract_ref, verdict) in verdicts {
+        digest.update(b"\0");
+        digest.update(contract_ref.as_bytes());
+        digest.update(b"=");
+        digest.update(verdict.as_bytes());
+    }
+    let digest = digest.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        write!(&mut hex, "{byte:02x}").ok()?;
+    }
+    Some(format!("proof:managed-webview:sha256:{hex}"))
+}
+
+fn bounded_detail(value: &str) -> String {
+    value.chars().take(512).collect()
 }
 
 fn control_for_sessions(sessions: &Arc<SessionManager>) -> ManagedConsequentialControlHandle {
@@ -446,6 +731,7 @@ fn control_for_sessions(sessions: &Arc<SessionManager>) -> ManagedConsequentialC
             owner: Arc::downgrade(sessions),
             handle: ManagedConsequentialControlHandle {
                 pending: Arc::new(Mutex::new(HashMap::new())),
+                reconciliations: Arc::new(Mutex::new(HashMap::new())),
                 plan_gate: Arc::new(Mutex::new(())),
             },
         })
@@ -479,6 +765,11 @@ async fn prune_expired(control: &ManagedConsequentialControlHandle, live: &LiveB
     for action_id in expired {
         live.discard_bound_canonical_action(action_id).await;
     }
+    control
+        .reconciliations
+        .lock()
+        .await
+        .retain(|_, record| record.expires_at > now);
 }
 
 fn allowed_action(action: &BridgeActionKind) -> bool {
@@ -495,14 +786,21 @@ fn valid_reference(reference: &str) -> bool {
 }
 
 fn valid_postcondition_refs(refs: &[String]) -> bool {
-    !refs.is_empty()
-        && refs.len() <= MAX_POSTCONDITION_CONTRACTS
-        && refs.iter().all(|contract_ref| {
-            !contract_ref.is_empty()
-                && contract_ref.len() <= MAX_POSTCONDITION_CONTRACT_REF_BYTES
-                && contract_ref.starts_with("lvpc:")
-                && !contract_ref.chars().any(char::is_control)
-        })
+    if refs.is_empty() || refs.len() > MAX_POSTCONDITION_CONTRACTS {
+        return false;
+    }
+    let registry = PostconditionContractRegistry::standard();
+    let mut unique = HashSet::with_capacity(refs.len());
+    refs.iter().all(|contract_ref| {
+        !contract_ref.is_empty()
+            && contract_ref.len() <= MAX_POSTCONDITION_CONTRACT_REF_BYTES
+            && !contract_ref.chars().any(char::is_control)
+            && unique.insert(contract_ref.as_str())
+            && matches!(
+                registry.decode(contract_ref),
+                Ok(RegisteredPostconditionContract::WebSemanticV1(_))
+            )
+    })
 }
 
 fn find_node<'a>(node: &'a SemanticNode, reference: &str) -> Option<&'a SemanticNode> {
