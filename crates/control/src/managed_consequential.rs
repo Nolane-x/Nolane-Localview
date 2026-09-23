@@ -20,7 +20,8 @@ use localview_live_bridge::{
     BoundCanonicalDispatchError, BridgeAction, BridgeActionKind, BridgeActionResult,
     CanonicalQueuedAction, ConsequentialJournal, ConsequentialPostconditionEvidence,
     ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
-    DispatchExecutionPermit, DispatchLinearizationReceipt, DispatchPreparationReceipt,
+    ConsequentialRecoveryState, DispatchExecutionPermit, DispatchLinearizationReceipt,
+    DispatchPreparationReceipt,
     DispatchPreparedCapability, LiveBridge, reconcile_consequential_postconditions,
 };
 use localview_postcondition_contracts::{
@@ -749,40 +750,166 @@ async fn managed_consequential_status(
     };
     let record = {
         let mut records = control.reconciliations.lock().await;
-        let Some(record) = records.get(&action_id) else {
-            return error(
-                StatusCode::NOT_FOUND,
-                "managed_consequential_status_not_found",
-            );
-        };
-        if record.session_id != session_id {
-            return error(
-                StatusCode::CONFLICT,
-                "managed_consequential_status_session_mismatch",
-            );
+        match records.get(&action_id) {
+            Some(record) => {
+                if record.session_id != session_id {
+                    return error(
+                        StatusCode::CONFLICT,
+                        "managed_consequential_status_session_mismatch",
+                    );
+                }
+                if record.expires_at <= Instant::now() {
+                    records.remove(&action_id);
+                    None
+                } else {
+                    Some(record.clone())
+                }
+            }
+            None => None,
         }
-        if record.expires_at <= Instant::now() {
-            records.remove(&action_id);
-            return error(StatusCode::GONE, "managed_consequential_status_expired");
-        }
-        record.clone()
     };
+    if let Some(record) = record {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "action_id": action_id,
+                "postcondition_status": record.status,
+                "expected_postcondition_contract_refs": record.expected_postcondition_contract_refs,
+                "proof_ref": record.proof_ref,
+                "fresh_snapshot_version": record.snapshot_version,
+                "detail": record.detail,
+                "terminal": !matches!(
+                    record.status,
+                    "pending_executor_completion" | "pending_fresh_reconciliation"
+                ),
+                "durable_recovery": false,
+            })),
+        )
+            .into_response();
+    }
+
+    durable_managed_consequential_status(&control, session_id, action_id).await
+}
+
+async fn durable_managed_consequential_status(
+    control: &ManagedConsequentialControlHandle,
+    session_id: SessionId,
+    action_id: Uuid,
+) -> axum::response::Response {
+    let Some(journal) = control.journal.as_ref() else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "managed_consequential_status_not_found",
+        );
+    };
+    let binding = journal
+        .recovery_binding_inventory()
+        .await
+        .into_iter()
+        .find(|entry| entry.action_id == action_id);
+    let Some(binding) = binding else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "managed_consequential_status_not_found",
+        );
+    };
+    if binding.session_id != session_id {
+        return error(
+            StatusCode::CONFLICT,
+            "managed_consequential_status_session_mismatch",
+        );
+    }
+    if !binding
+        .provider_incarnation_ref
+        .as_str()
+        .starts_with("provider:managed-webview:")
+        || !binding
+            .target_incarnation_ref
+            .as_str()
+            .starts_with("target:managed-webview:")
+    {
+        return error(
+            StatusCode::NOT_FOUND,
+            "managed_consequential_status_not_found",
+        );
+    }
+
+    let receipt = journal.latest_action_postcondition_receipt(action_id).await;
+    let proof_ref = receipt.as_ref().map(|receipt| receipt.receipt_ref.clone());
+    let (postcondition_status, detail) = match binding.recovery_state {
+        ConsequentialRecoveryState::Admitted
+        | ConsequentialRecoveryState::AuthorizedNotDispatched
+        | ConsequentialRecoveryState::KnownNotDispatched => (
+            "known_not_dispatched",
+            "durable_recovery_proves_no_dispatch_authority",
+        ),
+        ConsequentialRecoveryState::DispatchPrepared
+        | ConsequentialRecoveryState::PossiblyDispatched => (
+            "reconciliation_required",
+            "durable_recovery_requires_original_post_dispatch_lineage",
+        ),
+        ConsequentialRecoveryState::OutcomeObservedUnverified => match receipt
+            .as_ref()
+            .map(|receipt| receipt.verdict)
+        {
+            Some(ActionPostconditionVerdict::VerifiedUnexpected) => (
+                "verified_unexpected",
+                "durable_postcondition_receipt_observed_unexpected_world_state",
+            ),
+            _ => (
+                "reconciliation_required",
+                "durable_postcondition_receipt_requires_reconciliation",
+            ),
+        },
+        ConsequentialRecoveryState::VerifiedUncommitted => (
+            "reconciliation_required",
+            "durable_verified_receipt_commit_pending",
+        ),
+        ConsequentialRecoveryState::Committed => (
+            "verified_expected",
+            "durable_verified_receipt_committed",
+        ),
+        ConsequentialRecoveryState::Compensated => (
+            "reconciliation_required",
+            "durable_action_was_compensated_outside_managed_webview_scope",
+        ),
+        ConsequentialRecoveryState::CompensationFailed => (
+            "reconciliation_required",
+            "durable_compensation_failed",
+        ),
+    };
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "action_id": action_id,
-            "postcondition_status": record.status,
-            "expected_postcondition_contract_refs": record.expected_postcondition_contract_refs,
-            "proof_ref": record.proof_ref,
-            "fresh_snapshot_version": record.snapshot_version,
-            "detail": record.detail,
-            "terminal": !matches!(
-                record.status,
-                "pending_executor_completion" | "pending_fresh_reconciliation"
-            ),
+            "postcondition_status": postcondition_status,
+            "expected_postcondition_contract_refs": binding.expected_postcondition_contract_refs,
+            "proof_ref": proof_ref,
+            "fresh_snapshot_version": serde_json::Value::Null,
+            "detail": detail,
+            "terminal": true,
+            "durable_recovery": true,
+            "durable_recovery_state": durable_recovery_state_name(binding.recovery_state),
+            "retry_same_confirmation_allowed": false,
         })),
     )
         .into_response()
+}
+
+fn durable_recovery_state_name(state: ConsequentialRecoveryState) -> &'static str {
+    match state {
+        ConsequentialRecoveryState::Admitted => "admitted",
+        ConsequentialRecoveryState::AuthorizedNotDispatched => "authorized_not_dispatched",
+        ConsequentialRecoveryState::DispatchPrepared => "dispatch_prepared",
+        ConsequentialRecoveryState::KnownNotDispatched => "known_not_dispatched",
+        ConsequentialRecoveryState::PossiblyDispatched => "possibly_dispatched",
+        ConsequentialRecoveryState::OutcomeObservedUnverified => "outcome_observed_unverified",
+        ConsequentialRecoveryState::VerifiedUncommitted => "verified_uncommitted",
+        ConsequentialRecoveryState::Compensated => "compensated",
+        ConsequentialRecoveryState::CompensationFailed => "compensation_failed",
+        ConsequentialRecoveryState::Committed => "committed",
+    }
 }
 
 pub(crate) async fn arm_managed_consequential_actions_for_executor(
@@ -1166,18 +1293,27 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
             }
         };
 
-        let status = match durable.postcondition_receipt.verdict {
+        let mut status = match durable.postcondition_receipt.verdict {
             ActionPostconditionVerdict::VerifiedExpected => "verified_expected",
             ActionPostconditionVerdict::VerifiedUnexpected => "verified_unexpected",
             ActionPostconditionVerdict::ReconciliationRequired => "reconciliation_required",
         };
+        let mut durable_commit_failed = false;
+        if durable.postcondition_receipt.verdict == ActionPostconditionVerdict::VerifiedExpected
+            && journal.record_committed(action_id).await.is_err()
+        {
+            status = "reconciliation_required";
+            durable_commit_failed = true;
+        }
 
         let mut records = control.reconciliations.lock().await;
         if let Some(record) = records.get_mut(&action_id) {
             record.status = status;
             record.proof_ref = Some(durable.postcondition_receipt.receipt_ref.clone());
             record.snapshot_version = Some(snapshot.version);
-            record.detail = if status == "reconciliation_required" {
+            record.detail = if durable_commit_failed {
+                Some("durable_verified_receipt_commit_failed".to_owned())
+            } else if status == "reconciliation_required" {
                 Some("one_or_more_postconditions_unresolved".to_owned())
             } else if !result.ok {
                 Some("executor_reported_failure_but_world_state_reconciled".to_owned())
