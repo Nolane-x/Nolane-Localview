@@ -1270,6 +1270,7 @@ async fn verify_fix_change(
                         },
                         canonical_route: record.canonical_route.clone(),
                         reference: Some(record.reference.clone()),
+                        selected_target_revalidated: true,
                         reference_changed,
                         visual_region_count: affected_regions.len(),
                         regression_signals: comparison.regression_signals.clone(),
