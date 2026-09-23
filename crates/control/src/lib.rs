@@ -38,7 +38,10 @@ use axum::Router;
 #[doc(hidden)]
 pub use chromium_runtime::configure_chromium_executor_for_sessions;
 pub use localview_resource_governor::RuntimeResourceGovernor;
-pub use managed_consequential::release_managed_consequential_control_session_for_sessions;
+pub use managed_consequential::{
+    configure_managed_consequential_control_for_sessions,
+    release_managed_consequential_control_session_for_sessions,
+};
 #[doc(hidden)]
 pub use native_executor::{NativeExecutorWaitError, wait_for_native_executor_result_with_timeout};
 pub use resource_runtime::{
