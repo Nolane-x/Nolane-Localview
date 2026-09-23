@@ -10,7 +10,7 @@ use localview_visual::{
     ChangedRegionPlan, ChangedRegionPolicy, RgbaImage, decode_png_rgba, pixel_diff,
     plan_changed_css_regions,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::trusted_ai;
@@ -25,7 +25,7 @@ const VERIFY_PIXEL_THRESHOLD: u8 = 12;
 const MAX_VERIFY_CHANGE_CODES: usize = 32;
 const MAX_VERIFY_REGRESSION_CODES: usize = 32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VerificationScope {
     SemanticVisual,
@@ -102,7 +102,7 @@ pub struct VerificationVisualAssessment {
     pub affected: Option<VerificationAffectedVisualPlan>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifySemanticProjection {
     pub reference: String,
@@ -115,7 +115,7 @@ pub struct VerifySemanticProjection {
     pub rect: Option<Rect>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyConsoleFingerprint {
     pub level: String,
@@ -123,7 +123,7 @@ pub struct VerifyConsoleFingerprint {
     pub count: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyNetworkFingerprint {
     pub method: String,
@@ -132,7 +132,7 @@ pub struct VerifyNetworkFingerprint {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifySemanticBaseline {
     pub context_version: u32,
@@ -163,7 +163,7 @@ pub struct VerificationRecord {
     pub project_root: std::path::PathBuf,
     pub display_file: String,
     pub source_line: u32,
-    pub postimage: Vec<u8>,
+    pub postimage_sha256: String,
     pub instruction: String,
     pub semantic_before: VerifySemanticBaseline,
     pub visual_before: Option<VerifyVisualBaseline>,
@@ -218,12 +218,39 @@ pub struct VerifyProviderAdvisory {
     pub advisory_summary: String,
 }
 
-#[derive(Default)]
 pub struct VerificationStore {
     records: Mutex<HashMap<String, VerificationRecord>>,
+    persistence: crate::trusted_verify_recovery::VerificationPersistence,
+}
+
+impl Default for VerificationStore {
+    fn default() -> Self {
+        Self {
+            records: Mutex::new(HashMap::new()),
+            persistence: crate::trusted_verify_recovery::VerificationPersistence::Disabled,
+        }
+    }
 }
 
 impl VerificationStore {
+    pub fn production() -> Self {
+        let (persistence, records) =
+            crate::trusted_verify_recovery::VerificationPersistence::production_default();
+        Self {
+            records: Mutex::new(records),
+            persistence,
+        }
+    }
+
+    #[cfg(test)]
+    fn persistent_at(root: std::path::PathBuf) -> Result<Self, String> {
+        let (persistence, records) =
+            crate::trusted_verify_recovery::VerificationPersistence::open_at(root)?;
+        Ok(Self {
+            records: Mutex::new(records),
+            persistence,
+        })
+    }
     fn with_records<T>(
         &self,
         f: impl FnOnce(&mut HashMap<String, VerificationRecord>) -> Result<T, String>,
@@ -282,6 +309,7 @@ impl VerificationStore {
             if projected > MAX_VERIFY_TOTAL_VISUAL_BYTES {
                 return Err("trusted Verify visual baseline budget exceeded".into());
             }
+            self.persistence.persist(&record)?;
             records.insert(record.verification_id.clone(), record);
             Ok(())
         })
@@ -333,6 +361,10 @@ impl VerificationStore {
             if record.status != VerificationStatus::Verifying {
                 return Err("trusted Verify record is not verifying".into());
             }
+            if let Err(error) = self.persistence.consume(verification_id) {
+                record.status = VerificationStatus::Pending;
+                return Err(error);
+            }
             record.status = VerificationStatus::Verified;
             records.remove(verification_id);
             Ok(())
@@ -341,6 +373,9 @@ impl VerificationStore {
 
     pub fn discard_verification(&self, verification_id: &str) -> Result<(), String> {
         self.with_records(|records| {
+            if records.contains_key(verification_id) {
+                self.persistence.consume(verification_id)?;
+            }
             if let Some(record) = records.get_mut(verification_id) {
                 record.status = VerificationStatus::Invalidated;
             }
@@ -836,7 +871,7 @@ pub fn mint_verification_baseline(
         project_root,
         display_file,
         source_line,
-        postimage,
+        postimage_sha256: localview_counterfactual::sha256_bytes(&postimage),
         instruction,
         semantic_before,
         visual_before,
@@ -982,7 +1017,7 @@ mod trusted_verify_tests {
             project_root: ".".into(),
             display_file: "src/App.tsx".into(),
             source_line: 4,
-            postimage: b"after".to_vec(),
+            postimage_sha256: localview_counterfactual::sha256_bytes(b"after"),
             instruction: "make it clearer".into(),
             semantic_before: semantic,
             visual_before: (visual_bytes > 0).then(|| VerifyVisualBaseline {
@@ -1044,6 +1079,50 @@ mod trusted_verify_tests {
         store.complete(&id).unwrap();
         assert!(store.begin_verify(&id).is_err());
         assert_eq!(store.retained_visual_bytes_for_test(), 0);
+    }
+
+    #[test]
+    fn durable_verification_store_recovers_pending_record_after_restart() {
+        let root = std::env::temp_dir().join(format!(
+            "localview-trusted-verify-recovery-{}",
+            Uuid::new_v4()
+        ));
+        let record = dummy_record(64);
+        let id = record.verification_id.clone();
+        let expected_hash = record.postimage_sha256.clone();
+        {
+            let store = VerificationStore::persistent_at(root.clone()).unwrap();
+            store.insert(record).unwrap();
+        }
+        {
+            let store = VerificationStore::persistent_at(root.clone()).unwrap();
+            let recovered = store.begin_verify(&id).unwrap();
+            assert_eq!(recovered.postimage_sha256, expected_hash);
+            assert_eq!(recovered.visual_before.as_ref().unwrap().png.len(), 64);
+            store.release_retryable(&id).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn completed_verification_does_not_recover_after_restart() {
+        let root = std::env::temp_dir().join(format!(
+            "localview-trusted-verify-consumed-{}",
+            Uuid::new_v4()
+        ));
+        let record = dummy_record(0);
+        let id = record.verification_id.clone();
+        {
+            let store = VerificationStore::persistent_at(root.clone()).unwrap();
+            store.insert(record).unwrap();
+            store.begin_verify(&id).unwrap();
+            store.complete(&id).unwrap();
+        }
+        {
+            let store = VerificationStore::persistent_at(root.clone()).unwrap();
+            assert!(store.begin_verify(&id).is_err());
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
