@@ -136,6 +136,18 @@ pub enum ActionEnvelopeBindingError {
     InternalCaptureActionUnsupported,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundCanonicalDispatchError {
+    MissingCanonicalEnvelope,
+    EnvelopeMismatch,
+    ActionIdentityMismatch,
+    MissingProviderObservation,
+    ProviderIncarnationMismatch,
+    TargetIncarnationMismatch,
+    InternalCaptureActionUnsupported,
+    PublicQueueRejected,
+}
+
 impl LiveBridge {
     /// Bind a canonical V4.3 action for direct verified execution without ever
     /// exposing it to the legacy V1-V3 public action queue.
@@ -214,5 +226,69 @@ impl LiveBridge {
             .insert(action.id, envelope.clone());
 
         Ok(CanonicalQueuedAction { action, envelope })
+    }
+
+    /// Consume one exact direct canonical binding into the public executor queue.
+    ///
+    /// The binding is consumed under the canonical action gate before the queue
+    /// write, so provider detach, managed-surface authority rotation, and another
+    /// canonical dispatch cannot race the lineage check. The stored envelope is
+    /// removed even if queue admission fails: callers must reconcile/replan
+    /// rather than retry a consequential dispatch after a failed one-shot handoff.
+    pub async fn enqueue_bound_canonical_action_for_dispatch(
+        &self,
+        queued: CanonicalQueuedAction,
+    ) -> Result<(), BoundCanonicalDispatchError> {
+        if queued.action.action.is_internal_capture_action() {
+            return Err(BoundCanonicalDispatchError::InternalCaptureActionUnsupported);
+        }
+        if queued.action.id != queued.envelope.transport_action_id
+            || queued.action.session_id != queued.envelope.session_id
+        {
+            return Err(BoundCanonicalDispatchError::ActionIdentityMismatch);
+        }
+
+        let _gate = self.action_gate.lock().await;
+        let stored = self
+            .action_envelopes
+            .read()
+            .await
+            .get(&queued.action.id)
+            .cloned()
+            .ok_or(BoundCanonicalDispatchError::MissingCanonicalEnvelope)?;
+        if stored != queued.envelope {
+            return Err(BoundCanonicalDispatchError::EnvelopeMismatch);
+        }
+
+        // From this point onward the dispatch attempt is one-shot, including
+        // freshness rejection. Explicit confirmation must never become reusable
+        // merely because the world changed before queue admission.
+        self.action_envelopes.write().await.remove(&queued.action.id);
+
+        let current_incarnations = {
+            let continuity = self.continuity.read().await;
+            let Some(state) = continuity.get(&queued.action.session_id) else {
+                return Err(BoundCanonicalDispatchError::MissingProviderObservation);
+            };
+            (
+                state.provider_incarnation_ref.clone(),
+                state.target_incarnation_ref.clone(),
+            )
+        };
+        if queued.envelope.metadata.provider_incarnation_ref != current_incarnations.0 {
+            return Err(BoundCanonicalDispatchError::ProviderIncarnationMismatch);
+        }
+        if queued.envelope.metadata.target_incarnation_ref != current_incarnations.1 {
+            return Err(BoundCanonicalDispatchError::TargetIncarnationMismatch);
+        }
+
+        if !self
+            .legacy
+            .enqueue_prebound_public_action(queued.action)
+            .await
+        {
+            return Err(BoundCanonicalDispatchError::PublicQueueRejected);
+        }
+        Ok(())
     }
 }
