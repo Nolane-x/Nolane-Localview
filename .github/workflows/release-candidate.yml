@@ -6,6 +6,8 @@ on:
     paths:
       - "apps/desktop/**"
       - "apps/daemon/**"
+      - "Cargo.lock"
+      - "tools/release/**"
       - ".github/workflows/release-candidate.yml"
 
 permissions:
@@ -32,6 +34,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install Linux Tauri dependencies
         if: matrix.name == 'linux'
@@ -58,12 +62,18 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install desktop dependencies
+      - name: Verify locked Rust dependency graph
+        run: cargo check --workspace --locked
+
+      - name: Install desktop dependencies from committed lockfile
         working-directory: apps/desktop
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+
+      - name: Release evidence generator contract
+        run: python3 -m unittest tools/release/test_release_evidence.py
 
       - name: Sidecar production contract
-        run: cargo test -p localview-desktop --test daemon_sidecar_contract
+        run: cargo test --locked -p localview-desktop --test daemon_sidecar_contract
 
       - name: Build Tauri bundle with bundled daemon
         working-directory: apps/desktop
@@ -76,9 +86,39 @@ jobs:
           find target/release/bundle -type f -maxdepth 4 -print | tee bundle-files.txt
           test -s bundle-files.txt
 
+      - name: Generate exact-head release evidence
+        shell: bash
+        env:
+          LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          version="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
+          python3 tools/release/generate_release_evidence.py \
+            --repo-root . \
+            --bundle-dir target/release/bundle \
+            --output-dir target/release/release-evidence \
+            --candidate-sha "$LOCALVIEW_CANDIDATE_SHA" \
+            --platform "${{ matrix.name }}" \
+            --version "$version"
+          test -s target/release/release-evidence/artifact-manifest.json
+          test -s target/release/release-evidence/sbom.spdx.json
+          test -s target/release/release-evidence/provenance.json
+          python3 tools/release/verify_release_evidence.py \
+            --repo-root . \
+            --bundle-dir target/release/bundle \
+            --evidence-dir target/release/release-evidence \
+            --candidate-sha "$LOCALVIEW_CANDIDATE_SHA" \
+            --platform "${{ matrix.name }}" \
+            --version "$version"
+
+      - name: Assert build did not mutate dependency locks
+        shell: bash
+        run: git diff --exit-code -- Cargo.lock apps/desktop/package-lock.json
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: localview-desktop-${{ matrix.name }}-${{ github.sha }}
-          path: target/release/bundle/**
+          name: localview-desktop-${{ matrix.name }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            target/release/bundle/**
+            target/release/release-evidence/**
           if-no-files-found: error
           retention-days: 14
