@@ -109,6 +109,9 @@ fn tool_definitions() -> Vec<Value> {
         json!({"name":"session.performance_lite","description":"Read the bounded live performance-lite packet for one session","inputSchema":session_schema()}),
         json!({"name":"session.capture_settle","description":"Read the current bounded capture-settle decision for one session without capturing pixels","inputSchema":session_schema()}),
         json!({"name":"action.correlation","description":"Read bounded action→request→UI-response correlation for one exact action id","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"actionId":{"type":"string"}},"required":["session","actionId"]}}),
+        json!({"name":"action.plan","description":"Create a bounded consequential managed-WebView plan. This never dispatches. The returned one-shot confirmationRef must be explicitly supplied to action.confirm before executor authority exists.","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"reference":{"type":"string"},"action":{"type":"object"},"expectedPostconditions":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":8}},"required":["session","reference","action","expectedPostconditions"]}}),
+        json!({"name":"action.confirm","description":"Explicitly consume one LocalView consequential confirmation capability and queue the already-planned action. This does not bypass daemon freshness, payload commitment, executor fencing, or durable postcondition proof.","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"actionId":{"type":"string"},"confirmationRef":{"type":"string"}},"required":["session","actionId","confirmationRef"]}}),
+        json!({"name":"action.status","description":"Read bounded process-local or durable status/proof for one consequential action without replaying it.","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"actionId":{"type":"string"}},"required":["session","actionId"]}}),
         json!({"name":"source.resolve","description":"Resolve one generated JS/CSS position through a project-contained source map","inputSchema":{"type":"object","properties":{"session":{"type":"string"},"generatedFile":{"type":"string"},"generatedLine":{"type":"integer","minimum":1},"generatedColumn":{"type":"integer","minimum":0}},"required":["session","generatedFile","generatedLine","generatedColumn"]}}),
         json!({"name":"session.verify","description":"Verify the current UI using revision-bound fresh evidence; inconclusive is never promoted to pass","inputSchema":session_schema()}),
         json!({"name":"session.coverage","description":"Report strict current-target coverage without inventing a project denominator","inputSchema":session_schema()}),
@@ -186,6 +189,58 @@ async fn call_tool(params: &Value) -> Result<Value> {
             )
             .await?
         },
+        "action.plan" => {
+            let session = string_arg(&args, "session")?;
+            let reference = string_arg(&args, "reference")?;
+            let action = args
+                .get("action")
+                .cloned()
+                .context("missing action")?;
+            let expected_postconditions = args
+                .get("expectedPostconditions")
+                .cloned()
+                .context("missing expectedPostconditions")?;
+            authed_post_json(
+                &client,
+                &base,
+                &token,
+                &format!("/v1/sessions/{session}/managed-consequential/plan"),
+                &json!({
+                    "reference": reference,
+                    "action": action,
+                    "expected_postcondition_contract_refs": expected_postconditions,
+                }),
+            )
+            .await?
+        }
+        "action.confirm" => {
+            let session = string_arg(&args, "session")?;
+            let action_id = string_arg(&args, "actionId")?;
+            let confirmation_ref = string_arg(&args, "confirmationRef")?;
+            authed_post_json(
+                &client,
+                &base,
+                &token,
+                &format!(
+                    "/v1/sessions/{session}/managed-consequential/{action_id}/confirm"
+                ),
+                &json!({ "confirmation_ref": confirmation_ref }),
+            )
+            .await?
+        }
+        "action.status" => {
+            let session = string_arg(&args, "session")?;
+            let action_id = string_arg(&args, "actionId")?;
+            authed_get(
+                &client,
+                &base,
+                &token,
+                &format!(
+                    "/v1/sessions/{session}/managed-consequential/{action_id}/status"
+                ),
+            )
+            .await?
+        }
         "source.resolve" => {
             let session = string_arg(&args, "session")?;
             let generated_file = string_arg(&args, "generatedFile")?;
@@ -576,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn advertised_action_tools_never_expose_legacy_consequential_mutations() {
+    fn advertised_action_tools_expose_two_phase_authority_without_legacy_shortcuts() {
         let names = tool_definitions()
             .into_iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_owned))
@@ -585,6 +640,9 @@ mod tests {
         assert!(names.contains(&"session.performance_lite".to_owned()));
         assert!(names.contains(&"session.capture_settle".to_owned()));
         assert!(names.contains(&"action.correlation".to_owned()));
+        assert!(names.contains(&"action.plan".to_owned()));
+        assert!(names.contains(&"action.confirm".to_owned()));
+        assert!(names.contains(&"action.status".to_owned()));
         assert!(names.contains(&"source.resolve".to_owned()));
         for forbidden in [
             "action.click",
