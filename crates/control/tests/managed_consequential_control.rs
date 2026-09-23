@@ -370,7 +370,8 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
         .await
     });
 
-    let snapshot_action_id = loop {
+    let mut snapshot_action_id = None;
+    for _ in 0..100 {
         let (status, body) =
             take_surface_actions(state.clone(), session_id, registration).await;
         assert_eq!(status, StatusCode::OK);
@@ -382,10 +383,13 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
             )
             .expect("canonical snapshot uuid");
             assert_eq!(action["action"]["type"], "snapshot");
-            break action_id;
+            snapshot_action_id = Some(action_id);
+            break;
         }
         sleep(Duration::from_millis(10)).await;
-    };
+    }
+    let snapshot_action_id =
+        snapshot_action_id.expect("R6 plan must request a bounded fresh precondition snapshot");
 
     assert_eq!(
         complete_surface_action(
@@ -552,5 +556,44 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
         terminal["proof_ref"]
             .as_str()
             .is_some_and(|value| value.starts_with("proof:managed-webview:sha256:"))
+    );
+}
+
+#[tokio::test]
+async fn managed_consequential_plan_rejects_non_web_and_duplicate_postconditions() {
+    let (state, session_id) = test_state().await;
+    let native = "lvpc:native-semantic:v1:{\"expectation\":\"present\",\"matcher\":{\"name\":\"Done\"}}";
+    let web = "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@edone\"}";
+
+    let (native_status, native_body) = post(
+        state.clone(),
+        &format!("/v1/sessions/{session_id}/managed-consequential/plan"),
+        serde_json::json!({
+            "reference": "@eabc123",
+            "action": { "type": "click" },
+            "expected_postcondition_contract_refs": [native]
+        }),
+    )
+    .await;
+    assert_eq!(native_status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        native_body["error"],
+        "managed_consequential_invalid_postcondition_contract"
+    );
+
+    let (duplicate_status, duplicate_body) = post(
+        state,
+        &format!("/v1/sessions/{session_id}/managed-consequential/plan"),
+        serde_json::json!({
+            "reference": "@eabc123",
+            "action": { "type": "focus" },
+            "expected_postcondition_contract_refs": [web, web]
+        }),
+    )
+    .await;
+    assert_eq!(duplicate_status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        duplicate_body["error"],
+        "managed_consequential_invalid_postcondition_contract"
     );
 }
