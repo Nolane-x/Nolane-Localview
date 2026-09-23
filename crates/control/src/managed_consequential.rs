@@ -79,7 +79,6 @@ struct ManagedConsequentialReconciliation {
     status: &'static str,
     proof_ref: Option<String>,
     snapshot_version: Option<u64>,
-    snapshot_route: Option<String>,
     detail: Option<String>,
     expires_at: Instant,
 }
@@ -468,7 +467,6 @@ async fn confirm_managed_consequential_action(
         status: "pending_executor_completion",
         proof_ref: None,
         snapshot_version: None,
-        snapshot_route: None,
         detail: None,
         expires_at: Instant::now() + RECONCILIATION_RECORD_TTL,
     };
@@ -551,7 +549,6 @@ async fn managed_consequential_status(
             "expected_postcondition_contract_refs": record.expected_postcondition_contract_refs,
             "proof_ref": record.proof_ref,
             "fresh_snapshot_version": record.snapshot_version,
-            "fresh_snapshot_route": record.snapshot_route,
             "detail": record.detail,
             "terminal": !matches!(
                 record.status,
@@ -583,7 +580,7 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
             record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
             if !result.ok {
                 record.status = "executor_failed";
-                record.detail = result.error.map(|value| bounded_detail(&value));
+                record.detail = Some("executor_reported_failure".to_owned());
                 return;
             }
             record.status = "pending_fresh_reconciliation";
@@ -714,7 +711,6 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
             record.status = status;
             record.proof_ref = proof_ref;
             record.snapshot_version = Some(snapshot.version);
-            record.snapshot_route = Some(snapshot.route.clone());
             record.detail = (status == "reconciliation_required")
                 .then(|| "one_or_more_postconditions_unresolved".to_owned());
             record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
@@ -763,10 +759,6 @@ fn reconciliation_proof_ref(
         write!(&mut hex, "{byte:02x}").ok()?;
     }
     Some(format!("proof:managed-webview:sha256:{hex}"))
-}
-
-fn bounded_detail(value: &str) -> String {
-    value.chars().take(512).collect()
 }
 
 fn control_for_sessions(sessions: &Arc<SessionManager>) -> ManagedConsequentialControlHandle {
