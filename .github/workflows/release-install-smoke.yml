@@ -1,0 +1,197 @@
+name: Clean-machine install and first launch
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "apps/daemon/**"
+      - "Cargo.lock"
+      - "apps/desktop/package-lock.json"
+      - "tools/release/wait_for_first_launch_health.py"
+      - ".github/workflows/release-install-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localview-clean-install-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-candidate:
+    name: Build install candidate (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+          - name: macos
+            os: macos-latest
+          - name: windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Linux build dependencies
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+
+      - name: Install locked desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci --no-audit --no-fund
+
+      - name: Build exact-head install bundle
+        working-directory: apps/desktop
+        run: npm run tauri build
+
+      - name: Assert platform installer exists
+        shell: bash
+        run: |
+          test -d target/release/bundle
+          case "${{ matrix.name }}" in
+            linux) find target/release/bundle -type f -name '*.deb' -print -quit | grep . ;;
+            macos) find target/release/bundle -type f -name '*.dmg' -print -quit | grep . ;;
+            windows) find target/release/bundle -type f -path '*/nsis/*.exe' -print -quit | grep . ;;
+          esac
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: localview-install-candidate-${{ matrix.name }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/release/bundle/**
+          if-no-files-found: error
+          retention-days: 3
+
+  install-and-launch:
+    name: Fresh install + first launch (${{ matrix.name }})
+    needs: build-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+          - name: macos
+            os: macos-latest
+          - name: windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: localview-install-candidate-${{ matrix.name }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate-bundle
+
+      - name: Resolve candidate version
+        shell: bash
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("apps/desktop/src-tauri/tauri.conf.json"))["version"])')"
+          test -n "$version"
+          echo "LOCALVIEW_EXPECTED_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Install and launch Linux package on fresh runner
+        if: matrix.name == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="$(find candidate-bundle -type f -name '*.deb' -print -quit)"
+          test -n "$deb"
+          deb="$(realpath "$deb")"
+          sudo apt-get update
+          sudo apt-get install -y xvfb "$deb"
+          package="$(dpkg-deb -f "$deb" Package)"
+          test -n "$package"
+          binary="$(dpkg -L "$package" | awk '/\/usr\/bin\// { print; exit }')"
+          test -n "$binary"
+          test -x "$binary"
+          xvfb-run -a "$binary" >"$RUNNER_TEMP/localview-first-launch.log" 2>&1 &
+          app_pid=$!
+          echo "$app_pid" >"$RUNNER_TEMP/localview-app.pid"
+          python3 tools/release/wait_for_first_launch_health.py --version "$LOCALVIEW_EXPECTED_VERSION" --timeout-seconds 45
+          kill "$app_pid" || true
+
+      - name: Install and launch macOS DMG on fresh runner
+        if: matrix.name == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="$(find candidate-bundle -type f -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+          mount="$RUNNER_TEMP/localview-dmg"
+          install_root="$RUNNER_TEMP/Applications"
+          mkdir -p "$mount" "$install_root"
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount"
+          source_app="$(find "$mount" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$source_app"
+          installed_app="$install_root/LocalView.app"
+          ditto "$source_app" "$installed_app"
+          hdiutil detach "$mount"
+          binary="$(find "$installed_app/Contents/MacOS" -maxdepth 1 -type f -print -quit)"
+          test -n "$binary"
+          test -x "$binary"
+          "$binary" >"$RUNNER_TEMP/localview-first-launch.log" 2>&1 &
+          app_pid=$!
+          echo "$app_pid" >"$RUNNER_TEMP/localview-app.pid"
+          python3 tools/release/wait_for_first_launch_health.py --version "$LOCALVIEW_EXPECTED_VERSION" --timeout-seconds 45
+          kill "$app_pid" || true
+
+      - name: Install and launch Windows NSIS package on fresh runner
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-ChildItem -Path candidate-bundle -Recurse -File -Filter *.exe | Where-Object { $_.FullName -match '[\\/]nsis[\\/]' } | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer not found" }
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "NSIS install failed with $($install.ExitCode)" }
+
+          $roots = @((Join-Path $env:LOCALAPPDATA "LocalView"), (Join-Path $env:ProgramFiles "LocalView"))
+          if (${env:ProgramFiles(x86)}) { $roots += (Join-Path ${env:ProgramFiles(x86)} "LocalView") }
+          $binary = $null
+          foreach ($root in $roots) {
+            if (Test-Path $root) {
+              $binary = Get-ChildItem -Path $root -Recurse -File -Filter *.exe | Where-Object { $_.Name -match '^LocalView.*\.exe$' -and $_.Name -notmatch 'uninstall' } | Select-Object -First 1
+              if ($binary) { break }
+            }
+          }
+          if (-not $binary) { throw "installed LocalView executable not found" }
+          $app = Start-Process -FilePath $binary.FullName -PassThru
+          Set-Content -Path "$env:RUNNER_TEMP\localview-app.pid" -Value $app.Id
+          python tools/release/wait_for_first_launch_health.py --version "$env:LOCALVIEW_EXPECTED_VERSION" --timeout-seconds 45
+          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+
+      - name: Upload first-launch log on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: localview-first-launch-log-${{ matrix.name }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/localview-first-launch.log
+          if-no-files-found: ignore
+          retention-days: 3
