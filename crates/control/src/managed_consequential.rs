@@ -503,16 +503,23 @@ async fn managed_consequential_status(
     let Some(control) = existing_control_for_sessions(&state.sessions) else {
         return error(StatusCode::NOT_FOUND, "managed_consequential_status_not_found");
     };
-    let records = control.reconciliations.lock().await;
-    let Some(record) = records.get(&action_id) else {
-        return error(StatusCode::NOT_FOUND, "managed_consequential_status_not_found");
+    let record = {
+        let mut records = control.reconciliations.lock().await;
+        let Some(record) = records.get(&action_id) else {
+            return error(StatusCode::NOT_FOUND, "managed_consequential_status_not_found");
+        };
+        if record.session_id != session_id {
+            return error(
+                StatusCode::CONFLICT,
+                "managed_consequential_status_session_mismatch",
+            );
+        }
+        if record.expires_at <= Instant::now() {
+            records.remove(&action_id);
+            return error(StatusCode::GONE, "managed_consequential_status_expired");
+        }
+        record.clone()
     };
-    if record.session_id != session_id {
-        return error(
-            StatusCode::CONFLICT,
-            "managed_consequential_status_session_mismatch",
-        );
-    }
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -622,6 +629,25 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
                 &control,
                 action_id,
                 "managed_surface_authority_changed_during_reconciliation",
+            )
+            .await;
+            return;
+        }
+        let observation_still_matches = state
+            .live
+            .observation_status(session_id)
+            .await
+            .is_some_and(|status| {
+                status.provider_incarnation_ref
+                    == initial.surface_authority.provider_incarnation_ref
+                    && status.target_incarnation_ref
+                        == initial.surface_authority.target_incarnation_ref
+            });
+        if !observation_still_matches {
+            set_reconciliation_required(
+                &control,
+                action_id,
+                "managed_observation_lineage_changed_during_reconciliation",
             )
             .await;
             return;
