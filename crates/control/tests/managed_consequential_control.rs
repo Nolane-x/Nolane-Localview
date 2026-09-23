@@ -768,6 +768,23 @@ async fn ambiguous_executor_failure_still_requires_fresh_world_reconciliation() 
         Some(ConsequentialRecoveryState::Committed),
         "verified managed world state must be durably committed"
     );
+
+    configure_managed_consequential_control_for_sessions(
+        &state.sessions,
+        Some(Arc::new(durable)),
+    );
+    let (restart_status, restart_body) = get(state, &status_uri).await;
+    assert_eq!(restart_status, StatusCode::OK, "{restart_body}");
+    assert_eq!(restart_body["durable_recovery"], true);
+    assert_eq!(restart_body["durable_recovery_state"], "committed");
+    assert_eq!(restart_body["postcondition_status"], "verified_expected");
+    assert_eq!(restart_body["terminal"], true);
+    assert_eq!(restart_body["retry_same_confirmation_allowed"], false);
+    assert!(
+        restart_body["proof_ref"]
+            .as_str()
+            .is_some_and(|value| value.starts_with(&format!("postcondition:{action_id}:")))
+    );
 }
 
 #[tokio::test]
