@@ -11,8 +11,9 @@ use localview_counterfactual::{
     sha256_bytes,
 };
 use localview_verification::{
-    ImpactKind, ProductionCandidatePreflightVerdict, bind_production_affected_state,
-    run_production_candidate_preflight,
+    AutonomousVerificationVerdict, ImpactKind, ProductionCandidatePreflightVerdict,
+    ProductionObservedVerificationInput, bind_production_affected_state,
+    build_production_observation_receipt, run_production_candidate_preflight,
 };
 use uuid::Uuid;
 
@@ -94,6 +95,7 @@ fn production_preflight_uses_real_temp_git_shadow_without_mutating_source() {
         ProductionCandidatePreflightVerdict::Inconclusive
     );
     assert!(receipt.affected_state_plan_hash.is_some());
+    assert!(receipt.affected_state_plan.is_some());
     assert!(
         receipt
             .affected_state_incomplete_reasons
@@ -134,6 +136,85 @@ fn production_preflight_uses_real_temp_git_shadow_without_mutating_source() {
         worktrees.lines().filter(|line| line.starts_with("worktree ")).count(),
         1
     );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+
+#[test]
+fn live_production_observation_receipt_stays_inconclusive_until_remaining_authorities_exist() {
+    let root = temp_path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/app.txt"), b"before\n").unwrap();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "wave9@local.invalid"]);
+    git(&root, &["config", "user.name", "Wave9 Production Observation"]);
+    git(&root, &["add", "src/app.txt"]);
+    git(&root, &["commit", "-m", "base"]);
+    let head = git(&root, &["rev-parse", "HEAD"]);
+
+    let candidate = CounterfactualCandidate {
+        id: Uuid::new_v4(),
+        name: "production-observation".into(),
+        base_revision: head,
+        overlays: vec![SourceOverlay {
+            file: "src/app.txt".into(),
+            base_hash: sha256_bytes(b"before\n"),
+            patch: "diff --git a/src/app.txt b/src/app.txt\n--- a/src/app.txt\n+++ b/src/app.txt\n@@ -1 +1 @@\n-before\n+after\n".into(),
+        }],
+        isolation: IsolationLevel::SemanticOnly,
+        disposable: true,
+        evidence_ids: vec!["integration:proposal".into()],
+        metrics: BTreeMap::new(),
+        hard_failures: BTreeSet::new(),
+    };
+    let preflight = bind_production_affected_state(
+        run_production_candidate_preflight(&root, &candidate).unwrap(),
+        &candidate,
+        "http://127.0.0.1:5173/settings",
+        Some("@e1"),
+    )
+    .unwrap();
+
+    let receipt = build_production_observation_receipt(
+        &preflight,
+        ProductionObservedVerificationInput {
+            canonical_route: "http://127.0.0.1:5173/settings".into(),
+            reference: Some("@e1".into()),
+            reference_changed: true,
+            visual_region_count: 1,
+            regression_signals: Vec::new(),
+            evidence_ids: vec!["visual:after".into()],
+            observed_runtime_ms: 250,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(receipt.final_verdict, AutonomousVerificationVerdict::Inconclusive);
+    assert_eq!(
+        receipt.external_side_effect_containment,
+        ExternalSideEffectContainment::NotProven
+    );
+    assert!(
+        receipt
+            .actual_impact
+            .targets
+            .iter()
+            .any(|target| target.kind == ImpactKind::Reference && target.id == "@e1")
+    );
+    assert!(
+        receipt
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("contract catalog execution"))
+    );
+    assert!(
+        receipt
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("mutation challenges"))
+    );
+    assert!(!receipt.resource_budget.executed_states.eq(&0));
 
     fs::remove_dir_all(root).unwrap();
 }
