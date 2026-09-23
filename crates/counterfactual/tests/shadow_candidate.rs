@@ -135,7 +135,7 @@ fn real_isolated_shadow_candidate_never_mutates_dirty_worktree_and_cleans_up() {
     assert!(proof.real_worktree_unchanged);
     assert_eq!(
         proof.external_side_effect_containment,
-        ExternalSideEffectContainment::NotProven
+        ExternalSideEffectContainment::ProvenBlocked
     );
     assert_eq!(proof.base_revision, fixture.head);
     assert_eq!(proof.changed_files, vec!["src/app.txt"]);
@@ -198,6 +198,88 @@ fn shadow_preparation_does_not_run_repository_checkout_hooks() {
     assert!(!sentinel.exists());
     shadow.cleanup().unwrap();
     assert!(!sentinel.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn semantic_only_shadow_does_not_execute_repo_filter_or_fsmonitor_helpers() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let sentinel = fixture.root.join("external-helper-fired");
+    let helper = fixture.root.join("external-helper.sh");
+    fs::write(
+        &helper,
+        format!("#!/bin/sh\nprintf fired >> '{}'\ncat\n", sentinel.display()),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&helper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&helper, permissions).unwrap();
+
+    // Both mechanisms are repository-controlled executable surfaces in an
+    // ordinary Git status/diff path. Production ShadowWorkspace must not invoke
+    // either while preparing/proving a SemanticOnly candidate.
+    fs::write(
+        fixture.root.join(".gitattributes"),
+        "src/app.txt filter=localview-evil\n",
+    )
+    .unwrap();
+    git(
+        &fixture.root,
+        &[
+            "config",
+            "filter.localview-evil.clean",
+            helper.to_str().unwrap(),
+        ],
+    );
+    git(
+        &fixture.root,
+        &[
+            "config",
+            "filter.localview-evil.smudge",
+            helper.to_str().unwrap(),
+        ],
+    );
+    git(
+        &fixture.root,
+        &["config", "core.fsmonitor", helper.to_str().unwrap()],
+    );
+
+    let candidate = fixture.candidate(fixture.overlay(
+        "src/app.txt",
+        normal_patch("src/app.txt", "before", "after"),
+    ));
+    let mut shadow = ShadowWorkspace::prepare(&fixture.root, &candidate).unwrap();
+    let proof = shadow.proof().unwrap();
+    assert_eq!(
+        proof.external_side_effect_containment,
+        ExternalSideEffectContainment::ProvenBlocked
+    );
+    assert!(!sentinel.exists(), "repository helper must never execute");
+    shadow.cleanup().unwrap();
+    assert!(
+        !sentinel.exists(),
+        "cleanup must not execute repository helper"
+    );
+}
+
+#[test]
+fn proof_detects_git_visible_real_worktree_mutation_before_minting_containment() {
+    let fixture = Fixture::new();
+    let candidate = fixture.candidate(fixture.overlay(
+        "src/app.txt",
+        normal_patch("src/app.txt", "before", "after"),
+    ));
+    let mut shadow = ShadowWorkspace::prepare(&fixture.root, &candidate).unwrap();
+    fs::write(fixture.root.join("src/app.txt"), b"tampered\n").unwrap();
+    let proof = shadow.proof().unwrap();
+    assert!(!proof.real_worktree_unchanged);
+    assert_eq!(
+        proof.external_side_effect_containment,
+        ExternalSideEffectContainment::NotProven
+    );
+    shadow.cleanup().unwrap();
 }
 
 #[test]
