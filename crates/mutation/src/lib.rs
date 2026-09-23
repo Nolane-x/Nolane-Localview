@@ -52,6 +52,25 @@ pub struct MutationCase {
     pub relevance: f32,
 }
 
+impl MutationCase {
+    pub fn synthetic_safe(
+        id: u128,
+        target: impl Into<String>,
+        operator: MutationOperator,
+        expected_detectors: BTreeSet<String>,
+        relevance: f32,
+    ) -> Self {
+        Self {
+            id: Uuid::from_u128(id),
+            target: target.into(),
+            operator,
+            expected_detectors,
+            safe_to_run: true,
+            relevance,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MutationVerdict { Killed, Survived, Invalid, SkippedUnsafe }
