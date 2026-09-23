@@ -691,3 +691,100 @@ async fn managed_surface_action_authority_never_replaces_native_provider_observa
     assert_eq!(current.event_continuity, EventContinuityState::Continuous);
     assert_eq!(current.last_seq, Some(3));
 }
+
+
+#[tokio::test]
+async fn releasing_primary_surface_retires_managed_execution_binding() {
+    let (state, session_id) = test_state().await;
+    let owner = Uuid::new_v4();
+    let (_, registration) = register_owner(state.clone(), owner).await;
+
+    assert_eq!(
+        send(
+            state.clone(),
+            "/v1/runtime/resources/surfaces/reserve",
+            reserve_body(session_id, "release-primary-open", registration),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(
+            state.clone(),
+            "/v1/runtime/resources/surfaces/activate",
+            activate_body(session_id, "release-primary-open", 1, registration),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+
+    let (handshake_status, handshake_body) = send(
+        state.clone(),
+        "/v1/runtime/resources/surfaces/actions/take",
+        action_surface_body(
+            session_id,
+            "preview_window",
+            "preview-owner-fence",
+            1,
+            registration,
+        ),
+    )
+    .await;
+    assert_eq!(handshake_status, StatusCode::OK);
+    assert_eq!(handshake_body, serde_json::json!([]));
+    assert!(
+        state
+            .live
+            .observation_status(session_id)
+            .await
+            .is_some_and(|status| status
+                .provider_incarnation_ref
+                .as_str()
+                .starts_with("provider:managed-webview:")),
+        "managed executor handshake must establish daemon-derived observation lineage when no independent provider exists"
+    );
+
+    let queued = state
+        .live
+        .enqueue_action(session_id, Some("@release-target".into()), BridgeActionKind::Click)
+        .await;
+    let (take_status, take_body) = send(
+        state.clone(),
+        "/v1/runtime/resources/surfaces/actions/take",
+        action_surface_body(
+            session_id,
+            "preview_window",
+            "preview-owner-fence",
+            1,
+            registration,
+        ),
+    )
+    .await;
+    assert_eq!(take_status, StatusCode::OK);
+    assert_eq!(take_body.as_array().map(Vec::len), Some(1));
+
+    assert_eq!(
+        send(
+            state.clone(),
+            "/v1/runtime/resources/surfaces/release",
+            release_body(session_id, 1, registration),
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        state.live.observation_status(session_id).await.is_none(),
+        "releasing the primary managed executor must remove only its synthetic observation binding"
+    );
+    assert!(
+        state
+            .live
+            .request_action_cancellation(session_id, queued.id)
+            .await
+            .is_none(),
+        "queued or inflight authority must not survive the released executor"
+    );
+}
