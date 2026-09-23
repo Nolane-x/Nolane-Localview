@@ -419,9 +419,7 @@ async fn plan_managed_consequential_action(
                 target_incarnation_ref: authority_after.target_incarnation_ref.clone(),
                 risk_class: ActionRiskClass::Unknown,
                 idempotency_class: ActionIdempotencyClass::Unknown,
-                expected_postcondition_contract_refs: request
-                    .expected_postcondition_contract_refs
-                    .clone(),
+                expected_postcondition_contract_refs: expected_postcondition_contract_refs.clone(),
             },
         )
         .await
