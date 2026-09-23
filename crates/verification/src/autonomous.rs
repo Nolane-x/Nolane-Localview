@@ -155,11 +155,24 @@ pub enum ProductionCandidatePreflightVerdict {
     Inconclusive,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProductionVerificationClaimScope {
+    #[default]
+    CandidateWideUnproven,
+    SelectedTarget {
+        canonical_route: String,
+        reference: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProductionCandidatePreflightReceipt {
     pub candidate_id: Option<String>,
     pub base_revision: Option<String>,
     pub patch_digest: Option<String>,
+    #[serde(default)]
+    pub claim_scope: ProductionVerificationClaimScope,
     pub affected_state_plan_hash: Option<ObjectHash>,
     pub affected_state_plan: Option<AffectedStatePlan>,
     pub predicted_impact: Option<PredictedImpact>,
@@ -180,6 +193,7 @@ impl ProductionCandidatePreflightReceipt {
             candidate_id: None,
             base_revision: None,
             patch_digest: None,
+            claim_scope: ProductionVerificationClaimScope::CandidateWideUnproven,
             affected_state_plan_hash: None,
             affected_state_plan: None,
             predicted_impact: None,
@@ -228,6 +242,7 @@ pub fn run_production_candidate_preflight(
                 candidate_id,
                 base_revision,
                 patch_digest,
+                claim_scope: ProductionVerificationClaimScope::CandidateWideUnproven,
                 affected_state_plan_hash: None,
                 affected_state_plan: None,
                 predicted_impact: None,
@@ -248,6 +263,7 @@ pub fn run_production_candidate_preflight(
                 candidate_id,
                 base_revision,
                 patch_digest,
+                claim_scope: ProductionVerificationClaimScope::CandidateWideUnproven,
                 affected_state_plan_hash: None,
                 affected_state_plan: None,
                 predicted_impact: None,
@@ -293,6 +309,7 @@ pub fn run_production_candidate_preflight(
         candidate_id: Some(candidate.id.to_string()),
         base_revision: Some(candidate.base_revision.clone()),
         patch_digest: Some(expected_patch_digest),
+        claim_scope: ProductionVerificationClaimScope::CandidateWideUnproven,
         affected_state_plan_hash: None,
         affected_state_plan: None,
         predicted_impact: None,
@@ -328,6 +345,8 @@ pub fn bind_production_affected_state(
         .map(|overlay| overlay.file.clone())
         .collect::<Vec<_>>();
     let impacted_routes = BTreeSet::from([canonical_route.to_owned()]);
+    let selected_reference = reference.filter(|value| !value.trim().is_empty()).map(str::to_owned);
+    let selected_target_scope = selected_reference.is_some();
     let mut impacted_refs = BTreeSet::new();
     let mut dimensions = vec![StateDimension {
         id: "route".into(),
@@ -339,13 +358,13 @@ pub fn bind_production_affected_state(
         risk_weight: 1.0,
         boundary_values: BTreeSet::new(),
     }];
-    if let Some(reference) = reference.filter(|value| !value.trim().is_empty()) {
-        impacted_refs.insert(reference.to_owned());
+    if let Some(reference) = selected_reference.as_ref() {
+        impacted_refs.insert(reference.clone());
         dimensions.push(StateDimension {
             id: "reference".into(),
             values: vec![StateValue {
-                id: reference.to_owned(),
-                label: reference.to_owned(),
+                id: reference.clone(),
+                label: reference.clone(),
                 metadata: BTreeMap::new(),
             }],
             risk_weight: 1.0,
@@ -368,11 +387,21 @@ pub fn bind_production_affected_state(
         constraints: Vec::new(),
         max_states: 1,
         evidence_ids: candidate.evidence_ids.clone(),
-        dependency_graph_complete: false,
-        denominator_known: false,
+        // This is complete only for the explicitly named selected-target claim:
+        // exact canonical route × exact stable ref. It is NOT a project-wide
+        // dependency or denominator claim.
+        dependency_graph_complete: selected_target_scope,
+        denominator_known: selected_target_scope,
     })
     .map_err(|error| format!("Wave 9 affected-state compilation failed: {error:?}"))?;
 
+    receipt.claim_scope = match selected_reference {
+        Some(reference) => ProductionVerificationClaimScope::SelectedTarget {
+            canonical_route: canonical_route.to_owned(),
+            reference,
+        },
+        None => ProductionVerificationClaimScope::CandidateWideUnproven,
+    };
     receipt.affected_state_plan_hash = Some(object_hash(&affected));
     receipt.affected_state_plan = Some(affected.clone());
     receipt.predicted_impact = Some(impact_targets_from_affected(&affected));
@@ -510,6 +539,7 @@ pub struct ProductionObservedVerificationInput {
     pub deterministic_status: ProductionDeterministicStatus,
     pub canonical_route: String,
     pub reference: Option<String>,
+    pub selected_target_revalidated: bool,
     pub reference_changed: bool,
     pub visual_region_count: usize,
     pub regression_signals: Vec<String>,
@@ -527,6 +557,25 @@ pub fn build_production_observation_receipt(
     if preflight.affected_state_plan_hash.as_ref() != Some(&object_hash(&affected)) {
         return Err("Wave 9 production receipt affected-state digest mismatch".into());
     }
+    let claim_scope = preflight.claim_scope.clone();
+    let selected_target_complete = match &claim_scope {
+        ProductionVerificationClaimScope::SelectedTarget {
+            canonical_route,
+            reference,
+        } => {
+            if observed.canonical_route != *canonical_route
+                || observed.reference.as_deref() != Some(reference.as_str())
+            {
+                return Err(
+                    "Wave 9 observed route/reference does not match selected-target claim scope"
+                        .into(),
+                );
+            }
+            observed.selected_target_revalidated
+        }
+        ProductionVerificationClaimScope::CandidateWideUnproven => false,
+    };
+
     let predicted_impact = preflight
         .predicted_impact
         .clone()
@@ -543,8 +592,8 @@ pub fn build_production_observation_receipt(
     let mutations = production_mutation_challenges();
     let mut actual_impact = ActualImpact {
         evidence_ids: sorted_dedup(observed.evidence_ids.clone()),
-        observation_scope_complete:
-            observed.deterministic_status != ProductionDeterministicStatus::Inconclusive,
+        observation_scope_complete: selected_target_complete
+            && observed.deterministic_status != ProductionDeterministicStatus::Inconclusive,
         ..Default::default()
     };
     if observed.reference_changed {
@@ -576,18 +625,21 @@ pub fn build_production_observation_receipt(
         });
     }
 
+    let selected_target_universe = selected_target_complete.then(|| {
+        affected
+            .compiled_states
+            .iter()
+            .map(|state| state.key())
+            .collect::<BTreeSet<_>>()
+    });
     let revalidation_plan = plan_partial_revalidation(&PartialRevalidationInput {
         affected: affected.clone(),
         impacted_flow_checkpoints: BTreeSet::new(),
         relevant_visual_baselines: BTreeSet::new(),
         source_semantic_checks: BTreeSet::from(["trusted-fix-postimage".into()]),
-        known_universe: None,
+        known_universe: selected_target_universe.clone(),
     });
-    let revalidated_states = affected
-        .compiled_states
-        .iter()
-        .map(|state| state.key())
-        .collect::<BTreeSet<_>>();
+    let revalidated_states = selected_target_universe.unwrap_or_default();
     let cleanup_proof = VerificationCleanupProof {
         shadow: shadow_cleanup,
         // SemanticOnly preflight never launches candidate processes or reserves
@@ -599,6 +651,7 @@ pub fn build_production_observation_receipt(
         external_side_effects_observed: false,
     };
     let receipt = build_autonomous_receipt(AutonomousVerificationInput {
+        claim_scope,
         affected,
         shadow_proof,
         contracts,
@@ -611,8 +664,8 @@ pub fn build_production_observation_receipt(
         stale_evidence_ids: Vec::new(),
         resource_budget: VerificationResourceBudget {
             admitted: true,
-            max_states: 1,
-            executed_states: 1,
+            max_states: affected.compiled_states.len(),
+            executed_states: revalidated_states.len(),
             max_mutations: mutations.len(),
             executed_mutations: mutations.len(),
             max_runtime_ms: 15_000,
@@ -636,6 +689,8 @@ pub enum AutonomousVerificationVerdict {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AutonomousVerificationReceipt {
     pub schema_version: u32,
+    #[serde(default)]
+    pub claim_scope: ProductionVerificationClaimScope,
     pub base_revision: String,
     pub candidate_id: String,
     pub patch_digest: String,
@@ -689,6 +744,7 @@ impl AutonomousVerificationReceipt {
 
 #[derive(Debug, Clone)]
 pub struct AutonomousVerificationInput {
+    pub claim_scope: ProductionVerificationClaimScope,
     pub affected: AffectedStatePlan,
     pub shadow_proof: ShadowCandidateProof,
     pub contracts: ContractEvaluationSummary,
@@ -709,6 +765,14 @@ pub fn build_autonomous_receipt(
     let impact_comparison = compare_predicted_actual(&input.predicted_impact, &input.actual_impact);
     let affected_state_plan_hash = object_hash(&input.affected);
     let mut reasons = Vec::new();
+
+    let claim_scope_unproven = matches!(
+        input.claim_scope,
+        ProductionVerificationClaimScope::CandidateWideUnproven
+    );
+    if claim_scope_unproven {
+        reasons.push("verification claim scope is not a proven bounded denominator".into());
+    }
 
     let identity_mismatch = input.shadow_proof.base_revision != input.affected.base_revision
         || input.shadow_proof.patch_digest != input.affected.change.patch_digest
@@ -837,6 +901,7 @@ pub fn build_autonomous_receipt(
         || !impact_comparison.unexpected_observed_impact.is_empty()
         || !impact_comparison.inconclusive.is_empty()
         || !input.revalidation_plan.complete_claim_allowed
+        || claim_scope_unproven
         || !input.affected.denominator_known
         || input.affected.incomplete
         || !input.stale_evidence_ids.is_empty()
@@ -855,7 +920,8 @@ pub fn build_autonomous_receipt(
     let evidence_ids = collect_evidence_ids(&input);
 
     AutonomousVerificationReceipt {
-        schema_version: 1,
+        schema_version: 2,
+        claim_scope: input.claim_scope,
         base_revision: input.affected.base_revision.clone(),
         candidate_id: input.affected.change.candidate_id.clone(),
         patch_digest: input.affected.change.patch_digest.clone(),
@@ -1154,6 +1220,7 @@ mod tests {
         let affected = affected(candidate);
         let predicted = impact_targets_from_affected(&affected);
         AutonomousVerificationInput {
+            claim_scope: ProductionVerificationClaimScope::CandidateWideUnproven,
             affected,
             shadow_proof: shadow(candidate),
             contracts: contract_summary,
