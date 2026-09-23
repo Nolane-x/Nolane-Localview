@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { COMMAND_IDS, type CommandId } from '../commands';
-import type { AiFixCapability, AiProviderCapability, ResponsivePresetId, VerifyScope, VerifyStatus } from '../api';
+import type { AiFixCapability, AiProviderCapability, ResponsivePresetId, VerifyScope, VerifyStatus, Wave9AutonomousReceipt } from '../api';
 import type { ActionCorrelationReceipt, DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
@@ -194,6 +194,8 @@ export type HumanVerifyState =
       targetChangedRatio?: number | null;
       providerLabel?: string | null;
       advisorySummary?: string | null;
+      wave9Autonomous?: Wave9AutonomousReceipt | null;
+      wave9AutonomousError?: string | null;
     }
   | {
       status: 'failure';
@@ -1320,6 +1322,24 @@ function AiPanel({
           )}
           {verifyState.regressionSignals.length > 0 && (
             <ul>{verifyState.regressionSignals.map((item: string) => <li key={item}>{item}</li>)}</ul>
+          )}
+          {verifyState.wave9Autonomous && (
+            <div className={`verify-autonomous ${verifyState.wave9Autonomous.final_verdict}`}>
+              <span>Wave 9 autonomous · {verifyState.wave9Autonomous.final_verdict.replace('_', ' ')}</span>
+              {verifyState.wave9Autonomous.reasons.length > 0 && (
+                <ul>
+                  {verifyState.wave9Autonomous.reasons
+                    .slice(0, 4)
+                    .map((reason: string) => <li key={reason}>{reason}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
+          {verifyState.wave9AutonomousError && (
+            <div className="verify-autonomous error">
+              <span>Wave 9 autonomous · orchestration error</span>
+              <p>{verifyState.wave9AutonomousError}</p>
+            </div>
           )}
           {verifyState.advisorySummary && (
             <div className="verify-advisory">

@@ -81,6 +81,15 @@ export interface HumanVerifyChangeRequest {
   verificationId: string;
 }
 
+export interface Wave9AutonomousReceipt {
+  final_verdict: 'verified' | 'rejected' | 'inconclusive';
+  reasons: string[];
+  evidence_ids: string[];
+  stale_evidence_ids: string[];
+  revalidated_state_set: string[];
+  unexpected_impact: Array<{ kind: string; id: string }>;
+}
+
 export interface HumanVerifyChangeReceipt {
   verificationId: string;
   reference: string;
@@ -98,6 +107,8 @@ export interface HumanVerifyChangeReceipt {
   snapshotVersion: number;
   providerLabel?: string | null;
   advisorySummary?: string | null;
+  wave9Autonomous?: Wave9AutonomousReceipt | null;
+  wave9AutonomousError?: string | null;
   verifiedAtUnixMs: number;
 }
 

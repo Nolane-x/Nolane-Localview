@@ -270,6 +270,13 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .verify-ready code{font-size:8px;color:#8895a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .verify-result strong{font-size:10px;color:#d0d6dc}
 .verify-result>span,.verify-result>small{font-size:8px;color:#778492;overflow-wrap:anywhere}
+.verify-autonomous{margin-top:4px;border-top:1px solid rgba(255,255,255,.06);padding-top:7px;display:flex;flex-direction:column;gap:5px}
+.verify-autonomous>span{font-size:8px;font-weight:700;color:#9ca8b5;text-transform:uppercase;letter-spacing:.05em}
+.verify-autonomous ul{margin:0;padding-left:14px;display:grid;gap:3px}
+.verify-autonomous li,.verify-autonomous p{margin:0;font-size:8px;line-height:1.45;color:#778492;overflow-wrap:anywhere}
+.verify-autonomous.verified>span{color:#a9c49a}
+.verify-autonomous.rejected>span,.verify-autonomous.error>span{color:#d7a0a0}
+.verify-autonomous.inconclusive>span{color:#cbb88c}
 .verify-result ul{margin:2px 0 0;padding-left:16px;color:#929daa;font-size:8px;line-height:1.45;overflow-wrap:anywhere}
 .verify-result.change_observed{border-color:rgba(154,169,130,.18);background:rgba(154,169,130,.045)}
 .verify-result.regression_signal{border-color:rgba(222,132,132,.16);background:rgba(222,132,132,.035)}
