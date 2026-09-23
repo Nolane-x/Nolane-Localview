@@ -11,7 +11,7 @@ Current R1 work closes product-operability gaps without overstating unfinished a
 - Release-candidate artifacts remain explicitly unsigned. Windows signing, macOS signing/notarization, updater signing/channel, clean-machine install smoke and upgrade/rollback evidence remain publication gates.
 - Production Wave 9 preflight now binds exact candidate/file identity to a bounded canonical-route/stable-ref affected-state slice and predicted impact, while dependency completeness, denominator coverage, contract/mutation execution and external side-effect containment remain explicit unknowns. It therefore cannot mint a production autonomous `Verified` verdict.
 - Trusted Verify's optional provider assessment is production-reachable only after the deterministic result is fixed; provider timeout/error cannot change that deterministic status.
-- CLI/MCP expose bounded performance-lite, capture-settle, action correlation and project-contained source-map resolution. Consequential DOM mutation remains intentionally unavailable until a complete canonical confirmation/revalidation/postcondition path exists.
+- CLI/MCP expose bounded performance-lite, capture-settle, action correlation and project-contained source-map resolution. Consequential DOM mutation remains intentionally unavailable through CLI/MCP. Internally, managed-WebView `click`/`focus` now have a bounded two-phase path with fresh precondition evidence, one-shot explicit confirmation, exact managed-surface dispatch fencing, and a fresh post-dispatch `web-semantic:v1` reconciliation proof. `type`/`key`/`scroll` and durable managed-WebView journal commitment remain later gates.
 
 
 

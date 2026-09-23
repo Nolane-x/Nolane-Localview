@@ -29,6 +29,7 @@ use localview_live_bridge::{
 
 use crate::{
     ControlState,
+    managed_consequential::schedule_managed_consequential_reconciliation,
     perception::{authorized, denied},
     surface_liveness::reap_expired_surface_owner_resources_for_sessions,
     surface_owner::{
@@ -912,16 +913,25 @@ async fn complete_surface_action(
     // Completion must be linearized with managed-surface authority transitions.
     // A separate claim/complete sequence after validation can otherwise race a
     // primary-surface change and let stale executor work cross the transition.
+    let session_id = request.surface.session_id;
+    let completed_result = request.result.clone();
     match state
         .live
         .complete_managed_surface_action(
-            request.surface.session_id,
+            session_id,
             &authority.authority_ref,
             request.result,
         )
         .await
     {
-        ManagedSurfaceActionCompletion::Completed => StatusCode::NO_CONTENT.into_response(),
+        ManagedSurfaceActionCompletion::Completed => {
+            schedule_managed_consequential_reconciliation(
+                state.clone(),
+                session_id,
+                completed_result,
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         ManagedSurfaceActionCompletion::AuthorityStale => {
             surface_conflict("managed_surface_action_authority_stale")
         }

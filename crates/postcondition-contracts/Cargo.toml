@@ -10,3 +10,6 @@ localview-native-provider = { path = "../native-provider" }
 localview-protocol = { path = "../protocol" }
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
