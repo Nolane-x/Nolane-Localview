@@ -17,9 +17,9 @@ use axum::{
 use chrono::Utc;
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BoundCanonicalDispatchError,
-    BridgeAction, BridgeActionKind, BridgeActionResult, CanonicalQueuedAction, ConsequentialJournal,
-    DispatchExecutionPermit, DispatchLinearizationReceipt, DispatchPreparationReceipt,
-    DispatchPreparedCapability, LiveBridge,
+    BridgeAction, BridgeActionKind, BridgeActionResult, CanonicalQueuedAction,
+    ConsequentialJournal, DispatchExecutionPermit, DispatchLinearizationReceipt,
+    DispatchPreparationReceipt, DispatchPreparedCapability, LiveBridge,
 };
 use localview_postcondition_contracts::{
     PostconditionContractRegistry, RegisteredPostconditionContract,
@@ -407,20 +407,18 @@ async fn plan_managed_consequential_action(
         .await
         .is_err()
     {
-        state
-            .live
-            .discard_bound_canonical_action(action_id)
-            .await;
+        state.live.discard_bound_canonical_action(action_id).await;
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "managed_consequential_durable_intent_failed",
         );
     }
-    if journal.record_intent_operation_bound(&queued).await.is_err() {
-        state
-            .live
-            .discard_bound_canonical_action(action_id)
-            .await;
+    if journal
+        .record_intent_operation_bound(&queued)
+        .await
+        .is_err()
+    {
+        state.live.discard_bound_canonical_action(action_id).await;
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "managed_consequential_durable_operation_failed",
@@ -562,9 +560,7 @@ async fn confirm_managed_consequential_action(
     }
 
     prune_expired_reconciliations(&control).await;
-    if control.reconciliations.lock().await.len()
-        >= MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS
-    {
+    if control.reconciliations.lock().await.len() >= MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS {
         state
             .live
             .discard_bound_canonical_action(plan.queued.action.id)
@@ -621,14 +617,12 @@ async fn confirm_managed_consequential_action(
             .metadata
             .provider_incarnation_ref
             .clone(),
-        target_incarnation_ref: plan
-            .queued
-            .envelope
-            .metadata
-            .target_incarnation_ref
-            .clone(),
+        target_incarnation_ref: plan.queued.envelope.metadata.target_incarnation_ref.clone(),
     };
-    let prepared = match journal.record_dispatch_prepared(action_id, preparation).await {
+    let prepared = match journal
+        .record_dispatch_prepared(action_id, preparation)
+        .await
+    {
         Ok(admission) => admission,
         Err(_) => {
             state
@@ -731,7 +725,6 @@ async fn confirm_managed_consequential_action(
     }
 }
 
-
 async fn managed_consequential_status(
     State(state): State<ControlState>,
     headers: HeaderMap,
@@ -741,12 +734,18 @@ async fn managed_consequential_status(
         return denied();
     }
     let Some(control) = existing_control_for_sessions(&state.sessions) else {
-        return error(StatusCode::NOT_FOUND, "managed_consequential_status_not_found");
+        return error(
+            StatusCode::NOT_FOUND,
+            "managed_consequential_status_not_found",
+        );
     };
     let record = {
         let mut records = control.reconciliations.lock().await;
         let Some(record) = records.get(&action_id) else {
-            return error(StatusCode::NOT_FOUND, "managed_consequential_status_not_found");
+            return error(
+            StatusCode::NOT_FOUND,
+            "managed_consequential_status_not_found",
+        );
         };
         if record.session_id != session_id {
             return error(
@@ -951,16 +950,17 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
             return;
         }
 
-        let observation_matches = state
-            .live
-            .observation_status(session_id)
-            .await
-            .is_some_and(|status| {
-                status.provider_incarnation_ref
-                    == initial.surface_authority.provider_incarnation_ref
-                    && status.target_incarnation_ref
-                        == initial.surface_authority.target_incarnation_ref
-            });
+        let observation_matches =
+            state
+                .live
+                .observation_status(session_id)
+                .await
+                .is_some_and(|status| {
+                    status.provider_incarnation_ref
+                        == initial.surface_authority.provider_incarnation_ref
+                        && status.target_incarnation_ref
+                            == initial.surface_authority.target_incarnation_ref
+                });
         if !observation_matches {
             set_reconciliation_required(
                 &control,
@@ -1046,12 +1046,8 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
         } else {
             "verified_expected"
         };
-        let proof_ref = reconciliation_proof_ref(
-            action_id,
-            &snapshot,
-            &initial.surface_authority,
-            &verdicts,
-        );
+        let proof_ref =
+            reconciliation_proof_ref(action_id, &snapshot, &initial.surface_authority, &verdicts);
 
         let mut records = control.reconciliations.lock().await;
         if let Some(record) = records.get_mut(&action_id) {
