@@ -23,6 +23,7 @@ use localview_control::{
     configure_windows_consequential_control_for_sessions,
     configure_windows_observe_runtime_for_sessions,
     reap_expired_surface_owner_resources_for_sessions,
+    release_managed_consequential_control_session_for_sessions,
     release_windows_consequential_control_session_for_sessions, runtime_resource_governor_for_sessions,
     ControlState, SurfaceRecoveryJournal, SURFACE_RECOVERY_JOURNAL_FILE,
 };
@@ -264,6 +265,7 @@ async fn main() -> Result<()> {
                                     }
                                 }
                             }
+                            release_managed_consequential_control_session_for_sessions(&sessions, id).await;
                             release_windows_consequential_control_session_for_sessions(&sessions, id).await;
                             live.release_session(id).await;
                             evidence.release_session(id).await;
