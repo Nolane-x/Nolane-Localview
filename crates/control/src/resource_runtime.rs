@@ -675,12 +675,8 @@ fn managed_surface_refs(
     })
     .to_string();
     (
-        ProviderIncarnationRef::from(format!(
-            "provider:managed-webview:{exact_surface}"
-        )),
-        TargetIncarnationRef::from(format!(
-            "target:managed-webview:{exact_surface}"
-        )),
+        ProviderIncarnationRef::from(format!("provider:managed-webview:{exact_surface}")),
+        TargetIncarnationRef::from(format!("target:managed-webview:{exact_surface}")),
     )
 }
 
