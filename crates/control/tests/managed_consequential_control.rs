@@ -604,7 +604,8 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
 
 #[tokio::test]
 async fn ambiguous_executor_failure_still_requires_fresh_world_reconciliation() {
-    let (state, session_id) = test_state().await;
+    let (state, session_id, consequential_path) =
+        test_state_with_consequential_path().await;
     let registration = register_owner(state.clone(), Uuid::new_v4()).await;
     activate_preview(state.clone(), session_id, registration).await;
 
@@ -757,6 +758,15 @@ async fn ambiguous_executor_failure_still_requires_fresh_world_reconciliation() 
     assert_eq!(
         terminal["detail"],
         "executor_reported_failure_but_world_state_reconciled"
+    );
+
+    let durable = ConsequentialJournal::open(&consequential_path)
+        .await
+        .expect("reopen durable journal after verified reconciliation");
+    assert_eq!(
+        durable.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::Committed),
+        "verified managed world state must be durably committed"
     );
 }
 
