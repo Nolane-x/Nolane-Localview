@@ -168,6 +168,7 @@ pub struct VerificationRecord {
     pub semantic_before: VerifySemanticBaseline,
     pub visual_before: Option<VerifyVisualBaseline>,
     pub scope: VerificationScope,
+    pub wave9_preflight: Option<localview_verification::ProductionCandidatePreflightReceipt>,
     pub created_at: Instant,
     pub expires_at: Instant,
     pub status: VerificationStatus,
@@ -209,6 +210,7 @@ pub struct HumanVerifyChangeReceipt {
     pub snapshot_version: u64,
     pub provider_label: Option<String>,
     pub advisory_summary: Option<String>,
+    pub wave9_autonomous: Option<localview_verification::AutonomousVerificationReceipt>,
     pub verified_at_unix_ms: u64,
 }
 
@@ -853,6 +855,7 @@ pub fn mint_verification_baseline(
     postimage: Vec<u8>,
     instruction: String,
     visual_before: Option<VerifyVisualBaseline>,
+    wave9_preflight: Option<localview_verification::ProductionCandidatePreflightReceipt>,
 ) -> Result<(String, VerificationScope), String> {
     let semantic_before = build_semantic_baseline(session, snapshot, reference)?;
     let verification_id = format!("lvv-{}", Uuid::new_v4());
@@ -876,6 +879,7 @@ pub fn mint_verification_baseline(
         semantic_before,
         visual_before,
         scope,
+        wave9_preflight,
         created_at: Instant::now(),
         expires_at: Instant::now() + VERIFICATION_TTL,
         status: VerificationStatus::Pending,
@@ -1020,6 +1024,7 @@ mod trusted_verify_tests {
             postimage_sha256: localview_counterfactual::sha256_bytes(b"after"),
             instruction: "make it clearer".into(),
             semantic_before: semantic,
+            wave9_preflight: None,
             visual_before: (visual_bytes > 0).then(|| VerifyVisualBaseline {
                 png: Arc::new(vec![0; visual_bytes]),
                 viewport: ViewportMeta {
