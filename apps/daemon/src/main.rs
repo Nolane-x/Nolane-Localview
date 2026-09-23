@@ -19,7 +19,9 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use localview_chromium::discover_chromium_executable;
 use localview_control::{
-    configure_chromium_executor_for_sessions, configure_surface_recovery_journal_for_sessions,
+    configure_chromium_executor_for_sessions,
+    configure_managed_consequential_control_for_sessions,
+    configure_surface_recovery_journal_for_sessions,
     configure_windows_consequential_control_for_sessions,
     configure_windows_observe_runtime_for_sessions,
     reap_expired_surface_owner_resources_for_sessions,
@@ -186,6 +188,10 @@ async fn main() -> Result<()> {
     let windows_observe: Option<Arc<WindowsUiaObserveRuntimeManager>> = None;
 
     configure_windows_observe_runtime_for_sessions(&sessions, windows_observe.clone());
+    configure_managed_consequential_control_for_sessions(
+        &sessions,
+        Some(consequential_journal.clone()),
+    );
     configure_windows_consequential_control_for_sessions(
         &sessions,
         Some(consequential_journal.clone()),

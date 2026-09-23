@@ -29,7 +29,11 @@ use localview_live_bridge::{
 
 use crate::{
     ControlState,
-    managed_consequential::schedule_managed_consequential_reconciliation,
+    managed_consequential::{
+        arm_managed_consequential_actions_for_executor,
+        record_managed_consequential_executor_completion,
+        schedule_managed_consequential_reconciliation,
+    },
     perception::{authorized, denied},
     surface_liveness::reap_expired_surface_owner_resources_for_sessions,
     surface_owner::{
@@ -869,13 +873,19 @@ async fn take_surface_actions(
     // queue drain must share the LiveBridge action gate. Calling the session-wide
     // public drain here would reopen a TOCTOU window where a different managed
     // surface could become primary between validation and drain.
-    Json(
-        state
-            .live
-            .take_managed_surface_actions(request.session_id, authority.authority_ref.clone(), 16)
-            .await,
+    let actions = state
+        .live
+        .take_managed_surface_actions(request.session_id, authority.authority_ref.clone(), 16)
+        .await;
+    let actions = arm_managed_consequential_actions_for_executor(
+        &state.sessions,
+        &state.live,
+        request.session_id,
+        &authority.authority_ref,
+        actions,
     )
-    .into_response()
+    .await;
+    Json(actions).into_response()
 }
 
 async fn complete_surface_action(
@@ -917,19 +927,29 @@ async fn complete_surface_action(
     let completed_result = request.result.clone();
     match state
         .live
-        .complete_managed_surface_action(
-            session_id,
-            &authority.authority_ref,
-            request.result,
-        )
+        .complete_managed_surface_action(session_id, &authority.authority_ref, request.result)
         .await
     {
         ManagedSurfaceActionCompletion::Completed => {
+            let durable_dispatch_recorded = record_managed_consequential_executor_completion(
+                &state.sessions,
+                session_id,
+                &completed_result,
+            )
+            .await
+            .is_ok();
+            // The executor may already have crossed the side-effect boundary even
+            // when durable dispatch linearization fails. The journal deliberately
+            // retains PREPARED uncertainty in that case, so launch read-only
+            // reconciliation before returning the fail-closed transport error.
             schedule_managed_consequential_reconciliation(
                 state.clone(),
                 session_id,
                 completed_result,
             );
+            if !durable_dispatch_recorded {
+                return surface_conflict("managed_consequential_durable_dispatch_receipt_failed");
+            }
             StatusCode::NO_CONTENT.into_response()
         }
         ManagedSurfaceActionCompletion::AuthorityStale => {

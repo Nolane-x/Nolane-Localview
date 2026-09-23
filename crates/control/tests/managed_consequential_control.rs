@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 use std::{
+    path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
@@ -11,13 +12,18 @@ use axum::{
 };
 use chrono::Utc;
 use localview_control::{
-    ControlState, SurfaceRecoveryJournal, configure_surface_recovery_journal_for_sessions, router,
+    ControlState, SurfaceRecoveryJournal, configure_managed_consequential_control_for_sessions,
+    configure_surface_recovery_journal_for_sessions, router,
 };
 use localview_evidence::EvidenceStore;
-use localview_live_bridge::LiveBridge;
+use localview_live_bridge::{
+    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
+    ConsequentialJournal, ConsequentialRecoveryState, DispatchPreparationReceipt, LiveBridge,
+};
 use localview_observation::ObservationBus;
 use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, PrincipalRef,
+    ProviderIncarnationRef, ServerKind, TargetIncarnationRef,
 };
 use localview_sessions::SessionManager;
 use serde::Deserialize;
@@ -57,7 +63,7 @@ fn discovered() -> DiscoveredServer {
     }
 }
 
-async fn test_state() -> (ControlState, Uuid) {
+async fn test_state_with_consequential_path() -> (ControlState, Uuid, PathBuf) {
     let sessions = Arc::new(SessionManager::new(Duration::from_secs(2)));
     let reconcile = sessions.reconcile(vec![discovered()], Utc::now()).await;
     let session_id = reconcile.created[0];
@@ -79,6 +85,25 @@ async fn test_state() -> (ControlState, Uuid) {
             .expect("open surface recovery journal"),
     );
     configure_surface_recovery_journal_for_sessions(&state.sessions, Some(journal));
+
+    let consequential_path = std::env::temp_dir().join(format!(
+        "localview-r7-managed-consequential-{}.jsonl",
+        Uuid::new_v4()
+    ));
+    let consequential = Arc::new(
+        ConsequentialJournal::open(&consequential_path)
+            .await
+            .expect("open consequential journal"),
+    );
+    configure_managed_consequential_control_for_sessions(
+        &state.sessions,
+        Some(consequential),
+    );
+    (state, session_id, consequential_path)
+}
+
+async fn test_state() -> (ControlState, Uuid) {
+    let (state, session_id, _) = test_state_with_consequential_path().await;
     (state, session_id)
 }
 
@@ -314,11 +339,12 @@ async fn take_surface_actions(
     .await
 }
 
-async fn complete_surface_action(
+async fn complete_surface_action_with_outcome(
     state: ControlState,
     session_id: Uuid,
     registration: Registration,
     action_id: Uuid,
+    ok: bool,
     payload: Value,
 ) -> StatusCode {
     let mut body = surface_body(session_id, registration);
@@ -326,8 +352,8 @@ async fn complete_surface_action(
         "result".into(),
         serde_json::json!({
             "action_id": action_id,
-            "ok": true,
-            "error": null,
+            "ok": ok,
+            "error": (!ok).then_some("executor reported failure"),
             "payload": payload,
             "completed_at": Utc::now(),
         }),
@@ -339,6 +365,24 @@ async fn complete_surface_action(
     )
     .await
     .0
+}
+
+async fn complete_surface_action(
+    state: ControlState,
+    session_id: Uuid,
+    registration: Registration,
+    action_id: Uuid,
+    payload: Value,
+) -> StatusCode {
+    complete_surface_action_with_outcome(
+        state,
+        session_id,
+        registration,
+        action_id,
+        true,
+        payload,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -554,8 +598,296 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
     assert!(
         terminal["proof_ref"]
             .as_str()
-            .is_some_and(|value| value.starts_with("proof:managed-webview:sha256:"))
+            .is_some_and(|value| value.starts_with(&format!("postcondition:{action_id}:")))
     );
+}
+
+#[tokio::test]
+async fn ambiguous_executor_failure_still_requires_fresh_world_reconciliation() {
+    let (state, session_id, consequential_path) =
+        test_state_with_consequential_path().await;
+    let registration = register_owner(state.clone(), Uuid::new_v4()).await;
+    activate_preview(state.clone(), session_id, registration).await;
+
+    assert_eq!(
+        take_surface_actions(state.clone(), session_id, registration)
+            .await
+            .1,
+        serde_json::json!([])
+    );
+
+    let plan_state = state.clone();
+    let plan = tokio::spawn(async move {
+        post(
+            plan_state,
+            &format!("/v1/sessions/{session_id}/managed-consequential/plan"),
+            serde_json::json!({
+                "reference": "@eabc123",
+                "action": { "type": "click" },
+                "expected_postcondition_contract_refs": [
+                    "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@edead\"}"
+                ]
+            }),
+        )
+        .await
+    });
+
+    let mut pre_snapshot_action_id = None;
+    for _ in 0..100 {
+        let (status, body) =
+            take_surface_actions(state.clone(), session_id, registration).await;
+        assert_eq!(status, StatusCode::OK);
+        if let Some(action) = body.as_array().and_then(|actions| actions.first()) {
+            pre_snapshot_action_id = Some(
+                Uuid::parse_str(action["id"].as_str().expect("pre snapshot action id"))
+                    .expect("pre snapshot uuid"),
+            );
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    let pre_snapshot_action_id =
+        pre_snapshot_action_id.expect("plan must request a fresh precondition snapshot");
+    assert_eq!(
+        complete_surface_action(
+            state.clone(),
+            session_id,
+            registration,
+            pre_snapshot_action_id,
+            fresh_snapshot_payload(),
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+
+    let (plan_status, plan_body) = plan.await.expect("plan task");
+    assert_eq!(plan_status, StatusCode::CREATED, "{plan_body}");
+    let action_id =
+        Uuid::parse_str(plan_body["action_id"].as_str().expect("planned action id"))
+            .expect("planned action uuid");
+    let confirmation_ref = Uuid::parse_str(
+        plan_body["confirmation_ref"]
+            .as_str()
+            .expect("confirmation ref"),
+    )
+    .expect("confirmation uuid");
+
+    assert_eq!(
+        post(
+            state.clone(),
+            &format!(
+                "/v1/sessions/{session_id}/managed-consequential/{action_id}/confirm"
+            ),
+            serde_json::json!({ "confirmation_ref": confirmation_ref }),
+        )
+        .await
+        .0,
+        StatusCode::ACCEPTED
+    );
+
+    let (take_status, take_body) =
+        take_surface_actions(state.clone(), session_id, registration).await;
+    assert_eq!(take_status, StatusCode::OK);
+    assert_eq!(take_body.as_array().map(Vec::len), Some(1));
+    assert_eq!(take_body[0]["id"], action_id.to_string());
+
+    // A negative executor acknowledgement cannot prove that no side effect
+    // crossed the WebView boundary. Durable dispatch is classified ambiguous,
+    // and R7 must still obtain a fresh post-dispatch observation.
+    assert_eq!(
+        complete_surface_action_with_outcome(
+            state.clone(),
+            session_id,
+            registration,
+            action_id,
+            false,
+            serde_json::json!({ "executor_ack": "failed_after_possible_click" }),
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+
+    let mut post_snapshot_action_id = None;
+    for _ in 0..100 {
+        let (status, body) =
+            take_surface_actions(state.clone(), session_id, registration).await;
+        assert_eq!(status, StatusCode::OK);
+        if let Some(action) = body.as_array().and_then(|actions| actions.first()) {
+            assert_eq!(action["action"]["type"], "snapshot");
+            post_snapshot_action_id = Some(
+                Uuid::parse_str(action["id"].as_str().expect("post snapshot action id"))
+                    .expect("post snapshot uuid"),
+            );
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    let post_snapshot_action_id = post_snapshot_action_id
+        .expect("ambiguous executor failure must still request fresh reconciliation");
+    assert_eq!(
+        complete_surface_action(
+            state.clone(),
+            session_id,
+            registration,
+            post_snapshot_action_id,
+            post_dispatch_snapshot_payload(),
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+
+    let status_uri =
+        format!("/v1/sessions/{session_id}/managed-consequential/{action_id}/status");
+    let mut terminal = None;
+    for _ in 0..100 {
+        let (status, body) = get(state.clone(), &status_uri).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body["terminal"] == true {
+            terminal = Some(body);
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    let terminal = terminal.expect("ambiguous dispatch reconciliation must terminate");
+    assert_eq!(terminal["postcondition_status"], "verified_expected");
+    assert!(
+        terminal["proof_ref"]
+            .as_str()
+            .is_some_and(|value| value.starts_with(&format!("postcondition:{action_id}:")))
+    );
+    assert_eq!(
+        terminal["detail"],
+        "executor_reported_failure_but_world_state_reconciled"
+    );
+
+    let durable = ConsequentialJournal::open(&consequential_path)
+        .await
+        .expect("reopen durable journal after verified reconciliation");
+    assert_eq!(
+        durable.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::Committed),
+        "verified managed world state must be durably committed"
+    );
+
+    configure_managed_consequential_control_for_sessions(
+        &state.sessions,
+        Some(Arc::new(durable)),
+    );
+    let (restart_status, restart_body) = get(state, &status_uri).await;
+    assert_eq!(restart_status, StatusCode::OK, "{restart_body}");
+    assert_eq!(restart_body["durable_recovery"], true);
+    assert_eq!(restart_body["durable_recovery_state"], "committed");
+    assert_eq!(restart_body["postcondition_status"], "verified_expected");
+    assert_eq!(restart_body["terminal"], true);
+    assert_eq!(restart_body["retry_same_confirmation_allowed"], false);
+    assert!(
+        restart_body["proof_ref"]
+            .as_str()
+            .is_some_and(|value| value.starts_with(&format!("postcondition:{action_id}:")))
+    );
+}
+
+#[tokio::test]
+async fn durable_managed_status_survives_process_restart_without_restoring_retry_authority() {
+    let (state, session_id) = test_state().await;
+    let path = std::env::temp_dir().join(format!(
+        "localview-r7-managed-restart-status-{}.jsonl",
+        Uuid::new_v4()
+    ));
+    let journal = ConsequentialJournal::open(&path)
+        .await
+        .expect("open restart journal");
+    let action_id = Uuid::new_v4();
+    let provider_incarnation_ref =
+        ProviderIncarnationRef::from("provider:managed-webview:{\"restart\":1}");
+    let target_incarnation_ref =
+        TargetIncarnationRef::from("target:managed-webview:{\"restart\":1}");
+    let envelope = CanonicalActionEnvelope {
+        envelope_id: Uuid::new_v4(),
+        transport_action_id: action_id,
+        session_id,
+        metadata: ActionEnvelopeMetadata {
+            decision_principal_ref: PrincipalRef::from("principal:test:decision"),
+            acting_principal_ref: PrincipalRef::from("principal:test:managed-webview"),
+            authorization_revision: "authorization:test:managed-restart".into(),
+            precondition_snapshot_cut_ref: "cut:test:managed-before-restart".into(),
+            provider_incarnation_ref: provider_incarnation_ref.clone(),
+            target_incarnation_ref: target_incarnation_ref.clone(),
+            risk_class: ActionRiskClass::Unknown,
+            idempotency_class: ActionIdempotencyClass::Unknown,
+            expected_postcondition_contract_refs: vec![
+                "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@edead\"}"
+                    .into(),
+            ],
+        },
+    };
+    journal
+        .record_intent_admitted(envelope.clone())
+        .await
+        .expect("durable intent");
+    let authorization = journal
+        .record_authorization(
+            action_id,
+            envelope.metadata.authorization_revision.clone(),
+            true,
+        )
+        .await
+        .expect("durable authorization");
+    let prepared = journal
+        .record_dispatch_prepared(
+            action_id,
+            DispatchPreparationReceipt {
+                receipt_ref: format!("prepared:managed-restart:{action_id}"),
+                authorization_journal_sequence: authorization.journal_sequence,
+                precondition_snapshot_cut_ref: envelope
+                    .metadata
+                    .precondition_snapshot_cut_ref
+                    .clone(),
+                provider_incarnation_ref,
+                target_incarnation_ref,
+            },
+        )
+        .await
+        .expect("durable prepared state");
+    drop(prepared);
+    drop(journal);
+
+    // Reopening the journal and reconfiguring the control handle models a new
+    // daemon process: all confirmation, prepared-capability, execution-permit
+    // and process-local reconciliation maps start empty.
+    let reopened = Arc::new(
+        ConsequentialJournal::open(&path)
+            .await
+            .expect("reopen restart journal"),
+    );
+    assert_eq!(
+        reopened.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::DispatchPrepared)
+    );
+    configure_managed_consequential_control_for_sessions(
+        &state.sessions,
+        Some(reopened),
+    );
+
+    let (status, body) = get(
+        state,
+        &format!(
+            "/v1/sessions/{session_id}/managed-consequential/{action_id}/status"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["durable_recovery"], true);
+    assert_eq!(body["durable_recovery_state"], "dispatch_prepared");
+    assert_eq!(body["postcondition_status"], "reconciliation_required");
+    assert_eq!(body["terminal"], true);
+    assert_eq!(body["retry_same_confirmation_allowed"], false);
+    assert_eq!(
+        body["detail"],
+        "durable_recovery_requires_original_post_dispatch_lineage"
+    );
+
+    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
