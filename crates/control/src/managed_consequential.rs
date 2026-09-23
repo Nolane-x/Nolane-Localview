@@ -1725,7 +1725,10 @@ async fn verify_managed_payload_at_dispatch(
     journal: &ConsequentialJournal,
     action: &BridgeAction,
 ) -> Result<(), &'static str> {
-    if matches!(action.action, BridgeActionKind::Click | BridgeActionKind::Focus) {
+    if matches!(
+        &action.action,
+        BridgeActionKind::Click | BridgeActionKind::Focus
+    ) {
         return Ok(());
     }
     validate_materialized_payload_action(&action.action)?;
