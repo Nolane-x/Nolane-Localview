@@ -14,9 +14,10 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use chrono::Utc;
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BoundCanonicalDispatchError,
-    BridgeActionKind, BridgeActionResult, CanonicalQueuedAction, ConsequentialJournal,
+    BridgeAction, BridgeActionKind, BridgeActionResult, CanonicalQueuedAction, ConsequentialJournal,
     DispatchExecutionPermit, DispatchLinearizationReceipt, DispatchPreparationReceipt,
     DispatchPreparedCapability, LiveBridge,
 };
@@ -729,6 +730,134 @@ async fn managed_consequential_status(
         })),
     )
         .into_response()
+}
+
+pub(crate) async fn arm_managed_consequential_actions_for_executor(
+    sessions: &Arc<SessionManager>,
+    live: &LiveBridge,
+    session_id: SessionId,
+    authority_ref: &str,
+    actions: Vec<BridgeAction>,
+) -> Vec<BridgeAction> {
+    let Some(control) = existing_control_for_sessions(sessions) else {
+        return actions;
+    };
+    let Some(journal) = control.journal.as_ref() else {
+        return actions;
+    };
+
+    let tracked_ids = {
+        let records = control.reconciliations.lock().await;
+        actions
+            .iter()
+            .filter(|action| {
+                records
+                    .get(&action.id)
+                    .is_some_and(|record| record.session_id == session_id)
+            })
+            .map(|action| action.id)
+            .collect::<HashSet<_>>()
+    };
+    if tracked_ids.is_empty() {
+        return actions;
+    }
+
+    let mut ready = Vec::with_capacity(actions.len());
+    for action in actions {
+        if !tracked_ids.contains(&action.id) {
+            ready.push(action);
+            continue;
+        }
+
+        let prepared = control.prepared.lock().await.remove(&action.id);
+        let permit = match prepared {
+            Some(prepared) if prepared.session_id == session_id => {
+                journal.begin_dispatch(prepared.capability).await.ok()
+            }
+            _ => None,
+        };
+        let Some(permit) = permit else {
+            if let Some(record) = control.reconciliations.lock().await.get_mut(&action.id) {
+                record.status = "durable_dispatch_authority_failed";
+                record.detail = Some("journal execution permit unavailable".into());
+                record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
+            }
+            let _ = live
+                .complete_managed_surface_action(
+                    session_id,
+                    authority_ref,
+                    BridgeActionResult {
+                        action_id: action.id,
+                        ok: false,
+                        error: Some("durable dispatch authority unavailable".into()),
+                        payload: serde_json::Value::Null,
+                        completed_at: Utc::now(),
+                    },
+                )
+                .await;
+            continue;
+        };
+
+        control.executing.lock().await.insert(
+            action.id,
+            ExecutingManagedConsequentialDispatch { session_id, permit },
+        );
+        ready.push(action);
+    }
+    ready
+}
+
+pub(crate) async fn record_managed_consequential_executor_completion(
+    sessions: &Arc<SessionManager>,
+    session_id: SessionId,
+    result: &BridgeActionResult,
+) -> Result<bool, &'static str> {
+    let Some(control) = existing_control_for_sessions(sessions) else {
+        return Ok(false);
+    };
+    let tracked = control
+        .reconciliations
+        .lock()
+        .await
+        .get(&result.action_id)
+        .is_some_and(|record| record.session_id == session_id);
+    if !tracked {
+        return Ok(false);
+    }
+    let Some(journal) = control.journal.as_ref() else {
+        return Err("managed_consequential_durable_journal_unavailable");
+    };
+    let Some(executing) = control.executing.lock().await.remove(&result.action_id) else {
+        return Err("managed_consequential_dispatch_permit_missing");
+    };
+    if executing.session_id != session_id {
+        return Err("managed_consequential_dispatch_session_mismatch");
+    }
+
+    let dispatch_result = if result.ok {
+        DispatchResult::DispatchedFull
+    } else {
+        // A negative executor acknowledgement does not prove that no side effect
+        // crossed the page boundary. Preserve uncertainty and reconcile fresh
+        // world state instead of manufacturing known-not-dispatched evidence.
+        DispatchResult::DispatchAmbiguous
+    };
+    journal
+        .record_dispatch_linearized(
+            executing.permit,
+            DispatchLinearizationReceipt {
+                receipt_ref: format!(
+                    "dispatch:managed-webview:{}:{}",
+                    result.action_id,
+                    Uuid::new_v4()
+                ),
+                transport_result: TransportResult::DeliveredToExecutor,
+                dispatch_result,
+            },
+        )
+        .await
+        .map_err(|_| "managed_consequential_durable_dispatch_receipt_failed")?;
+    Ok(true)
 }
 
 pub(crate) fn schedule_managed_consequential_reconciliation(
