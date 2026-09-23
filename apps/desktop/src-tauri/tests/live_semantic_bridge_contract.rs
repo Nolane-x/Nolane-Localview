@@ -55,7 +55,7 @@ fn preview_action_drain_preserves_private_capture_envelope_without_widening_publ
     let source = include_str!("../src/lib.rs");
     assert!(source.contains("PrivateBridgeAction"));
     assert!(source.contains(".json::<Vec<PrivateBridgeAction>>()"));
-    assert!(source.contains(".json::<Vec<BridgeAction>>()"));
+    assert!(source.contains("take_surface_actions(&surface.identity).await?"));
     assert!(source.contains("serde_json::to_value"));
 }
 
@@ -66,9 +66,9 @@ fn preview_action_drain_prioritizes_private_capture_actions_over_public_backlog(
         .find("/capture-actions")
         .expect("managed preview must drain a private capture-action channel");
     let public = source[internal..]
-        .find("/actions\"")
+        .find("take_surface_actions(&surface.identity)")
         .map(|offset| offset + internal)
-        .expect("managed preview must still drain normal public actions");
+        .expect("managed preview must still drain surface-authorized public actions");
 
     assert!(internal < public, "capture actions must be fetched before public actions");
     assert!(source.contains("internal_actions"));
