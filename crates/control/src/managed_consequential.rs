@@ -457,8 +457,7 @@ fn existing_control_for_sessions(
     sessions: &Arc<SessionManager>,
 ) -> Option<ManagedConsequentialControlHandle> {
     let key = Arc::as_ptr(sessions) as usize;
-    let registry =
-        MANAGED_CONSEQUENTIAL_CONTROL.get_or_init(|| StdMutex::new(HashMap::new()));
+    let registry = MANAGED_CONSEQUENTIAL_CONTROL.get_or_init(|| StdMutex::new(HashMap::new()));
     let mut entries = lock_registry(registry);
     entries.retain(|_, entry| entry.owner.strong_count() > 0);
     entries.get(&key).map(|entry| entry.handle.clone())
