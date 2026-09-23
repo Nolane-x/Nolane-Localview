@@ -931,21 +931,25 @@ async fn complete_surface_action(
         .await
     {
         ManagedSurfaceActionCompletion::Completed => {
-            if record_managed_consequential_executor_completion(
+            let durable_dispatch_recorded = record_managed_consequential_executor_completion(
                 &state.sessions,
                 session_id,
                 &completed_result,
             )
             .await
-            .is_err()
-            {
-                return surface_conflict("managed_consequential_durable_dispatch_receipt_failed");
-            }
+            .is_ok();
+            // The executor may already have crossed the side-effect boundary even
+            // when durable dispatch linearization fails. The journal deliberately
+            // retains PREPARED uncertainty in that case, so launch read-only
+            // reconciliation before returning the fail-closed transport error.
             schedule_managed_consequential_reconciliation(
                 state.clone(),
                 session_id,
                 completed_result,
             );
+            if !durable_dispatch_recorded {
+                return surface_conflict("managed_consequential_durable_dispatch_receipt_failed");
+            }
             StatusCode::NO_CONTENT.into_response()
         }
         ManagedSurfaceActionCompletion::AuthorityStale => {
