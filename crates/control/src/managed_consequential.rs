@@ -743,9 +743,9 @@ async fn managed_consequential_status(
         let mut records = control.reconciliations.lock().await;
         let Some(record) = records.get(&action_id) else {
             return error(
-            StatusCode::NOT_FOUND,
-            "managed_consequential_status_not_found",
-        );
+                StatusCode::NOT_FOUND,
+                "managed_consequential_status_not_found",
+            );
         };
         if record.session_id != session_id {
             return error(
