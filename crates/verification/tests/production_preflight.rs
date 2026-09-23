@@ -12,7 +12,7 @@ use localview_counterfactual::{
 use localview_verification::{
     AutonomousVerificationVerdict, ImpactKind, ProductionCandidatePreflightVerdict,
     ProductionDeterministicStatus, ProductionObservedVerificationInput,
-    bind_production_affected_state,
+    ProductionVerificationClaimScope, bind_production_affected_state,
     build_production_observation_receipt, run_production_candidate_preflight,
 };
 use uuid::Uuid;
@@ -92,12 +92,17 @@ fn production_preflight_uses_real_temp_git_shadow_without_mutating_source() {
         ProductionCandidatePreflightVerdict::Inconclusive
     );
     assert!(receipt.affected_state_plan_hash.is_some());
-    assert!(receipt.affected_state_plan.is_some());
-    assert!(
-        receipt
-            .affected_state_incomplete_reasons
-            .iter()
-            .any(|reason| reason.contains("denominator is unknown"))
+    let affected = receipt.affected_state_plan.as_ref().expect("affected state plan");
+    assert!(receipt.affected_state_incomplete_reasons.is_empty());
+    assert!(affected.denominator_known);
+    assert!(!affected.incomplete);
+    assert_eq!(affected.compiled_states.len(), 1);
+    assert_eq!(
+        receipt.claim_scope,
+        ProductionVerificationClaimScope::SelectedTarget {
+            canonical_route: "http://127.0.0.1:5173/settings".into(),
+            reference: "@e1".into(),
+        }
     );
     let predicted = receipt.predicted_impact.as_ref().expect("predicted impact");
     assert!(
@@ -173,6 +178,50 @@ fn live_production_observation_receipt_stays_inconclusive_until_remaining_author
     )
     .unwrap();
 
+    let mismatch = build_production_observation_receipt(
+        &preflight,
+        ProductionObservedVerificationInput {
+            deterministic_status: ProductionDeterministicStatus::ChangeObserved,
+            canonical_route: "http://127.0.0.1:5173/settings".into(),
+            reference: Some("@wrong".into()),
+            selected_target_revalidated: true,
+            reference_changed: true,
+            visual_region_count: 0,
+            regression_signals: Vec::new(),
+            evidence_ids: vec!["semantic:wrong-target".into()],
+            observed_runtime_ms: 10,
+        },
+    )
+    .expect_err("wrong stable ref must not satisfy selected-target claim");
+    assert!(mismatch.contains("does not match selected-target claim scope"));
+
+    let missing_revalidation = build_production_observation_receipt(
+        &preflight,
+        ProductionObservedVerificationInput {
+            deterministic_status: ProductionDeterministicStatus::ChangeObserved,
+            canonical_route: "http://127.0.0.1:5173/settings".into(),
+            reference: Some("@e1".into()),
+            selected_target_revalidated: false,
+            reference_changed: true,
+            visual_region_count: 0,
+            regression_signals: Vec::new(),
+            evidence_ids: vec!["semantic:after".into()],
+            observed_runtime_ms: 20,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        missing_revalidation.final_verdict,
+        AutonomousVerificationVerdict::Inconclusive
+    );
+    assert!(!missing_revalidation.actual_impact.observation_scope_complete);
+    assert!(
+        missing_revalidation
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("partial revalidation cannot claim complete coverage"))
+    );
+
     let receipt = build_production_observation_receipt(
         &preflight,
         ProductionObservedVerificationInput {
@@ -224,7 +273,34 @@ fn live_production_observation_receipt_stays_inconclusive_until_remaining_author
             .all(|reason| !reason.contains("mutation challenges"))
     );
     assert_eq!(receipt.resource_budget.executed_mutations, 2);
-    assert!(!receipt.resource_budget.executed_states.eq(&0));
+    assert_eq!(receipt.resource_budget.executed_states, 1);
+    assert!(receipt.actual_impact.observation_scope_complete);
+    assert_eq!(receipt.revalidated_state_set.len(), 1);
+    assert!(
+        receipt
+            .reasons
+            .iter()
+            .all(|reason| !reason.contains("denominator is unknown"))
+    );
+    assert!(
+        receipt
+            .reasons
+            .iter()
+            .all(|reason| !reason.contains("affected-state plan is incomplete"))
+    );
+
+    let mut legacy_json = serde_json::to_value(&preflight).unwrap();
+    legacy_json
+        .as_object_mut()
+        .expect("preflight JSON object")
+        .remove("claim_scope");
+    let legacy: localview_verification::ProductionCandidatePreflightReceipt =
+        serde_json::from_value(legacy_json).unwrap();
+    assert_eq!(
+        legacy.claim_scope,
+        ProductionVerificationClaimScope::CandidateWideUnproven,
+        "pre-R15 durable receipts must not gain selected-target authority on deserialize"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
