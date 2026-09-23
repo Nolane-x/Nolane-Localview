@@ -6,6 +6,7 @@ mod capture_settle;
 mod chromium_runtime;
 mod css_trace;
 mod fresh_snapshot;
+mod managed_consequential;
 mod native_cancellation;
 mod native_executor;
 mod network_fault;
@@ -39,6 +40,7 @@ pub use chromium_runtime::configure_chromium_executor_for_sessions;
 pub use localview_resource_governor::RuntimeResourceGovernor;
 #[doc(hidden)]
 pub use native_executor::{NativeExecutorWaitError, wait_for_native_executor_result_with_timeout};
+pub use managed_consequential::release_managed_consequential_control_session_for_sessions;
 pub use resource_runtime::{
     release_surface_resource_session_for_sessions, runtime_resource_governor_for_sessions,
 };
@@ -69,6 +71,7 @@ pub fn router(state: ControlState) -> Router {
         .merge(capture_settle::router(state.clone()))
         .merge(css_trace::router(state.clone()))
         .merge(fresh_snapshot::router(state.clone()))
+        .merge(managed_consequential::router(state.clone()))
         .merge(native_cancellation::router(state.clone()))
         .merge(native_executor::router(state.clone()))
         .merge(network_fault::router(state.clone()))
