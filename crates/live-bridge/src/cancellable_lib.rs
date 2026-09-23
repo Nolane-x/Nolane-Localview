@@ -346,6 +346,21 @@ impl LiveBridge {
         action
     }
 
+    /// Register a previously minted public action with cancellation authority
+    /// without replacing its canonical transport id.
+    pub async fn enqueue_prebound_public_action(&self, action: BridgeAction) -> bool {
+        if action.action.is_internal_capture_action() {
+            return false;
+        }
+
+        let mut authority = self.action_cancellation.lock().await;
+        if !self.base.enqueue_prebound_public_action(action.clone()).await {
+            return false;
+        }
+        authority.record_enqueued(&action, self.action_capacity);
+        true
+    }
+
     pub async fn take_actions(&self, session_id: SessionId, limit: usize) -> Vec<BridgeAction> {
         self.take_public_actions(session_id, limit).await
     }
