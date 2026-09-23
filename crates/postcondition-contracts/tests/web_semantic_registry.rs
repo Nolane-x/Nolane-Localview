@@ -92,7 +92,7 @@ fn web_semantic_absence_is_proved_only_against_the_fresh_snapshot_supplied() {
 
     assert_eq!(
         registry
-            .evaluate_web_semantic(&encoded, &snapshot(vec![node("@egood", "Ready", vec![])]))
+            .evaluate_web_semantic(&encoded, &snapshot(vec![node("@ecafe", "Ready", vec![])]))
             .unwrap(),
         WebSemanticPostconditionEvaluation::VerifiedPass
     );
