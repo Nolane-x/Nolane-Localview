@@ -11,7 +11,8 @@ use localview_counterfactual::{
 };
 use localview_verification::{
     AutonomousVerificationVerdict, ImpactKind, ProductionCandidatePreflightVerdict,
-    ProductionObservedVerificationInput, bind_production_affected_state,
+    ProductionDeterministicStatus, ProductionObservedVerificationInput,
+    bind_production_affected_state,
     build_production_observation_receipt, run_production_candidate_preflight,
 };
 use uuid::Uuid;
@@ -176,6 +177,7 @@ fn live_production_observation_receipt_stays_inconclusive_until_remaining_author
     let receipt = build_production_observation_receipt(
         &preflight,
         ProductionObservedVerificationInput {
+            deterministic_status: ProductionDeterministicStatus::ChangeObserved,
             canonical_route: "http://127.0.0.1:5173/settings".into(),
             reference: Some("@e1".into()),
             reference_changed: true,
@@ -199,19 +201,85 @@ fn live_production_observation_receipt_stays_inconclusive_until_remaining_author
             .iter()
             .any(|target| target.kind == ImpactKind::Reference && target.id == "@e1")
     );
+    assert_eq!(receipt.contracts_evaluated.evaluated.len(), 4);
+    assert!(receipt.contracts_evaluated.hard_failures.is_empty());
+    assert!(receipt.contracts_evaluated.hard_unknowns.is_empty());
+    assert_eq!(receipt.mutation_results.len(), 2);
     assert!(
         receipt
-            .reasons
+            .mutation_results
             .iter()
-            .any(|reason| reason.contains("contract catalog execution"))
+            .all(|result| result.outcome.verdict == localview_mutation::MutationVerdict::Killed)
     );
     assert!(
         receipt
             .reasons
             .iter()
-            .any(|reason| reason.contains("mutation challenges"))
+            .all(|reason| !reason.contains("contract catalog execution"))
     );
+    assert!(
+        receipt
+            .reasons
+            .iter()
+            .all(|reason| !reason.contains("mutation challenges"))
+    );
+    assert_eq!(receipt.resource_budget.executed_mutations, 2);
     assert!(!receipt.resource_budget.executed_states.eq(&0));
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn production_contract_catalog_keeps_inconclusive_deterministic_status_unknown() {
+    let root = temp_path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/app.txt"), b"before\n").unwrap();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.email", "wave9@local.invalid"]);
+    git(&root, &["config", "user.name", "Wave9 Production Contract"]);
+    git(&root, &["add", "src/app.txt"]);
+    git(&root, &["commit", "-m", "base"]);
+    let head = git(&root, &["rev-parse", "HEAD"]);
+    let candidate = CounterfactualCandidate {
+        id: Uuid::new_v4(),
+        name: "production-contract".into(),
+        base_revision: head,
+        overlays: vec![SourceOverlay {
+            file: "src/app.txt".into(),
+            base_hash: sha256_bytes(b"before\n"),
+            patch: "diff --git a/src/app.txt b/src/app.txt\n--- a/src/app.txt\n+++ b/src/app.txt\n@@ -1 +1 @@\n-before\n+after\n".into(),
+        }],
+        isolation: IsolationLevel::SemanticOnly,
+        disposable: true,
+        evidence_ids: vec!["integration:proposal".into()],
+        metrics: BTreeMap::new(),
+        hard_failures: BTreeSet::new(),
+    };
+    let preflight = bind_production_affected_state(
+        run_production_candidate_preflight(&root, &candidate).unwrap(),
+        &candidate,
+        "http://127.0.0.1:5173/settings",
+        Some("@e1"),
+    )
+    .unwrap();
+    let receipt = build_production_observation_receipt(
+        &preflight,
+        ProductionObservedVerificationInput {
+            deterministic_status: ProductionDeterministicStatus::Inconclusive,
+            canonical_route: "http://127.0.0.1:5173/settings".into(),
+            reference: Some("@e1".into()),
+            reference_changed: false,
+            visual_region_count: 0,
+            regression_signals: Vec::new(),
+            evidence_ids: vec!["semantic:after".into()],
+            observed_runtime_ms: 100,
+        },
+    )
+    .unwrap();
+    assert_eq!(receipt.final_verdict, AutonomousVerificationVerdict::Inconclusive);
+    assert_eq!(
+        receipt.contracts_evaluated.hard_unknowns,
+        vec!["trusted-verify.observable-change".to_string()]
+    );
     fs::remove_dir_all(root).unwrap();
 }

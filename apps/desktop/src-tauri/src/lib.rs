@@ -1254,6 +1254,20 @@ async fn verify_fix_change(
                 Some(preflight) => match localview_verification::build_production_observation_receipt(
                     preflight,
                     localview_verification::ProductionObservedVerificationInput {
+                        deterministic_status: match comparison.deterministic_status {
+                            trusted_verify::DeterministicVerificationStatus::ChangeObserved => {
+                                localview_verification::ProductionDeterministicStatus::ChangeObserved
+                            }
+                            trusted_verify::DeterministicVerificationStatus::NoObservableChange => {
+                                localview_verification::ProductionDeterministicStatus::NoObservableChange
+                            }
+                            trusted_verify::DeterministicVerificationStatus::RegressionSignal => {
+                                localview_verification::ProductionDeterministicStatus::RegressionSignal
+                            }
+                            trusted_verify::DeterministicVerificationStatus::Inconclusive => {
+                                localview_verification::ProductionDeterministicStatus::Inconclusive
+                            }
+                        },
                         canonical_route: record.canonical_route.clone(),
                         reference: Some(record.reference.clone()),
                         reference_changed,

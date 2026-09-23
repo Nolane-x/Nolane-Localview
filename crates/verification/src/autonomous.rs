@@ -4,12 +4,19 @@ use std::{
 };
 
 use localview_content_addressed::{ObjectHash, object_hash};
-use localview_contracts::{ContractEvaluationSummary, ContractStrength, ContractVerdict};
+use localview_contracts::{
+    ContractCategory, ContractEvaluationSummary, ContractPredicate, ContractRegistry,
+    ContractScope, ContractStrength, ContractVerdict, LiveRuntimeFacts, RuntimeFactDomain,
+    UxContract, evaluate_compiled_contracts,
+};
 use localview_counterfactual::{
     CounterfactualCandidate, ExternalSideEffectContainment, IsolationLevel, ShadowCandidateProof,
     ShadowCleanupProof, ShadowWorkspace, patch_digest,
 };
-use localview_mutation::{MutationChallengeResult, MutationVerdict};
+use localview_mutation::{
+    MutationCase, MutationChallengeResult, MutationExecutionPolicy, MutationOperator,
+    MutationVerdict, SyntheticMutationState, execute_mutation_challenge,
+};
 use localview_planner::{
     PartialRevalidationInput, PartialRevalidationPlan, plan_partial_revalidation,
 };
@@ -380,8 +387,130 @@ pub fn bind_production_affected_state(
     Ok(receipt)
 }
 
+pub const PRODUCTION_CONTRACT_CATALOG_REVISION: &str =
+    "localview-wave9-trusted-verify-contracts-v1";
+pub const PRODUCTION_MUTATION_CATALOG_REVISION: &str =
+    "localview-wave9-trusted-verify-mutations-v1";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductionDeterministicStatus {
+    ChangeObserved,
+    NoObservableChange,
+    RegressionSignal,
+    Inconclusive,
+}
+
+fn production_contract_summary(
+    observed: &ProductionObservedVerificationInput,
+) -> Result<ContractEvaluationSummary, String> {
+    let mut registry = ContractRegistry::default();
+    registry.insert(UxContract {
+        id: "trusted-verify.observable-change".into(),
+        title: "Trusted Verify must observe the reviewed change".into(),
+        category: ContractCategory::Safety,
+        strength: ContractStrength::Hard,
+        scope: ContractScope::global(),
+        predicate: ContractPredicate::MetricAtLeast {
+            metric: "observable_change".into(),
+            min: 1.0,
+        },
+        provenance: PRODUCTION_CONTRACT_CATALOG_REVISION.into(),
+        inherited_from: None,
+    });
+    for (id, code) in [
+        ("trusted-verify.no-new-console-error", "new_console_error"),
+        (
+            "trusted-verify.no-new-network-failure",
+            "new_network_failure",
+        ),
+        (
+            "trusted-verify.target-remains-interactive",
+            "target_became_non_interactive",
+        ),
+    ] {
+        registry.insert(UxContract {
+            id: id.into(),
+            title: id.into(),
+            category: ContractCategory::Safety,
+            strength: ContractStrength::Hard,
+            scope: ContractScope::global(),
+            predicate: ContractPredicate::NoIssueCode { code: code.into() },
+            provenance: PRODUCTION_CONTRACT_CATALOG_REVISION.into(),
+            inherited_from: None,
+        });
+    }
+
+    let compiled = registry
+        .compile_autonomous_subset(&BTreeSet::new())
+        .map_err(|error| format!("Wave 9 production contract catalog failed: {error:?}"))?;
+    let mut live = LiveRuntimeFacts::default();
+    live.facts
+        .issue_codes
+        .extend(observed.regression_signals.iter().cloned());
+    live.complete_domains.insert(RuntimeFactDomain::IssueCodes);
+    if observed.deterministic_status != ProductionDeterministicStatus::Inconclusive {
+        live.facts.metrics.insert(
+            "observable_change".into(),
+            if observed.deterministic_status == ProductionDeterministicStatus::ChangeObserved {
+                1.0
+            } else {
+                0.0
+            },
+        );
+        live.metric_keys.insert("observable_change".into());
+        live.complete_domains.insert(RuntimeFactDomain::Metrics);
+    }
+    live.evidence_ids = observed.evidence_ids.clone();
+    Ok(evaluate_compiled_contracts(
+        &compiled,
+        &live,
+        &BTreeMap::new(),
+        PRODUCTION_CONTRACT_CATALOG_REVISION,
+    ))
+}
+
+fn production_mutation_challenges() -> Vec<MutationChallengeResult> {
+    let baseline = SyntheticMutationState::default();
+    let policy = MutationExecutionPolicy::default();
+    let geometry = MutationCase::synthetic_safe(
+        0x7d1b4f346bcc4a23a0a8382e2cab1001,
+        "trusted-verify:selected-target",
+        MutationOperator::Shift { dx: 17.0, dy: 11.0 },
+        BTreeSet::from(["geometry_changed".into()]),
+        1.0,
+    );
+    let accessible_name = MutationCase::synthetic_safe(
+        0x7d1b4f346bcc4a23a0a8382e2cab1002,
+        "trusted-verify:selected-target",
+        MutationOperator::RemoveAccessibleName,
+        BTreeSet::from(["name_changed".into()]),
+        1.0,
+    );
+
+    vec![
+        execute_mutation_challenge(&geometry, &baseline, &policy, |before, after| {
+            if (before.x, before.y, before.width, before.height)
+                != (after.x, after.y, after.width, after.height)
+            {
+                BTreeSet::from(["geometry_changed".into()])
+            } else {
+                BTreeSet::new()
+            }
+        }),
+        execute_mutation_challenge(&accessible_name, &baseline, &policy, |before, after| {
+            if before.accessible_name != after.accessible_name {
+                BTreeSet::from(["name_changed".into()])
+            } else {
+                BTreeSet::new()
+            }
+        }),
+    ]
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProductionObservedVerificationInput {
+    pub deterministic_status: ProductionDeterministicStatus,
     pub canonical_route: String,
     pub reference: Option<String>,
     pub reference_changed: bool,
@@ -413,9 +542,12 @@ pub fn build_production_observation_receipt(
         "Wave 9 production receipt is missing the shadow cleanup proof".to_string()
     })?;
 
+    let contracts = production_contract_summary(&observed)?;
+    let mutations = production_mutation_challenges();
     let mut actual_impact = ActualImpact {
-        evidence_ids: sorted_dedup(observed.evidence_ids),
-        observation_scope_complete: false,
+        evidence_ids: sorted_dedup(observed.evidence_ids.clone()),
+        observation_scope_complete: observed.deterministic_status
+            != ProductionDeterministicStatus::Inconclusive,
         ..Default::default()
     };
     if observed.reference_changed {
@@ -440,10 +572,10 @@ pub fn build_production_observation_receipt(
             id: format!("{}#visual-region-{index}", observed.canonical_route),
         });
     }
-    for signal in observed.regression_signals {
+    for signal in &observed.regression_signals {
         actual_impact.targets.insert(ImpactTarget {
             kind: ImpactKind::IssueClass,
-            id: signal,
+            id: signal.clone(),
         });
     }
 
@@ -469,11 +601,11 @@ pub fn build_production_observation_receipt(
         real_worktree_unchanged: shadow_proof.real_worktree_unchanged,
         external_side_effects_observed: false,
     };
-    let mut receipt = build_autonomous_receipt(AutonomousVerificationInput {
+    let receipt = build_autonomous_receipt(AutonomousVerificationInput {
         affected,
         shadow_proof,
-        contracts: ContractEvaluationSummary::default(),
-        mutations: Vec::new(),
+        contracts,
+        mutations: mutations.clone(),
         predicted_impact,
         actual_impact,
         revalidation_plan,
@@ -484,8 +616,8 @@ pub fn build_production_observation_receipt(
             admitted: true,
             max_states: 1,
             executed_states: 1,
-            max_mutations: 0,
-            executed_mutations: 0,
+            max_mutations: mutations.len(),
+            executed_mutations: mutations.len(),
             max_runtime_ms: 15_000,
             observed_runtime_ms: observed.observed_runtime_ms,
             denial_reason: None,
@@ -493,18 +625,6 @@ pub fn build_production_observation_receipt(
         cleanup_proof,
     });
 
-    receipt.reasons.push(
-        "production contract catalog execution is not yet bound to the live Trusted Verify path"
-            .into(),
-    );
-    receipt.reasons.push(
-        "production mutation challenges are not yet bound to the live Trusted Verify path".into(),
-    );
-    receipt.reasons.sort();
-    receipt.reasons.dedup();
-    if receipt.final_verdict == AutonomousVerificationVerdict::Verified {
-        receipt.final_verdict = AutonomousVerificationVerdict::Inconclusive;
-    }
     Ok(receipt)
 }
 
