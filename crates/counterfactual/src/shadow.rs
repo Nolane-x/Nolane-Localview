@@ -23,6 +23,8 @@ pub const MAX_SHADOW_STARTUP_MS: u64 = 20_000;
 pub const MAX_SHADOW_LIFETIME_MS: u64 = 120_000;
 const MAX_GIT_RUNTIME_MS: u64 = 10_000;
 const MAX_GIT_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_WORKTREE_SNAPSHOT_FILES: usize = 20_000;
+const MAX_WORKTREE_SNAPSHOT_BYTES: usize = 256 * 1024 * 1024;
 
 const SENSITIVE_BASENAMES: &[&str] = &[
     ".env",
@@ -93,6 +95,8 @@ pub enum ShadowError {
     ShadowMaterializationFailed { path: String },
     ShadowDiffFailed,
     UnexpectedChangedFile { path: String },
+    WorktreeSnapshotTooLarge,
+    WorktreeSnapshotFailed { path: String },
     CleanupFailed,
 }
 
@@ -106,7 +110,7 @@ pub struct ShadowWorkspace {
     patch_digest: String,
     isolation: IsolationLevel,
     changed_files: Vec<String>,
-    original_status: String,
+    original_worktree_snapshot: WorktreeSnapshot,
     cleaned: bool,
 }
 
@@ -181,8 +185,12 @@ impl ShadowWorkspace {
             changed_files.insert(overlay.file.clone());
         }
 
-        let original_status = git_output(&repository_root, &["status", "--porcelain=v1"])
-            .ok_or(ShadowError::GitUnavailable)?;
+        // Do not use `git status` here. A repository can bind clean filters,
+        // fsmonitor helpers or other executable config to status/diff paths.
+        // The production preflight instead snapshots Git-visible worktree bytes
+        // directly, under hard count/byte bounds, and compares the snapshot
+        // again before minting proof.
+        let original_worktree_snapshot = snapshot_visible_worktree(&repository_root)?;
 
         let shadow_parent = create_private_shadow_parent()?;
         let shadow_root = shadow_parent.join("worktree");
@@ -219,7 +227,7 @@ impl ShadowWorkspace {
             patch_digest: patch_digest(&candidate.overlays),
             isolation: candidate.isolation,
             changed_files: changed_files.into_iter().collect(),
-            original_status,
+            original_worktree_snapshot,
             cleaned: false,
         };
 
@@ -247,8 +255,8 @@ impl ShadowWorkspace {
     }
 
     pub fn proof(&self) -> Result<ShadowCandidateProof, ShadowError> {
-        let current_status = git_output(&self.repository_root, &["status", "--porcelain=v1"])
-            .ok_or(ShadowError::GitUnavailable)?;
+        let current_worktree_snapshot = snapshot_visible_worktree(&self.repository_root)?;
+        let real_worktree_unchanged = current_worktree_snapshot == self.original_worktree_snapshot;
         Ok(ShadowCandidateProof {
             candidate_id: self.candidate_id,
             base_revision: self.base_revision.clone(),
@@ -256,9 +264,20 @@ impl ShadowWorkspace {
             isolation: self.isolation,
             changed_files: self.changed_files.clone(),
             shadow_path: self.shadow_root.to_string_lossy().into_owned(),
-            original_worktree_dirty: !self.original_status.trim().is_empty(),
-            real_worktree_unchanged: current_status == self.original_status,
-            external_side_effect_containment: ExternalSideEffectContainment::NotProven,
+            // Dirty-state classification is not needed for authority and would
+            // require executing repository-configurable diff/filter machinery.
+            // Preserve the field conservatively instead of inventing a clean claim.
+            original_worktree_dirty: true,
+            real_worktree_unchanged,
+            // SemanticOnly never launches candidate code. All Git subprocesses
+            // are absolute trusted binaries with hooks/fsmonitor/external diff
+            // disabled, inherited Git configuration authority removed, and the
+            // real Git-visible worktree is byte-snapshotted before/after.
+            external_side_effect_containment: if real_worktree_unchanged {
+                ExternalSideEffectContainment::ProvenBlocked
+            } else {
+                ExternalSideEffectContainment::NotProven
+            },
         })
     }
 
@@ -646,31 +665,37 @@ fn safe_git_command() -> Option<Command> {
     if let Some(parent) = program.parent() {
         command.current_dir(parent);
     }
-    for variable in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_EXTERNAL_DIFF",
-        "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_SYSTEM",
-        "GIT_CONFIG_COUNT",
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "DYLD_INSERT_LIBRARIES",
-        "DYLD_LIBRARY_PATH",
-    ] {
-        command.env_remove(variable);
+
+    // Inherited process environment is not Git authority. Start from an empty
+    // environment and restore only OS variables required for process/runtime
+    // operation. The Git executable is absolute, so PATH is intentionally absent.
+    let preserved = ["SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR"]
+        .into_iter()
+        .filter_map(|key| std::env::var_os(key).map(|value| (key, value)))
+        .collect::<Vec<_>>();
+    command.env_clear();
+    for (key, value) in preserved {
+        command.env(key, value);
     }
+
     command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_PAGER", "cat")
+        .env("PAGER", "cat")
         .arg("-c")
         .arg("core.hooksPath=")
         .arg("-c")
         .arg("core.fsmonitor=false")
         .arg("-c")
         .arg("diff.external=")
-        .env("GIT_LFS_SKIP_SMUDGE", "1");
+        .arg("-c")
+        .arg("pager.status=false")
+        .arg("-c")
+        .arg("pager.diff=false");
     Some(command)
 }
 
@@ -738,6 +763,94 @@ fn git_output(root: &Path, args: &[&str]) -> Option<String> {
 
 fn git_bytes(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     git_output_bytes(root, args)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorktreeSnapshot {
+    entries: Vec<(String, String)>,
+}
+
+fn snapshot_visible_worktree(repository_root: &Path) -> Result<WorktreeSnapshot, ShadowError> {
+    let bytes = git_output_bytes(
+        repository_root,
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+    )
+    .ok_or(ShadowError::GitUnavailable)?;
+    let mut paths = bytes
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            std::str::from_utf8(path).map(str::to_owned).map_err(|_| {
+                ShadowError::WorktreeSnapshotFailed {
+                    path: "<non-utf8>".into(),
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort();
+    paths.dedup();
+    if paths.len() > MAX_WORKTREE_SNAPSHOT_FILES {
+        return Err(ShadowError::WorktreeSnapshotTooLarge);
+    }
+
+    let mut total_bytes = 0usize;
+    let mut entries = Vec::with_capacity(paths.len());
+    for relative in paths {
+        validate_relative_path(&relative)?;
+        let path = repository_root.join(&relative);
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|_| ShadowError::WorktreeSnapshotFailed {
+                path: relative.clone(),
+            })?;
+        let mut digest = Sha256::new();
+        if metadata.file_type().is_symlink() {
+            let target = fs::read_link(&path).map_err(|_| ShadowError::WorktreeSnapshotFailed {
+                path: relative.clone(),
+            })?;
+            let target = target.to_string_lossy();
+            total_bytes = total_bytes
+                .checked_add(target.len())
+                .ok_or(ShadowError::WorktreeSnapshotTooLarge)?;
+            if total_bytes > MAX_WORKTREE_SNAPSHOT_BYTES {
+                return Err(ShadowError::WorktreeSnapshotTooLarge);
+            }
+            digest.update(b"symlink\0");
+            digest.update(target.as_bytes());
+        } else if metadata.is_file() {
+            let len = usize::try_from(metadata.len())
+                .map_err(|_| ShadowError::WorktreeSnapshotTooLarge)?;
+            total_bytes = total_bytes
+                .checked_add(len)
+                .ok_or(ShadowError::WorktreeSnapshotTooLarge)?;
+            if total_bytes > MAX_WORKTREE_SNAPSHOT_BYTES {
+                return Err(ShadowError::WorktreeSnapshotTooLarge);
+            }
+            let content = fs::read(&path).map_err(|_| ShadowError::WorktreeSnapshotFailed {
+                path: relative.clone(),
+            })?;
+            digest.update(b"file\0");
+            digest.update(&content);
+        } else {
+            return Err(ShadowError::WorktreeSnapshotFailed { path: relative });
+        }
+        digest.update(b"\0readonly=");
+        digest.update(if metadata.permissions().readonly() {
+            b"1".as_slice()
+        } else {
+            b"0".as_slice()
+        });
+        entries.push((
+            relative,
+            format!("sha256:{}", hex_lower(&digest.finalize())),
+        ));
+    }
+    Ok(WorktreeSnapshot { entries })
 }
 
 fn create_private_shadow_parent() -> Result<PathBuf, ShadowError> {
