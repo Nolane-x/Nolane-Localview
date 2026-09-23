@@ -135,11 +135,20 @@ fn trusted_verify_wave9_recovery_preserves_previous_reader_compatibility() {
 }
 
 #[test]
-fn shadow_proof_never_optimistically_claims_external_side_effect_blocking() {
+fn semantic_only_shadow_containment_has_explicit_fail_closed_controls() {
     let shadow = source("../../../crates/counterfactual/src/shadow.rs");
+    assert!(shadow.contains("ExternalSideEffectContainment::ProvenBlocked"));
     assert!(shadow.contains("ExternalSideEffectContainment::NotProven"));
-    assert!(!shadow.contains("external_side_effects_blocked: true"));
     assert!(shadow.contains("candidate.isolation != IsolationLevel::SemanticOnly"));
+    assert!(shadow.contains("snapshot_visible_worktree"));
+    assert!(shadow.contains("command.env_clear()"));
+    assert!(shadow.contains("GIT_CONFIG_NOSYSTEM"));
+    assert!(shadow.contains("GIT_ATTR_NOSYSTEM"));
     assert!(shadow.contains("core.hooksPath="));
-    assert!(shadow.contains("GIT_EXTERNAL_DIFF"));
+    assert!(shadow.contains("core.fsmonitor=false"));
+    assert!(shadow.contains("diff.external="));
+    assert!(
+        !shadow.contains("[\"status\", \"--porcelain=v1\"]"),
+        "production containment proof must not execute repository-configurable git status"
+    );
 }
