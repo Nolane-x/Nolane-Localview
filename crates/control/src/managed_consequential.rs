@@ -21,8 +21,8 @@ use localview_live_bridge::{
     CanonicalQueuedAction, ConsequentialJournal, ConsequentialPostconditionEvidence,
     ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
     ConsequentialRecoveryState, DispatchExecutionPermit, DispatchLinearizationReceipt,
-    DispatchPreparationReceipt,
-    DispatchPreparedCapability, LiveBridge, reconcile_consequential_postconditions,
+    DispatchPreparationReceipt, DispatchPreparedCapability, LiveBridge,
+    reconcile_consequential_postconditions,
 };
 use localview_postcondition_contracts::{
     PostconditionContractRegistry, RegisteredPostconditionContract,
@@ -848,35 +848,32 @@ async fn durable_managed_consequential_status(
             "reconciliation_required",
             "durable_recovery_requires_original_post_dispatch_lineage",
         ),
-        ConsequentialRecoveryState::OutcomeObservedUnverified => match receipt
-            .as_ref()
-            .map(|receipt| receipt.verdict)
-        {
-            Some(ActionPostconditionVerdict::VerifiedUnexpected) => (
-                "verified_unexpected",
-                "durable_postcondition_receipt_observed_unexpected_world_state",
-            ),
-            _ => (
-                "reconciliation_required",
-                "durable_postcondition_receipt_requires_reconciliation",
-            ),
-        },
+        ConsequentialRecoveryState::OutcomeObservedUnverified => {
+            match receipt.as_ref().map(|receipt| receipt.verdict) {
+                Some(ActionPostconditionVerdict::VerifiedUnexpected) => (
+                    "verified_unexpected",
+                    "durable_postcondition_receipt_observed_unexpected_world_state",
+                ),
+                _ => (
+                    "reconciliation_required",
+                    "durable_postcondition_receipt_requires_reconciliation",
+                ),
+            }
+        }
         ConsequentialRecoveryState::VerifiedUncommitted => (
             "reconciliation_required",
             "durable_verified_receipt_commit_pending",
         ),
-        ConsequentialRecoveryState::Committed => (
-            "verified_expected",
-            "durable_verified_receipt_committed",
-        ),
+        ConsequentialRecoveryState::Committed => {
+            ("verified_expected", "durable_verified_receipt_committed")
+        }
         ConsequentialRecoveryState::Compensated => (
             "reconciliation_required",
             "durable_action_was_compensated_outside_managed_webview_scope",
         ),
-        ConsequentialRecoveryState::CompensationFailed => (
-            "reconciliation_required",
-            "durable_compensation_failed",
-        ),
+        ConsequentialRecoveryState::CompensationFailed => {
+            ("reconciliation_required", "durable_compensation_failed")
+        }
     };
 
     (
