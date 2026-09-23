@@ -1023,6 +1023,7 @@ async fn apply_fix_proposal(
             proposal.postimage.clone(),
             proposal.instruction.clone(),
             visual_before,
+            proposal.wave9_preflight.clone(),
         )?;
 
         if let Err(error) = trusted_fix::apply_fix_transaction(
@@ -1078,6 +1079,7 @@ async fn verify_fix_change(
     verification_id: String,
 ) -> Result<trusted_verify::HumanVerifyChangeReceipt, String> {
     let record = verification_store.begin_verify(&verification_id)?;
+    let wave9_started = std::time::Instant::now();
     if record.semantic_before.context_version != trusted_verify::VERIFY_CONTEXT_VERSION {
         let _ = verification_store.invalidate(&verification_id);
         return Err("trusted Verify context version is unsupported".into());
@@ -1239,6 +1241,38 @@ async fn verify_fix_change(
         let advisory_context =
             trusted_ai::build_trusted_ai_context(&session, &snapshot, &record.reference)?;
 
+        let reference_changed = !comparison.semantic_changes.is_empty()
+            || comparison
+                .target_changed_ratio
+                .is_some_and(|ratio| ratio > 0.0);
+        let mut wave9_evidence_ids = affected_visual_evidence_ids.clone();
+        if let Some(evidence_id) = visual_diff_evidence_id.as_ref() {
+            wave9_evidence_ids.push(evidence_id.clone());
+        }
+        let (wave9_autonomous, wave9_autonomous_error) =
+            match record.wave9_preflight.as_ref() {
+                Some(preflight) => match localview_verification::build_production_observation_receipt(
+                    preflight,
+                    localview_verification::ProductionObservedVerificationInput {
+                        canonical_route: record.canonical_route.clone(),
+                        reference: Some(record.reference.clone()),
+                        reference_changed,
+                        visual_region_count: affected_regions.len(),
+                        regression_signals: comparison.regression_signals.clone(),
+                        evidence_ids: wave9_evidence_ids,
+                        observed_runtime_ms: wave9_started
+                            .elapsed()
+                            .as_millis()
+                            .min(u128::from(u64::MAX))
+                            as u64,
+                    },
+                ) {
+                    Ok(receipt) => (Some(receipt), None),
+                    Err(error) => (None, Some(error)),
+                },
+                None => (None, None),
+            };
+
         Ok::<
             (
                 trusted_verify::HumanVerifyChangeReceipt,
@@ -1263,6 +1297,8 @@ async fn verify_fix_change(
                 snapshot_version: snapshot.version,
                 provider_label: None,
                 advisory_summary: None,
+                wave9_autonomous,
+                wave9_autonomous_error,
                 verified_at_unix_ms: trusted_verify::now_unix_ms(),
             },
             advisory_context,
