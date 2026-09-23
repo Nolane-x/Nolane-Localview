@@ -361,6 +361,42 @@ impl LiveBridge {
             .await
     }
 
+    /// Rotate the exact managed-surface executor authority without draining work.
+    ///
+    /// Resource-runtime callers use this while holding the surface-owner operation
+    /// fence. A transition retires every queued/inflight public action, cancellation
+    /// authority, and canonical envelope from the previous executor before the new
+    /// surface may drain the public queue.
+    pub async fn ensure_managed_surface_action_authority(
+        &self,
+        session_id: SessionId,
+        authority_ref: String,
+    ) -> bool {
+        let _gate = self.action_gate.lock().await;
+        let unchanged = self
+            .managed_surface_action_authority
+            .read()
+            .await
+            .get(&session_id)
+            .is_some_and(|current| current == &authority_ref);
+        if unchanged {
+            return false;
+        }
+
+        self.legacy
+            .discard_public_actions_for_session(session_id)
+            .await;
+        self.action_envelopes
+            .write()
+            .await
+            .retain(|_, envelope| envelope.session_id != session_id);
+        self.managed_surface_action_authority
+            .write()
+            .await
+            .insert(session_id, authority_ref);
+        true
+    }
+
     /// Drain public work only for the exact primary managed-surface executor.
     ///
     /// The authority switch and queue drain share the V4.3 action gate, giving
