@@ -1964,3 +1964,120 @@ mod tests {
         assert!(!valid_postcondition_refs(&["not-a-contract".into()]));
     }
 }
+
+
+#[cfg(test)]
+mod r8_managed_payload_tests {
+    use super::*;
+
+    #[test]
+    fn managed_key_and_scroll_payloads_are_sanitized_before_canonical_binding() {
+        let (key_carrier, key_payload, key_public) = prepare_managed_action(
+            BridgeActionKind::Key {
+                key: "Enter".into(),
+                modifiers: vec!["Control".into(), "Shift".into()],
+            },
+        )
+        .expect("bounded key payload");
+        assert_eq!(
+            key_carrier,
+            BridgeActionKind::Key {
+                key: String::new(),
+                modifiers: Vec::new(),
+            }
+        );
+        assert!(key_payload.is_some());
+        assert_eq!(key_public["type"], "key");
+        assert!(key_public.get("key").is_none());
+        assert!(key_public.get("modifiers").is_none());
+        assert!(key_public["payload_ref"].as_str().is_some());
+
+        let (scroll_carrier, scroll_payload, scroll_public) =
+            prepare_managed_action(BridgeActionKind::Scroll { x: 12.5, y: -48.0 })
+                .expect("bounded scroll payload");
+        assert_eq!(
+            scroll_carrier,
+            BridgeActionKind::Scroll { x: 0.0, y: 0.0 }
+        );
+        assert!(scroll_payload.is_some());
+        assert_eq!(scroll_public["type"], "scroll");
+        assert!(scroll_public.get("x").is_none());
+        assert!(scroll_public.get("y").is_none());
+        assert!(scroll_public["payload_ref"].as_str().is_some());
+    }
+
+    #[test]
+    fn managed_payload_validation_fails_closed_on_unbounded_or_empty_input() {
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::TypeText {
+                text: "x".repeat(MAX_MANAGED_TYPE_UTF8_BYTES + 1),
+                clear_first: false,
+            }),
+            Err("managed_consequential_type_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::TypeText {
+                text: "bad\0value".into(),
+                clear_first: false,
+            }),
+            Err("managed_consequential_type_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Key {
+                key: String::new(),
+                modifiers: Vec::new(),
+            }),
+            Err("managed_consequential_key_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Key {
+                key: "A".into(),
+                modifiers: vec!["modifier".into(); MAX_MANAGED_MODIFIERS + 1],
+            }),
+            Err("managed_consequential_key_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Scroll { x: 0.0, y: 0.0 }),
+            Err("managed_consequential_scroll_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Scroll {
+                x: MAX_MANAGED_SCROLL_DELTA + 1.0,
+                y: 1.0,
+            }),
+            Err("managed_consequential_scroll_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Scroll {
+                x: f64::INFINITY,
+                y: 1.0,
+            }),
+            Err("managed_consequential_scroll_payload_invalid")
+        ));
+    }
+
+    #[test]
+    fn managed_type_plan_projection_never_contains_plaintext() {
+        let secret = "r8-private-plan-text";
+        let (carrier, payload, public) = prepare_managed_action(BridgeActionKind::TypeText {
+            text: secret.into(),
+            clear_first: true,
+        })
+        .expect("bounded TypeText payload");
+
+        assert_eq!(
+            carrier,
+            BridgeActionKind::TypeText {
+                text: String::new(),
+                clear_first: true,
+            }
+        );
+        assert!(payload.is_some());
+        let encoded_public = public.to_string();
+        assert!(!encoded_public.contains(secret));
+        assert_eq!(public["type"], "type_text");
+        assert_eq!(public["clear_first"], true);
+        assert!(public.get("text").is_none());
+        assert!(public["payload_ref"].as_str().is_some());
+    }
+}
