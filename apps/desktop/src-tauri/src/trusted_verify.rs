@@ -211,6 +211,7 @@ pub struct HumanVerifyChangeReceipt {
     pub provider_label: Option<String>,
     pub advisory_summary: Option<String>,
     pub wave9_autonomous: Option<localview_verification::AutonomousVerificationReceipt>,
+    pub wave9_autonomous_error: Option<String>,
     pub verified_at_unix_ms: u64,
 }
 
