@@ -84,7 +84,7 @@ fn production_preflight_uses_real_temp_git_shadow_without_mutating_source() {
     let cleanup_proof = receipt.cleanup_proof.as_ref().expect("cleanup proof");
     assert_eq!(
         shadow_proof.external_side_effect_containment,
-        ExternalSideEffectContainment::NotProven
+        ExternalSideEffectContainment::ProvenBlocked
     );
     assert_eq!(
         receipt.verdict,
@@ -124,7 +124,8 @@ fn production_preflight_uses_real_temp_git_shadow_without_mutating_source() {
         receipt
             .reasons
             .iter()
-            .any(|reason| reason.contains("containment is not proven"))
+            .all(|reason| !reason.contains("containment is not proven")),
+        "SemanticOnly preflight must not retain a false containment debt"
     );
 
     let worktrees = git(&root, &["worktree", "list", "--porcelain"]);
@@ -189,7 +190,7 @@ fn live_production_observation_receipt_stays_inconclusive_until_remaining_author
     assert_eq!(receipt.final_verdict, AutonomousVerificationVerdict::Inconclusive);
     assert_eq!(
         receipt.external_side_effect_containment,
-        ExternalSideEffectContainment::NotProven
+        ExternalSideEffectContainment::ProvenBlocked
     );
     assert!(
         receipt
