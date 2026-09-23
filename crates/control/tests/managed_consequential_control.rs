@@ -11,10 +11,11 @@ use axum::{
 };
 use chrono::Utc;
 use localview_control::{
-    ControlState, SurfaceRecoveryJournal, configure_surface_recovery_journal_for_sessions, router,
+    ControlState, SurfaceRecoveryJournal, configure_managed_consequential_control_for_sessions,
+    configure_surface_recovery_journal_for_sessions, router,
 };
 use localview_evidence::EvidenceStore;
-use localview_live_bridge::LiveBridge;
+use localview_live_bridge::{ConsequentialJournal, LiveBridge};
 use localview_observation::ObservationBus;
 use localview_protocol::{
     Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
@@ -79,6 +80,20 @@ async fn test_state() -> (ControlState, Uuid) {
             .expect("open surface recovery journal"),
     );
     configure_surface_recovery_journal_for_sessions(&state.sessions, Some(journal));
+
+    let consequential_path = std::env::temp_dir().join(format!(
+        "localview-r7-managed-consequential-{}.jsonl",
+        Uuid::new_v4()
+    ));
+    let consequential = Arc::new(
+        ConsequentialJournal::open(consequential_path)
+            .await
+            .expect("open consequential journal"),
+    );
+    configure_managed_consequential_control_for_sessions(
+        &state.sessions,
+        Some(consequential),
+    );
     (state, session_id)
 }
 
