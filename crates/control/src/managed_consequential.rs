@@ -76,12 +76,10 @@ struct ManagedConsequentialControlEntry {
     handle: ManagedConsequentialControlHandle,
 }
 
-type ManagedConsequentialControlRegistry =
-    HashMap<usize, ManagedConsequentialControlEntry>;
+type ManagedConsequentialControlRegistry = HashMap<usize, ManagedConsequentialControlEntry>;
 
-static MANAGED_CONSEQUENTIAL_CONTROL: OnceLock<
-    StdMutex<ManagedConsequentialControlRegistry>,
-> = OnceLock::new();
+static MANAGED_CONSEQUENTIAL_CONTROL: OnceLock<StdMutex<ManagedConsequentialControlRegistry>> =
+    OnceLock::new();
 
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
@@ -162,14 +160,13 @@ async fn plan_managed_consequential_action(
             .into_response();
     }
 
-    let authority_before =
-        match current_primary_managed_surface_action_authority_for_sessions(
-            &state.sessions,
-            session_id,
-        ) {
-            Ok(authority) => authority,
-            Err(code) => return error(StatusCode::CONFLICT, code),
-        };
+    let authority_before = match current_primary_managed_surface_action_authority_for_sessions(
+        &state.sessions,
+        session_id,
+    ) {
+        Ok(authority) => authority,
+        Err(code) => return error(StatusCode::CONFLICT, code),
+    };
 
     // Fresh semantic evidence is acquired through the exact managed executor.
     // The worker's take path establishes the daemon-derived managed observation
@@ -189,14 +186,13 @@ async fn plan_managed_consequential_action(
         }
     };
 
-    let authority_after =
-        match current_primary_managed_surface_action_authority_for_sessions(
-            &state.sessions,
-            session_id,
-        ) {
-            Ok(authority) => authority,
-            Err(code) => return error(StatusCode::CONFLICT, code),
-        };
+    let authority_after = match current_primary_managed_surface_action_authority_for_sessions(
+        &state.sessions,
+        session_id,
+    ) {
+        Ok(authority) => authority,
+        Err(code) => return error(StatusCode::CONFLICT, code),
+    };
     if authority_before != authority_after {
         return error(
             StatusCode::CONFLICT,
@@ -365,20 +361,19 @@ async fn confirm_managed_consequential_action(
             .expect("pending plan existed immediately before one-shot consume")
     };
 
-    let current_authority =
-        match current_primary_managed_surface_action_authority_for_sessions(
-            &state.sessions,
-            session_id,
-        ) {
-            Ok(authority) => authority,
-            Err(code) => {
-                state
-                    .live
-                    .discard_bound_canonical_action(plan.queued.action.id)
-                    .await;
-                return error(StatusCode::CONFLICT, code);
-            }
-        };
+    let current_authority = match current_primary_managed_surface_action_authority_for_sessions(
+        &state.sessions,
+        session_id,
+    ) {
+        Ok(authority) => authority,
+        Err(code) => {
+            state
+                .live
+                .discard_bound_canonical_action(plan.queued.action.id)
+                .await;
+            return error(StatusCode::CONFLICT, code);
+        }
+    };
     if current_authority != plan.surface_authority {
         state
             .live
@@ -390,14 +385,15 @@ async fn confirm_managed_consequential_action(
         );
     }
 
-    let observation_matches = state
-        .live
-        .observation_status(session_id)
-        .await
-        .is_some_and(|status| {
-            status.provider_incarnation_ref == current_authority.provider_incarnation_ref
-                && status.target_incarnation_ref == current_authority.target_incarnation_ref
-        });
+    let observation_matches =
+        state
+            .live
+            .observation_status(session_id)
+            .await
+            .is_some_and(|status| {
+                status.provider_incarnation_ref == current_authority.provider_incarnation_ref
+                    && status.target_incarnation_ref == current_authority.target_incarnation_ref
+            });
     if !observation_matches {
         state
             .live
@@ -439,12 +435,9 @@ async fn confirm_managed_consequential_action(
     }
 }
 
-fn control_for_sessions(
-    sessions: &Arc<SessionManager>,
-) -> ManagedConsequentialControlHandle {
+fn control_for_sessions(sessions: &Arc<SessionManager>) -> ManagedConsequentialControlHandle {
     let key = Arc::as_ptr(sessions) as usize;
-    let registry =
-        MANAGED_CONSEQUENTIAL_CONTROL.get_or_init(|| StdMutex::new(HashMap::new()));
+    let registry = MANAGED_CONSEQUENTIAL_CONTROL.get_or_init(|| StdMutex::new(HashMap::new()));
     let mut entries = lock_registry(registry);
     entries.retain(|_, entry| entry.owner.strong_count() > 0);
     entries
@@ -471,18 +464,13 @@ fn existing_control_for_sessions(
     entries.get(&key).map(|entry| entry.handle.clone())
 }
 
-async fn prune_expired(
-    control: &ManagedConsequentialControlHandle,
-    live: &LiveBridge,
-) {
+async fn prune_expired(control: &ManagedConsequentialControlHandle, live: &LiveBridge) {
     let now = Instant::now();
     let expired = {
         let mut pending = control.pending.lock().await;
         let expired = pending
             .iter()
-            .filter_map(|(action_id, plan)| {
-                (plan.expires_at <= now).then_some(*action_id)
-            })
+            .filter_map(|(action_id, plan)| (plan.expires_at <= now).then_some(*action_id))
             .collect::<Vec<_>>();
         for action_id in &expired {
             pending.remove(action_id);
@@ -555,9 +543,7 @@ fn dispatch_error_code(error: BoundCanonicalDispatchError) -> &'static str {
         BoundCanonicalDispatchError::MissingCanonicalEnvelope => {
             "managed_consequential_binding_missing"
         }
-        BoundCanonicalDispatchError::EnvelopeMismatch => {
-            "managed_consequential_binding_mismatch"
-        }
+        BoundCanonicalDispatchError::EnvelopeMismatch => "managed_consequential_binding_mismatch",
         BoundCanonicalDispatchError::ActionIdentityMismatch => {
             "managed_consequential_action_identity_mismatch"
         }
@@ -646,7 +632,9 @@ mod tests {
 
     #[test]
     fn managed_consequential_contract_refs_are_bounded() {
-        assert!(valid_postcondition_refs(&["lvpc:web-semantic:v1:{}".into()]));
+        assert!(valid_postcondition_refs(
+            &["lvpc:web-semantic:v1:{}".into()]
+        ));
         assert!(!valid_postcondition_refs(&[]));
         assert!(!valid_postcondition_refs(&["not-a-contract".into()]));
     }
