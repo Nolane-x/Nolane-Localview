@@ -186,12 +186,12 @@ struct SurfaceActionCompleteRequest {
     result: BridgeActionResult,
 }
 
-#[derive(Debug, Clone)]
-struct ManagedSurfaceActionAuthority {
-    authority_ref: String,
-    provider_incarnation_ref: ProviderIncarnationRef,
-    target_incarnation_ref: TargetIncarnationRef,
-    generation: u64,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManagedSurfaceActionAuthority {
+    pub(crate) authority_ref: String,
+    pub(crate) provider_incarnation_ref: ProviderIncarnationRef,
+    pub(crate) target_incarnation_ref: TargetIncarnationRef,
+    pub(crate) generation: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -712,6 +712,32 @@ fn primary_live_surface(
         }
     }
     None
+}
+
+pub(crate) fn current_primary_managed_surface_action_authority_for_sessions(
+    sessions: &Arc<SessionManager>,
+    session_id: SessionId,
+) -> Result<ManagedSurfaceActionAuthority, &'static str> {
+    let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = lock_surface_registry(registry);
+    let Some(entry) = existing_surface_entry_mut(&mut entries, sessions) else {
+        return Err("surface_owner_missing");
+    };
+    let Some((owner_instance_id, identity)) = primary_live_surface(entry, session_id) else {
+        return Err("surface_owner_missing");
+    };
+    let (provider_incarnation_ref, target_incarnation_ref) =
+        managed_surface_refs(owner_instance_id, session_id, &identity);
+    Ok(ManagedSurfaceActionAuthority {
+        authority_ref: managed_surface_action_authority_ref(
+            owner_instance_id,
+            session_id,
+            &identity,
+        ),
+        provider_incarnation_ref,
+        target_incarnation_ref,
+        generation: identity.incarnation.max(1),
+    })
 }
 
 fn validate_primary_surface_action_request(
