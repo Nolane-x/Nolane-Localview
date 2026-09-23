@@ -52,6 +52,8 @@ struct PersistedVerificationRecordV1 {
     semantic_before: VerifySemanticBaseline,
     visual_before: Option<PersistedVisualBaselineV1>,
     scope: VerificationScope,
+    #[serde(default)]
+    wave9_preflight: Option<localview_verification::ProductionCandidatePreflightReceipt>,
     created_at_unix_ms: u64,
     expires_at_unix_ms: u64,
 }
@@ -309,6 +311,7 @@ fn persisted_record(record: &VerificationRecord) -> PersistedVerificationRecordV
             captured_at_unix_ms: visual.captured_at_unix_ms,
         }),
         scope: record.scope,
+        wave9_preflight: record.wave9_preflight.clone(),
         created_at_unix_ms: now_ms,
         expires_at_unix_ms: now_ms.saturating_add(remaining_ms),
     }
@@ -464,6 +467,7 @@ fn load_records(root: &Path) -> Result<HashMap<String, VerificationRecord>, Stri
             semantic_before: persisted.semantic_before,
             visual_before,
             scope: persisted.scope,
+            wave9_preflight: persisted.wave9_preflight,
             created_at: now,
             expires_at: now + Duration::from_millis(remaining),
             status: VerificationStatus::Pending,
