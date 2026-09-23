@@ -103,6 +103,26 @@ async fn post(state: ControlState, uri: &str, body: Value) -> (StatusCode, Value
     (status, value)
 }
 
+async fn get(state: ControlState, uri: &str) -> (StatusCode, Value) {
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(uri)
+                .header(header::AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 512 * 1024)
+        .await
+        .expect("bounded response");
+    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
 async fn register_owner(state: ControlState, owner_instance_id: Uuid) -> Registration {
     let (status, value) = post(
         state,
@@ -217,6 +237,61 @@ fn fresh_snapshot_payload() -> Value {
                         "height": 40.0
                     },
                     "interactive": true,
+                    "attributes": {},
+                    "sourceHint": null,
+                    "children": []
+                }
+            ]
+        }
+    })
+}
+
+fn post_dispatch_snapshot_payload() -> Value {
+    serde_json::json!({
+        "version": 2,
+        "route": "/settings",
+        "viewport": {
+            "width": 1280,
+            "height": 720
+        },
+        "semantic_tree": {
+            "ref": "@e1",
+            "tag": "main",
+            "role": "main",
+            "name": "Settings",
+            "rect": {
+                "x": 0.0,
+                "y": 0.0,
+                "width": 1280.0,
+                "height": 720.0
+            },
+            "interactive": false,
+            "attributes": {},
+            "sourceHint": null,
+            "children": [
+                {
+                    "ref": "@eabc123",
+                    "tag": "button",
+                    "role": "button",
+                    "name": "Save",
+                    "rect": {
+                        "x": 20.0,
+                        "y": 20.0,
+                        "width": 100.0,
+                        "height": 40.0
+                    },
+                    "interactive": true,
+                    "attributes": {},
+                    "sourceHint": null,
+                    "children": []
+                },
+                {
+                    "ref": "@edone",
+                    "tag": "status",
+                    "role": "status",
+                    "name": "Saved",
+                    "rect": null,
+                    "interactive": false,
                     "attributes": {},
                     "sourceHint": null,
                     "children": []
@@ -384,7 +459,7 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
     assert_eq!(confirm_body["confirmation_consumed"], true);
     assert_eq!(
         confirm_body["postcondition_status"],
-        "pending_fresh_reconciliation"
+        "pending_executor_completion"
     );
 
     let (take_status, take_body) =
@@ -401,7 +476,7 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
 
     // Process-local confirmation is one-shot even before the first action result.
     let (replay_status, replay_body) = post(
-        state,
+        state.clone(),
         &format!(
             "/v1/sessions/{session_id}/managed-consequential/{action_id}/confirm"
         ),
@@ -412,5 +487,63 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
     assert_eq!(
         replay_body["error"],
         "managed_consequential_confirmation_missing"
+    );
+
+    // Executor completion alone is not enough. R6 must request a fresh semantic
+    // snapshot and prove the expected postcondition on that new cut.
+    assert_eq!(
+        complete_surface_action(
+            state.clone(),
+            session_id,
+            registration,
+            action_id,
+            serde_json::json!({ "clicked": true }),
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+
+    let post_snapshot_action_id = loop {
+        let (status, body) =
+            take_surface_actions(state.clone(), session_id, registration).await;
+        assert_eq!(status, StatusCode::OK);
+        if let Some(action) = body.as_array().and_then(|actions| actions.first()) {
+            let snapshot_id =
+                Uuid::parse_str(action["id"].as_str().expect("post-dispatch snapshot id"))
+                    .expect("canonical snapshot uuid");
+            assert_eq!(action["action"]["type"], "snapshot");
+            break snapshot_id;
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(
+        complete_surface_action(
+            state.clone(),
+            session_id,
+            registration,
+            post_snapshot_action_id,
+            post_dispatch_snapshot_payload(),
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+
+    let status_uri =
+        format!("/v1/sessions/{session_id}/managed-consequential/{action_id}/status");
+    let terminal = loop {
+        let (status, body) = get(state.clone(), &status_uri).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body["terminal"] == true {
+            break body;
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(terminal["postcondition_status"], "verified_expected");
+    assert_eq!(terminal["fresh_snapshot_version"], 2);
+    assert_eq!(terminal["fresh_snapshot_route"], "/settings");
+    assert!(
+        terminal["proof_ref"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("proof:managed-webview:sha256:"))
     );
 }
