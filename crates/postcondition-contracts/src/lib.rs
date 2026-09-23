@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use localview_native_provider::{
     NativeSemanticNodeObservation, NativeSemanticSnapshotRevision,
 };
-use localview_protocol::ReconciliationCompleteness;
+use localview_protocol::{PageSnapshot, ReconciliationCompleteness, SemanticNode};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -20,6 +20,10 @@ const PAYLOAD_EQUALITY_FAMILY: &str = "payload-equality";
 const PAYLOAD_EQUALITY_VERSION_V1: &str = "1";
 const PAYLOAD_EQUALITY_PREFIX_V1: &str = "lvpc:payload-equality:v1:";
 const PAYLOAD_EQUALITY_FAMILY_PREFIX: &str = "lvpc:payload-equality:v";
+const WEB_SEMANTIC_FAMILY: &str = "web-semantic";
+const WEB_SEMANTIC_VERSION_V1: &str = "1";
+const WEB_SEMANTIC_PREFIX_V1: &str = "lvpc:web-semantic:v1:";
+const WEB_SEMANTIC_FAMILY_PREFIX: &str = "lvpc:web-semantic:v";
 
 /// Correctness-bearing schema entry admitted by a registry revision.
 ///
@@ -33,7 +37,7 @@ pub struct PostconditionContractSchema {
     pub version: &'static str,
 }
 
-const STANDARD_SCHEMAS: [PostconditionContractSchema; 3] = [
+const STANDARD_SCHEMAS: [PostconditionContractSchema; 4] = [
     PostconditionContractSchema {
         family: NATIVE_SEMANTIC_FAMILY,
         version: NATIVE_SEMANTIC_VERSION_V1,
@@ -46,6 +50,10 @@ const STANDARD_SCHEMAS: [PostconditionContractSchema; 3] = [
         family: PAYLOAD_EQUALITY_FAMILY,
         version: PAYLOAD_EQUALITY_VERSION_V1,
     },
+    PostconditionContractSchema {
+        family: WEB_SEMANTIC_FAMILY,
+        version: WEB_SEMANTIC_VERSION_V1,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +61,7 @@ pub enum RegisteredPostconditionContract {
     NativeSemanticV1(NativeSemanticPostconditionContractV1),
     NativeSemanticV2(NativeSemanticPostconditionContractV2),
     PayloadEqualityV1(PayloadEqualityPostconditionContractV1),
+    WebSemanticV1(WebSemanticPostconditionContractV1),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -67,6 +76,8 @@ pub enum PostconditionContractRegistryError {
     NativeSemanticContract(NativeSemanticPostconditionContractError),
     #[error("registered payload equality postcondition contract is invalid: {0}")]
     PayloadEqualityContract(PayloadEqualityPostconditionContractError),
+    #[error("registered web semantic postcondition contract is invalid: {0}")]
+    WebSemanticContract(WebSemanticPostconditionContractError),
 }
 
 /// Immutable registry of correctness-bearing postcondition schemas understood by
@@ -124,6 +135,11 @@ impl PostconditionContractRegistry {
                     .map(RegisteredPostconditionContract::PayloadEqualityV1)
                     .map_err(PostconditionContractRegistryError::PayloadEqualityContract)
             }
+            (WEB_SEMANTIC_FAMILY, WEB_SEMANTIC_VERSION_V1) => {
+                WebSemanticPostconditionContractV1::from_contract_ref(contract_ref)
+                    .map(RegisteredPostconditionContract::WebSemanticV1)
+                    .map_err(PostconditionContractRegistryError::WebSemanticContract)
+            }
             _ => unreachable!("registered postcondition schema lacks a decoder"),
         }
     }
@@ -140,8 +156,26 @@ impl PostconditionContractRegistry {
             RegisteredPostconditionContract::NativeSemanticV2(contract) => {
                 Ok(contract.evaluate(snapshot))
             }
-            RegisteredPostconditionContract::PayloadEqualityV1(_) => {
+            RegisteredPostconditionContract::PayloadEqualityV1(_)
+            | RegisteredPostconditionContract::WebSemanticV1(_) => {
                 Ok(NativeSemanticPostconditionEvaluation::Unknown)
+            }
+        }
+    }
+
+    pub fn evaluate_web_semantic(
+        &self,
+        contract_ref: &str,
+        snapshot: &PageSnapshot,
+    ) -> Result<WebSemanticPostconditionEvaluation, PostconditionContractRegistryError> {
+        match self.decode(contract_ref)? {
+            RegisteredPostconditionContract::WebSemanticV1(contract) => {
+                Ok(contract.evaluate(snapshot))
+            }
+            RegisteredPostconditionContract::NativeSemanticV1(_)
+            | RegisteredPostconditionContract::NativeSemanticV2(_)
+            | RegisteredPostconditionContract::PayloadEqualityV1(_) => {
+                Ok(WebSemanticPostconditionEvaluation::Unknown)
             }
         }
     }
@@ -280,6 +314,157 @@ fn payload_equality_payload_for_version(
     } else {
         Err(PayloadEqualityPostconditionContractError::UnsupportedFamily)
     }
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebSemanticPostconditionExpectation {
+    Present,
+    Absent,
+}
+
+impl WebSemanticPostconditionExpectation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Present => "present",
+            Self::Absent => "absent",
+        }
+    }
+
+    fn parse(value: &Value) -> Result<Self, WebSemanticPostconditionContractError> {
+        match value.as_str() {
+            Some("present") => Ok(Self::Present),
+            Some("absent") => Ok(Self::Absent),
+            _ => Err(WebSemanticPostconditionContractError::InvalidPayload),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebSemanticPostconditionEvaluation {
+    VerifiedPass,
+    VerifiedFail,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebSemanticPostconditionContractV1 {
+    pub expectation: WebSemanticPostconditionExpectation,
+    pub reference: String,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum WebSemanticPostconditionContractError {
+    #[error("unsupported web semantic postcondition contract version {version}")]
+    UnsupportedVersion { version: String },
+    #[error("web semantic postcondition contract family is unsupported")]
+    UnsupportedFamily,
+    #[error("web semantic postcondition contract payload is invalid")]
+    InvalidPayload,
+    #[error("web semantic postcondition contract contains an unknown correctness field")]
+    UnknownField,
+    #[error("web semantic postcondition reference is invalid")]
+    InvalidReference,
+    #[error("web semantic postcondition reference is not canonically encoded")]
+    NonCanonicalReference,
+}
+
+impl WebSemanticPostconditionContractV1 {
+    pub fn to_contract_ref(&self) -> Result<String, WebSemanticPostconditionContractError> {
+        if !valid_web_reference(&self.reference) {
+            return Err(WebSemanticPostconditionContractError::InvalidReference);
+        }
+        let reference = serde_json::to_string(&self.reference)
+            .map_err(|_| WebSemanticPostconditionContractError::InvalidPayload)?;
+        Ok(format!(
+            "{WEB_SEMANTIC_PREFIX_V1}{{\"expectation\":\"{}\",\"ref\":{reference}}}",
+            self.expectation.as_str()
+        ))
+    }
+
+    pub fn from_contract_ref(
+        contract_ref: &str,
+    ) -> Result<Self, WebSemanticPostconditionContractError> {
+        let payload = web_semantic_payload_for_version(contract_ref)?;
+        let value: Value = serde_json::from_str(payload)
+            .map_err(|_| WebSemanticPostconditionContractError::InvalidPayload)?;
+        let object = value
+            .as_object()
+            .ok_or(WebSemanticPostconditionContractError::InvalidPayload)?;
+        if object.len() != 2
+            || !object.contains_key("expectation")
+            || !object.contains_key("ref")
+        {
+            return Err(WebSemanticPostconditionContractError::UnknownField);
+        }
+
+        let reference = object
+            .get("ref")
+            .and_then(Value::as_str)
+            .ok_or(WebSemanticPostconditionContractError::InvalidPayload)?
+            .to_owned();
+        let contract = Self {
+            expectation: WebSemanticPostconditionExpectation::parse(
+                object
+                    .get("expectation")
+                    .ok_or(WebSemanticPostconditionContractError::InvalidPayload)?,
+            )?,
+            reference,
+        };
+        if !valid_web_reference(&contract.reference) {
+            return Err(WebSemanticPostconditionContractError::InvalidReference);
+        }
+        if contract.to_contract_ref()? != contract_ref {
+            return Err(WebSemanticPostconditionContractError::NonCanonicalReference);
+        }
+        Ok(contract)
+    }
+
+    pub fn evaluate(&self, snapshot: &PageSnapshot) -> WebSemanticPostconditionEvaluation {
+        let found = find_web_reference(&snapshot.root, &self.reference);
+        match (self.expectation, found) {
+            (WebSemanticPostconditionExpectation::Present, true)
+            | (WebSemanticPostconditionExpectation::Absent, false) => {
+                WebSemanticPostconditionEvaluation::VerifiedPass
+            }
+            (WebSemanticPostconditionExpectation::Present, false)
+            | (WebSemanticPostconditionExpectation::Absent, true) => {
+                WebSemanticPostconditionEvaluation::VerifiedFail
+            }
+        }
+    }
+}
+
+fn web_semantic_payload_for_version(
+    contract_ref: &str,
+) -> Result<&str, WebSemanticPostconditionContractError> {
+    if let Some(payload) = contract_ref.strip_prefix(WEB_SEMANTIC_PREFIX_V1) {
+        Ok(payload)
+    } else if let Some(rest) = contract_ref.strip_prefix(WEB_SEMANTIC_FAMILY_PREFIX) {
+        let version = rest.split(':').next().unwrap_or(rest).to_owned();
+        Err(WebSemanticPostconditionContractError::UnsupportedVersion { version })
+    } else {
+        Err(WebSemanticPostconditionContractError::UnsupportedFamily)
+    }
+}
+
+fn valid_web_reference(reference: &str) -> bool {
+    let Some(rest) = reference.strip_prefix("@e") else {
+        return false;
+    };
+    !rest.is_empty()
+        && reference.len() <= 256
+        && rest
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn find_web_reference(node: &SemanticNode, reference: &str) -> bool {
+    node.reference == reference
+        || node
+            .children
+            .iter()
+            .any(|child| find_web_reference(child, reference))
 }
 
 fn is_canonical_uuid(value: &str) -> bool {
