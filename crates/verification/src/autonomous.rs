@@ -152,6 +152,7 @@ pub struct ProductionCandidatePreflightReceipt {
     pub base_revision: Option<String>,
     pub patch_digest: Option<String>,
     pub affected_state_plan_hash: Option<ObjectHash>,
+    pub affected_state_plan: Option<AffectedStatePlan>,
     pub predicted_impact: Option<PredictedImpact>,
     pub affected_state_incomplete_reasons: Vec<String>,
     pub shadow_proof: Option<ShadowCandidateProof>,
@@ -171,6 +172,7 @@ impl ProductionCandidatePreflightReceipt {
             base_revision: None,
             patch_digest: None,
             affected_state_plan_hash: None,
+            affected_state_plan: None,
             predicted_impact: None,
             affected_state_incomplete_reasons: Vec::new(),
             shadow_proof: None,
@@ -218,6 +220,7 @@ pub fn run_production_candidate_preflight(
                 base_revision,
                 patch_digest,
                 affected_state_plan_hash: None,
+                affected_state_plan: None,
                 predicted_impact: None,
                 affected_state_incomplete_reasons: Vec::new(),
                 shadow_proof: None,
@@ -237,6 +240,7 @@ pub fn run_production_candidate_preflight(
                 base_revision,
                 patch_digest,
                 affected_state_plan_hash: None,
+                affected_state_plan: None,
                 predicted_impact: None,
                 affected_state_incomplete_reasons: Vec::new(),
                 shadow_proof: Some(proof),
@@ -281,6 +285,7 @@ pub fn run_production_candidate_preflight(
         base_revision: Some(candidate.base_revision.clone()),
         patch_digest: Some(expected_patch_digest),
         affected_state_plan_hash: None,
+        affected_state_plan: None,
         predicted_impact: None,
         affected_state_incomplete_reasons: Vec::new(),
         shadow_proof: Some(proof),
@@ -360,6 +365,7 @@ pub fn bind_production_affected_state(
     .map_err(|error| format!("Wave 9 affected-state compilation failed: {error:?}"))?;
 
     receipt.affected_state_plan_hash = Some(object_hash(&affected));
+    receipt.affected_state_plan = Some(affected.clone());
     receipt.predicted_impact = Some(impact_targets_from_affected(&affected));
     receipt.affected_state_incomplete_reasons = affected.incomplete_reasons.clone();
     if affected.incomplete {
