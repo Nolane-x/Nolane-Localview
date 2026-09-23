@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { COMMAND_IDS, type CommandId } from '../commands';
-import type { AiFixCapability, AiProviderCapability, ResponsivePresetId, VerifyScope, VerifyStatus } from '../api';
+import type { AiFixCapability, AiProviderCapability, ResponsivePresetId, VerifyScope, VerifyStatus, Wave9AutonomousReceipt } from '../api';
 import type { ActionCorrelationReceipt, DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
@@ -194,6 +194,8 @@ export type HumanVerifyState =
       targetChangedRatio?: number | null;
       providerLabel?: string | null;
       advisorySummary?: string | null;
+      wave9Autonomous?: Wave9AutonomousReceipt | null;
+      wave9AutonomousError?: string | null;
     }
   | {
       status: 'failure';
