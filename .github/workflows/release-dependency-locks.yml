@@ -1,0 +1,47 @@
+name: Release dependency locks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "apps/desktop/package.json"
+      - ".github/workflows/release-dependency-locks.yml"
+      - "tools/release/**"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-locks:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+
+      - name: Require committed release locks
+        shell: bash
+        run: |
+          test -s Cargo.lock
+          test -s apps/desktop/package-lock.json
+
+      - name: Verify Rust manifests are satisfied by Cargo.lock
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+
+      - name: Verify desktop package manifest is satisfied by package-lock.json
+        working-directory: apps/desktop
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Assert verification did not mutate lockfiles
+        shell: bash
+        run: git diff --exit-code -- Cargo.lock apps/desktop/package-lock.json
