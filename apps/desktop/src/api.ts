@@ -98,6 +98,8 @@ export interface HumanVerifyChangeReceipt {
   snapshotVersion: number;
   providerLabel?: string | null;
   advisorySummary?: string | null;
+  wave9Autonomous?: Record<string, unknown> | null;
+  wave9AutonomousError?: string | null;
   verifiedAtUnixMs: number;
 }
 
