@@ -23,7 +23,9 @@ use localview_sessions::SessionManager;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use localview_live_bridge::{BridgeActionResult, ProviderObservationBinding};
+use localview_live_bridge::{
+    BridgeActionResult, ManagedSurfaceActionCompletion, ProviderObservationBinding,
+};
 
 use crate::{
     ControlState,
@@ -845,7 +847,21 @@ async fn take_surface_actions(
     {
         return surface_conflict(error);
     }
-    Json(state.live.take_public_actions(request.session_id, 16).await).into_response()
+    // Observation binding is established above, but exact executor selection and
+    // queue drain must share the LiveBridge action gate. Calling the session-wide
+    // public drain here would reopen a TOCTOU window where a different managed
+    // surface could become primary between validation and drain.
+    Json(
+        state
+            .live
+            .take_managed_surface_actions(
+                request.session_id,
+                authority.authority_ref.clone(),
+                16,
+            )
+            .await,
+    )
+    .into_response()
 }
 
 async fn complete_surface_action(
@@ -882,15 +898,26 @@ async fn complete_surface_action(
     {
         return surface_conflict("managed_surface_observation_binding_stale");
     }
-    let Some(action) = state
+    // Completion must be linearized with managed-surface authority transitions.
+    // A separate claim/complete sequence after validation can otherwise race a
+    // primary-surface change and let stale executor work cross the transition.
+    match state
         .live
-        .claim_action(request.surface.session_id, request.result.action_id)
+        .complete_managed_surface_action(
+            request.surface.session_id,
+            &authority.authority_ref,
+            request.result,
+        )
         .await
-    else {
-        return surface_conflict("surface_action_not_inflight");
-    };
-    state.live.complete_action(&action, request.result).await;
-    StatusCode::NO_CONTENT.into_response()
+    {
+        ManagedSurfaceActionCompletion::Completed => StatusCode::NO_CONTENT.into_response(),
+        ManagedSurfaceActionCompletion::AuthorityStale => {
+            surface_conflict("managed_surface_action_authority_stale")
+        }
+        ManagedSurfaceActionCompletion::ActionNotInflight => {
+            surface_conflict("surface_action_not_inflight")
+        }
+    }
 }
 
 async fn retire_managed_surface_execution_binding(
