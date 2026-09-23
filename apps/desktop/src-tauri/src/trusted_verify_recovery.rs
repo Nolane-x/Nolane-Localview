@@ -17,9 +17,11 @@ use crate::trusted_verify::{
     VerifySemanticBaseline, VerifyVisualBaseline, now_unix_ms,
 };
 
-const RECOVERY_SCHEMA_VERSION: u32 = 2;
+const RECOVERY_SCHEMA_VERSION: u32 = 1;
+const WAVE9_RECOVERY_SCHEMA_VERSION: u32 = 1;
 const RECOVERY_DIR: &str = "trusted-verify-v1";
 const MAX_RECOVERY_METADATA_BYTES: usize = 256 * 1024;
+const MAX_RECOVERY_WAVE9_BYTES: usize = 256 * 1024;
 
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
@@ -77,6 +79,14 @@ struct PersistedVerificationRecordV2 {
     wave9_preflight: Option<localview_verification::ProductionCandidatePreflightReceipt>,
     created_at_unix_ms: u64,
     expires_at_unix_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedWave9PreflightV1 {
+    schema_version: u32,
+    verification_id: String,
+    wave9_preflight: localview_verification::ProductionCandidatePreflightReceipt,
 }
 
 impl From<PersistedVerificationRecordV1> for PersistedVerificationRecordV2 {
@@ -285,6 +295,13 @@ fn consumed_path(root: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(root.join(format!("{id}.consumed")))
 }
 
+fn wave9_path(root: &Path, id: &str) -> Result<PathBuf, String> {
+    if !valid_verification_id(id) {
+        return Err("trusted Verify recovery id is malformed".into());
+    }
+    Ok(root.join(format!("{id}.wave9")))
+}
+
 fn write_new_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -327,14 +344,14 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, S
     Ok(bytes)
 }
 
-fn persisted_record(record: &VerificationRecord) -> PersistedVerificationRecordV2 {
+fn persisted_record(record: &VerificationRecord) -> PersistedVerificationRecordV1 {
     let now_ms = now_unix_ms();
     let remaining_ms = record
         .expires_at
         .saturating_duration_since(Instant::now())
         .as_millis()
         .min(u128::from(u64::MAX)) as u64;
-    PersistedVerificationRecordV2 {
+    PersistedVerificationRecordV1 {
         schema_version: RECOVERY_SCHEMA_VERSION,
         verification_id: record.verification_id.clone(),
         proposal_id: record.proposal_id.clone(),
@@ -357,7 +374,6 @@ fn persisted_record(record: &VerificationRecord) -> PersistedVerificationRecordV
             captured_at_unix_ms: visual.captured_at_unix_ms,
         }),
         scope: record.scope,
-        wave9_preflight: record.wave9_preflight.clone(),
         created_at_unix_ms: now_ms,
         expires_at_unix_ms: now_ms.saturating_add(remaining_ms),
     }
@@ -375,11 +391,30 @@ fn persist_record(root: &Path, record: &VerificationRecord) -> Result<(), String
     if metadata_bytes.len() > MAX_RECOVERY_METADATA_BYTES {
         return Err("trusted Verify recovery metadata exceeds its bound".into());
     }
+    let wave9_bytes = record
+        .wave9_preflight
+        .as_ref()
+        .map(|wave9_preflight| {
+            serde_json::to_vec(&PersistedWave9PreflightV1 {
+                schema_version: WAVE9_RECOVERY_SCHEMA_VERSION,
+                verification_id: record.verification_id.clone(),
+                wave9_preflight: wave9_preflight.clone(),
+            })
+            .map_err(|error| format!("serialize trusted Verify Wave 9 recovery context: {error}"))
+        })
+        .transpose()?;
+    if wave9_bytes
+        .as_ref()
+        .is_some_and(|bytes| bytes.len() > MAX_RECOVERY_WAVE9_BYTES)
+    {
+        return Err("trusted Verify Wave 9 recovery context exceeds its bound".into());
+    }
 
     let meta = metadata_path(root, &record.verification_id)?;
     let visual = visual_path(root, &record.verification_id)?;
+    let wave9 = wave9_path(root, &record.verification_id)?;
     let consumed = consumed_path(root, &record.verification_id)?;
-    if meta.exists() || visual.exists() || consumed.exists() {
+    if meta.exists() || visual.exists() || wave9.exists() || consumed.exists() {
         return Err("trusted Verify recovery record already exists".into());
     }
 
@@ -388,6 +423,21 @@ fn persist_record(root: &Path, record: &VerificationRecord) -> Result<(), String
             return Err("trusted Verify recovery visual baseline exceeds its bound".into());
         }
         write_new_private_file(&visual, before.png.as_slice())?;
+    }
+
+    if let Some(wave9_bytes) = wave9_bytes.as_ref() {
+        let wave9_temp = root.join(format!("{}.wave9.tmp", record.verification_id));
+        if wave9_temp.exists() {
+            let _ = fs::remove_file(&wave9_temp);
+        }
+        if let Err(error) = write_new_private_file(&wave9_temp, wave9_bytes).and_then(|_| {
+            fs::rename(&wave9_temp, &wave9)
+                .map_err(|error| format!("commit trusted Verify Wave 9 recovery context: {error}"))
+        }) {
+            let _ = fs::remove_file(&wave9_temp);
+            let _ = fs::remove_file(&visual);
+            return Err(error);
+        }
     }
 
     let temp = root.join(format!("{}.json.tmp", record.verification_id));
@@ -402,6 +452,7 @@ fn persist_record(root: &Path, record: &VerificationRecord) -> Result<(), String
     {
         let _ = fs::remove_file(&temp);
         let _ = fs::remove_file(&visual);
+        let _ = fs::remove_file(&wave9);
         return Err(error);
     }
     Ok(())
@@ -410,6 +461,7 @@ fn persist_record(root: &Path, record: &VerificationRecord) -> Result<(), String
 fn consume_record(root: &Path, id: &str) -> Result<(), String> {
     let meta = metadata_path(root, id)?;
     let visual = visual_path(root, id)?;
+    let wave9 = wave9_path(root, id)?;
     let consumed = consumed_path(root, id)?;
     match fs::rename(&meta, &consumed) {
         Ok(()) => {}
@@ -421,6 +473,7 @@ fn consume_record(root: &Path, id: &str) -> Result<(), String> {
         }
     }
     let _ = fs::remove_file(&visual);
+    let _ = fs::remove_file(&wave9);
     let _ = fs::remove_file(&consumed);
     Ok(())
 }
@@ -436,12 +489,35 @@ fn decode_persisted_record(bytes: &[u8]) -> Result<PersistedVerificationRecordV2
         1 => serde_json::from_value::<PersistedVerificationRecordV1>(value)
             .map(PersistedVerificationRecordV2::from)
             .map_err(|error| format!("parse trusted Verify v1 recovery metadata: {error}")),
-        2 => serde_json::from_value::<PersistedVerificationRecordV2>(value)
-            .map_err(|error| format!("parse trusted Verify v2 recovery metadata: {error}")),
+        2 => {
+            let mut record = serde_json::from_value::<PersistedVerificationRecordV2>(value)
+                .map_err(|error| format!("parse trusted Verify v2 recovery metadata: {error}"))?;
+            record.schema_version = RECOVERY_SCHEMA_VERSION;
+            Ok(record)
+        },
         _ => Err(format!(
             "trusted Verify recovery schema version {version} is unsupported"
         )),
     }
+}
+
+fn load_wave9_preflight(
+    root: &Path,
+    id: &str,
+) -> Result<Option<localview_verification::ProductionCandidatePreflightReceipt>, String> {
+    let path = wave9_path(root, id)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = read_bounded_regular_file(&path, MAX_RECOVERY_WAVE9_BYTES)?;
+    let persisted: PersistedWave9PreflightV1 = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("parse trusted Verify Wave 9 recovery context: {error}"))?;
+    if persisted.schema_version != WAVE9_RECOVERY_SCHEMA_VERSION
+        || persisted.verification_id != id
+    {
+        return Err("trusted Verify Wave 9 recovery context version or identity mismatch".into());
+    }
+    Ok(Some(persisted.wave9_preflight))
 }
 
 fn load_records(root: &Path) -> Result<HashMap<String, VerificationRecord>, String> {
@@ -474,7 +550,14 @@ fn load_records(root: &Path) -> Result<HashMap<String, VerificationRecord>, Stri
         }
 
         let bytes = read_bounded_regular_file(&entry.path(), MAX_RECOVERY_METADATA_BYTES)?;
-        let persisted = decode_persisted_record(&bytes)?;
+        let mut persisted = decode_persisted_record(&bytes)?;
+        let companion_wave9 = load_wave9_preflight(root, id)?;
+        if persisted.wave9_preflight.is_some() && companion_wave9.is_some() {
+            return Err("trusted Verify recovery contains ambiguous Wave 9 context".into());
+        }
+        if persisted.wave9_preflight.is_none() {
+            persisted.wave9_preflight = companion_wave9;
+        }
         if persisted.schema_version != RECOVERY_SCHEMA_VERSION
             || persisted.verification_id != id
             || persisted.semantic_before.context_version != VERIFY_CONTEXT_VERSION
@@ -485,6 +568,7 @@ fn load_records(root: &Path) -> Result<HashMap<String, VerificationRecord>, Stri
         if persisted.expires_at_unix_ms <= now_ms {
             let _ = fs::remove_file(entry.path());
             let _ = fs::remove_file(visual_path(root, id)?);
+            let _ = fs::remove_file(wave9_path(root, id)?);
             continue;
         }
         if records.len() >= MAX_VERIFICATION_RECORDS {
@@ -551,6 +635,12 @@ fn load_records(root: &Path) -> Result<HashMap<String, VerificationRecord>, Stri
         {
             let _ = fs::remove_file(entry.path());
         }
+        if let Some(id) = name.strip_suffix(".wave9")
+            && valid_verification_id(id)
+            && !active_ids.contains(id)
+        {
+            let _ = fs::remove_file(entry.path());
+        }
     }
 
     Ok(records)
@@ -597,10 +687,35 @@ mod tests {
             expires_at_unix_ms: 20,
         };
         let bytes = serde_json::to_vec(&persisted).expect("serialize v1 recovery fixture");
+        assert!(
+            !String::from_utf8(bytes.clone())
+                .expect("v1 recovery fixture is utf8")
+                .contains("wave9_preflight"),
+            "rollback-readable primary metadata must not gain Wave 9-only fields"
+        );
         let migrated = decode_persisted_record(&bytes).expect("migrate v1 recovery fixture");
         assert_eq!(migrated.schema_version, RECOVERY_SCHEMA_VERSION);
         assert_eq!(migrated.verification_id, persisted.verification_id);
         assert!(migrated.wave9_preflight.is_none());
+    }
+
+    #[test]
+    fn wave9_companion_is_versioned_separately_from_rollback_readable_metadata() {
+        let verification_id = format!("lvv-{}", Uuid::new_v4());
+        let persisted = PersistedWave9PreflightV1 {
+            schema_version: WAVE9_RECOVERY_SCHEMA_VERSION,
+            verification_id: verification_id.clone(),
+            wave9_preflight:
+                localview_verification::ProductionCandidatePreflightReceipt::inconclusive_unavailable(
+                    "fixture",
+                ),
+        };
+        let bytes = serde_json::to_vec(&persisted).expect("serialize Wave 9 companion");
+        let decoded: PersistedWave9PreflightV1 =
+            serde_json::from_slice(&bytes).expect("decode Wave 9 companion");
+        assert_eq!(decoded.schema_version, WAVE9_RECOVERY_SCHEMA_VERSION);
+        assert_eq!(decoded.verification_id, verification_id);
+        assert_eq!(RECOVERY_SCHEMA_VERSION, 1);
     }
 
     #[test]
