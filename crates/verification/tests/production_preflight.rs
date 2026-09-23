@@ -3,7 +3,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use localview_counterfactual::{
@@ -18,13 +17,10 @@ use localview_verification::{
 use uuid::Uuid;
 
 fn temp_path() -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
     std::env::temp_dir().join(format!(
-        "localview-wave9-production-preflight-{}-{stamp}",
-        std::process::id()
+        "localview-wave9-production-preflight-{}-{}",
+        std::process::id(),
+        Uuid::new_v4()
     ))
 }
 
