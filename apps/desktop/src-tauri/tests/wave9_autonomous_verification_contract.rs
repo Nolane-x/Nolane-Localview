@@ -111,6 +111,30 @@ fn production_preflight_is_reachable_and_never_mints_verified() {
 }
 
 #[test]
+fn trusted_verify_wave9_recovery_preserves_previous_reader_compatibility() {
+    let recovery = source("src/trusted_verify_recovery.rs");
+    assert!(recovery.contains("const RECOVERY_SCHEMA_VERSION: u32 = 1;"));
+    assert!(recovery.contains("struct PersistedWave9PreflightV1"));
+    assert!(recovery.contains("format!(\"{id}.wave9\")"));
+
+    let primary_writer = function_body(&recovery, "fn persisted_record(", "fn persist_record(");
+    assert!(primary_writer.contains("-> PersistedVerificationRecordV1"));
+    assert!(!primary_writer.contains("wave9_preflight:"));
+
+    let persist = function_body(&recovery, "fn persist_record(", "fn consume_record(");
+    let wave9_commit = persist
+        .find("fs::rename(&wave9_temp, &wave9)")
+        .expect("Wave 9 companion commit must exist");
+    let primary_commit = persist
+        .find("fs::rename(&temp, &meta)")
+        .expect("primary metadata commit must exist");
+    assert!(
+        wave9_commit < primary_commit,
+        "rollback-readable primary metadata must remain the final commit-point"
+    );
+}
+
+#[test]
 fn shadow_proof_never_optimistically_claims_external_side_effect_blocking() {
     let shadow = source("../../../crates/counterfactual/src/shadow.rs");
     assert!(shadow.contains("ExternalSideEffectContainment::NotProven"));
