@@ -503,7 +503,8 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
         StatusCode::NO_CONTENT
     );
 
-    let post_snapshot_action_id = loop {
+    let mut post_snapshot_action_id = None;
+    for _ in 0..100 {
         let (status, body) =
             take_surface_actions(state.clone(), session_id, registration).await;
         assert_eq!(status, StatusCode::OK);
@@ -512,10 +513,13 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
                 Uuid::parse_str(action["id"].as_str().expect("post-dispatch snapshot id"))
                     .expect("canonical snapshot uuid");
             assert_eq!(action["action"]["type"], "snapshot");
-            break snapshot_id;
+            post_snapshot_action_id = Some(snapshot_id);
+            break;
         }
         sleep(Duration::from_millis(10)).await;
-    };
+    }
+    let post_snapshot_action_id =
+        post_snapshot_action_id.expect("R6 must enqueue a bounded fresh post-dispatch snapshot");
     assert_eq!(
         complete_surface_action(
             state.clone(),
@@ -530,14 +534,17 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
 
     let status_uri =
         format!("/v1/sessions/{session_id}/managed-consequential/{action_id}/status");
-    let terminal = loop {
+    let mut terminal = None;
+    for _ in 0..100 {
         let (status, body) = get(state.clone(), &status_uri).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         if body["terminal"] == true {
-            break body;
+            terminal = Some(body);
+            break;
         }
         sleep(Duration::from_millis(10)).await;
-    };
+    }
+    let terminal = terminal.expect("R6 reconciliation must reach a bounded terminal status");
     assert_eq!(terminal["postcondition_status"], "verified_expected");
     assert_eq!(terminal["fresh_snapshot_version"], 2);
     assert_eq!(terminal["fresh_snapshot_route"], "/settings");
