@@ -29,7 +29,11 @@ use localview_live_bridge::{
 
 use crate::{
     ControlState,
-    managed_consequential::schedule_managed_consequential_reconciliation,
+    managed_consequential::{
+        arm_managed_consequential_actions_for_executor,
+        record_managed_consequential_executor_completion,
+        schedule_managed_consequential_reconciliation,
+    },
     perception::{authorized, denied},
     surface_liveness::reap_expired_surface_owner_resources_for_sessions,
     surface_owner::{
@@ -869,13 +873,19 @@ async fn take_surface_actions(
     // queue drain must share the LiveBridge action gate. Calling the session-wide
     // public drain here would reopen a TOCTOU window where a different managed
     // surface could become primary between validation and drain.
-    Json(
-        state
-            .live
-            .take_managed_surface_actions(request.session_id, authority.authority_ref.clone(), 16)
-            .await,
+    let actions = state
+        .live
+        .take_managed_surface_actions(request.session_id, authority.authority_ref.clone(), 16)
+        .await;
+    let actions = arm_managed_consequential_actions_for_executor(
+        &state.sessions,
+        &state.live,
+        request.session_id,
+        &authority.authority_ref,
+        actions,
     )
-    .into_response()
+    .await;
+    Json(actions).into_response()
 }
 
 async fn complete_surface_action(
@@ -925,6 +935,16 @@ async fn complete_surface_action(
         .await
     {
         ManagedSurfaceActionCompletion::Completed => {
+            if record_managed_consequential_executor_completion(
+                &state.sessions,
+                session_id,
+                &completed_result,
+            )
+            .await
+            .is_err()
+            {
+                return surface_conflict("managed_consequential_durable_dispatch_receipt_failed");
+            }
             schedule_managed_consequential_reconciliation(
                 state.clone(),
                 session_id,
