@@ -17,7 +17,7 @@ use crate::trusted_verify::{
     VerifySemanticBaseline, VerifyVisualBaseline, now_unix_ms,
 };
 
-const RECOVERY_SCHEMA_VERSION: u32 = 1;
+const RECOVERY_SCHEMA_VERSION: u32 = 2;
 const RECOVERY_DIR: &str = "trusted-verify-v1";
 const MAX_RECOVERY_METADATA_BYTES: usize = 256 * 1024;
 
@@ -52,10 +52,56 @@ struct PersistedVerificationRecordV1 {
     semantic_before: VerifySemanticBaseline,
     visual_before: Option<PersistedVisualBaselineV1>,
     scope: VerificationScope,
-    #[serde(default)]
+    created_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedVerificationRecordV2 {
+    schema_version: u32,
+    verification_id: String,
+    proposal_id: String,
+    session_id: localview_protocol::SessionId,
+    reference: String,
+    canonical_route: String,
+    canonical_file: PathBuf,
+    project_root: PathBuf,
+    display_file: String,
+    source_line: u32,
+    postimage_sha256: String,
+    instruction: String,
+    semantic_before: VerifySemanticBaseline,
+    visual_before: Option<PersistedVisualBaselineV1>,
+    scope: VerificationScope,
     wave9_preflight: Option<localview_verification::ProductionCandidatePreflightReceipt>,
     created_at_unix_ms: u64,
     expires_at_unix_ms: u64,
+}
+
+impl From<PersistedVerificationRecordV1> for PersistedVerificationRecordV2 {
+    fn from(record: PersistedVerificationRecordV1) -> Self {
+        Self {
+            schema_version: RECOVERY_SCHEMA_VERSION,
+            verification_id: record.verification_id,
+            proposal_id: record.proposal_id,
+            session_id: record.session_id,
+            reference: record.reference,
+            canonical_route: record.canonical_route,
+            canonical_file: record.canonical_file,
+            project_root: record.project_root,
+            display_file: record.display_file,
+            source_line: record.source_line,
+            postimage_sha256: record.postimage_sha256,
+            instruction: record.instruction,
+            semantic_before: record.semantic_before,
+            visual_before: record.visual_before,
+            scope: record.scope,
+            wave9_preflight: None,
+            created_at_unix_ms: record.created_at_unix_ms,
+            expires_at_unix_ms: record.expires_at_unix_ms,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -281,14 +327,14 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, S
     Ok(bytes)
 }
 
-fn persisted_record(record: &VerificationRecord) -> PersistedVerificationRecordV1 {
+fn persisted_record(record: &VerificationRecord) -> PersistedVerificationRecordV2 {
     let now_ms = now_unix_ms();
     let remaining_ms = record
         .expires_at
         .saturating_duration_since(Instant::now())
         .as_millis()
         .min(u128::from(u64::MAX)) as u64;
-    PersistedVerificationRecordV1 {
+    PersistedVerificationRecordV2 {
         schema_version: RECOVERY_SCHEMA_VERSION,
         verification_id: record.verification_id.clone(),
         proposal_id: record.proposal_id.clone(),
@@ -379,6 +425,25 @@ fn consume_record(root: &Path, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn decode_persisted_record(bytes: &[u8]) -> Result<PersistedVerificationRecordV2, String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("parse trusted Verify recovery metadata: {error}"))?;
+    let version = value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "trusted Verify recovery metadata is missing schema version".to_string())?;
+    match version {
+        1 => serde_json::from_value::<PersistedVerificationRecordV1>(value)
+            .map(PersistedVerificationRecordV2::from)
+            .map_err(|error| format!("parse trusted Verify v1 recovery metadata: {error}")),
+        2 => serde_json::from_value::<PersistedVerificationRecordV2>(value)
+            .map_err(|error| format!("parse trusted Verify v2 recovery metadata: {error}")),
+        _ => Err(format!(
+            "trusted Verify recovery schema version {version} is unsupported"
+        )),
+    }
+}
+
 fn load_records(root: &Path) -> Result<HashMap<String, VerificationRecord>, String> {
     ensure_private_directory(root)?;
     let now_ms = now_unix_ms();
@@ -409,8 +474,7 @@ fn load_records(root: &Path) -> Result<HashMap<String, VerificationRecord>, Stri
         }
 
         let bytes = read_bounded_regular_file(&entry.path(), MAX_RECOVERY_METADATA_BYTES)?;
-        let persisted: PersistedVerificationRecordV1 = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("parse trusted Verify recovery metadata: {error}"))?;
+        let persisted = decode_persisted_record(&bytes)?;
         if persisted.schema_version != RECOVERY_SCHEMA_VERSION
             || persisted.verification_id != id
             || persisted.semantic_before.context_version != VERIFY_CONTEXT_VERSION
