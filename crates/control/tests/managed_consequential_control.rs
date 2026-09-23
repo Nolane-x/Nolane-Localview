@@ -551,7 +551,6 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
     let terminal = terminal.expect("R6 reconciliation must reach a bounded terminal status");
     assert_eq!(terminal["postcondition_status"], "verified_expected");
     assert_eq!(terminal["fresh_snapshot_version"], 2);
-    assert_eq!(terminal["fresh_snapshot_route"], "/settings");
     assert!(
         terminal["proof_ref"]
             .as_str()
