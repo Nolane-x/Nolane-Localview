@@ -146,7 +146,7 @@ pub enum ProductionCandidatePreflightVerdict {
     Inconclusive,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProductionCandidatePreflightReceipt {
     pub candidate_id: Option<String>,
     pub base_revision: Option<String>,
