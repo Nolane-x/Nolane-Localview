@@ -100,7 +100,7 @@ fn production_preflight_is_reachable_and_never_mints_verified() {
     let body = function_body(
         &verification,
         "pub fn run_production_candidate_preflight",
-        "#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]\n#[serde(rename_all = \"snake_case\")]\npub enum AutonomousVerificationVerdict",
+        "pub fn bind_production_affected_state",
     );
     assert!(body.contains("ShadowWorkspace::prepare"));
     assert!(body.contains("shadow.proof()"));
