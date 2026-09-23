@@ -16,13 +16,17 @@ use axum::{
 };
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BoundCanonicalDispatchError,
-    BridgeActionKind, BridgeActionResult, CanonicalQueuedAction, ConsequentialJournal, LiveBridge,
+    BridgeActionKind, BridgeActionResult, CanonicalQueuedAction, ConsequentialJournal,
+    DispatchExecutionPermit, DispatchLinearizationReceipt, DispatchPreparationReceipt,
+    DispatchPreparedCapability, LiveBridge,
 };
 use localview_postcondition_contracts::{
     PostconditionContractRegistry, RegisteredPostconditionContract,
     WebSemanticPostconditionEvaluation,
 };
-use localview_protocol::{PageSnapshot, PrincipalRef, SemanticNode, SessionId};
+use localview_protocol::{
+    DispatchResult, PageSnapshot, PrincipalRef, SemanticNode, SessionId, TransportResult,
+};
 use localview_sessions::SessionManager;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -71,6 +75,16 @@ struct PendingManagedConsequentialPlan {
     expires_at: Instant,
 }
 
+struct PreparedManagedConsequentialDispatch {
+    session_id: SessionId,
+    capability: DispatchPreparedCapability,
+}
+
+struct ExecutingManagedConsequentialDispatch {
+    session_id: SessionId,
+    permit: DispatchExecutionPermit,
+}
+
 #[derive(Debug, Clone)]
 struct ManagedConsequentialReconciliation {
     session_id: SessionId,
@@ -87,6 +101,8 @@ struct ManagedConsequentialReconciliation {
 struct ManagedConsequentialControlHandle {
     journal: Option<Arc<ConsequentialJournal>>,
     pending: Arc<Mutex<HashMap<Uuid, PendingManagedConsequentialPlan>>>,
+    prepared: Arc<Mutex<HashMap<Uuid, PreparedManagedConsequentialDispatch>>>,
+    executing: Arc<Mutex<HashMap<Uuid, ExecutingManagedConsequentialDispatch>>>,
     reconciliations: Arc<Mutex<HashMap<Uuid, ManagedConsequentialReconciliation>>>,
     plan_gate: Arc<Mutex<()>>,
 }
@@ -116,6 +132,8 @@ pub fn configure_managed_consequential_control_for_sessions(
             handle: ManagedConsequentialControlHandle {
                 journal,
                 pending: Arc::new(Mutex::new(HashMap::new())),
+                prepared: Arc::new(Mutex::new(HashMap::new())),
+                executing: Arc::new(Mutex::new(HashMap::new())),
                 reconciliations: Arc::new(Mutex::new(HashMap::new())),
                 plan_gate: Arc::new(Mutex::new(())),
             },
@@ -405,6 +423,12 @@ async fn confirm_managed_consequential_action(
     }
 
     let control = control_for_sessions(&state.sessions);
+    let Some(journal) = control.journal.as_ref() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "managed_consequential_durable_journal_unavailable",
+        );
+    };
     let _plan_gate = control.plan_gate.lock().await;
 
     let plan = {
@@ -490,6 +514,73 @@ async fn confirm_managed_consequential_action(
         );
     }
 
+    let authorization_entry = match journal
+        .record_authorization(
+            action_id,
+            plan.queued.envelope.metadata.authorization_revision.clone(),
+            true,
+        )
+        .await
+    {
+        Ok(entry) => entry,
+        Err(_) => {
+            state
+                .live
+                .discard_bound_canonical_action(plan.queued.action.id)
+                .await;
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "managed_consequential_durable_authorization_failed",
+            );
+        }
+    };
+    let preparation = DispatchPreparationReceipt {
+        receipt_ref: format!(
+            "dispatch-prepared:managed-webview:{action_id}:{}",
+            authorization_entry.journal_sequence
+        ),
+        authorization_journal_sequence: authorization_entry.journal_sequence,
+        precondition_snapshot_cut_ref: plan
+            .queued
+            .envelope
+            .metadata
+            .precondition_snapshot_cut_ref
+            .clone(),
+        provider_incarnation_ref: plan
+            .queued
+            .envelope
+            .metadata
+            .provider_incarnation_ref
+            .clone(),
+        target_incarnation_ref: plan
+            .queued
+            .envelope
+            .metadata
+            .target_incarnation_ref
+            .clone(),
+    };
+    let prepared = match journal.record_dispatch_prepared(action_id, preparation).await {
+        Ok(admission) => admission,
+        Err(_) => {
+            state
+                .live
+                .discard_bound_canonical_action(plan.queued.action.id)
+                .await;
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "managed_consequential_durable_prepare_failed",
+            );
+        }
+    };
+    let (_, capability) = prepared.into_parts();
+    control.prepared.lock().await.insert(
+        action_id,
+        PreparedManagedConsequentialDispatch {
+            session_id,
+            capability,
+        },
+    );
+
     prune_expired_reconciliations(&control).await;
     if control.reconciliations.lock().await.len()
         >= MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS
@@ -554,8 +645,32 @@ async fn confirm_managed_consequential_action(
             .into_response(),
         Err(error_code) => {
             control.reconciliations.lock().await.remove(&action_id);
+            let rollback_failed = match control.prepared.lock().await.remove(&action_id) {
+                Some(prepared) => match journal.begin_dispatch(prepared.capability).await {
+                    Ok(permit) => journal
+                        .record_dispatch_linearized(
+                            permit,
+                            DispatchLinearizationReceipt {
+                                receipt_ref: format!(
+                                    "dispatch:managed-webview:not-dispatched:{action_id}:{}",
+                                    Uuid::new_v4()
+                                ),
+                                transport_result: TransportResult::RejectedBeforeExecutor,
+                                dispatch_result: DispatchResult::NotDispatched,
+                            },
+                        )
+                        .await
+                        .is_err(),
+                    Err(_) => true,
+                },
+                None => true,
+            };
             (
-                StatusCode::CONFLICT,
+                if rollback_failed {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    StatusCode::CONFLICT
+                },
                 Json(serde_json::json!({
                     "error": dispatch_error_code(error_code),
                     "action_id": action_id,
@@ -830,6 +945,8 @@ fn control_for_sessions(sessions: &Arc<SessionManager>) -> ManagedConsequentialC
             handle: ManagedConsequentialControlHandle {
                 journal: None,
                 pending: Arc::new(Mutex::new(HashMap::new())),
+                prepared: Arc::new(Mutex::new(HashMap::new())),
+                executing: Arc::new(Mutex::new(HashMap::new())),
                 reconciliations: Arc::new(Mutex::new(HashMap::new())),
                 plan_gate: Arc::new(Mutex::new(())),
             },
