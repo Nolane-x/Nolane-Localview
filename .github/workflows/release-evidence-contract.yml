@@ -1,0 +1,31 @@
+name: Release evidence contract
+
+on:
+  pull_request:
+    paths:
+      - "tools/release/**"
+      - ".github/workflows/release-evidence-contract.yml"
+      - ".github/workflows/release-candidate.yml"
+      - "Cargo.lock"
+      - "apps/desktop/package-lock.json"
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Run release evidence unit tests
+        run: python3 -m unittest tools/release/test_release_evidence.py
+      - name: Truth-boundary source contract
+        shell: bash
+        run: |
+          grep -F '"signed": False' tools/release/generate_release_evidence.py
+          grep -F '"public_release": False' tools/release/generate_release_evidence.py
+          grep -F '"code_signing_verified": False' tools/release/generate_release_evidence.py
+          grep -F '"macos_notarization_verified": False' tools/release/generate_release_evidence.py
