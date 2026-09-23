@@ -228,6 +228,21 @@ impl LiveBridge {
         Ok(CanonicalQueuedAction { action, envelope })
     }
 
+    /// Discard one unconsumed direct canonical binding.
+    ///
+    /// This is used when a process-local confirmation expires or is otherwise
+    /// invalidated before dispatch. Removal is serialized with provider/surface
+    /// authority changes so an expired confirmation can never leave reusable
+    /// canonical dispatch authority behind.
+    pub async fn discard_bound_canonical_action(&self, action_id: Uuid) -> bool {
+        let _gate = self.action_gate.lock().await;
+        self.action_envelopes
+            .write()
+            .await
+            .remove(&action_id)
+            .is_some()
+    }
+
     /// Consume one exact direct canonical binding into the public executor queue.
     ///
     /// The binding is consumed under the canonical action gate before the queue
