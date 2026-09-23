@@ -800,7 +800,11 @@ fn existing_control_for_sessions(
 
 async fn prune_expired_reconciliations(control: &ManagedConsequentialControlHandle) {
     let now = Instant::now();
-    prune_expired_reconciliations(control).await;
+    control
+        .reconciliations
+        .lock()
+        .await
+        .retain(|_, record| record.expires_at > now);
 }
 
 async fn prune_expired(control: &ManagedConsequentialControlHandle, live: &LiveBridge) {
