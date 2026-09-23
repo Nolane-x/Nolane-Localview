@@ -16,7 +16,7 @@ use axum::{
 };
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BoundCanonicalDispatchError,
-    BridgeActionKind, BridgeActionResult, CanonicalQueuedAction, LiveBridge,
+    BridgeActionKind, BridgeActionResult, CanonicalQueuedAction, ConsequentialJournal, LiveBridge,
 };
 use localview_postcondition_contracts::{
     PostconditionContractRegistry, RegisteredPostconditionContract,
@@ -85,6 +85,7 @@ struct ManagedConsequentialReconciliation {
 
 #[derive(Clone)]
 struct ManagedConsequentialControlHandle {
+    journal: Option<Arc<ConsequentialJournal>>,
     pending: Arc<Mutex<HashMap<Uuid, PendingManagedConsequentialPlan>>>,
     reconciliations: Arc<Mutex<HashMap<Uuid, ManagedConsequentialReconciliation>>>,
     plan_gate: Arc<Mutex<()>>,
@@ -100,6 +101,31 @@ type ManagedConsequentialControlRegistry = HashMap<usize, ManagedConsequentialCo
 static MANAGED_CONSEQUENTIAL_CONTROL: OnceLock<StdMutex<ManagedConsequentialControlRegistry>> =
     OnceLock::new();
 
+pub fn configure_managed_consequential_control_for_sessions(
+    sessions: &Arc<SessionManager>,
+    journal: Option<Arc<ConsequentialJournal>>,
+) {
+    let key = Arc::as_ptr(sessions) as usize;
+    let registry = MANAGED_CONSEQUENTIAL_CONTROL.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut entries = lock_registry(registry);
+    entries.retain(|_, entry| entry.owner.strong_count() > 0);
+    entries.insert(
+        key,
+        ManagedConsequentialControlEntry {
+            owner: Arc::downgrade(sessions),
+            handle: ManagedConsequentialControlHandle {
+                journal,
+                pending: Arc::new(Mutex::new(HashMap::new())),
+                reconciliations: Arc::new(Mutex::new(HashMap::new())),
+                plan_gate: Arc::new(Mutex::new(())),
+            },
+        },
+    );
+}
+
+/// Configure durable history only. Process-local pending confirmations and
+/// reconciliation capabilities are always recreated empty and are never
+/// restored from journal contents after restart.
 pub(crate) fn router(state: ControlState) -> Router {
     Router::new()
         .route(
@@ -175,6 +201,12 @@ async fn plan_managed_consequential_action(
     }
 
     let control = control_for_sessions(&state.sessions);
+    let Some(journal) = control.journal.as_ref() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "managed_consequential_durable_journal_unavailable",
+        );
+    };
     let _plan_gate = control.plan_gate.lock().await;
     prune_expired(&control, &state.live).await;
     if control.pending.lock().await.len() >= MAX_PENDING_MANAGED_CONSEQUENTIAL_PLANS {
@@ -305,6 +337,31 @@ async fn plan_managed_consequential_action(
     };
 
     let action_id = queued.action.id;
+    if journal
+        .record_intent_admitted(queued.envelope.clone())
+        .await
+        .is_err()
+    {
+        state
+            .live
+            .discard_bound_canonical_action(action_id)
+            .await;
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "managed_consequential_durable_intent_failed",
+        );
+    }
+    if journal.record_intent_operation_bound(&queued).await.is_err() {
+        state
+            .live
+            .discard_bound_canonical_action(action_id)
+            .await;
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "managed_consequential_durable_operation_failed",
+        );
+    }
+
     control.pending.lock().await.insert(
         action_id,
         PendingManagedConsequentialPlan {
@@ -771,6 +828,7 @@ fn control_for_sessions(sessions: &Arc<SessionManager>) -> ManagedConsequentialC
         .or_insert_with(|| ManagedConsequentialControlEntry {
             owner: Arc::downgrade(sessions),
             handle: ManagedConsequentialControlHandle {
+                journal: None,
                 pending: Arc::new(Mutex::new(HashMap::new())),
                 reconciliations: Arc::new(Mutex::new(HashMap::new())),
                 plan_gate: Arc::new(Mutex::new(())),
