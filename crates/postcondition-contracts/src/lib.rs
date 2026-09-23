@@ -454,9 +454,7 @@ fn valid_web_reference(reference: &str) -> bool {
     };
     !rest.is_empty()
         && reference.len() <= 256
-        && rest
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        && rest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn find_web_reference(node: &SemanticNode, reference: &str) -> bool {
