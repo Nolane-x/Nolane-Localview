@@ -91,7 +91,7 @@ async fn test_state_with_consequential_path() -> (ControlState, Uuid, PathBuf) {
         Uuid::new_v4()
     ));
     let consequential = Arc::new(
-        ConsequentialJournal::open(consequential_path)
+        ConsequentialJournal::open(&consequential_path)
             .await
             .expect("open consequential journal"),
     );
