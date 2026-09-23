@@ -5,6 +5,7 @@ use std::{sync::OnceLock, time::Duration};
 use localview_protocol::SessionId;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+use localview_live_bridge::{BridgeAction, BridgeActionResult};
 use uuid::Uuid;
 
 use super::surface_registry::{
@@ -121,6 +122,24 @@ struct SurfaceVisibilityRequest<'a> {
     owner_instance_id: Uuid,
     boot_epoch: Uuid,
     owner_lease_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+struct SurfaceActionRequest<'a> {
+    session_id: SessionId,
+    surface_kind: &'a str,
+    label: &'a str,
+    incarnation: u64,
+    owner_instance_id: Uuid,
+    boot_epoch: Uuid,
+    owner_lease_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+struct SurfaceActionCompleteRequest<'a> {
+    #[serde(flatten)]
+    surface: SurfaceActionRequest<'a>,
+    result: &'a BridgeActionResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -259,6 +278,55 @@ pub async fn update_surface_visibility(
         }
         Err(error) => Err(error.into_string()),
     }
+}
+
+fn surface_action_request<'a>(
+    identity: &'a DesktopSurfaceIdentity,
+    proof: SurfaceOwnerRegistration,
+) -> SurfaceActionRequest<'a> {
+    SurfaceActionRequest {
+        session_id: identity.session_id,
+        surface_kind: identity.kind.as_runtime_kind(),
+        label: &identity.label,
+        incarnation: identity.incarnation,
+        owner_instance_id: proof.owner_instance_id,
+        boot_epoch: proof.boot_epoch,
+        owner_lease_id: proof.owner_lease_id,
+    }
+}
+
+pub async fn take_surface_actions(
+    identity: &DesktopSurfaceIdentity,
+) -> Result<Vec<BridgeAction>, String> {
+    let proof = exact_identity_owner(identity).await?;
+    let request = surface_action_request(identity, proof);
+    let token = super::super::read_token().await?;
+    super::super::control_client()?
+        .post(format!(
+            "{SURFACE_RESOURCE_BASE}/v1/runtime/resources/surfaces/actions/take"
+        ))
+        .bearer_auth(token)
+        .json(&request)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?
+        .json::<Vec<BridgeAction>>()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+pub async fn complete_surface_action(
+    identity: &DesktopSurfaceIdentity,
+    result: &BridgeActionResult,
+) -> Result<(), String> {
+    let proof = exact_identity_owner(identity).await?;
+    let request = SurfaceActionCompleteRequest {
+        surface: surface_action_request(identity, proof),
+        result,
+    };
+    post_surface("/v1/runtime/resources/surfaces/actions/complete", &request).await
 }
 
 pub async fn release_surface(identity: &DesktopSurfaceIdentity) -> Result<(), String> {
