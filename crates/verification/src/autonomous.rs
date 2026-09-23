@@ -10,7 +10,7 @@ use localview_counterfactual::{
     ShadowCleanupProof, ShadowWorkspace, patch_digest,
 };
 use localview_mutation::{MutationChallengeResult, MutationVerdict};
-use localview_planner::PartialRevalidationPlan;
+use localview_planner::{PartialRevalidationInput, PartialRevalidationPlan, plan_partial_revalidation};
 use localview_state_space::{
     AffectedChangeIdentity, AffectedStateInput, AffectedStatePlan, StateDimension, StateValue,
     compile_affected_state_plan,
@@ -374,6 +374,136 @@ pub fn bind_production_affected_state(
             .push("production affected-state scope remains explicitly incomplete".into());
         receipt.reasons.sort();
         receipt.reasons.dedup();
+    }
+    Ok(receipt)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProductionObservedVerificationInput {
+    pub canonical_route: String,
+    pub reference: Option<String>,
+    pub reference_changed: bool,
+    pub visual_region_count: usize,
+    pub regression_signals: Vec<String>,
+    pub evidence_ids: Vec<String>,
+    pub observed_runtime_ms: u64,
+}
+
+pub fn build_production_observation_receipt(
+    preflight: &ProductionCandidatePreflightReceipt,
+    observed: ProductionObservedVerificationInput,
+) -> Result<AutonomousVerificationReceipt, String> {
+    let affected = preflight
+        .affected_state_plan
+        .clone()
+        .ok_or_else(|| "Wave 9 production receipt is missing the affected-state plan".to_string())?;
+    if preflight.affected_state_plan_hash.as_ref() != Some(&object_hash(&affected)) {
+        return Err("Wave 9 production receipt affected-state digest mismatch".into());
+    }
+    let predicted_impact = preflight
+        .predicted_impact
+        .clone()
+        .unwrap_or_else(|| impact_targets_from_affected(&affected));
+    let shadow_proof = preflight
+        .shadow_proof
+        .clone()
+        .ok_or_else(|| "Wave 9 production receipt is missing the shadow proof".to_string())?;
+    let shadow_cleanup = preflight
+        .cleanup_proof
+        .clone()
+        .ok_or_else(|| "Wave 9 production receipt is missing the shadow cleanup proof".to_string())?;
+
+    let mut actual_impact = ActualImpact {
+        evidence_ids: sorted_dedup(observed.evidence_ids),
+        observation_scope_complete: false,
+        ..Default::default()
+    };
+    if observed.reference_changed {
+        if let Some(reference) = observed
+            .reference
+            .as_ref()
+            .filter(|reference| !reference.trim().is_empty())
+        {
+            actual_impact.targets.insert(ImpactTarget {
+                kind: ImpactKind::Reference,
+                id: reference.clone(),
+            });
+        }
+        actual_impact.targets.insert(ImpactTarget {
+            kind: ImpactKind::Route,
+            id: observed.canonical_route.clone(),
+        });
+    }
+    for index in 0..observed.visual_region_count {
+        actual_impact.targets.insert(ImpactTarget {
+            kind: ImpactKind::VisualRegion,
+            id: format!("{}#visual-region-{index}", observed.canonical_route),
+        });
+    }
+    for signal in observed.regression_signals {
+        actual_impact.targets.insert(ImpactTarget {
+            kind: ImpactKind::IssueClass,
+            id: signal,
+        });
+    }
+
+    let revalidation_plan = plan_partial_revalidation(&PartialRevalidationInput {
+        affected: affected.clone(),
+        impacted_flow_checkpoints: BTreeSet::new(),
+        relevant_visual_baselines: BTreeSet::new(),
+        source_semantic_checks: BTreeSet::from(["trusted-fix-postimage".into()]),
+        known_universe: None,
+    });
+    let revalidated_states = affected
+        .compiled_states
+        .iter()
+        .map(|state| state.key())
+        .collect::<BTreeSet<_>>();
+    let cleanup_proof = VerificationCleanupProof {
+        shadow: shadow_cleanup,
+        // SemanticOnly preflight never launches candidate processes or reserves
+        // a candidate runtime port. These obligations are vacuously discharged,
+        // while external side-effect containment remains independently NotProven.
+        shadow_processes_terminated: true,
+        loopback_port_released: true,
+        real_worktree_unchanged: shadow_proof.real_worktree_unchanged,
+        external_side_effects_observed: false,
+    };
+    let mut receipt = build_autonomous_receipt(AutonomousVerificationInput {
+        affected,
+        shadow_proof,
+        contracts: ContractEvaluationSummary::default(),
+        mutations: Vec::new(),
+        predicted_impact,
+        actual_impact,
+        revalidation_plan,
+        revalidated_states,
+        skipped_states: Vec::new(),
+        stale_evidence_ids: Vec::new(),
+        resource_budget: VerificationResourceBudget {
+            admitted: true,
+            max_states: 1,
+            executed_states: 1,
+            max_mutations: 0,
+            executed_mutations: 0,
+            max_runtime_ms: 15_000,
+            observed_runtime_ms: observed.observed_runtime_ms,
+            denial_reason: None,
+        },
+        cleanup_proof,
+    });
+
+    receipt.reasons.push(
+        "production contract catalog execution is not yet bound to the live Trusted Verify path"
+            .into(),
+    );
+    receipt.reasons.push(
+        "production mutation challenges are not yet bound to the live Trusted Verify path".into(),
+    );
+    receipt.reasons.sort();
+    receipt.reasons.dedup();
+    if receipt.final_verdict == AutonomousVerificationVerdict::Verified {
+        receipt.final_verdict = AutonomousVerificationVerdict::Inconclusive;
     }
     Ok(receipt)
 }
