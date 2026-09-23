@@ -979,9 +979,9 @@ mod tests {
 
     #[test]
     fn managed_consequential_contract_refs_are_bounded() {
-        assert!(valid_postcondition_refs(
-            &["lvpc:web-semantic:v1:{}".into()]
-        ));
+        assert!(valid_postcondition_refs(&[
+            r#"lvpc:web-semantic:v1:{"expectation":"present","ref":"@eabc123"}"#.into()
+        ]));
         assert!(!valid_postcondition_refs(&[]));
         assert!(!valid_postcondition_refs(&["not-a-contract".into()]));
     }
