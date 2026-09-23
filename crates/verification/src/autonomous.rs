@@ -10,7 +10,9 @@ use localview_counterfactual::{
     ShadowCleanupProof, ShadowWorkspace, patch_digest,
 };
 use localview_mutation::{MutationChallengeResult, MutationVerdict};
-use localview_planner::{PartialRevalidationInput, PartialRevalidationPlan, plan_partial_revalidation};
+use localview_planner::{
+    PartialRevalidationInput, PartialRevalidationPlan, plan_partial_revalidation,
+};
 use localview_state_space::{
     AffectedChangeIdentity, AffectedStateInput, AffectedStatePlan, StateDimension, StateValue,
     compile_affected_state_plan,
@@ -393,10 +395,9 @@ pub fn build_production_observation_receipt(
     preflight: &ProductionCandidatePreflightReceipt,
     observed: ProductionObservedVerificationInput,
 ) -> Result<AutonomousVerificationReceipt, String> {
-    let affected = preflight
-        .affected_state_plan
-        .clone()
-        .ok_or_else(|| "Wave 9 production receipt is missing the affected-state plan".to_string())?;
+    let affected = preflight.affected_state_plan.clone().ok_or_else(|| {
+        "Wave 9 production receipt is missing the affected-state plan".to_string()
+    })?;
     if preflight.affected_state_plan_hash.as_ref() != Some(&object_hash(&affected)) {
         return Err("Wave 9 production receipt affected-state digest mismatch".into());
     }
@@ -408,10 +409,9 @@ pub fn build_production_observation_receipt(
         .shadow_proof
         .clone()
         .ok_or_else(|| "Wave 9 production receipt is missing the shadow proof".to_string())?;
-    let shadow_cleanup = preflight
-        .cleanup_proof
-        .clone()
-        .ok_or_else(|| "Wave 9 production receipt is missing the shadow cleanup proof".to_string())?;
+    let shadow_cleanup = preflight.cleanup_proof.clone().ok_or_else(|| {
+        "Wave 9 production receipt is missing the shadow cleanup proof".to_string()
+    })?;
 
     let mut actual_impact = ActualImpact {
         evidence_ids: sorted_dedup(observed.evidence_ids),
