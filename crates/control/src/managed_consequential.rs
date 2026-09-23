@@ -39,6 +39,7 @@ use crate::{
 };
 
 const MAX_PENDING_MANAGED_CONSEQUENTIAL_PLANS: usize = 64;
+const MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS: usize = 128;
 const MAX_POSTCONDITION_CONTRACTS: usize = 8;
 const MAX_POSTCONDITION_CONTRACT_REF_BYTES: usize = 4 * 1024;
 const MAX_REFERENCE_BYTES: usize = 256;
@@ -433,6 +434,28 @@ async fn confirm_managed_consequential_action(
         );
     }
 
+    prune_expired_reconciliations(&control).await;
+    if control.reconciliations.lock().await.len()
+        >= MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS
+    {
+        state
+            .live
+            .discard_bound_canonical_action(plan.queued.action.id)
+            .await;
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": "managed_consequential_reconciliation_capacity_exhausted",
+                "action_id": action_id,
+                "confirmation_consumed": true,
+                "dispatch_performed": false,
+                "retry_same_confirmation_allowed": false,
+                "max_reconciliation_records": MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS,
+            })),
+        )
+            .into_response();
+    }
+
     let reconciliation = ManagedConsequentialReconciliation {
         session_id,
         surface_authority: plan.surface_authority.clone(),
@@ -773,6 +796,11 @@ fn existing_control_for_sessions(
     let mut entries = lock_registry(registry);
     entries.retain(|_, entry| entry.owner.strong_count() > 0);
     entries.get(&key).map(|entry| entry.handle.clone())
+}
+
+async fn prune_expired_reconciliations(control: &ManagedConsequentialControlHandle) {
+    let now = Instant::now();
+    prune_expired_reconciliations(control).await;
 }
 
 async fn prune_expired(control: &ManagedConsequentialControlHandle, live: &LiveBridge) {
