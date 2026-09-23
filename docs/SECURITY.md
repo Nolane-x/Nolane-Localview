@@ -16,7 +16,7 @@ A future Unix-domain-socket / named-pipe transport can replace TCP without chang
 
 The legacy CLI/MCP DOM mutation commands (`click`, `type`, `key`, `scroll`, `focus`) are not advertised. The public `/actions` route remains observe-only for `Snapshot`/`Measure`; it is not reopened for mutations.
 
-The shipping canonical V4.3 consequential authority is Windows UIA-specific and binds fresh provider element identity, confirmation, risk and postcondition authority. A DOM stable reference cannot be truthfully converted into that provider authority, so CLI/MCP do not fabricate such a mapping. Generic agent-driven DOM mutation remains unsupported until a canonical consequential transport with equivalent authority exists.
+LocalView has two separate consequential authority families and does not convert one into the other. Windows UIA keeps its provider-element V4.3 authority. Managed WebViews now have a narrower stable-ref authority for `click`/`focus`: planning requires a newly completed semantic snapshot containing the exact interactive ref; confirmation is process-local, one-shot and short-lived; dispatch is fenced to the exact current managed provider/target incarnation; successful executor completion triggers another fresh semantic snapshot; and only canonical `web-semantic:v1` postconditions on that new cut may produce a bounded proof digest. Missing/stale lineage, unavailable fresh evidence, unsupported contracts and capacity exhaustion fail closed. This managed-WebView proof is not yet a durable V4.3 journal commit, and `type`/`key`/`scroll` plus CLI/MCP consequential entry points remain unavailable.
 
 ## Navigation
 
