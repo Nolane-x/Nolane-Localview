@@ -40,6 +40,32 @@ enum Command {
     PerformanceLite { session: Option<SessionId> },
     CaptureSettle { session: Option<SessionId> },
     ActionCorrelation { session: SessionId, action_id: String },
+    ConsequentialPlan {
+        session: SessionId,
+        reference: String,
+        action: String,
+        #[arg(long = "expect", required = true)]
+        expected_postcondition: Vec<String>,
+        #[arg(long)]
+        clear_first: bool,
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long = "modifier")]
+        modifiers: Vec<String>,
+        #[arg(long)]
+        x: Option<f64>,
+        #[arg(long)]
+        y: Option<f64>,
+    },
+    ConsequentialConfirm {
+        session: SessionId,
+        action_id: String,
+        confirmation_ref: String,
+    },
+    ConsequentialStatus {
+        session: SessionId,
+        action_id: String,
+    },
     SourceMapResolve {
         session: SessionId,
         generated_file: String,
@@ -185,6 +211,68 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
+        Command::ConsequentialPlan {
+            session,
+            reference,
+            action,
+            expected_postcondition,
+            clear_first,
+            key,
+            modifiers,
+            x,
+            y,
+        } => {
+            let action = consequential_action_request(
+                &action,
+                clear_first,
+                key,
+                modifiers,
+                x,
+                y,
+            )?;
+            let value: Value = authed_post_json(
+                &client,
+                &cli.control,
+                &format!("/v1/sessions/{session}/managed-consequential/plan"),
+                &serde_json::json!({
+                    "reference": reference,
+                    "action": action,
+                    "expected_postcondition_contract_refs": expected_postcondition,
+                }),
+            )
+            .await?
+            .json()
+            .await?;
+            print_json(&value)?;
+        }
+        Command::ConsequentialConfirm {
+            session,
+            action_id,
+            confirmation_ref,
+        } => {
+            let value: Value = authed_post_json(
+                &client,
+                &cli.control,
+                &format!(
+                    "/v1/sessions/{session}/managed-consequential/{action_id}/confirm"
+                ),
+                &serde_json::json!({ "confirmation_ref": confirmation_ref }),
+            )
+            .await?
+            .json()
+            .await?;
+            print_json(&value)?;
+        }
+        Command::ConsequentialStatus { session, action_id } => {
+            print_path(
+                &client,
+                &cli.control,
+                &format!(
+                    "/v1/sessions/{session}/managed-consequential/{action_id}/status"
+                ),
+            )
+            .await?;
+        }
         Command::SourceMapResolve {
             session,
             generated_file,
@@ -312,6 +400,58 @@ async fn resolve_session(
         _ => Err(anyhow::anyhow!(
             "multiple LocalView sessions are active; pass a session id explicitly"
         )),
+    }
+}
+
+fn consequential_action_request(
+    action: &str,
+    clear_first: bool,
+    key: Option<String>,
+    modifiers: Vec<String>,
+    x: Option<f64>,
+    y: Option<f64>,
+) -> Result<Value> {
+    match action {
+        "click" => Ok(serde_json::json!({ "type": "click" })),
+        "focus" => Ok(serde_json::json!({ "type": "focus" })),
+        "type_text" => {
+            if key.is_some() || !modifiers.is_empty() || x.is_some() || y.is_some() {
+                anyhow::bail!("type_text does not accept key/modifier/x/y options");
+            }
+            let mut text = String::new();
+            let mut stdin = std::io::stdin();
+            std::io::Read::read_to_string(&mut stdin, &mut text)
+                .context("cannot read type_text payload from stdin")?;
+            Ok(serde_json::json!({
+                "type": "type_text",
+                "text": text,
+                "clear_first": clear_first,
+            }))
+        }
+        "key" => {
+            if clear_first || x.is_some() || y.is_some() {
+                anyhow::bail!("key does not accept clear-first/x/y options");
+            }
+            let key = key.context("key action requires --key")?;
+            Ok(serde_json::json!({
+                "type": "key",
+                "key": key,
+                "modifiers": modifiers,
+            }))
+        }
+        "scroll" => {
+            if clear_first || key.is_some() || !modifiers.is_empty() {
+                anyhow::bail!("scroll does not accept clear-first/key/modifier options");
+            }
+            Ok(serde_json::json!({
+                "type": "scroll",
+                "x": x.unwrap_or(0.0),
+                "y": y.unwrap_or(0.0),
+            }))
+        }
+        _ => anyhow::bail!(
+            "unsupported consequential action; expected click, focus, type_text, key, or scroll"
+        ),
     }
 }
 
@@ -481,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_does_not_advertise_legacy_consequential_dom_actions() {
+    fn cli_exposes_two_phase_consequential_authority_without_legacy_shortcuts() {
         use clap::Parser as _;
 
         assert!(Cli::try_parse_from(["localview", "snapshot", "550e8400-e29b-41d4-a716-446655440000"]).is_ok());
@@ -500,6 +640,28 @@ mod tests {
             "dist/app.js",
             "42",
             "7",
+        ]).is_ok());
+        assert!(Cli::try_parse_from([
+            "localview",
+            "consequential-plan",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "@eabc123",
+            "click",
+            "--expect",
+            "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@eabc123\"}",
+        ]).is_ok());
+        assert!(Cli::try_parse_from([
+            "localview",
+            "consequential-confirm",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "11111111-2222-3333-4444-555555555555",
+            "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        ]).is_ok());
+        assert!(Cli::try_parse_from([
+            "localview",
+            "consequential-status",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "11111111-2222-3333-4444-555555555555",
         ]).is_ok());
         for forbidden in ["click", "type", "key", "scroll", "focus"] {
             let parsed = Cli::try_parse_from(["localview", forbidden]);
