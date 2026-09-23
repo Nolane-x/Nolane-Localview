@@ -928,3 +928,200 @@ async fn managed_consequential_plan_rejects_non_web_and_duplicate_postconditions
         "managed_consequential_invalid_postcondition_contract"
     );
 }
+
+
+#[tokio::test]
+async fn managed_type_text_payload_is_private_until_confirmed_and_exact_at_executor() {
+    let (state, session_id, consequential_path) =
+        test_state_with_consequential_path().await;
+    let registration = register_owner(state.clone(), Uuid::new_v4()).await;
+    activate_preview(state.clone(), session_id, registration).await;
+
+    // Establish exact managed-surface execution/observation lineage.
+    assert_eq!(
+        take_surface_actions(state.clone(), session_id, registration)
+            .await
+            .1,
+        serde_json::json!([])
+    );
+
+    let secret = "top-secret-localview-r8-value";
+    let plan_state = state.clone();
+    let plan = tokio::spawn(async move {
+        post(
+            plan_state,
+            &format!("/v1/sessions/{session_id}/managed-consequential/plan"),
+            serde_json::json!({
+                "reference": "@eabc123",
+                "action": {
+                    "type": "type_text",
+                    "text": secret,
+                    "clear_first": true
+                },
+                "expected_postcondition_contract_refs": [
+                    "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@edead\"}"
+                ]
+            }),
+        )
+        .await
+    });
+
+    let mut snapshot_action_id = None;
+    for _ in 0..100 {
+        let (status, body) =
+            take_surface_actions(state.clone(), session_id, registration).await;
+        assert_eq!(status, StatusCode::OK);
+        if let Some(action) = body.as_array().and_then(|actions| actions.first()) {
+            assert_eq!(action["action"]["type"], "snapshot");
+            snapshot_action_id = Some(
+                Uuid::parse_str(action["id"].as_str().expect("snapshot action id"))
+                    .expect("snapshot uuid"),
+            );
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    let snapshot_action_id =
+        snapshot_action_id.expect("payload-bearing plan must acquire a fresh precondition snapshot");
+    assert_eq!(
+        complete_surface_action(
+            state.clone(),
+            session_id,
+            registration,
+            snapshot_action_id,
+            fresh_snapshot_payload(),
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+
+    let (plan_status, plan_body) = plan.await.expect("type plan task");
+    assert_eq!(plan_status, StatusCode::CREATED, "{plan_body}");
+    let serialized_plan = plan_body.to_string();
+    assert!(
+        !serialized_plan.contains(secret),
+        "plan response must never echo TypeText plaintext"
+    );
+    assert_eq!(plan_body["action"]["type"], "type_text");
+    assert_eq!(plan_body["action"]["clear_first"], true);
+    assert!(
+        plan_body["action"].get("text").is_none(),
+        "sanitized plan response must omit TypeText plaintext"
+    );
+    let payload_ref = plan_body["action"]["payload_ref"]
+        .as_str()
+        .expect("server-owned payload ref");
+    assert!(Uuid::parse_str(payload_ref).is_ok());
+
+    let action_id = Uuid::parse_str(
+        plan_body["action_id"]
+            .as_str()
+            .expect("planned type action id"),
+    )
+    .expect("planned type action uuid");
+    let confirmation_ref = Uuid::parse_str(
+        plan_body["confirmation_ref"]
+            .as_str()
+            .expect("type confirmation ref"),
+    )
+    .expect("type confirmation uuid");
+
+    // Payload authority is not executor authority. Nothing is public before
+    // explicit one-shot confirmation.
+    assert_eq!(
+        take_surface_actions(state.clone(), session_id, registration)
+            .await
+            .1,
+        serde_json::json!([])
+    );
+
+    let (confirm_status, confirm_body) = post(
+        state.clone(),
+        &format!(
+            "/v1/sessions/{session_id}/managed-consequential/{action_id}/confirm"
+        ),
+        serde_json::json!({ "confirmation_ref": confirmation_ref }),
+    )
+    .await;
+    assert_eq!(confirm_status, StatusCode::ACCEPTED, "{confirm_body}");
+    assert_eq!(confirm_body["confirmation_consumed"], true);
+
+    let (take_status, take_body) =
+        take_surface_actions(state.clone(), session_id, registration).await;
+    assert_eq!(take_status, StatusCode::OK);
+    let actions = take_body.as_array().expect("confirmed type action array");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0]["id"], action_id.to_string());
+    assert_eq!(actions[0]["action"]["type"], "type_text");
+    assert_eq!(actions[0]["action"]["text"], secret);
+    assert_eq!(actions[0]["action"]["clear_first"], true);
+
+    assert_eq!(
+        complete_surface_action(
+            state.clone(),
+            session_id,
+            registration,
+            action_id,
+            serde_json::json!({ "typed": true }),
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+
+    // R8 must preserve R7's durable fresh post-dispatch proof rather than
+    // treating payload verification as execution success.
+    let mut post_snapshot_action_id = None;
+    for _ in 0..100 {
+        let (status, body) =
+            take_surface_actions(state.clone(), session_id, registration).await;
+        assert_eq!(status, StatusCode::OK);
+        if let Some(action) = body.as_array().and_then(|actions| actions.first()) {
+            assert_eq!(action["action"]["type"], "snapshot");
+            post_snapshot_action_id = Some(
+                Uuid::parse_str(action["id"].as_str().expect("post snapshot id"))
+                    .expect("post snapshot uuid"),
+            );
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    let post_snapshot_action_id = post_snapshot_action_id
+        .expect("payload-bearing execution must trigger fresh post-dispatch reconciliation");
+    assert_eq!(
+        complete_surface_action(
+            state.clone(),
+            session_id,
+            registration,
+            post_snapshot_action_id,
+            post_dispatch_snapshot_payload(),
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+
+    let status_uri =
+        format!("/v1/sessions/{session_id}/managed-consequential/{action_id}/status");
+    let mut terminal = None;
+    for _ in 0..100 {
+        let (status, body) = get(state.clone(), &status_uri).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body["terminal"] == true {
+            terminal = Some(body);
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    let terminal = terminal.expect("payload-bearing action must reach a terminal durable outcome");
+    assert_eq!(terminal["postcondition_status"], "verified_expected");
+    assert!(
+        terminal["proof_ref"]
+            .as_str()
+            .is_some_and(|value| value.starts_with(&format!("postcondition:{action_id}:")))
+    );
+
+    let _ = std::fs::remove_file(format!(
+        "{}.managed-web-payload-{action_id}.json",
+        consequential_path.display()
+    ));
+    let _ = std::fs::remove_file(consequential_path);
+}
