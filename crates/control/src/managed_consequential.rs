@@ -18,11 +18,13 @@ use chrono::Utc;
 use localview_live_bridge::{
     ActionEnvelopeMetadata, ActionIdempotencyClass, ActionPostconditionVerdict, ActionRiskClass,
     BoundCanonicalDispatchError, BridgeAction, BridgeActionKind, BridgeActionResult,
-    CanonicalQueuedAction, ConsequentialJournal, ConsequentialPostconditionEvidence,
+    CanonicalActionOperation, CanonicalQueuedAction, ConsequentialJournal,
+    ConsequentialPostconditionEvidence,
     ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
     ConsequentialRecoveryState, DispatchExecutionPermit, DispatchLinearizationReceipt,
     DispatchPreparationReceipt, DispatchPreparedCapability, LiveBridge,
-    reconcile_consequential_postconditions,
+    ManagedWebPayloadCommitmentKey, ManagedWebPayloadRef,
+    reconcile_consequential_postconditions, verify_managed_web_payload_binding,
 };
 use localview_postcondition_contracts::{
     PostconditionContractRegistry, RegisteredPostconditionContract,
@@ -37,6 +39,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use uuid::Uuid;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     ControlState,
@@ -52,6 +55,11 @@ const MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS: usize = 128;
 const MAX_POSTCONDITION_CONTRACTS: usize = 8;
 const MAX_POSTCONDITION_CONTRACT_REF_BYTES: usize = 4 * 1024;
 const MAX_REFERENCE_BYTES: usize = 256;
+const MAX_MANAGED_TYPE_UTF8_BYTES: usize = 16 * 1024;
+const MAX_MANAGED_KEY_UTF8_BYTES: usize = 256;
+const MAX_MANAGED_MODIFIERS: usize = 8;
+const MAX_MANAGED_MODIFIER_UTF8_BYTES: usize = 64;
+const MAX_MANAGED_SCROLL_DELTA: f64 = 100_000.0;
 const CONFIRMATION_TTL: Duration = Duration::from_secs(30);
 const RECONCILIATION_RECORD_TTL: Duration = Duration::from_secs(5 * 60);
 const MANAGED_RECONCILIATION_SURFACE_SCOPE: &str = "managed-webview:semantic";
@@ -77,10 +85,15 @@ struct ManagedConsequentialConfirmRequest {
     confirmation_ref: Uuid,
 }
 
-#[derive(Debug, Clone)]
+struct ProcessLocalManagedWebPayload {
+    payload_ref: ManagedWebPayloadRef,
+    bytes: Zeroizing<Vec<u8>>,
+}
+
 struct PendingManagedConsequentialPlan {
     confirmation_ref: Uuid,
     queued: CanonicalQueuedAction,
+    payload: Option<ProcessLocalManagedWebPayload>,
     surface_authority: ManagedSurfaceActionAuthority,
     expires_at: Instant,
 }
@@ -110,6 +123,7 @@ struct ManagedConsequentialReconciliation {
 #[derive(Clone)]
 struct ManagedConsequentialControlHandle {
     journal: Option<Arc<ConsequentialJournal>>,
+    payload_commitment_key: Option<Arc<ManagedWebPayloadCommitmentKey>>,
     pending: Arc<Mutex<HashMap<Uuid, PendingManagedConsequentialPlan>>>,
     prepared: Arc<Mutex<HashMap<Uuid, PreparedManagedConsequentialDispatch>>>,
     executing: Arc<Mutex<HashMap<Uuid, ExecutingManagedConsequentialDispatch>>>,
@@ -141,6 +155,9 @@ pub fn configure_managed_consequential_control_for_sessions(
             owner: Arc::downgrade(sessions),
             handle: ManagedConsequentialControlHandle {
                 journal,
+                payload_commitment_key: ManagedWebPayloadCommitmentKey::generate()
+                    .ok()
+                    .map(Arc::new),
                 pending: Arc::new(Mutex::new(HashMap::new())),
                 prepared: Arc::new(Mutex::new(HashMap::new())),
                 executing: Arc::new(Mutex::new(HashMap::new())),
@@ -249,25 +266,33 @@ async fn plan_managed_consequential_action(
     if state.sessions.get(session_id).await.is_none() {
         return error(StatusCode::NOT_FOUND, "session_not_found");
     }
-    if !valid_reference(&request.reference) {
+    let ManagedConsequentialPlanRequest {
+        reference,
+        action,
+        expected_postcondition_contract_refs,
+    } = request;
+    if !valid_reference(&reference) {
         return error(
             StatusCode::BAD_REQUEST,
             "managed_consequential_invalid_reference",
         );
     }
-    if !allowed_action(&request.action) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "managed_consequential_action_not_supported",
-                "supported": ["click", "focus"],
-                "dispatch_performed": false,
-                "confirmation_created": false,
-            })),
-        )
-            .into_response();
-    }
-    if !valid_postcondition_refs(&request.expected_postcondition_contract_refs) {
+    let (carrier_action, payload, public_action) = match prepare_managed_action(action) {
+        Ok(prepared) => prepared,
+        Err(code) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": code,
+                    "supported": ["click", "focus", "type_text", "key", "scroll"],
+                    "dispatch_performed": false,
+                    "confirmation_created": false,
+                })),
+            )
+                .into_response();
+        }
+    };
+    if !valid_postcondition_refs(&expected_postcondition_contract_refs) {
         return error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "managed_consequential_invalid_postcondition_contract",
@@ -353,7 +378,7 @@ async fn plan_managed_consequential_action(
         );
     }
 
-    let Some(node) = find_node(&snapshot.root, &request.reference) else {
+    let Some(node) = find_node(&snapshot.root, &reference) else {
         return error(
             StatusCode::CONFLICT,
             "managed_consequential_reference_not_in_fresh_snapshot",
@@ -367,7 +392,7 @@ async fn plan_managed_consequential_action(
     }
 
     let Some(precondition_snapshot_cut_ref) =
-        snapshot_cut_ref(&snapshot, &request.reference, &authority_after)
+        snapshot_cut_ref(&snapshot, &reference, &authority_after)
     else {
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -381,8 +406,8 @@ async fn plan_managed_consequential_action(
         .live
         .bind_direct_canonical_action(
             session_id,
-            Some(request.reference.clone()),
-            request.action.clone(),
+            Some(reference.clone()),
+            carrier_action.clone(),
             ActionEnvelopeMetadata {
                 decision_principal_ref: PrincipalRef::from(DECISION_PRINCIPAL_REF),
                 acting_principal_ref: PrincipalRef::from(ACTING_PRINCIPAL_REF),
@@ -394,9 +419,7 @@ async fn plan_managed_consequential_action(
                 target_incarnation_ref: authority_after.target_incarnation_ref.clone(),
                 risk_class: ActionRiskClass::Unknown,
                 idempotency_class: ActionIdempotencyClass::Unknown,
-                expected_postcondition_contract_refs: request
-                    .expected_postcondition_contract_refs
-                    .clone(),
+                expected_postcondition_contract_refs: expected_postcondition_contract_refs.clone(),
             },
         )
         .await
@@ -434,11 +457,38 @@ async fn plan_managed_consequential_action(
         );
     }
 
+    if let Some(payload) = payload.as_ref() {
+        let Some(key) = control.payload_commitment_key.as_ref() else {
+            state.live.discard_bound_canonical_action(action_id).await;
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "managed_consequential_payload_commitment_key_unavailable",
+            );
+        };
+        if journal
+            .record_managed_web_payload_binding(
+                &queued,
+                key.as_ref(),
+                payload.payload_ref,
+                payload.bytes.as_slice(),
+            )
+            .await
+            .is_err()
+        {
+            state.live.discard_bound_canonical_action(action_id).await;
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "managed_consequential_payload_binding_failed",
+            );
+        }
+    }
+
     control.pending.lock().await.insert(
         action_id,
         PendingManagedConsequentialPlan {
             confirmation_ref,
             queued,
+            payload,
             surface_authority: authority_after.clone(),
             expires_at: Instant::now() + CONFIRMATION_TTL,
         },
@@ -449,12 +499,12 @@ async fn plan_managed_consequential_action(
         Json(serde_json::json!({
             "action_id": action_id,
             "confirmation_ref": confirmation_ref,
-            "action": request.action,
-            "reference": request.reference,
+            "action": public_action,
+            "reference": reference,
             "precondition_snapshot_cut_ref": precondition_snapshot_cut_ref,
             "provider_incarnation_ref": authority_after.provider_incarnation_ref,
             "target_incarnation_ref": authority_after.target_incarnation_ref,
-            "expected_postcondition_contract_refs": request.expected_postcondition_contract_refs,
+            "expected_postcondition_contract_refs": expected_postcondition_contract_refs,
             "confirmation_expires_ms": CONFIRMATION_TTL.as_millis(),
             "dispatch_performed": false,
             "restart_restores_confirmation_authority": false,
@@ -485,7 +535,7 @@ async fn confirm_managed_consequential_action(
     };
     let _plan_gate = control.plan_gate.lock().await;
 
-    let plan = {
+    let mut plan = {
         let mut pending = control.pending.lock().await;
         let Some(existing) = pending.get(&action_id) else {
             return error(
@@ -586,6 +636,19 @@ async fn confirm_managed_consequential_action(
             })),
         )
             .into_response();
+    }
+
+    if let Some(payload) = plan.payload.take() {
+        match materialize_verified_managed_payload(&control, journal, action_id, payload).await {
+            Ok(action) => plan.queued.action.action = action,
+            Err(code) => {
+                state
+                    .live
+                    .discard_bound_canonical_action(plan.queued.action.id)
+                    .await;
+                return error(StatusCode::CONFLICT, code);
+            }
+        }
     }
 
     let authorization_entry = match journal
@@ -943,6 +1006,23 @@ pub(crate) async fn arm_managed_consequential_actions_for_executor(
     for action in actions {
         if !tracked_ids.contains(&action.id) {
             ready.push(action);
+            continue;
+        }
+
+        if verify_managed_payload_at_dispatch(&control, journal, &action)
+            .await
+            .is_err()
+        {
+            reject_managed_action_before_executor(
+                &control,
+                journal,
+                live,
+                session_id,
+                authority_ref,
+                action.id,
+                "managed payload commitment verification failed",
+            )
+            .await;
             continue;
         }
 
@@ -1386,6 +1466,9 @@ fn control_for_sessions(sessions: &Arc<SessionManager>) -> ManagedConsequentialC
             owner: Arc::downgrade(sessions),
             handle: ManagedConsequentialControlHandle {
                 journal: None,
+                payload_commitment_key: ManagedWebPayloadCommitmentKey::generate()
+                    .ok()
+                    .map(Arc::new),
                 pending: Arc::new(Mutex::new(HashMap::new())),
                 prepared: Arc::new(Mutex::new(HashMap::new())),
                 executing: Arc::new(Mutex::new(HashMap::new())),
@@ -1439,8 +1522,289 @@ async fn prune_expired(control: &ManagedConsequentialControlHandle, live: &LiveB
         .retain(|_, record| record.expires_at > now);
 }
 
-fn allowed_action(action: &BridgeActionKind) -> bool {
-    matches!(action, BridgeActionKind::Click | BridgeActionKind::Focus)
+fn prepare_managed_action(
+    action: BridgeActionKind,
+) -> Result<
+    (
+        BridgeActionKind,
+        Option<ProcessLocalManagedWebPayload>,
+        serde_json::Value,
+    ),
+    &'static str,
+> {
+    match action {
+        BridgeActionKind::Click => Ok((
+            BridgeActionKind::Click,
+            None,
+            serde_json::json!({"type": "click"}),
+        )),
+        BridgeActionKind::Focus => Ok((
+            BridgeActionKind::Focus,
+            None,
+            serde_json::json!({"type": "focus"}),
+        )),
+        BridgeActionKind::TypeText {
+            mut text,
+            clear_first,
+        } => {
+            if text.len() > MAX_MANAGED_TYPE_UTF8_BYTES || text.as_bytes().contains(&0) {
+                text.zeroize();
+                return Err("managed_consequential_type_payload_invalid");
+            }
+            let actual = BridgeActionKind::TypeText {
+                text,
+                clear_first,
+            };
+            prepare_payload_action(
+                actual,
+                BridgeActionKind::TypeText {
+                    text: String::new(),
+                    clear_first,
+                },
+                serde_json::json!({"type": "type_text", "clear_first": clear_first}),
+            )
+        }
+        BridgeActionKind::Key {
+            mut key,
+            mut modifiers,
+        } => {
+            let valid = !key.is_empty()
+                && key.len() <= MAX_MANAGED_KEY_UTF8_BYTES
+                && !key.as_bytes().contains(&0)
+                && modifiers.len() <= MAX_MANAGED_MODIFIERS
+                && modifiers.iter().all(|modifier| {
+                    !modifier.is_empty()
+                        && modifier.len() <= MAX_MANAGED_MODIFIER_UTF8_BYTES
+                        && !modifier.as_bytes().contains(&0)
+                });
+            if !valid {
+                key.zeroize();
+                for modifier in &mut modifiers {
+                    modifier.zeroize();
+                }
+                modifiers.clear();
+                return Err("managed_consequential_key_payload_invalid");
+            }
+            let actual = BridgeActionKind::Key { key, modifiers };
+            prepare_payload_action(
+                actual,
+                BridgeActionKind::Key {
+                    key: String::new(),
+                    modifiers: Vec::new(),
+                },
+                serde_json::json!({"type": "key"}),
+            )
+        }
+        BridgeActionKind::Scroll { x, y } => {
+            if !x.is_finite()
+                || !y.is_finite()
+                || x.abs() > MAX_MANAGED_SCROLL_DELTA
+                || y.abs() > MAX_MANAGED_SCROLL_DELTA
+                || (x == 0.0 && y == 0.0)
+            {
+                return Err("managed_consequential_scroll_payload_invalid");
+            }
+            prepare_payload_action(
+                BridgeActionKind::Scroll { x, y },
+                BridgeActionKind::Scroll { x: 0.0, y: 0.0 },
+                serde_json::json!({"type": "scroll"}),
+            )
+        }
+        _ => Err("managed_consequential_action_not_supported"),
+    }
+}
+
+fn prepare_payload_action(
+    mut actual: BridgeActionKind,
+    carrier: BridgeActionKind,
+    mut public_action: serde_json::Value,
+) -> Result<
+    (
+        BridgeActionKind,
+        Option<ProcessLocalManagedWebPayload>,
+        serde_json::Value,
+    ),
+    &'static str,
+> {
+    let bytes = serde_json::to_vec(&actual)
+        .map(Zeroizing::new)
+        .map_err(|_| "managed_consequential_payload_encoding_failed")?;
+    zeroize_action_payload(&mut actual);
+    let payload_ref = ManagedWebPayloadRef(Uuid::new_v4());
+    if let Some(object) = public_action.as_object_mut() {
+        object.insert(
+            "payload_ref".into(),
+            serde_json::Value::String(payload_ref.0.to_string()),
+        );
+    }
+    Ok((
+        carrier,
+        Some(ProcessLocalManagedWebPayload { payload_ref, bytes }),
+        public_action,
+    ))
+}
+
+fn zeroize_action_payload(action: &mut BridgeActionKind) {
+    match action {
+        BridgeActionKind::TypeText { text, .. } => text.zeroize(),
+        BridgeActionKind::Key { key, modifiers } => {
+            key.zeroize();
+            for modifier in modifiers.iter_mut() {
+                modifier.zeroize();
+            }
+            modifiers.clear();
+        }
+        _ => {}
+    }
+}
+
+async fn materialize_verified_managed_payload(
+    control: &ManagedConsequentialControlHandle,
+    journal: &ConsequentialJournal,
+    action_id: Uuid,
+    payload: ProcessLocalManagedWebPayload,
+) -> Result<BridgeActionKind, &'static str> {
+    let Some(key) = control.payload_commitment_key.as_ref() else {
+        return Err("managed_consequential_payload_commitment_key_unavailable");
+    };
+    let binding = journal
+        .managed_web_payload_binding(action_id)
+        .await
+        .map_err(|_| "managed_consequential_payload_binding_unavailable")?
+        .ok_or("managed_consequential_payload_binding_missing")?;
+    if binding.payload_ref != payload.payload_ref {
+        return Err("managed_consequential_payload_ref_mismatch");
+    }
+    verify_managed_web_payload_binding(key.as_ref(), &binding, payload.bytes.as_slice())
+        .map_err(|_| "managed_consequential_payload_commitment_mismatch")?;
+    let action: BridgeActionKind = serde_json::from_slice(payload.bytes.as_slice())
+        .map_err(|_| "managed_consequential_payload_decode_failed")?;
+    if CanonicalActionOperation::from_bridge_action_kind(&action) != Some(binding.operation) {
+        return Err("managed_consequential_payload_operation_mismatch");
+    }
+    validate_materialized_payload_action(&action)?;
+    Ok(action)
+}
+
+fn validate_materialized_payload_action(action: &BridgeActionKind) -> Result<(), &'static str> {
+    match action {
+        BridgeActionKind::TypeText { text, .. }
+            if text.len() <= MAX_MANAGED_TYPE_UTF8_BYTES && !text.as_bytes().contains(&0) =>
+        {
+            Ok(())
+        }
+        BridgeActionKind::Key { key, modifiers }
+            if !key.is_empty()
+                && key.len() <= MAX_MANAGED_KEY_UTF8_BYTES
+                && !key.as_bytes().contains(&0)
+                && modifiers.len() <= MAX_MANAGED_MODIFIERS
+                && modifiers.iter().all(|modifier| {
+                    !modifier.is_empty()
+                        && modifier.len() <= MAX_MANAGED_MODIFIER_UTF8_BYTES
+                        && !modifier.as_bytes().contains(&0)
+                }) =>
+        {
+            Ok(())
+        }
+        BridgeActionKind::Scroll { x, y }
+            if x.is_finite()
+                && y.is_finite()
+                && x.abs() <= MAX_MANAGED_SCROLL_DELTA
+                && y.abs() <= MAX_MANAGED_SCROLL_DELTA
+                && (*x != 0.0 || *y != 0.0) =>
+        {
+            Ok(())
+        }
+        BridgeActionKind::Click | BridgeActionKind::Focus => Ok(()),
+        _ => Err("managed_consequential_payload_invalid"),
+    }
+}
+
+async fn verify_managed_payload_at_dispatch(
+    control: &ManagedConsequentialControlHandle,
+    journal: &ConsequentialJournal,
+    action: &BridgeAction,
+) -> Result<(), &'static str> {
+    if matches!(
+        &action.action,
+        BridgeActionKind::Click | BridgeActionKind::Focus
+    ) {
+        return Ok(());
+    }
+    validate_materialized_payload_action(&action.action)?;
+    let Some(operation) = CanonicalActionOperation::from_bridge_action_kind(&action.action) else {
+        return Err("managed_consequential_payload_operation_missing");
+    };
+    if !matches!(
+        operation,
+        CanonicalActionOperation::InputText
+            | CanonicalActionOperation::KeyInput
+            | CanonicalActionOperation::Scroll
+    ) {
+        return Err("managed_consequential_payload_operation_unsupported");
+    }
+    let Some(key) = control.payload_commitment_key.as_ref() else {
+        return Err("managed_consequential_payload_commitment_key_unavailable");
+    };
+    let binding = journal
+        .managed_web_payload_binding(action.id)
+        .await
+        .map_err(|_| "managed_consequential_payload_binding_unavailable")?
+        .ok_or("managed_consequential_payload_binding_missing")?;
+    if binding.operation != operation {
+        return Err("managed_consequential_payload_operation_mismatch");
+    }
+    let bytes = serde_json::to_vec(&action.action)
+        .map(Zeroizing::new)
+        .map_err(|_| "managed_consequential_payload_encoding_failed")?;
+    verify_managed_web_payload_binding(key.as_ref(), &binding, bytes.as_slice())
+        .map_err(|_| "managed_consequential_payload_commitment_mismatch")
+}
+
+async fn reject_managed_action_before_executor(
+    control: &ManagedConsequentialControlHandle,
+    journal: &ConsequentialJournal,
+    live: &LiveBridge,
+    session_id: SessionId,
+    authority_ref: &str,
+    action_id: Uuid,
+    detail: &'static str,
+) {
+    if let Some(prepared) = control.prepared.lock().await.remove(&action_id) {
+        if let Ok(permit) = journal.begin_dispatch(prepared.capability).await {
+            let _ = journal
+                .record_dispatch_linearized(
+                    permit,
+                    DispatchLinearizationReceipt {
+                        receipt_ref: format!(
+                            "dispatch:managed-webview:rejected-before-executor:{action_id}:{}",
+                            Uuid::new_v4()
+                        ),
+                        transport_result: TransportResult::RejectedBeforeExecutor,
+                        dispatch_result: DispatchResult::NotDispatched,
+                    },
+                )
+                .await;
+        }
+    }
+    if let Some(record) = control.reconciliations.lock().await.get_mut(&action_id) {
+        record.status = "durable_payload_authority_failed";
+        record.detail = Some(detail.to_owned());
+        record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
+    }
+    let _ = live
+        .complete_managed_surface_action(
+            session_id,
+            authority_ref,
+            BridgeActionResult {
+                action_id,
+                ok: false,
+                error: Some(detail.to_owned()),
+                payload: serde_json::Value::Null,
+                completed_at: Utc::now(),
+            },
+        )
+        .await;
 }
 
 fn valid_reference(reference: &str) -> bool {
@@ -1601,5 +1965,122 @@ mod tests {
         ]));
         assert!(!valid_postcondition_refs(&[]));
         assert!(!valid_postcondition_refs(&["not-a-contract".into()]));
+    }
+}
+
+
+#[cfg(test)]
+mod r8_managed_payload_tests {
+    use super::*;
+
+    #[test]
+    fn managed_key_and_scroll_payloads_are_sanitized_before_canonical_binding() {
+        let (key_carrier, key_payload, key_public) = prepare_managed_action(
+            BridgeActionKind::Key {
+                key: "Enter".into(),
+                modifiers: vec!["Control".into(), "Shift".into()],
+            },
+        )
+        .expect("bounded key payload");
+        assert_eq!(
+            key_carrier,
+            BridgeActionKind::Key {
+                key: String::new(),
+                modifiers: Vec::new(),
+            }
+        );
+        assert!(key_payload.is_some());
+        assert_eq!(key_public["type"], "key");
+        assert!(key_public.get("key").is_none());
+        assert!(key_public.get("modifiers").is_none());
+        assert!(key_public["payload_ref"].as_str().is_some());
+
+        let (scroll_carrier, scroll_payload, scroll_public) =
+            prepare_managed_action(BridgeActionKind::Scroll { x: 12.5, y: -48.0 })
+                .expect("bounded scroll payload");
+        assert_eq!(
+            scroll_carrier,
+            BridgeActionKind::Scroll { x: 0.0, y: 0.0 }
+        );
+        assert!(scroll_payload.is_some());
+        assert_eq!(scroll_public["type"], "scroll");
+        assert!(scroll_public.get("x").is_none());
+        assert!(scroll_public.get("y").is_none());
+        assert!(scroll_public["payload_ref"].as_str().is_some());
+    }
+
+    #[test]
+    fn managed_payload_validation_fails_closed_on_unbounded_or_empty_input() {
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::TypeText {
+                text: "x".repeat(MAX_MANAGED_TYPE_UTF8_BYTES + 1),
+                clear_first: false,
+            }),
+            Err("managed_consequential_type_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::TypeText {
+                text: "bad\0value".into(),
+                clear_first: false,
+            }),
+            Err("managed_consequential_type_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Key {
+                key: String::new(),
+                modifiers: Vec::new(),
+            }),
+            Err("managed_consequential_key_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Key {
+                key: "A".into(),
+                modifiers: vec!["modifier".into(); MAX_MANAGED_MODIFIERS + 1],
+            }),
+            Err("managed_consequential_key_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Scroll { x: 0.0, y: 0.0 }),
+            Err("managed_consequential_scroll_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Scroll {
+                x: MAX_MANAGED_SCROLL_DELTA + 1.0,
+                y: 1.0,
+            }),
+            Err("managed_consequential_scroll_payload_invalid")
+        ));
+        assert!(matches!(
+            prepare_managed_action(BridgeActionKind::Scroll {
+                x: f64::INFINITY,
+                y: 1.0,
+            }),
+            Err("managed_consequential_scroll_payload_invalid")
+        ));
+    }
+
+    #[test]
+    fn managed_type_plan_projection_never_contains_plaintext() {
+        let secret = "r8-private-plan-text";
+        let (carrier, payload, public) = prepare_managed_action(BridgeActionKind::TypeText {
+            text: secret.into(),
+            clear_first: true,
+        })
+        .expect("bounded TypeText payload");
+
+        assert_eq!(
+            carrier,
+            BridgeActionKind::TypeText {
+                text: String::new(),
+                clear_first: true,
+            }
+        );
+        assert!(payload.is_some());
+        let encoded_public = public.to_string();
+        assert!(!encoded_public.contains(secret));
+        assert_eq!(public["type"], "type_text");
+        assert_eq!(public["clear_first"], true);
+        assert!(public.get("text").is_none());
+        assert!(public["payload_ref"].as_str().is_some());
     }
 }

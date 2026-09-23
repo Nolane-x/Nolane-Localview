@@ -3017,7 +3017,8 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
       case 'type_text':
         if (!target) throw new Error(`element reference not found: ${queued.reference}`);
         target.focus?.();
-        return { reference: queued.reference, value: setElementValue(target, String(action.text ?? ''), !!action.clear_first) };
+        setElementValue(target, String(action.text ?? ''), !!action.clear_first);
+        return { reference: queued.reference };
       case 'key': {
         const receiver = target || document.activeElement || document.body;
         const options = keyboardOptions(action);
