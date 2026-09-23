@@ -514,6 +514,28 @@ async fn confirm_managed_consequential_action(
         );
     }
 
+    prune_expired_reconciliations(&control).await;
+    if control.reconciliations.lock().await.len()
+        >= MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS
+    {
+        state
+            .live
+            .discard_bound_canonical_action(plan.queued.action.id)
+            .await;
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": "managed_consequential_reconciliation_capacity_exhausted",
+                "action_id": action_id,
+                "confirmation_consumed": true,
+                "dispatch_performed": false,
+                "retry_same_confirmation_allowed": false,
+                "max_reconciliation_records": MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS,
+            })),
+        )
+            .into_response();
+    }
+
     let authorization_entry = match journal
         .record_authorization(
             action_id,
@@ -580,28 +602,6 @@ async fn confirm_managed_consequential_action(
             capability,
         },
     );
-
-    prune_expired_reconciliations(&control).await;
-    if control.reconciliations.lock().await.len()
-        >= MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS
-    {
-        state
-            .live
-            .discard_bound_canonical_action(plan.queued.action.id)
-            .await;
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(serde_json::json!({
-                "error": "managed_consequential_reconciliation_capacity_exhausted",
-                "action_id": action_id,
-                "confirmation_consumed": true,
-                "dispatch_performed": false,
-                "retry_same_confirmation_allowed": false,
-                "max_reconciliation_records": MAX_MANAGED_CONSEQUENTIAL_RECONCILIATIONS,
-            })),
-        )
-            .into_response();
-    }
 
     let reconciliation = ManagedConsequentialReconciliation {
         session_id,
