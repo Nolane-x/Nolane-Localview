@@ -286,7 +286,7 @@ fn post_dispatch_snapshot_payload() -> Value {
                     "children": []
                 },
                 {
-                    "ref": "@edone",
+                    "ref": "@edead",
                     "tag": "status",
                     "role": "status",
                     "name": "Saved",
@@ -363,7 +363,7 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
                 "reference": "@eabc123",
                 "action": { "type": "click" },
                 "expected_postcondition_contract_refs": [
-                    "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@edone\"}"
+                    "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@edead\"}"
                 ]
             }),
         )
@@ -563,7 +563,7 @@ async fn managed_consequential_action_requires_fresh_plan_and_one_shot_confirmat
 async fn managed_consequential_plan_rejects_non_web_and_duplicate_postconditions() {
     let (state, session_id) = test_state().await;
     let native = "lvpc:native-semantic:v1:{\"expectation\":\"present\",\"matcher\":{\"name\":\"Done\"}}";
-    let web = "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@edone\"}";
+    let web = "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@edead\"}";
 
     let (native_status, native_body) = post(
         state.clone(),
