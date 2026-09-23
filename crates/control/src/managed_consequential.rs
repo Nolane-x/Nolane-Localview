@@ -175,6 +175,52 @@ pub async fn release_managed_consequential_control_session_for_sessions(
         .lock()
         .await
         .retain(|_, plan| plan.queued.action.session_id != session_id);
+    let prepared = {
+        let mut prepared = handle.prepared.lock().await;
+        let action_ids = prepared
+            .iter()
+            .filter_map(|(action_id, entry)| (entry.session_id == session_id).then_some(*action_id))
+            .collect::<Vec<_>>();
+        action_ids
+            .into_iter()
+            .filter_map(|action_id| prepared.remove(&action_id).map(|entry| (action_id, entry)))
+            .collect::<Vec<_>>()
+    };
+    let executing = {
+        let mut executing = handle.executing.lock().await;
+        let action_ids = executing
+            .iter()
+            .filter_map(|(action_id, entry)| (entry.session_id == session_id).then_some(*action_id))
+            .collect::<Vec<_>>();
+        action_ids
+            .into_iter()
+            .filter_map(|action_id| executing.remove(&action_id).map(|entry| (action_id, entry)))
+            .collect::<Vec<_>>()
+    };
+
+    if let Some(journal) = handle.journal.as_ref() {
+        for (action_id, prepared) in prepared {
+            if let Ok(permit) = journal.begin_dispatch(prepared.capability).await {
+                let _ = journal
+                    .record_dispatch_linearized(
+                        permit,
+                        DispatchLinearizationReceipt {
+                            receipt_ref: format!(
+                                "dispatch:managed-webview:session-release:{action_id}:{}",
+                                Uuid::new_v4()
+                            ),
+                            transport_result: TransportResult::RejectedBeforeExecutor,
+                            dispatch_result: DispatchResult::NotDispatched,
+                        },
+                    )
+                    .await;
+            }
+        }
+        for (_, executing) in executing {
+            let _ = journal.abandon_dispatch_execution(executing.permit).await;
+        }
+    }
+
     handle
         .reconciliations
         .lock()
