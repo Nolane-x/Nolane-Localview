@@ -1434,6 +1434,8 @@ export default function LocalViewShell() {
         targetChangedRatio: receipt.targetChangedRatio,
         providerLabel: receipt.providerLabel,
         advisorySummary: receipt.advisorySummary,
+        wave9Autonomous: receipt.wave9Autonomous,
+        wave9AutonomousError: receipt.wave9AutonomousError,
       });
     } catch (cause) {
       if (
