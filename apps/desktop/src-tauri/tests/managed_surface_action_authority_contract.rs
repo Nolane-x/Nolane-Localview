@@ -50,7 +50,12 @@ fn public_actions_are_bound_to_exact_primary_managed_surface() {
     );
     assert!(take.contains("pin_surface_owner_for_sessions"));
     assert!(take.contains("ensure_managed_surface_observation_binding"));
-    assert!(take.contains("take_public_actions(request.session_id, 16)"));
+    assert!(take.contains("take_managed_surface_actions("));
+    assert!(take.contains("authority.authority_ref.clone()"));
+    assert!(
+        !take.contains("take_public_actions(request.session_id, 16)"),
+        "surface validation and queue drain must remain one exact-authority linearization"
+    );
 
     let complete = between(
         &control,
@@ -59,8 +64,12 @@ fn public_actions_are_bound_to_exact_primary_managed_surface() {
     );
     assert!(complete.contains("pin_surface_owner_for_sessions"));
     assert!(complete.contains("managed_surface_observation_binding_stale"));
-    assert!(complete.contains("claim_action(request.surface.session_id"));
-    assert!(complete.contains("complete_action(&action, request.result)"));
+    assert!(complete.contains("complete_managed_surface_action("));
+    assert!(complete.contains("&authority.authority_ref"));
+    assert!(
+        !complete.contains("claim_action(request.surface.session_id"),
+        "surface validation and completion claim must not be split across authority transitions"
+    );
 
     let preview_take = between(
         &desktop,
