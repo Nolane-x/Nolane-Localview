@@ -933,8 +933,8 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
             }
             record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
             record.status = "pending_fresh_reconciliation";
-            record.detail = (!result.ok)
-                .then(|| "executor_reported_failure_dispatch_ambiguous".to_owned());
+            record.detail =
+                (!result.ok).then(|| "executor_reported_failure_dispatch_ambiguous".to_owned());
             record.clone()
         };
 
@@ -1071,24 +1071,15 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
             return;
         };
         let reconciliation_snapshot = ReconciliationSnapshotReceipt {
-            receipt_id: format!(
-                "reconcile:managed-webview:{action_id}:{}",
-                Uuid::new_v4()
-            ),
-            provider_incarnation_ref: initial
-                .surface_authority
-                .provider_incarnation_ref
-                .clone(),
-            target_incarnation_ref: initial
-                .surface_authority
-                .target_incarnation_ref
-                .clone(),
+            receipt_id: format!("reconcile:managed-webview:{action_id}:{}", Uuid::new_v4()),
+            provider_incarnation_ref: initial.surface_authority.provider_incarnation_ref.clone(),
+            target_incarnation_ref: initial.surface_authority.target_incarnation_ref.clone(),
             snapshot_cut_ref: post_dispatch_cut_ref,
             surface_scope: MANAGED_RECONCILIATION_SURFACE_SCOPE.to_owned(),
             completeness: ReconciliationCompleteness::Established,
             cache_profile_revision: MANAGED_RECONCILIATION_CACHE_PROFILE_REVISION.to_owned(),
-            permission_visibility_revision:
-                MANAGED_RECONCILIATION_PERMISSION_VISIBILITY_REVISION.to_owned(),
+            permission_visibility_revision: MANAGED_RECONCILIATION_PERMISSION_VISIBILITY_REVISION
+                .to_owned(),
             capture_sequence: snapshot.version,
             observed_digest: observed_digest.clone(),
             incompleteness_debt: Vec::new(),
@@ -1128,8 +1119,7 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
         };
 
         let registry = PostconditionContractRegistry::standard();
-        let mut evidence =
-            Vec::with_capacity(initial.expected_postcondition_contract_refs.len());
+        let mut evidence = Vec::with_capacity(initial.expected_postcondition_contract_refs.len());
         for contract_ref in &initial.expected_postcondition_contract_refs {
             let status = match registry.evaluate_web_semantic(contract_ref, &snapshot) {
                 Ok(WebSemanticPostconditionEvaluation::VerifiedPass) => {
