@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 use std::{
+    path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
@@ -15,10 +16,14 @@ use localview_control::{
     configure_surface_recovery_journal_for_sessions, router,
 };
 use localview_evidence::EvidenceStore;
-use localview_live_bridge::{ConsequentialJournal, LiveBridge};
+use localview_live_bridge::{
+    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, CanonicalActionEnvelope,
+    ConsequentialJournal, ConsequentialRecoveryState, DispatchPreparationReceipt, LiveBridge,
+};
 use localview_observation::ObservationBus;
 use localview_protocol::{
-    Classification, DiscoveredServer, Endpoint, ListenerCandidate, ServerKind,
+    Classification, DiscoveredServer, Endpoint, ListenerCandidate, PrincipalRef,
+    ProviderIncarnationRef, ServerKind, TargetIncarnationRef,
 };
 use localview_sessions::SessionManager;
 use serde::Deserialize;
@@ -58,7 +63,7 @@ fn discovered() -> DiscoveredServer {
     }
 }
 
-async fn test_state() -> (ControlState, Uuid) {
+async fn test_state_with_consequential_path() -> (ControlState, Uuid, PathBuf) {
     let sessions = Arc::new(SessionManager::new(Duration::from_secs(2)));
     let reconcile = sessions.reconcile(vec![discovered()], Utc::now()).await;
     let session_id = reconcile.created[0];
@@ -94,6 +99,11 @@ async fn test_state() -> (ControlState, Uuid) {
         &state.sessions,
         Some(consequential),
     );
+    (state, session_id, consequential_path)
+}
+
+async fn test_state() -> (ControlState, Uuid) {
+    let (state, session_id, _) = test_state_with_consequential_path().await;
     (state, session_id)
 }
 
@@ -748,6 +758,109 @@ async fn ambiguous_executor_failure_still_requires_fresh_world_reconciliation() 
         terminal["detail"],
         "executor_reported_failure_but_world_state_reconciled"
     );
+}
+
+#[tokio::test]
+async fn durable_managed_status_survives_process_restart_without_restoring_retry_authority() {
+    let (state, session_id) = test_state().await;
+    let path = std::env::temp_dir().join(format!(
+        "localview-r7-managed-restart-status-{}.jsonl",
+        Uuid::new_v4()
+    ));
+    let journal = ConsequentialJournal::open(&path)
+        .await
+        .expect("open restart journal");
+    let action_id = Uuid::new_v4();
+    let provider_incarnation_ref =
+        ProviderIncarnationRef::from("provider:managed-webview:{\"restart\":1}");
+    let target_incarnation_ref =
+        TargetIncarnationRef::from("target:managed-webview:{\"restart\":1}");
+    let envelope = CanonicalActionEnvelope {
+        envelope_id: Uuid::new_v4(),
+        transport_action_id: action_id,
+        session_id,
+        metadata: ActionEnvelopeMetadata {
+            decision_principal_ref: PrincipalRef::from("principal:test:decision"),
+            acting_principal_ref: PrincipalRef::from("principal:test:managed-webview"),
+            authorization_revision: "authorization:test:managed-restart".into(),
+            precondition_snapshot_cut_ref: "cut:test:managed-before-restart".into(),
+            provider_incarnation_ref: provider_incarnation_ref.clone(),
+            target_incarnation_ref: target_incarnation_ref.clone(),
+            risk_class: ActionRiskClass::Unknown,
+            idempotency_class: ActionIdempotencyClass::Unknown,
+            expected_postcondition_contract_refs: vec![
+                "lvpc:web-semantic:v1:{\"expectation\":\"present\",\"ref\":\"@edead\"}"
+                    .into(),
+            ],
+        },
+    };
+    journal
+        .record_intent_admitted(envelope.clone())
+        .await
+        .expect("durable intent");
+    let authorization = journal
+        .record_authorization(
+            action_id,
+            envelope.metadata.authorization_revision.clone(),
+            true,
+        )
+        .await
+        .expect("durable authorization");
+    let prepared = journal
+        .record_dispatch_prepared(
+            action_id,
+            DispatchPreparationReceipt {
+                receipt_ref: format!("prepared:managed-restart:{action_id}"),
+                authorization_journal_sequence: authorization.journal_sequence,
+                precondition_snapshot_cut_ref: envelope
+                    .metadata
+                    .precondition_snapshot_cut_ref
+                    .clone(),
+                provider_incarnation_ref,
+                target_incarnation_ref,
+            },
+        )
+        .await
+        .expect("durable prepared state");
+    drop(prepared);
+    drop(journal);
+
+    // Reopening the journal and reconfiguring the control handle models a new
+    // daemon process: all confirmation, prepared-capability, execution-permit
+    // and process-local reconciliation maps start empty.
+    let reopened = Arc::new(
+        ConsequentialJournal::open(&path)
+            .await
+            .expect("reopen restart journal"),
+    );
+    assert_eq!(
+        reopened.recovery_state(action_id).await,
+        Some(ConsequentialRecoveryState::DispatchPrepared)
+    );
+    configure_managed_consequential_control_for_sessions(
+        &state.sessions,
+        Some(reopened),
+    );
+
+    let (status, body) = get(
+        state,
+        &format!(
+            "/v1/sessions/{session_id}/managed-consequential/{action_id}/status"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["durable_recovery"], true);
+    assert_eq!(body["durable_recovery_state"], "dispatch_prepared");
+    assert_eq!(body["postcondition_status"], "reconciliation_required");
+    assert_eq!(body["terminal"], true);
+    assert_eq!(body["retry_same_confirmation_allowed"], false);
+    assert_eq!(
+        body["detail"],
+        "durable_recovery_requires_original_post_dispatch_lineage"
+    );
+
+    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
