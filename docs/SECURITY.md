@@ -67,7 +67,7 @@ That sandbox is a compatibility boundary for the embedded application, not evide
 
 ## Discovery and provider redirect containment
 
-Discovery probes start from loopback listeners and revalidate every redirect hop. An effective discovery request must remain HTTP(S) on loopback; redirects to external, private-LAN or non-HTTP(S) targets fail closed, and redirect depth is bounded. Discovery does not attach LocalView credentials.
+Discovery probes start from loopback listeners and revalidate every redirect hop. An effective discovery request must remain HTTP(S) on loopback **and on the original managed-surface origin**; redirects that change scheme/host/port, escape to external/private-LAN targets, or exceed the redirect bound fail closed. This keeps discovery truth aligned with the exact-origin native WebView authority. Discovery does not attach LocalView credentials.
 
 Trusted Ask AI/Fix provider endpoints remain loopback-only. The shared provider transport does not follow redirects, so bounded AI context, source excerpts and provider bearer credentials are sent only to the configured local provider endpoint.
 

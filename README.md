@@ -128,15 +128,17 @@ npm install
 npm run tauri dev
 ```
 
+The Tauri desktop build now prepares and starts the matching bundled `localview-daemon` sidecar when no same-version runtime is already healthy. For distributable release-candidate bundles, run `npm run tauri build`. See `docs/PRODUCTION_RELEASE.md` for signing and publication gates.
+
 ## Security model
 
 LocalView's control API binds to `127.0.0.1`, requires a generated bearer token for agent/runtime data, and remote preview navigation is rejected by the Tauri command. Preview windows are intentionally excluded from the main Tauri command capability. Secrets are redacted before agent-facing surfaces whenever possible.
 
 ## Direction
 
-The next major implementation blocks are live WebView instrumentation, DOM/AX extraction, real screenshot capture adapters, console/network hooks, source-map adapters for React/Vue/Svelte, state packet subscriptions, deterministic interaction execution, Storybook mode and CI/headless validation.
+LocalView is now in production-closure work rather than bootstrap implementation. The highest-value remaining blocks are canonical consequential DOM interaction authority, full Wave 9 contract/mutation/actual-impact/revalidation orchestration, durable Fix→Verify recovery across desktop restart, signed/notarized public releases with updater/upgrade evidence, and the remaining native/framework depth documented as Partial in `docs/SPEC_COVERAGE.md`.
 
-See `docs/ARCHITECTURE.md` and `docs/ROADMAP.md` for the expanded architecture and delivery sequence.
+See `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/SPEC_COVERAGE.md` and `docs/PRODUCTION_RELEASE.md` for the current architecture, truthful coverage frontier and release gates.
 
 ## License
 

@@ -292,6 +292,7 @@ fn trusted_verify_compares_semantics_issues_and_redacted_visual_facts() {
 #[test]
 fn provider_assessment_is_advisory_and_cannot_override_deterministic_status() {
     let verify = include_str!("../src/trusted_verify.rs");
+    let desktop = include_str!("../src/lib.rs");
 
     for required in [
         "deterministic_status",
@@ -304,6 +305,36 @@ fn provider_assessment_is_advisory_and_cannot_override_deterministic_status() {
         );
     }
 
+    let verify_command = between(
+        desktop,
+        "async fn verify_fix_change(",
+        "async fn open_source_for_selection(",
+    );
+    for required in [
+        "trusted_ai::provider_config_from_env()",
+        "trusted_ai::ask_with_provider(",
+        "Duration::from_secs(2)",
+        "Advisory only.",
+        "Do not override or relabel the deterministic status.",
+        "receipt.provider_label = Some(answer.provider_label)",
+        "receipt.advisory_summary = Some(answer.answer)",
+    ] {
+        assert!(
+            verify_command.contains(required),
+            "production Verify advisory path is missing {required}"
+        );
+    }
+    let receipt_status = verify_command
+        .find("status: comparison.deterministic_status")
+        .expect("deterministic receipt status must be assigned");
+    let provider_call = verify_command
+        .find("trusted_ai::ask_with_provider(")
+        .expect("optional provider advisory must be reachable");
+    assert!(
+        receipt_status < provider_call,
+        "provider advisory must execute only after deterministic status is fixed"
+    );
+
     for forbidden in [
         "provider_status_override",
         "provider_can_verify",
@@ -311,7 +342,7 @@ fn provider_assessment_is_advisory_and_cannot_override_deterministic_status() {
         "provider_patch",
     ] {
         assert!(
-            !verify.contains(forbidden),
+            !verify.contains(forbidden) && !verify_command.contains(forbidden),
             "provider must not gain deterministic/write authority: {forbidden}"
         );
     }

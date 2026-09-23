@@ -1039,7 +1039,12 @@ pub fn wave9_preflight_for_pending_proposal(
         &proposal.project_root,
         &candidate,
     ) {
-        Ok(receipt) => Ok(receipt),
+        Ok(receipt) => localview_verification::bind_production_affected_state(
+            receipt,
+            &candidate,
+            &proposal.canonical_route,
+            Some(&proposal.reference),
+        ),
         Err(error) => Ok(
             localview_verification::ProductionCandidatePreflightReceipt::inconclusive_unavailable(
                 error,

@@ -37,6 +37,15 @@ enum Command {
     },
     Analyze { session: Option<SessionId> },
     Diagnose { session: Option<SessionId> },
+    PerformanceLite { session: Option<SessionId> },
+    CaptureSettle { session: Option<SessionId> },
+    ActionCorrelation { session: SessionId, action_id: String },
+    SourceMapResolve {
+        session: SessionId,
+        generated_file: String,
+        generated_line: u32,
+        generated_column: u32,
+    },
     Verify { session: Option<SessionId> },
     Coverage { session: Option<SessionId> },
     Proof { session: Option<SessionId> },
@@ -161,6 +170,41 @@ async fn main() -> Result<()> {
         }
         Command::Diagnose { session } => {
             print_session_endpoint(&client, &cli.control, session, "diagnose").await?;
+        }
+        Command::PerformanceLite { session } => {
+            print_session_endpoint(&client, &cli.control, session, "performance-lite").await?;
+        }
+        Command::CaptureSettle { session } => {
+            print_session_endpoint(&client, &cli.control, session, "capture-settle").await?;
+        }
+        Command::ActionCorrelation { session, action_id } => {
+            print_path(
+                &client,
+                &cli.control,
+                &format!("/v1/sessions/{session}/actions/{action_id}/correlation"),
+            )
+            .await?;
+        }
+        Command::SourceMapResolve {
+            session,
+            generated_file,
+            generated_line,
+            generated_column,
+        } => {
+            let value: Value = authed_post_json(
+                &client,
+                &cli.control,
+                &format!("/v1/sessions/{session}/source-map/resolve"),
+                &serde_json::json!({
+                    "generated_file": generated_file,
+                    "generated_line": generated_line,
+                    "generated_column": generated_column,
+                }),
+            )
+            .await?
+            .json()
+            .await?;
+            print_json(&value)?;
         }
         Command::Verify { session } => {
             print_session_endpoint(&client, &cli.control, session, "verify").await?;
@@ -441,6 +485,22 @@ mod tests {
         use clap::Parser as _;
 
         assert!(Cli::try_parse_from(["localview", "snapshot", "550e8400-e29b-41d4-a716-446655440000"]).is_ok());
+        assert!(Cli::try_parse_from(["localview", "performance-lite"]).is_ok());
+        assert!(Cli::try_parse_from(["localview", "capture-settle"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "localview",
+            "action-correlation",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "11111111-2222-3333-4444-555555555555",
+        ]).is_ok());
+        assert!(Cli::try_parse_from([
+            "localview",
+            "source-map-resolve",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "dist/app.js",
+            "42",
+            "7",
+        ]).is_ok());
         for forbidden in ["click", "type", "key", "scroll", "focus"] {
             let parsed = Cli::try_parse_from(["localview", forbidden]);
             assert!(

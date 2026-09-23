@@ -11,7 +11,10 @@ use localview_counterfactual::{
 };
 use localview_mutation::{MutationChallengeResult, MutationVerdict};
 use localview_planner::PartialRevalidationPlan;
-use localview_state_space::AffectedStatePlan;
+use localview_state_space::{
+    AffectedChangeIdentity, AffectedStateInput, AffectedStatePlan, StateDimension, StateValue,
+    compile_affected_state_plan,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -148,6 +151,9 @@ pub struct ProductionCandidatePreflightReceipt {
     pub candidate_id: Option<String>,
     pub base_revision: Option<String>,
     pub patch_digest: Option<String>,
+    pub affected_state_plan_hash: Option<ObjectHash>,
+    pub predicted_impact: Option<PredictedImpact>,
+    pub affected_state_incomplete_reasons: Vec<String>,
     pub shadow_proof: Option<ShadowCandidateProof>,
     pub cleanup_proof: Option<ShadowCleanupProof>,
     pub verdict: ProductionCandidatePreflightVerdict,
@@ -164,6 +170,9 @@ impl ProductionCandidatePreflightReceipt {
             candidate_id: None,
             base_revision: None,
             patch_digest: None,
+            affected_state_plan_hash: None,
+            predicted_impact: None,
+            affected_state_incomplete_reasons: Vec::new(),
             shadow_proof: None,
             cleanup_proof: None,
             verdict: ProductionCandidatePreflightVerdict::Inconclusive,
@@ -208,6 +217,9 @@ pub fn run_production_candidate_preflight(
                 candidate_id,
                 base_revision,
                 patch_digest,
+                affected_state_plan_hash: None,
+                predicted_impact: None,
+                affected_state_incomplete_reasons: Vec::new(),
                 shadow_proof: None,
                 cleanup_proof: cleanup,
                 verdict: ProductionCandidatePreflightVerdict::Rejected,
@@ -224,6 +236,9 @@ pub fn run_production_candidate_preflight(
                 candidate_id,
                 base_revision,
                 patch_digest,
+                affected_state_plan_hash: None,
+                predicted_impact: None,
+                affected_state_incomplete_reasons: Vec::new(),
                 shadow_proof: Some(proof),
                 cleanup_proof: None,
                 verdict: ProductionCandidatePreflightVerdict::Rejected,
@@ -265,11 +280,96 @@ pub fn run_production_candidate_preflight(
         candidate_id: Some(candidate.id.to_string()),
         base_revision: Some(candidate.base_revision.clone()),
         patch_digest: Some(expected_patch_digest),
+        affected_state_plan_hash: None,
+        predicted_impact: None,
+        affected_state_incomplete_reasons: Vec::new(),
         shadow_proof: Some(proof),
         cleanup_proof: Some(cleanup),
         verdict,
         reasons,
     })
+}
+
+pub fn bind_production_affected_state(
+    mut receipt: ProductionCandidatePreflightReceipt,
+    candidate: &CounterfactualCandidate,
+    canonical_route: &str,
+    reference: Option<&str>,
+) -> Result<ProductionCandidatePreflightReceipt, String> {
+    let expected_candidate_id = candidate.id.to_string();
+    let expected_patch_digest = patch_digest(&candidate.overlays);
+    if receipt.candidate_id.as_deref() != Some(expected_candidate_id.as_str())
+        || receipt.base_revision.as_deref() != Some(candidate.base_revision.as_str())
+        || receipt.patch_digest.as_deref() != Some(expected_patch_digest.as_str())
+    {
+        return Err("Wave 9 affected-state binding does not match the preflight candidate".into());
+    }
+    if canonical_route.trim().is_empty() {
+        return Err("Wave 9 affected-state binding requires a canonical route".into());
+    }
+
+    let changed_project_files = candidate
+        .overlays
+        .iter()
+        .map(|overlay| overlay.file.clone())
+        .collect::<Vec<_>>();
+    let impacted_routes = BTreeSet::from([canonical_route.to_owned()]);
+    let mut impacted_refs = BTreeSet::new();
+    let mut dimensions = vec![StateDimension {
+        id: "route".into(),
+        values: vec![StateValue {
+            id: canonical_route.to_owned(),
+            label: canonical_route.to_owned(),
+            metadata: BTreeMap::new(),
+        }],
+        risk_weight: 1.0,
+        boundary_values: BTreeSet::new(),
+    }];
+    if let Some(reference) = reference.filter(|value| !value.trim().is_empty()) {
+        impacted_refs.insert(reference.to_owned());
+        dimensions.push(StateDimension {
+            id: "reference".into(),
+            values: vec![StateValue {
+                id: reference.to_owned(),
+                label: reference.to_owned(),
+                metadata: BTreeMap::new(),
+            }],
+            risk_weight: 1.0,
+            boundary_values: BTreeSet::new(),
+        });
+    }
+
+    let affected = compile_affected_state_plan(&AffectedStateInput {
+        base_revision: candidate.base_revision.clone(),
+        change: AffectedChangeIdentity {
+            candidate_id: expected_candidate_id,
+            patch_digest: expected_patch_digest,
+            changed_project_files,
+        },
+        impacted_routes,
+        impacted_regions: BTreeSet::new(),
+        impacted_refs,
+        impacted_contracts: BTreeSet::new(),
+        dimensions,
+        constraints: Vec::new(),
+        max_states: 1,
+        evidence_ids: candidate.evidence_ids.clone(),
+        dependency_graph_complete: false,
+        denominator_known: false,
+    })
+    .map_err(|error| format!("Wave 9 affected-state compilation failed: {error:?}"))?;
+
+    receipt.affected_state_plan_hash = Some(object_hash(&affected));
+    receipt.predicted_impact = Some(impact_targets_from_affected(&affected));
+    receipt.affected_state_incomplete_reasons = affected.incomplete_reasons.clone();
+    if affected.incomplete {
+        receipt
+            .reasons
+            .push("production affected-state scope remains explicitly incomplete".into());
+        receipt.reasons.sort();
+        receipt.reasons.dedup();
+    }
+    Ok(receipt)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

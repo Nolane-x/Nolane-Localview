@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod content_stress;
+mod daemon_sidecar;
 mod native_executor_worker;
 mod point_select;
 mod trusted_ai;
@@ -1234,7 +1235,16 @@ async fn verify_fix_change(
             return Err("trusted Verify route changed during verification".into());
         }
 
-        Ok::<trusted_verify::HumanVerifyChangeReceipt, String>(
+        let advisory_context =
+            trusted_ai::build_trusted_ai_context(&session, &snapshot, &record.reference)?;
+
+        Ok::<
+            (
+                trusted_verify::HumanVerifyChangeReceipt,
+                trusted_ai::TrustedAiContext,
+            ),
+            String,
+        >((
             trusted_verify::HumanVerifyChangeReceipt {
                 verification_id: record.verification_id.clone(),
                 reference: record.reference.clone(),
@@ -1254,7 +1264,8 @@ async fn verify_fix_change(
                 advisory_summary: None,
                 verified_at_unix_ms: trusted_verify::now_unix_ms(),
             },
-        )
+            advisory_context,
+        ))
     })
     .await
     {
@@ -1263,7 +1274,39 @@ async fn verify_fix_change(
     };
 
     match result {
-        Ok(receipt) => {
+        Ok((mut receipt, advisory_context)) => {
+            if let Ok(config) = trusted_ai::provider_config_from_env() {
+                let semantic_summary = if receipt.semantic_changes.is_empty() {
+                    "none".to_string()
+                } else {
+                    receipt.semantic_changes.join(",")
+                };
+                let regression_summary = if receipt.regression_signals.is_empty() {
+                    "none".to_string()
+                } else {
+                    receipt.regression_signals.join(",")
+                };
+                let question = format!(
+                    "Advisory only. Deterministic LocalView Verify status is '{}'. Semantic changes: {}. Regression signals: {}. Explain the likely developer-facing meaning in at most three concise sentences. Do not override or relabel the deterministic status.",
+                    receipt.status.as_str(),
+                    semantic_summary,
+                    regression_summary,
+                );
+                if let Ok(Ok(answer)) = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    trusted_ai::ask_with_provider(
+                        &reqwest::Client::new(),
+                        &config,
+                        &advisory_context,
+                        &question,
+                    ),
+                )
+                .await
+                {
+                    receipt.provider_label = Some(answer.provider_label);
+                    receipt.advisory_summary = Some(answer.answer);
+                }
+            }
             verification_store.complete(&verification_id)?;
             Ok(receipt)
         }
@@ -3317,6 +3360,7 @@ const PREVIEW_BRIDGE_SCRIPT: &str = r#"
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let _ = app.manage(visual_capture::VisualCaptureState::default());
             let _ = app.manage(content_stress::ContentStressState::default());
@@ -3325,6 +3369,8 @@ pub fn run() {
             let _ = app.manage(trusted_verify::VerificationStore::default());
             let _ = app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
             let _ = app.manage(PreviewBridgeAuthority::default());
+            let _ = app.manage(daemon_sidecar::ManagedDaemonSidecar::default());
+            daemon_sidecar::ensure_daemon(app.handle().clone())?;
             native_executor_worker::spawn(app.handle().clone());
             let menu = MenuBuilder::new(app)
                 .text("show", "Open LocalView")
@@ -3337,6 +3383,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
                     if event.id() == "quit" {
+                        daemon_sidecar::stop_owned_daemon(app);
                         app.exit(0);
                     }
                     if event.id() == "show" {
@@ -3399,6 +3446,11 @@ pub fn run() {
             workspace_surface::workspace_surface_navigate,
             workspace_surface::workspace_surface_close
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running LocalView desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building LocalView desktop")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                daemon_sidecar::stop_owned_daemon(app);
+            }
+        });
 }

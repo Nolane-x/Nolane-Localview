@@ -825,13 +825,13 @@ export default function LocalViewShell() {
 
   const togglePanel = useCallback((tool: ToolId) => {
     if (activeTool === tool) {
-      panelFocusOriginRef.current = null;
       setActiveTool(undefined);
+      restorePanelFocus();
       return;
     }
     if (!activeTool) rememberPanelFocus();
     setActiveTool(tool);
-  }, [activeTool, rememberPanelFocus]);
+  }, [activeTool, rememberPanelFocus, restorePanelFocus]);
 
   const togglePause = useCallback(async () => {
     try {
@@ -864,8 +864,11 @@ export default function LocalViewShell() {
     if (requestToken && requestSessionId) {
       void api.cancelPointSelect(requestSessionId, requestToken).catch(() => undefined);
     }
-    if (closeInspector) setActiveTool(undefined);
-  }, []);
+    if (closeInspector) {
+      setActiveTool(undefined);
+      restorePanelFocus();
+    }
+  }, [restorePanelFocus]);
 
   const beginPointSelect = useCallback(async () => {
     const session = current;
