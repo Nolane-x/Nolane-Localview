@@ -260,6 +260,11 @@ impl LiveBridge {
             return Err(BoundCanonicalDispatchError::EnvelopeMismatch);
         }
 
+        // From this point onward the dispatch attempt is one-shot, including
+        // freshness rejection. Explicit confirmation must never become reusable
+        // merely because the world changed before queue admission.
+        self.action_envelopes.write().await.remove(&queued.action.id);
+
         let current_incarnations = {
             let continuity = self.continuity.read().await;
             let Some(state) = continuity.get(&queued.action.session_id) else {
@@ -277,9 +282,6 @@ impl LiveBridge {
             return Err(BoundCanonicalDispatchError::TargetIncarnationMismatch);
         }
 
-        // Consume the direct binding before crossing into the public queue. A
-        // failed queue admission is deliberately non-retryable.
-        self.action_envelopes.write().await.remove(&queued.action.id);
         if !self
             .legacy
             .enqueue_prebound_public_action(queued.action)
