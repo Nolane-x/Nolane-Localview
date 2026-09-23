@@ -385,6 +385,44 @@ impl LiveBridge {
         action
     }
 
+    /// Enqueue a pre-minted public action without changing its identity.
+    ///
+    /// This is intentionally stricter than the compatibility enqueue: it never
+    /// evicts an older action to make room, rejects internal-capture actions, and
+    /// rejects any action id that has already appeared in this session. It is
+    /// used only after canonical consequential admission has minted the exact
+    /// transport action id that durable journal state refers to.
+    pub async fn enqueue_prebound_public_action(&self, action: BridgeAction) -> bool {
+        if action.action.is_internal_capture_action() {
+            return false;
+        }
+
+        let session_id = action.session_id;
+        let action_id = action.id;
+        let mut states = self.inner.write().await;
+        let state = states.entry(session_id).or_default();
+
+        let duplicate = state.actions.iter().any(|item| item.id == action_id)
+            || state.inflight.iter().any(|item| item.id == action_id)
+            || state.claimed.iter().any(|item| item.id == action_id)
+            || state.capture_actions.iter().any(|item| item.id == action_id)
+            || state.capture_inflight.iter().any(|item| item.id == action_id)
+            || state.capture_claimed.iter().any(|item| item.id == action_id)
+            || state.results.iter().any(|item| item.action_id == action_id)
+            || state.capture_results.iter().any(|item| item.action_id == action_id)
+            || state.action_started_at.contains_key(&action_id)
+            || state
+                .action_boundaries
+                .iter()
+                .any(|item| item.action_id == action_id);
+        if duplicate || state.actions.len() >= self.action_capacity {
+            return false;
+        }
+
+        state.actions.push_back(action);
+        true
+    }
+
     pub async fn enqueue_capture_freeze(
         &self,
         session_id: SessionId,
