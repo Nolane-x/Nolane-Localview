@@ -705,9 +705,11 @@ fn primary_live_surface(
     session_id: SessionId,
 ) -> Option<(Uuid, LiveSurfaceIdentity)> {
     for preferred_kind in ["preview_window", "workspace_child"] {
-        if let Some((owner, _, identity)) = entry.live.keys().find(|(_, current_session, identity)| {
-            *current_session == session_id && identity.surface_kind == preferred_kind
-        }) {
+        if let Some((owner, _, identity)) =
+            entry.live.keys().find(|(_, current_session, identity)| {
+                *current_session == session_id && identity.surface_kind == preferred_kind
+            })
+        {
             return Some((*owner, identity.clone()));
         }
     }
@@ -768,8 +770,7 @@ fn validate_primary_surface_action_request(
     if !entry.live.contains_key(&exact_key) {
         return Err("surface_owner_incarnation_mismatch");
     }
-    let Some((primary_owner, primary_identity)) =
-        primary_live_surface(entry, request.session_id)
+    let Some((primary_owner, primary_identity)) = primary_live_surface(entry, request.session_id)
     else {
         return Err("surface_owner_missing");
     };
@@ -800,10 +801,7 @@ async fn ensure_managed_surface_observation_binding(
 ) -> Result<(), &'static str> {
     state
         .live
-        .ensure_managed_surface_action_authority(
-            session_id,
-            authority.authority_ref.clone(),
-        )
+        .ensure_managed_surface_action_authority(session_id, authority.authority_ref.clone())
         .await;
 
     match state.live.observation_status(session_id).await {
@@ -860,14 +858,11 @@ async fn take_surface_actions(
     if state.sessions.get(request.session_id).await.is_none() {
         return surface_not_found("surface_session_not_found");
     }
-    let (_, authority) = match validate_primary_surface_action_request(
-        &state.sessions,
-        proof,
-        &request,
-    ) {
-        Ok(value) => value,
-        Err(error) => return surface_conflict(error),
-    };
+    let (_, authority) =
+        match validate_primary_surface_action_request(&state.sessions, proof, &request) {
+            Ok(value) => value,
+            Err(error) => return surface_conflict(error),
+        };
     if let Err(error) =
         ensure_managed_surface_observation_binding(&state, request.session_id, &authority).await
     {
@@ -880,11 +875,7 @@ async fn take_surface_actions(
     Json(
         state
             .live
-            .take_managed_surface_actions(
-                request.session_id,
-                authority.authority_ref.clone(),
-                16,
-            )
+            .take_managed_surface_actions(request.session_id, authority.authority_ref.clone(), 16)
             .await,
     )
     .into_response()
@@ -903,24 +894,22 @@ async fn complete_surface_action(
         Ok(guard) => guard,
         Err(error) => return surface_owner_conflict(error),
     };
-    if state.sessions.get(request.surface.session_id).await.is_none() {
+    if state
+        .sessions
+        .get(request.surface.session_id)
+        .await
+        .is_none()
+    {
         return surface_not_found("surface_session_not_found");
     }
-    let (_, authority) = match validate_primary_surface_action_request(
-        &state.sessions,
-        proof,
-        &request.surface,
-    ) {
-        Ok(value) => value,
-        Err(error) => return surface_conflict(error),
-    };
-    if ensure_managed_surface_observation_binding(
-        &state,
-        request.surface.session_id,
-        &authority,
-    )
-    .await
-    .is_err()
+    let (_, authority) =
+        match validate_primary_surface_action_request(&state.sessions, proof, &request.surface) {
+            Ok(value) => value,
+            Err(error) => return surface_conflict(error),
+        };
+    if ensure_managed_surface_observation_binding(&state, request.surface.session_id, &authority)
+        .await
+        .is_err()
     {
         return surface_conflict("managed_surface_observation_binding_stale");
     }
@@ -946,10 +935,7 @@ async fn complete_surface_action(
     }
 }
 
-async fn retire_managed_surface_execution_binding(
-    state: &ControlState,
-    session_id: SessionId,
-) {
+async fn retire_managed_surface_execution_binding(state: &ControlState, session_id: SessionId) {
     state
         .live
         .clear_managed_surface_action_authority(session_id)
@@ -1011,8 +997,8 @@ async fn release_surface_resource(
                 surface_conflict("surface_owner_incarnation_mismatch")
             };
         }
-        let released_primary = primary_live_surface(entry, request.session_id)
-            .is_some_and(|(owner, primary)| {
+        let released_primary =
+            primary_live_surface(entry, request.session_id).is_some_and(|(owner, primary)| {
                 owner == proof.owner_instance_id && primary == identity
             });
         (
@@ -1199,7 +1185,6 @@ fn lock_surface_registry(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-
 #[cfg(test)]
 mod managed_surface_action_tests {
     use super::*;
@@ -1208,16 +1193,9 @@ mod managed_surface_action_tests {
     fn managed_surface_action_authority_binds_exact_owner_session_kind_label_and_incarnation() {
         let owner = Uuid::parse_str("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap();
         let session = Uuid::parse_str("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap();
-        let preview = LiveSurfaceIdentity::new(
-            "preview_window",
-            format!("preview-{session}"),
-            7,
-        );
-        let workspace = LiveSurfaceIdentity::new(
-            "workspace_child",
-            format!("workspace-{session}"),
-            7,
-        );
+        let preview = LiveSurfaceIdentity::new("preview_window", format!("preview-{session}"), 7);
+        let workspace =
+            LiveSurfaceIdentity::new("workspace_child", format!("workspace-{session}"), 7);
 
         let preview_ref = managed_surface_action_authority_ref(owner, session, &preview);
         let workspace_ref = managed_surface_action_authority_ref(owner, session, &workspace);
