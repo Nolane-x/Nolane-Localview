@@ -9,6 +9,13 @@ pub use recovery_inventory::{
     ConsequentialRecoveryDebtDisposition, ConsequentialRecoveryInventoryEntry,
 };
 
+mod managed_web_payload;
+pub use managed_web_payload::{
+    DurableManagedWebPayloadBinding, MANAGED_WEB_PAYLOAD_COMMITMENT_ALGORITHM,
+    ManagedWebPayloadCommitmentKey, ManagedWebPayloadRef,
+    ManagedWebPayloadVerificationError, verify_managed_web_payload_binding,
+};
+
 mod set_value_payload;
 pub use set_value_payload::{
     DurableSetValuePayloadBinding, SET_VALUE_COMMITMENT_ALGORITHM, SetValueCommitmentKey,
