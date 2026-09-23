@@ -16,17 +16,20 @@ use axum::{
 };
 use chrono::Utc;
 use localview_live_bridge::{
-    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionRiskClass, BoundCanonicalDispatchError,
-    BridgeAction, BridgeActionKind, BridgeActionResult, CanonicalQueuedAction,
-    ConsequentialJournal, DispatchExecutionPermit, DispatchLinearizationReceipt,
-    DispatchPreparationReceipt, DispatchPreparedCapability, LiveBridge,
+    ActionEnvelopeMetadata, ActionIdempotencyClass, ActionPostconditionVerdict, ActionRiskClass,
+    BoundCanonicalDispatchError, BridgeAction, BridgeActionKind, BridgeActionResult,
+    CanonicalQueuedAction, ConsequentialJournal, ConsequentialPostconditionEvidence,
+    ConsequentialPostconditionReconciliationReceipt, ConsequentialPostconditionStatus,
+    DispatchExecutionPermit, DispatchLinearizationReceipt, DispatchPreparationReceipt,
+    DispatchPreparedCapability, LiveBridge, reconcile_consequential_postconditions,
 };
 use localview_postcondition_contracts::{
     PostconditionContractRegistry, RegisteredPostconditionContract,
     WebSemanticPostconditionEvaluation,
 };
 use localview_protocol::{
-    DispatchResult, PageSnapshot, PrincipalRef, SemanticNode, SessionId, TransportResult,
+    DispatchResult, PageSnapshot, PrincipalRef, ReconciliationCompleteness,
+    ReconciliationSnapshotReceipt, SemanticNode, SessionId, TransportResult,
 };
 use localview_sessions::SessionManager;
 use serde::Deserialize;
@@ -50,6 +53,11 @@ const MAX_POSTCONDITION_CONTRACT_REF_BYTES: usize = 4 * 1024;
 const MAX_REFERENCE_BYTES: usize = 256;
 const CONFIRMATION_TTL: Duration = Duration::from_secs(30);
 const RECONCILIATION_RECORD_TTL: Duration = Duration::from_secs(5 * 60);
+const MANAGED_RECONCILIATION_SURFACE_SCOPE: &str = "managed-webview:semantic";
+const MANAGED_RECONCILIATION_CACHE_PROFILE_REVISION: &str =
+    "cache:managed-webview:fresh-semantic:v1";
+const MANAGED_RECONCILIATION_PERMISSION_VISIBILITY_REVISION: &str =
+    "visibility:managed-webview:session-scoped:v1";
 const DECISION_PRINCIPAL_REF: &str =
     "principal:local-control:bearer-holder-explicit-confirmation-v1";
 const ACTING_PRINCIPAL_REF: &str = "principal:localview-daemon:managed-webview-v1";
@@ -924,13 +932,20 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
                 return;
             }
             record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
-            if !result.ok {
-                record.status = "executor_failed";
-                record.detail = Some("executor_reported_failure".to_owned());
-                return;
-            }
             record.status = "pending_fresh_reconciliation";
+            record.detail = (!result.ok)
+                .then(|| "executor_reported_failure_dispatch_ambiguous".to_owned());
             record.clone()
+        };
+
+        let Some(journal) = control.journal.as_ref() else {
+            set_reconciliation_required(
+                &control,
+                action_id,
+                "managed_consequential_durable_journal_unavailable",
+            )
+            .await;
+            return;
         };
 
         if current_primary_managed_surface_action_authority_for_sessions(
@@ -971,9 +986,26 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
             return;
         }
 
+        let observation_permit = match journal.begin_postcondition_observation(action_id).await {
+            Ok(permit) => permit,
+            Err(_) => {
+                set_reconciliation_required(
+                    &control,
+                    action_id,
+                    "durable_post_dispatch_observation_authority_unavailable",
+                )
+                .await;
+                return;
+            }
+        };
+        let post_dispatch_cut_ref = observation_permit.snapshot_cut_ref().to_owned();
+
         let snapshot = match acquire_fresh_semantic_snapshot(&state, session_id).await {
             Ok(snapshot) => snapshot,
             Err(_) => {
+                let _ = journal
+                    .abandon_postcondition_observation(observation_permit)
+                    .await;
                 set_reconciliation_required(
                     &control,
                     action_id,
@@ -992,6 +1024,9 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
         .as_ref()
             != Some(&initial.surface_authority)
         {
+            let _ = journal
+                .abandon_postcondition_observation(observation_permit)
+                .await;
             set_reconciliation_required(
                 &control,
                 action_id,
@@ -1011,6 +1046,9 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
                         == initial.surface_authority.target_incarnation_ref
             });
         if !observation_still_matches {
+            let _ = journal
+                .abandon_postcondition_observation(observation_permit)
+                .await;
             set_reconciliation_required(
                 &control,
                 action_id,
@@ -1020,45 +1058,185 @@ pub(crate) fn schedule_managed_consequential_reconciliation(
             return;
         }
 
-        let registry = PostconditionContractRegistry::standard();
-        let mut verdicts = Vec::with_capacity(initial.expected_postcondition_contract_refs.len());
-        let mut any_fail = false;
-        let mut any_unknown = false;
-        for contract_ref in &initial.expected_postcondition_contract_refs {
-            let verdict = match registry.evaluate_web_semantic(contract_ref, &snapshot) {
-                Ok(WebSemanticPostconditionEvaluation::VerifiedPass) => "verified_pass",
-                Ok(WebSemanticPostconditionEvaluation::VerifiedFail) => {
-                    any_fail = true;
-                    "verified_fail"
-                }
-                Ok(WebSemanticPostconditionEvaluation::Unknown) | Err(_) => {
-                    any_unknown = true;
-                    "unknown"
-                }
-            };
-            verdicts.push((contract_ref.as_str(), verdict));
+        let Some(observed_digest) = semantic_snapshot_digest(&snapshot) else {
+            let _ = journal
+                .abandon_postcondition_observation(observation_permit)
+                .await;
+            set_reconciliation_required(
+                &control,
+                action_id,
+                "fresh_post_dispatch_snapshot_digest_failed",
+            )
+            .await;
+            return;
+        };
+        let reconciliation_snapshot = ReconciliationSnapshotReceipt {
+            receipt_id: format!(
+                "reconcile:managed-webview:{action_id}:{}",
+                Uuid::new_v4()
+            ),
+            provider_incarnation_ref: initial
+                .surface_authority
+                .provider_incarnation_ref
+                .clone(),
+            target_incarnation_ref: initial
+                .surface_authority
+                .target_incarnation_ref
+                .clone(),
+            snapshot_cut_ref: post_dispatch_cut_ref,
+            surface_scope: MANAGED_RECONCILIATION_SURFACE_SCOPE.to_owned(),
+            completeness: ReconciliationCompleteness::Established,
+            cache_profile_revision: MANAGED_RECONCILIATION_CACHE_PROFILE_REVISION.to_owned(),
+            permission_visibility_revision:
+                MANAGED_RECONCILIATION_PERMISSION_VISIBILITY_REVISION.to_owned(),
+            capture_sequence: snapshot.version,
+            observed_digest: observed_digest.clone(),
+            incompleteness_debt: Vec::new(),
+        };
+
+        if !state
+            .live
+            .record_reconciliation(session_id, reconciliation_snapshot.clone())
+            .await
+        {
+            let _ = journal
+                .abandon_postcondition_observation(observation_permit)
+                .await;
+            set_reconciliation_required(
+                &control,
+                action_id,
+                "managed_reconciliation_snapshot_rejected",
+            )
+            .await;
+            return;
         }
 
-        let status = if any_fail {
-            "verified_unexpected"
-        } else if any_unknown {
-            "reconciliation_required"
-        } else {
-            "verified_expected"
+        let observation_receipt = match journal
+            .complete_postcondition_observation(observation_permit, reconciliation_snapshot)
+            .await
+        {
+            Ok(receipt) => receipt,
+            Err(_) => {
+                set_reconciliation_required(
+                    &control,
+                    action_id,
+                    "durable_post_dispatch_observation_completion_failed",
+                )
+                .await;
+                return;
+            }
         };
-        let proof_ref =
-            reconciliation_proof_ref(action_id, &snapshot, &initial.surface_authority, &verdicts);
+
+        let registry = PostconditionContractRegistry::standard();
+        let mut evidence =
+            Vec::with_capacity(initial.expected_postcondition_contract_refs.len());
+        for contract_ref in &initial.expected_postcondition_contract_refs {
+            let status = match registry.evaluate_web_semantic(contract_ref, &snapshot) {
+                Ok(WebSemanticPostconditionEvaluation::VerifiedPass) => {
+                    ConsequentialPostconditionStatus::VerifiedPass
+                }
+                Ok(WebSemanticPostconditionEvaluation::VerifiedFail) => {
+                    ConsequentialPostconditionStatus::VerifiedFail
+                }
+                Ok(WebSemanticPostconditionEvaluation::Unknown) | Err(_) => {
+                    ConsequentialPostconditionStatus::Unknown
+                }
+            };
+            evidence.push(ConsequentialPostconditionEvidence {
+                contract_ref: contract_ref.clone(),
+                status,
+                receipt_ref: postcondition_evidence_receipt_ref(
+                    action_id,
+                    &observed_digest,
+                    contract_ref,
+                    status,
+                ),
+            });
+        }
+
+        let durable = match reconcile_consequential_postconditions(
+            &state.live,
+            journal,
+            ConsequentialPostconditionReconciliationReceipt::from_observation(
+                observation_receipt,
+                evidence,
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                set_reconciliation_required(
+                    &control,
+                    action_id,
+                    "durable_postcondition_reconciliation_failed",
+                )
+                .await;
+                return;
+            }
+        };
+
+        let status = match durable.postcondition_receipt.verdict {
+            ActionPostconditionVerdict::VerifiedExpected => "verified_expected",
+            ActionPostconditionVerdict::VerifiedUnexpected => "verified_unexpected",
+            ActionPostconditionVerdict::ReconciliationRequired => "reconciliation_required",
+        };
 
         let mut records = control.reconciliations.lock().await;
         if let Some(record) = records.get_mut(&action_id) {
             record.status = status;
-            record.proof_ref = proof_ref;
+            record.proof_ref = Some(durable.postcondition_receipt.receipt_ref.clone());
             record.snapshot_version = Some(snapshot.version);
-            record.detail = (status == "reconciliation_required")
-                .then(|| "one_or_more_postconditions_unresolved".to_owned());
+            record.detail = if status == "reconciliation_required" {
+                Some("one_or_more_postconditions_unresolved".to_owned())
+            } else if !result.ok {
+                Some("executor_reported_failure_but_world_state_reconciled".to_owned())
+            } else {
+                None
+            };
             record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
         }
     });
+}
+
+fn semantic_snapshot_digest(snapshot: &PageSnapshot) -> Option<String> {
+    let encoded = serde_json::to_vec(snapshot).ok()?;
+    let mut digest = Sha256::new();
+    digest.update(b"localview-managed-webview-postdispatch-snapshot-v1\0");
+    digest.update(encoded);
+    let digest = digest.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        write!(&mut hex, "{byte:02x}").ok()?;
+    }
+    Some(format!("sha256:{hex}"))
+}
+
+fn postcondition_evidence_receipt_ref(
+    action_id: Uuid,
+    observed_digest: &str,
+    contract_ref: &str,
+    status: ConsequentialPostconditionStatus,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"localview-managed-webview-postcondition-evidence-v1\0");
+    digest.update(action_id.as_bytes());
+    digest.update(b"\0");
+    digest.update(observed_digest.as_bytes());
+    digest.update(b"\0");
+    digest.update(contract_ref.as_bytes());
+    digest.update(b"\0");
+    digest.update(match status {
+        ConsequentialPostconditionStatus::VerifiedPass => b"verified_pass".as_slice(),
+        ConsequentialPostconditionStatus::VerifiedFail => b"verified_fail".as_slice(),
+        ConsequentialPostconditionStatus::Unknown => b"unknown".as_slice(),
+    });
+    let digest = digest.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    format!("evidence:managed-webview:sha256:{hex}")
 }
 
 async fn set_reconciliation_required(
@@ -1072,36 +1250,6 @@ async fn set_reconciliation_required(
         record.detail = Some(detail.to_owned());
         record.expires_at = Instant::now() + RECONCILIATION_RECORD_TTL;
     }
-}
-
-fn reconciliation_proof_ref(
-    action_id: Uuid,
-    snapshot: &PageSnapshot,
-    authority: &ManagedSurfaceActionAuthority,
-    verdicts: &[(&str, &str)],
-) -> Option<String> {
-    let encoded = serde_json::to_vec(snapshot).ok()?;
-    let mut digest = Sha256::new();
-    digest.update(b"localview-managed-webview-postcondition-v1\0");
-    digest.update(action_id.as_bytes());
-    digest.update(b"\0");
-    digest.update(encoded);
-    digest.update(b"\0");
-    digest.update(authority.provider_incarnation_ref.as_str().as_bytes());
-    digest.update(b"\0");
-    digest.update(authority.target_incarnation_ref.as_str().as_bytes());
-    for (contract_ref, verdict) in verdicts {
-        digest.update(b"\0");
-        digest.update(contract_ref.as_bytes());
-        digest.update(b"=");
-        digest.update(verdict.as_bytes());
-    }
-    let digest = digest.finalize();
-    let mut hex = String::with_capacity(64);
-    for byte in digest {
-        write!(&mut hex, "{byte:02x}").ok()?;
-    }
-    Some(format!("proof:managed-webview:sha256:{hex}"))
 }
 
 fn control_for_sessions(sessions: &Arc<SessionManager>) -> ManagedConsequentialControlHandle {
