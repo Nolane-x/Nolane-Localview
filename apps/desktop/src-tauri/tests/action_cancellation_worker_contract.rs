@@ -125,16 +125,17 @@ fn observed_cancellation_retries_ack_without_falling_back_to_result_publication(
 
 #[test]
 fn already_terminal_result_conflict_does_not_create_an_endless_retry() {
-    let source = include_str!("../src/lib.rs");
+    let source = include_str!("../src/surface_resource.rs");
     let command_start = source
-        .find("async fn preview_complete_action(")
-        .expect("result command must exist");
+        .find("pub async fn complete_surface_action(")
+        .expect("managed-surface result command must exist");
     let command_end = source[command_start..]
-        .find("fn control_client()")
+        .find("pub async fn release_surface(")
         .map(|offset| command_start + offset)
-        .expect("control client helper must follow result command");
+        .expect("surface release helper must follow result command");
     let command = &source[command_start..command_end];
 
-    assert!(command.contains("reqwest::StatusCode::CONFLICT"));
-    assert!(command.contains("return Ok(())"));
+    assert!(command.contains("managed_surface_action_authority_stale"));
+    assert!(command.contains("surface_action_not_inflight"));
+    assert!(command.contains("Ok(())"));
 }
