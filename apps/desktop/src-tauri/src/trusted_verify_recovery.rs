@@ -561,6 +561,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn v1_recovery_record_migrates_without_wave9_authority() {
+        let persisted = PersistedVerificationRecordV1 {
+            schema_version: 1,
+            verification_id: format!("lvv-{}", Uuid::new_v4()),
+            proposal_id: format!("lvp-{}", Uuid::new_v4()),
+            session_id: Uuid::new_v4(),
+            reference: "@e1".into(),
+            canonical_route: "http://127.0.0.1:5173/".into(),
+            canonical_file: PathBuf::from("src/App.tsx"),
+            project_root: PathBuf::from("."),
+            display_file: "src/App.tsx".into(),
+            source_line: 1,
+            postimage_sha256: "sha256:fixture".into(),
+            instruction: "fixture".into(),
+            semantic_before: VerifySemanticBaseline {
+                context_version: VERIFY_CONTEXT_VERSION,
+                snapshot_version: 1,
+                selected: crate::trusted_verify::VerifySemanticProjection {
+                    reference: "@e1".into(),
+                    role: Some("button".into()),
+                    name: Some("Save".into()),
+                    tag: "button".into(),
+                    interactive: true,
+                    attributes: Default::default(),
+                    source: Some("src/App.tsx".into()),
+                    rect: None,
+                },
+                console_issues: Vec::new(),
+                network_issues: Vec::new(),
+            },
+            visual_before: None,
+            scope: VerificationScope::SemanticOnly,
+            created_at_unix_ms: 10,
+            expires_at_unix_ms: 20,
+        };
+        let bytes = serde_json::to_vec(&persisted).expect("serialize v1 recovery fixture");
+        let migrated = decode_persisted_record(&bytes).expect("migrate v1 recovery fixture");
+        assert_eq!(migrated.schema_version, RECOVERY_SCHEMA_VERSION);
+        assert_eq!(migrated.verification_id, persisted.verification_id);
+        assert!(migrated.wave9_preflight.is_none());
+    }
+
+    #[test]
     fn verification_id_is_path_safe_uuid_only() {
         assert!(valid_verification_id(&format!("lvv-{}", Uuid::new_v4())));
         for invalid in ["", "lvv-", "../escape", "lvv-../../escape", "other-123"] {
