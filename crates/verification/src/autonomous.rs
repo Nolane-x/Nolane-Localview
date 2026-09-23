@@ -650,6 +650,8 @@ pub fn build_production_observation_receipt(
         real_worktree_unchanged: shadow_proof.real_worktree_unchanged,
         external_side_effects_observed: false,
     };
+    let planned_state_count = affected.compiled_states.len();
+    let executed_state_count = revalidated_states.len();
     let receipt = build_autonomous_receipt(AutonomousVerificationInput {
         claim_scope,
         affected,
@@ -664,8 +666,8 @@ pub fn build_production_observation_receipt(
         stale_evidence_ids: Vec::new(),
         resource_budget: VerificationResourceBudget {
             admitted: true,
-            max_states: affected.compiled_states.len(),
-            executed_states: revalidated_states.len(),
+            max_states: planned_state_count,
+            executed_states: executed_state_count,
             max_mutations: mutations.len(),
             executed_mutations: mutations.len(),
             max_runtime_ms: 15_000,
