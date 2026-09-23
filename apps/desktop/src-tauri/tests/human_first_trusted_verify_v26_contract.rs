@@ -475,3 +475,29 @@ fn render_audit_proves_trusted_verify_runtime_matrix() {
         );
     }
 }
+
+#[test]
+fn verify_recovery_is_durable_hash_bound_and_revalidated_after_restart() {
+    let verify = include_str!("../src/trusted_verify.rs");
+    let recovery = include_str!("../src/trusted_verify_recovery.rs");
+    let desktop = include_str!("../src/lib.rs");
+
+    assert!(desktop.contains("VerificationStore::production"));
+    assert!(verify.contains("postimage_sha256"));
+    assert!(!verify.contains("pub postimage: Vec<u8>"));
+    assert!(recovery.contains("RECOVERY_SCHEMA_VERSION"));
+    assert!(recovery.contains("expires_at_unix_ms"));
+    assert!(recovery.contains("png_sha256"));
+    assert!(recovery.contains("VerificationStatus::Pending"));
+    assert!(recovery.contains("fs::rename(&meta, &consumed)"));
+
+    let command = between(
+        desktop,
+        "async fn verify_fix_change(",
+        "async fn open_source_for_selection(",
+    );
+    assert!(command.contains("managed_surface_canonical_route"));
+    assert!(command.contains("semantic-snapshot/fresh"));
+    assert!(command.contains("resolve_trusted_source_target"));
+    assert!(command.contains("sha256_bytes(&postimage) != record.postimage_sha256"));
+}

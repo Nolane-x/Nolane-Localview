@@ -3,7 +3,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use localview_counterfactual::{
@@ -72,13 +71,10 @@ fn normal_patch(path: &str, before: &str, after: &str) -> String {
 }
 
 fn temp_path(label: &str) -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
     std::env::temp_dir().join(format!(
-        "localview-wave9-{label}-{}-{stamp}",
-        std::process::id()
+        "localview-wave9-{label}-{}-{}",
+        std::process::id(),
+        Uuid::new_v4()
     ))
 }
 

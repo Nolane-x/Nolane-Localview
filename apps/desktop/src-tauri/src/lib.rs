@@ -7,6 +7,7 @@ mod point_select;
 mod trusted_ai;
 mod trusted_fix;
 mod trusted_verify;
+mod trusted_verify_recovery;
 mod wave6_accessibility_interaction;
 pub mod visual_capture;
 pub mod workspace_surface;
@@ -1150,7 +1151,7 @@ async fn verify_fix_change(
             return Err("trusted Verify source mapping changed after Apply".into());
         }
         let postimage = trusted_fix::validate_fix_source_policy(&target)?;
-        if postimage != record.postimage {
+        if localview_counterfactual::sha256_bytes(&postimage) != record.postimage_sha256 {
             return Err("trusted Verify source changed after Apply".into());
         }
 
@@ -2416,7 +2417,7 @@ async fn preview_take_actions(
     session_id: SessionId,
     attestation: String,
 ) -> Result<Vec<serde_json::Value>, String> {
-    ensure_preview_caller(
+    let surface = ensure_preview_caller(
         &webview_window,
         registry.inner(),
         bridge_authority.inner(),
@@ -2439,19 +2440,8 @@ async fn preview_take_actions(
         .json::<Vec<PrivateBridgeAction>>()
         .await
         .map_err(err)?;
-    let public_actions = client
-        .get(format!(
-            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions"
-        ))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(err)?
-        .error_for_status()
-        .map_err(err)?
-        .json::<Vec<BridgeAction>>()
-        .await
-        .map_err(err)?;
+    let public_actions =
+        workspace_surface::surface_resource::take_surface_actions(&surface.identity).await?;
 
     let mut actions = Vec::with_capacity(internal_actions.len() + public_actions.len());
     for action in internal_actions {
@@ -2600,28 +2590,18 @@ async fn preview_complete_action(
     result: BridgeActionResult,
     attestation: String,
 ) -> Result<(), String> {
-    ensure_preview_caller(
+    let surface = ensure_preview_caller(
         &webview_window,
         registry.inner(),
         bridge_authority.inner(),
         session_id,
         &attestation,
     )?;
-    let token = read_token().await?;
-    let response = control_client()?
-        .post(format!(
-            "http://127.0.0.1:45454/v1/sessions/{session_id}/actions/results"
-        ))
-        .bearer_auth(token)
-        .json(&result)
-        .send()
-        .await
-        .map_err(err)?;
-    if response.status() == reqwest::StatusCode::CONFLICT {
-        return Ok(());
-    }
-    response.error_for_status().map_err(err)?;
-    Ok(())
+    workspace_surface::surface_resource::complete_surface_action(
+        &surface.identity,
+        &result,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -3366,7 +3346,7 @@ pub fn run() {
             let _ = app.manage(content_stress::ContentStressState::default());
             let _ = app.manage(point_select::PointSelectState::default());
             let _ = app.manage(trusted_fix::FixProposalStore::default());
-            let _ = app.manage(trusted_verify::VerificationStore::default());
+            let _ = app.manage(trusted_verify::VerificationStore::production());
             let _ = app.manage(workspace_surface::surface_registry::DesktopSurfaceRegistry::default());
             let _ = app.manage(PreviewBridgeAuthority::default());
             let _ = app.manage(daemon_sidecar::ManagedDaemonSidecar::default());

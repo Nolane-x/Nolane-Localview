@@ -191,11 +191,19 @@ impl ProviderContinuityState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedSurfaceActionCompletion {
+    Completed,
+    AuthorityStale,
+    ActionNotInflight,
+}
+
 #[derive(Clone, Debug)]
 pub struct LiveBridge {
     legacy: legacy::LiveBridge,
     continuity: Arc<RwLock<HashMap<SessionId, ProviderContinuityState>>>,
     action_envelopes: Arc<RwLock<HashMap<Uuid, CanonicalActionEnvelope>>>,
+    managed_surface_action_authority: Arc<RwLock<HashMap<SessionId, String>>>,
     wave6_graphs: Arc<RwLock<HashMap<SessionId, localview_flow::InteractionGraph>>>,
     action_gate: Arc<Mutex<()>>,
 }
@@ -206,6 +214,7 @@ impl LiveBridge {
             legacy: legacy::LiveBridge::new(event_capacity, action_capacity),
             continuity: Arc::new(RwLock::new(HashMap::new())),
             action_envelopes: Arc::new(RwLock::new(HashMap::new())),
+            managed_surface_action_authority: Arc::new(RwLock::new(HashMap::new())),
             wave6_graphs: Arc::new(RwLock::new(HashMap::new())),
             action_gate: Arc::new(Mutex::new(())),
         }
@@ -350,6 +359,87 @@ impl LiveBridge {
         self.legacy
             .enqueue_action(session_id, reference, action)
             .await
+    }
+
+    /// Drain public work only for the exact primary managed-surface executor.
+    ///
+    /// The authority switch and queue drain share the V4.3 action gate, giving
+    /// them one linearization point with enqueue. A surface transition retires
+    /// queued/inflight work from the previous executor before any action can be
+    /// returned to the new WebView.
+    pub async fn take_managed_surface_actions(
+        &self,
+        session_id: SessionId,
+        authority_ref: String,
+        limit: usize,
+    ) -> Vec<BridgeAction> {
+        let _gate = self.action_gate.lock().await;
+        let unchanged = self
+            .managed_surface_action_authority
+            .read()
+            .await
+            .get(&session_id)
+            .is_some_and(|current| current == &authority_ref);
+        if !unchanged {
+            self.legacy
+                .discard_public_actions_for_session(session_id)
+                .await;
+            self.action_envelopes
+                .write()
+                .await
+                .retain(|_, envelope| envelope.session_id != session_id);
+            self.managed_surface_action_authority
+                .write()
+                .await
+                .insert(session_id, authority_ref);
+        }
+        self.legacy.take_public_actions(session_id, limit).await
+    }
+
+    /// Complete one action under the same exact managed-surface authority that
+    /// owns its current execution turn. Authority verification, claim and
+    /// completion are serialized with surface transitions and enqueue.
+    pub async fn complete_managed_surface_action(
+        &self,
+        session_id: SessionId,
+        authority_ref: &str,
+        result: BridgeActionResult,
+    ) -> ManagedSurfaceActionCompletion {
+        let _gate = self.action_gate.lock().await;
+        let current = self
+            .managed_surface_action_authority
+            .read()
+            .await
+            .get(&session_id)
+            .is_some_and(|value| value == authority_ref);
+        if !current {
+            return ManagedSurfaceActionCompletion::AuthorityStale;
+        }
+        let Some(action) = self.legacy.claim_action(session_id, result.action_id).await else {
+            return ManagedSurfaceActionCompletion::ActionNotInflight;
+        };
+        self.legacy.complete_action(&action, result).await;
+        ManagedSurfaceActionCompletion::Completed
+    }
+
+    pub async fn clear_managed_surface_action_authority(&self, session_id: SessionId) -> bool {
+        let _gate = self.action_gate.lock().await;
+        let existed = self
+            .managed_surface_action_authority
+            .write()
+            .await
+            .remove(&session_id)
+            .is_some();
+        if existed {
+            self.legacy
+                .discard_public_actions_for_session(session_id)
+                .await;
+            self.action_envelopes
+                .write()
+                .await
+                .retain(|_, envelope| envelope.session_id != session_id);
+        }
+        existed
     }
 
     /// Queue an action only after binding the canonical V4.3 authority envelope.
@@ -506,6 +596,10 @@ impl LiveBridge {
             .write()
             .await
             .retain(|_, envelope| envelope.session_id != session_id);
+        self.managed_surface_action_authority
+            .write()
+            .await
+            .remove(&session_id);
         self.wave6_graphs.write().await.remove(&session_id);
         self.legacy.release_session(session_id).await;
     }

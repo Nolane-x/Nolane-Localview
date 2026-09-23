@@ -21,6 +21,8 @@ use localview_sessions::SessionManager;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use localview_live_bridge::{BridgeActionResult, ManagedSurfaceActionCompletion};
+
 use crate::{
     ControlState,
     perception::{authorized, denied},
@@ -152,6 +154,41 @@ impl SurfaceVisibilityRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SurfaceActionRequest {
+    session_id: SessionId,
+    surface_kind: String,
+    label: String,
+    incarnation: u64,
+    owner_instance_id: Uuid,
+    boot_epoch: Uuid,
+    owner_lease_id: Uuid,
+}
+
+impl SurfaceActionRequest {
+    fn owner_proof(&self) -> SurfaceOwnerProof {
+        SurfaceOwnerProof {
+            owner_instance_id: self.owner_instance_id,
+            boot_epoch: self.boot_epoch,
+            owner_lease_id: self.owner_lease_id,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SurfaceActionCompleteRequest {
+    #[serde(flatten)]
+    surface: SurfaceActionRequest,
+    result: BridgeActionResult,
+}
+
+#[derive(Debug, Clone)]
+struct ManagedSurfaceActionAuthority {
+    authority_ref: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SurfaceReleaseRequest {
     session_id: SessionId,
     surface_kind: String,
@@ -202,6 +239,14 @@ pub(crate) fn router(state: ControlState) -> Router {
         .route(
             "/v1/runtime/resources/surfaces/release",
             post(release_surface_resource),
+        )
+        .route(
+            "/v1/runtime/resources/surfaces/actions/take",
+            post(take_surface_actions),
+        )
+        .route(
+            "/v1/runtime/resources/surfaces/actions/complete",
+            post(complete_surface_action),
         )
         .with_state(state)
 }
@@ -609,6 +654,164 @@ async fn update_surface_visibility(
     StatusCode::NO_CONTENT.into_response()
 }
 
+fn managed_surface_action_authority_ref(
+    owner_instance_id: Uuid,
+    session_id: SessionId,
+    identity: &LiveSurfaceIdentity,
+) -> String {
+    serde_json::json!({
+        "kind": "managed_webview",
+        "owner_instance_id": owner_instance_id,
+        "session_id": session_id,
+        "surface_kind": identity.surface_kind,
+        "label": identity.label,
+        "incarnation": identity.incarnation,
+    })
+    .to_string()
+}
+
+fn primary_live_surface(
+    entry: &SurfaceResourceEntry,
+    session_id: SessionId,
+) -> Option<(Uuid, LiveSurfaceIdentity)> {
+    for preferred_kind in ["preview_window", "workspace_child"] {
+        if let Some((owner, _, identity)) = entry.live.keys().find(|(_, current_session, identity)| {
+            *current_session == session_id && identity.surface_kind == preferred_kind
+        }) {
+            return Some((*owner, identity.clone()));
+        }
+    }
+    None
+}
+
+fn validate_primary_surface_action_request(
+    sessions: &Arc<SessionManager>,
+    proof: SurfaceOwnerProof,
+    request: &SurfaceActionRequest,
+) -> Result<(LiveSurfaceIdentity, ManagedSurfaceActionAuthority), &'static str> {
+    if request.incarnation == 0 {
+        return Err("invalid_surface_identity");
+    }
+    let Some(identity) = surface_identity(
+        request.surface_kind.clone(),
+        request.label.clone(),
+        request.incarnation,
+    ) else {
+        return Err("invalid_surface_identity");
+    };
+    let registry = SURFACE_RESOURCES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = lock_surface_registry(registry);
+    let Some(entry) = existing_surface_entry_mut(&mut entries, sessions) else {
+        return Err("surface_owner_missing");
+    };
+    let exact_key = (
+        proof.owner_instance_id,
+        request.session_id,
+        identity.clone(),
+    );
+    if !entry.live.contains_key(&exact_key) {
+        return Err("surface_owner_incarnation_mismatch");
+    }
+    let Some((primary_owner, primary_identity)) =
+        primary_live_surface(entry, request.session_id)
+    else {
+        return Err("surface_owner_missing");
+    };
+    if primary_owner != proof.owner_instance_id || primary_identity != identity {
+        return Err("surface_not_primary_action_authority");
+    }
+    Ok((
+        identity.clone(),
+        ManagedSurfaceActionAuthority {
+            authority_ref: managed_surface_action_authority_ref(
+                proof.owner_instance_id,
+                request.session_id,
+                &identity,
+            ),
+        },
+    ))
+}
+
+async fn take_surface_actions(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Json(request): Json<SurfaceActionRequest>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    let proof = request.owner_proof();
+    let _owner_operation = match pin_surface_owner_for_sessions(&state.sessions, proof) {
+        Ok(guard) => guard,
+        Err(error) => return surface_owner_conflict(error),
+    };
+    if state.sessions.get(request.session_id).await.is_none() {
+        return surface_not_found("surface_session_not_found");
+    }
+    let (_, authority) = match validate_primary_surface_action_request(
+        &state.sessions,
+        proof,
+        &request,
+    ) {
+        Ok(value) => value,
+        Err(error) => return surface_conflict(error),
+    };
+    Json(
+        state
+            .live
+            .take_managed_surface_actions(
+                request.session_id,
+                authority.authority_ref.clone(),
+                16,
+            )
+            .await,
+    )
+    .into_response()
+}
+
+async fn complete_surface_action(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    Json(request): Json<SurfaceActionCompleteRequest>,
+) -> axum::response::Response {
+    if !authorized(&headers, &state) {
+        return denied();
+    }
+    let proof = request.surface.owner_proof();
+    let _owner_operation = match pin_surface_owner_for_sessions(&state.sessions, proof) {
+        Ok(guard) => guard,
+        Err(error) => return surface_owner_conflict(error),
+    };
+    if state.sessions.get(request.surface.session_id).await.is_none() {
+        return surface_not_found("surface_session_not_found");
+    }
+    let (_, authority) = match validate_primary_surface_action_request(
+        &state.sessions,
+        proof,
+        &request.surface,
+    ) {
+        Ok(value) => value,
+        Err(error) => return surface_conflict(error),
+    };
+    match state
+        .live
+        .complete_managed_surface_action(
+            request.surface.session_id,
+            &authority.authority_ref,
+            request.result,
+        )
+        .await
+    {
+        ManagedSurfaceActionCompletion::Completed => StatusCode::NO_CONTENT.into_response(),
+        ManagedSurfaceActionCompletion::AuthorityStale => {
+            surface_conflict("managed_surface_action_authority_stale")
+        }
+        ManagedSurfaceActionCompletion::ActionNotInflight => {
+            surface_conflict("surface_action_not_inflight")
+        }
+    }
+}
+
 async fn release_surface_resource(
     State(state): State<ControlState>,
     headers: HeaderMap,
@@ -827,4 +1030,34 @@ fn lock_surface_registry(
     registry
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+
+#[cfg(test)]
+mod managed_surface_action_tests {
+    use super::*;
+
+    #[test]
+    fn managed_surface_action_authority_binds_exact_owner_session_kind_label_and_incarnation() {
+        let owner = Uuid::parse_str("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap();
+        let session = Uuid::parse_str("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap();
+        let preview = LiveSurfaceIdentity::new(
+            "preview_window",
+            format!("preview-{session}"),
+            7,
+        );
+        let workspace = LiveSurfaceIdentity::new(
+            "workspace_child",
+            format!("workspace-{session}"),
+            7,
+        );
+
+        let preview_ref = managed_surface_action_authority_ref(owner, session, &preview);
+        let workspace_ref = managed_surface_action_authority_ref(owner, session, &workspace);
+        assert_ne!(preview_ref, workspace_ref);
+        assert!(preview_ref.contains("\"kind\":\"managed_webview\""));
+        assert!(preview_ref.contains("\"surface_kind\":\"preview_window\""));
+        assert!(preview_ref.contains("preview-"));
+        assert!(preview_ref.contains("\"incarnation\":7"));
+    }
 }

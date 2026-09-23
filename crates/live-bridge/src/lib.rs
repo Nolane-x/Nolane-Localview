@@ -770,6 +770,23 @@ impl LiveBridge {
         removed
     }
 
+    pub async fn discard_public_actions_for_session(&self, session_id: SessionId) -> usize {
+        let mut states = self.inner.write().await;
+        let Some(state) = states.get_mut(&session_id) else {
+            return 0;
+        };
+        let removed = state
+            .actions
+            .len()
+            .saturating_add(state.inflight.len())
+            .saturating_add(state.claimed.len());
+        state.actions.clear();
+        state.inflight.clear();
+        state.claimed.clear();
+        state.action_started_at.clear();
+        removed
+    }
+
     pub async fn claim_native_executor(
         &self,
         session_id: SessionId,

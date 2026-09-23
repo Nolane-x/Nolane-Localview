@@ -518,6 +518,16 @@ impl LiveBridge {
         true
     }
 
+    pub async fn discard_public_actions_for_session(&self, session_id: SessionId) -> usize {
+        let mut authority = self.action_cancellation.lock().await;
+        let removed = self
+            .base
+            .discard_public_actions_for_session(session_id)
+            .await;
+        authority.release_session(session_id);
+        removed
+    }
+
     pub async fn enqueue_native_executor(
         &self,
         session_id: SessionId,
