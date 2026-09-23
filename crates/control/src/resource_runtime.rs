@@ -927,11 +927,7 @@ async fn complete_surface_action(
     let completed_result = request.result.clone();
     match state
         .live
-        .complete_managed_surface_action(
-            session_id,
-            &authority.authority_ref,
-            request.result,
-        )
+        .complete_managed_surface_action(session_id, &authority.authority_ref, request.result)
         .await
     {
         ManagedSurfaceActionCompletion::Completed => {
