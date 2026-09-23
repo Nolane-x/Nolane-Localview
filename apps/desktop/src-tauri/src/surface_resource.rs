@@ -326,7 +326,29 @@ pub async fn complete_surface_action(
         surface: surface_action_request(identity, proof),
         result,
     };
-    post_surface("/v1/runtime/resources/surfaces/actions/complete", &request).await
+    match post_surface_response(
+        "/v1/runtime/resources/surfaces/actions/complete",
+        &request,
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.code.as_deref(),
+                Some(
+                    "managed_surface_action_authority_stale"
+                        | "surface_action_not_inflight"
+                )
+            ) =>
+        {
+            // Both codes mean the daemon has already made this exact worker
+            // result terminal. Retrying can never regain authority and would
+            // leave the managed-page worker in an endless publication loop.
+            Ok(())
+        }
+        Err(error) => Err(error.into_string()),
+    }
 }
 
 pub async fn release_surface(identity: &DesktopSurfaceIdentity) -> Result<(), String> {
