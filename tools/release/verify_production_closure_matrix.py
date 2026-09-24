@@ -94,6 +94,15 @@ REQUIRED_REPO_EVIDENCE = {
         "scope-explicit bounded `current_target_current_route` receipt",
         "bounded verification never authorizes the whole-impact handoff",
     ],
+    "docs/SECURITY.md": [
+        "payload-bearing actions bind private process-local payloads to durable HMAC commitments",
+        "journal-minted one-shot executor permit",
+        "two-phase `plan -> confirm -> status` surface",
+    ],
+    "docs/ROADMAP.md": [
+        "bounded V1 target/current-route verification path is software-closed",
+        "whole-impact Autonomous Verified with a completeness-certified dependency denominator",
+    ],
 }
 
 
@@ -160,6 +169,15 @@ def verify_no_stale_public_claims() -> None:
         ],
         "docs/SPEC_COVERAGE.md": [
             "production contract-catalog execution, mutation challenges, complete denominator/revalidation authority and external side-effect containment are not proven",
+        ],
+        "docs/SECURITY.md": [
+            "This managed-WebView proof is not yet a durable V4.3 journal commit",
+            "type`/`key`/`scroll` plus CLI/MCP consequential entry points remain unavailable",
+        ],
+        "docs/ROADMAP.md": [
+            "production closure reopened",
+            "not yet production-orchestrated end-to-end",
+            "Wave 9 is **Partial at the live-product level**",
         ],
     }
     for relative, phrases in forbidden.items():
