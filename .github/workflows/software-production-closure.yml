@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "README.md"
-      - "SECURITY.md"
+      - "docs/SECURITY.md"
       - "docs/PRODUCTION_CLOSURE_MATRIX.md"
       - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/PRODUCTION_RELEASE.md"
@@ -28,7 +28,7 @@ on:
     branches: [main]
     paths:
       - "README.md"
-      - "SECURITY.md"
+      - "docs/SECURITY.md"
       - "docs/PRODUCTION_CLOSURE_MATRIX.md"
       - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/PRODUCTION_RELEASE.md"
