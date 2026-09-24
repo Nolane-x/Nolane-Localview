@@ -29,6 +29,65 @@ REQUIRED = {
     "Documentation truth": "closed",
 }
 
+REQUIRED_REPO_EVIDENCE = {
+    ".github/workflows/release-install-smoke.yml": [
+        "Clean-machine install and first launch",
+        "wait_for_first_launch_health.py",
+    ],
+    "tools/release/wait_for_first_launch_health.py": [
+        "status",
+        "ready",
+    ],
+    ".github/workflows/release-upgrade-policy.yml": [
+        "Release upgrade and rollback policy",
+        "verify_release_policy.py",
+    ],
+    "tools/release/verify_release_policy.py": [
+        "initial_supported_release",
+        "installer_upgrade_required",
+        "installer_rollback_required",
+    ],
+    "release-policy.json": [
+        '"schema": "localview-release-policy-v1"',
+        '"state_rollback_compatibility_required": true',
+    ],
+    ".github/workflows/release-candidate.yml": [
+        "artifact-manifest.json",
+        "sbom.spdx.json",
+        "provenance.json",
+        "verify_release_evidence.py",
+    ],
+    "tools/release/verify_release_evidence.py": [
+        'SPDX-2.3',
+        "artifact-manifest digest mismatch",
+        "provenance SBOM digest mismatch",
+    ],
+    "apps/desktop/src-tauri/src/update_channel.rs": [
+        'option_env!("LOCALVIEW_UPDATE_MANIFEST_URL")',
+        "redirect(Policy::none())",
+        "install_authorized: false",
+        "same_origin(manifest_url, &artifact_url)",
+    ],
+    "apps/desktop/src-tauri/tests/update_channel_contract.rs": [
+        "check_only_and_fail_closed_without_signature_authority",
+        "install_authorized: false",
+    ],
+    "crates/verification/src/autonomous.rs": [
+        "BoundedVerificationScope",
+        "CurrentTargetCurrentRoute",
+        "AUTONOMOUS_VERIFICATION_RECEIPT_SCHEMA_VERSION",
+    ],
+    "apps/desktop/src-tauri/src/trusted_verify.rs": [
+        "AUTONOMOUS_VERIFICATION_RECEIPT_SCHEMA_VERSION",
+        "AutonomousVerificationVerdict::Verified",
+    ],
+    "apps/desktop/src-tauri/tests/wave9_autonomous_verification_contract.rs": [
+        "bounded_verification",
+        "must never authorize the global Wave 9 handoff",
+    ],
+}
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"production closure matrix invalid: {message}")
 
@@ -69,9 +128,21 @@ def parse_rows(text: str) -> dict[str, dict[str, str]]:
         fail("production table was not found")
     return rows
 
+def verify_repository_evidence() -> None:
+    for relative, markers in REQUIRED_REPO_EVIDENCE.items():
+        path = ROOT / relative
+        if not path.is_file():
+            fail(f"required closure evidence file is missing: {relative}")
+        content = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in content:
+                fail(f"required closure evidence marker missing from {relative}: {marker}")
+
+
 def main() -> None:
     text = MATRIX.read_text(encoding="utf-8")
     rows = parse_rows(text)
+    verify_repository_evidence()
 
     unknown = {
         area: row["status"]
