@@ -75,3 +75,52 @@ jobs:
         run: python3 tools/release/verify_production_closure_matrix.py
       - name: Verify initial/future release policy
         run: python3 tools/release/verify_release_policy.py
+      - name: Negative proof — In progress status must fail closed
+        shell: bash
+        run: |
+          cp docs/PRODUCTION_CLOSURE_MATRIX.md "$RUNNER_TEMP/production-matrix.md"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("docs/PRODUCTION_CLOSURE_MATRIX.md")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          changed = False
+          for index, line in enumerate(lines):
+              if line.startswith("| Update check/channel |"):
+                  cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+                  if len(cells) != 4:
+                      raise SystemExit("unexpected production matrix row shape")
+                  cells[2] = "In progress"
+                  lines[index] = "| " + " | ".join(cells) + " |"
+                  changed = True
+                  break
+          if not changed:
+              raise SystemExit("update check/channel row not found")
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          set +e
+          python3 tools/release/verify_production_closure_matrix.py
+          rc=$?
+          set -e
+          cp "$RUNNER_TEMP/production-matrix.md" docs/PRODUCTION_CLOSURE_MATRIX.md
+          test "$rc" -ne 0
+      - name: Negative proof — missing repository evidence must fail closed
+        shell: bash
+        run: |
+          mv apps/desktop/src-tauri/tests/update_channel_contract.rs "$RUNNER_TEMP/update_channel_contract.rs"
+          set +e
+          python3 tools/release/verify_production_closure_matrix.py
+          rc=$?
+          set -e
+          mv "$RUNNER_TEMP/update_channel_contract.rs" apps/desktop/src-tauri/tests/update_channel_contract.rs
+          test "$rc" -ne 0
+      - name: Negative proof — stale public claim must fail closed
+        shell: bash
+        run: |
+          cp README.md "$RUNNER_TEMP/README.md"
+          printf '\ncanonical consequential DOM interaction authority\n' >> README.md
+          set +e
+          python3 tools/release/verify_production_closure_matrix.py
+          rc=$?
+          set -e
+          cp "$RUNNER_TEMP/README.md" README.md
+          test "$rc" -ne 0
