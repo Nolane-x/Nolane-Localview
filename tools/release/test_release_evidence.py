@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import pathlib
+import subprocess
 import tempfile
 import unittest
 
@@ -57,6 +58,56 @@ class ReleaseEvidenceTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
+
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "release-test@local.invalid"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "LocalView Release Test"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "add", "Cargo.lock", "apps/desktop/package-lock.json"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "fixture: commit dependency locks"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            candidate_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            committed_cargo = subprocess.run(
+                ["git", "show", f"{candidate_sha}:Cargo.lock"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            ).stdout
+            committed_npm = subprocess.run(
+                ["git", "show", f"{candidate_sha}:apps/desktop/package-lock.json"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            ).stdout
+
+            # Simulate CRLF checkout normalization after the committed objects
+            # already exist. Evidence must remain bound to Git blob bytes.
+            (root / "Cargo.lock").write_bytes(committed_cargo.replace(b"\n", b"\r\n"))
+            (root / "apps/desktop/package-lock.json").write_bytes(
+                committed_npm.replace(b"\n", b"\r\n")
+            )
+
             bundle = root / "bundle"
             bundle.mkdir()
             (bundle / "LocalView.bin").write_bytes(b"candidate")
@@ -66,7 +117,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
                 root,
                 bundle,
                 output,
-                "a" * 40,
+                candidate_sha,
                 "linux",
                 "0.2.0",
             )
@@ -77,10 +128,26 @@ class ReleaseEvidenceTests(unittest.TestCase):
 
             self.assertFalse(manifest["signed"])
             self.assertFalse(manifest["public_release"])
-            self.assertEqual(manifest["candidate_sha"], "a" * 40)
+            self.assertEqual(manifest["candidate_sha"], candidate_sha)
             self.assertEqual(manifest["artifacts"][0]["path"], "LocalView.bin")
             self.assertTrue(manifest["artifacts"][0]["sha256"].startswith("sha256:"))
             self.assertEqual(provenance["release_class"], "unsigned-release-candidate")
+            self.assertEqual(
+                provenance["lockfiles"]["Cargo.lock"],
+                release_evidence.sha256_bytes(committed_cargo),
+            )
+            self.assertEqual(
+                provenance["lockfiles"]["apps/desktop/package-lock.json"],
+                release_evidence.sha256_bytes(committed_npm),
+            )
+            self.assertNotEqual(
+                provenance["lockfiles"]["Cargo.lock"],
+                release_evidence.sha256_file(root / "Cargo.lock"),
+            )
+            self.assertNotEqual(
+                provenance["lockfiles"]["apps/desktop/package-lock.json"],
+                release_evidence.sha256_file(root / "apps/desktop/package-lock.json"),
+            )
             self.assertTrue(provenance["claims"]["dependency_resolution_locked"])
             self.assertFalse(provenance["claims"]["code_signing_verified"])
             self.assertEqual(sbom["spdxVersion"], "SPDX-2.3")
@@ -92,7 +159,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
                 root,
                 bundle,
                 output,
-                "a" * 40,
+                candidate_sha,
                 "linux",
                 "0.2.0",
             )
@@ -107,7 +174,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
                     root,
                     bundle,
                     output,
-                    "a" * 40,
+                    candidate_sha,
                     "linux",
                     "0.2.0",
                 )
