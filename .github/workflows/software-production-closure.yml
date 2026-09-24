@@ -1,0 +1,69 @@
+name: Software production closure truth
+
+on:
+  pull_request:
+    paths:
+      - "docs/PRODUCTION_CLOSURE_MATRIX.md"
+      - "docs/IMPLEMENTATION_STATUS.md"
+      - "docs/PRODUCTION_RELEASE.md"
+      - "release-policy.json"
+      - "tools/release/**"
+      - "apps/desktop/**"
+      - "apps/daemon/**"
+      - "crates/control/**"
+      - "crates/live-bridge/**"
+      - "crates/verification/**"
+      - "crates/counterfactual/**"
+      - "crates/mutation/**"
+      - "crates/contracts/**"
+      - "crates/planner/**"
+      - "crates/state-space/**"
+      - ".github/workflows/release-*.yml"
+      - ".github/workflows/software-production-closure.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/PRODUCTION_CLOSURE_MATRIX.md"
+      - "docs/IMPLEMENTATION_STATUS.md"
+      - "docs/PRODUCTION_RELEASE.md"
+      - "release-policy.json"
+      - "tools/release/**"
+      - "apps/desktop/**"
+      - "apps/daemon/**"
+      - "crates/control/**"
+      - "crates/live-bridge/**"
+      - "crates/verification/**"
+      - "crates/counterfactual/**"
+      - "crates/mutation/**"
+      - "crates/contracts/**"
+      - "crates/planner/**"
+      - "crates/state-space/**"
+      - ".github/workflows/release-*.yml"
+      - ".github/workflows/software-production-closure.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localview-software-production-closure-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  closure-truth:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Exact checked-out head
+        if: github.event_name == 'pull_request'
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Syntax-check closure verifier
+        run: python3 -m py_compile tools/release/verify_production_closure_matrix.py
+      - name: Verify bounded V1 production closure matrix
+        run: python3 tools/release/verify_production_closure_matrix.py
+      - name: Verify initial/future release policy
+        run: python3 tools/release/verify_release_policy.py
