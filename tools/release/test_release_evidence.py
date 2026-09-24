@@ -18,6 +18,20 @@ VERIFY_SPEC.loader.exec_module(verify_release_evidence)
 
 
 class ReleaseEvidenceTests(unittest.TestCase):
+    def test_publish_workflow_uses_portable_macos_tar_transport(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        workflow = (repo_root / ".github/workflows/publish-release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "COPYFILE_DISABLE=1 tar -czf target/release/release-payload/bundle.tar.gz",
+            workflow,
+        )
+        self.assertIn(
+            "tar -xzf \"$root/bundle.tar.gz\" -C \"$root/verified\"",
+            workflow,
+        )
+
     def test_evidence_binds_artifacts_locks_and_stays_unsigned(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
