@@ -86,9 +86,9 @@ REQUIRED_REPO_EVIDENCE = {
         "must never authorize the global Wave 9 handoff",
     ],
     "README.md": [
-        "bounded V1 software-production closure",
-        "Whole-impact Autonomous Verified remains fail-closed",
-        "Public signed distribution is still externally blocked",
+        "Bounded V1 software-production: complete on `main`.",
+        "independent whole-impact autonomous verdict remains fail-closed",
+        "external publication blockers for a signed final release",
     ],
     "README.vi.md": [
         "Bounded V1 software-production đã hoàn thành",
