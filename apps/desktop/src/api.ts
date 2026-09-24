@@ -81,8 +81,20 @@ export interface HumanVerifyChangeRequest {
   verificationId: string;
 }
 
+export interface Wave9BoundedVerificationReceipt {
+  schema_version: number;
+  scope: 'current_target_current_route';
+  canonical_route: string;
+  reference?: string | null;
+  snapshot_version: number;
+  verdict: 'verified' | 'rejected' | 'inconclusive';
+  reasons: string[];
+  evidence_ids: string[];
+}
+
 export interface Wave9AutonomousReceipt {
   final_verdict: 'verified' | 'rejected' | 'inconclusive';
+  bounded_verification?: Wave9BoundedVerificationReceipt | null;
   reasons: string[];
   evidence_ids: string[];
   stale_evidence_ids: string[];
