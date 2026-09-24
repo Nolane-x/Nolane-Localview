@@ -47,7 +47,7 @@ Before publishing installers to end users, all of the following must be configur
 - Windows code signing identity and signed installer verification;
 - macOS Developer ID signing and notarization;
 - update signing keys plus a trusted update manifest/channel;
-- installation/launch smoke on clean machines;
+- repeat installation/launch smoke on the final signed/notarized public artifacts; R14 already closes the unsigned release-candidate software gate on fresh hosted runners for Linux, macOS and Windows;
 - upgrade and rollback tests across at least the previous supported version; for the initial supported release, where no prior supported tag exists, CI must instead prove the declared initial-release policy and rollback-readable persisted-state compatibility;
 - provenance/SBOM publication if the release policy requires them.
 
