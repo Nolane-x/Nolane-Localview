@@ -44,18 +44,22 @@ class ReleaseEvidenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (root / "apps/desktop/package-lock.json").write_text(
-                json.dumps({
-                    "lockfileVersion": 3,
-                    "packages": {
-                        "": {"name": "@nolane/localview-desktop", "version": "0.2.0"},
-                        "node_modules/react": {
-                            "name": "react",
-                            "version": "19.2.8",
-                            "resolved": "https://registry.npmjs.org/react/-/react-19.2.8.tgz",
-                            "integrity": "sha512-test"
-                        }
-                    }
-                }),
+                json.dumps(
+                    {
+                        "lockfileVersion": 3,
+                        "packages": {
+                            "": {"name": "@nolane/localview-desktop", "version": "0.2.0"},
+                            "node_modules/react": {
+                                "name": "react",
+                                "version": "19.2.8",
+                                "resolved": "https://registry.npmjs.org/react/-/react-19.2.8.tgz",
+                                "integrity": "sha512-test",
+                            },
+                        },
+                    },
+                    indent=2,
+                )
+                + "\n",
                 encoding="utf-8",
             )
 
