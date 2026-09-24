@@ -387,6 +387,7 @@ pub fn bind_production_affected_state(
     Ok(receipt)
 }
 
+pub const AUTONOMOUS_VERIFICATION_RECEIPT_SCHEMA_VERSION: u32 = 2;
 pub const PRODUCTION_CONTRACT_CATALOG_REVISION: &str =
     "localview-wave9-trusted-verify-contracts-v1";
 pub const PRODUCTION_MUTATION_CATALOG_REVISION: &str =
@@ -508,16 +509,173 @@ fn production_mutation_challenges() -> Vec<MutationChallengeResult> {
     ]
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundedVerificationScope {
+    CurrentTargetCurrentRoute,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundedVerificationVerdict {
+    Verified,
+    Rejected,
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoundedVerificationReceipt {
+    pub schema_version: u32,
+    pub scope: BoundedVerificationScope,
+    pub canonical_route: String,
+    pub reference: Option<String>,
+    pub snapshot_version: u64,
+    pub verdict: BoundedVerificationVerdict,
+    pub reasons: Vec<String>,
+    pub evidence_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProductionObservedVerificationInput {
     pub deterministic_status: ProductionDeterministicStatus,
     pub canonical_route: String,
     pub reference: Option<String>,
+    pub snapshot_version: u64,
     pub reference_changed: bool,
     pub visual_region_count: usize,
     pub regression_signals: Vec<String>,
     pub evidence_ids: Vec<String>,
     pub observed_runtime_ms: u64,
+}
+
+fn build_bounded_target_verification(
+    observed: &ProductionObservedVerificationInput,
+    autonomous: &AutonomousVerificationReceipt,
+) -> BoundedVerificationReceipt {
+    let mut reasons = Vec::new();
+    let reference = observed
+        .reference
+        .as_ref()
+        .filter(|reference| !reference.trim().is_empty())
+        .cloned();
+
+    if reference.is_none() {
+        reasons.push("bounded verification target reference is unavailable".into());
+    }
+    if !observed.reference_changed {
+        reasons.push("bounded verification did not observe a change on the selected target".into());
+    }
+    match observed.deterministic_status {
+        ProductionDeterministicStatus::ChangeObserved => {}
+        ProductionDeterministicStatus::NoObservableChange => {
+            reasons.push("deterministic verification did not observe the reviewed change".into());
+        }
+        ProductionDeterministicStatus::RegressionSignal => {
+            reasons.push("deterministic verification observed a regression signal".into());
+        }
+        ProductionDeterministicStatus::Inconclusive => {
+            reasons.push("deterministic verification remains inconclusive".into());
+        }
+    }
+    if !autonomous.contracts_evaluated.hard_failures.is_empty() {
+        reasons.push(format!(
+            "{} bounded hard contract(s) failed",
+            autonomous.contracts_evaluated.hard_failures.len()
+        ));
+    }
+    if !autonomous.contracts_evaluated.hard_unknowns.is_empty() {
+        reasons.push(format!(
+            "{} bounded hard contract(s) remain unknown",
+            autonomous.contracts_evaluated.hard_unknowns.len()
+        ));
+    }
+    let survived = autonomous
+        .mutation_results
+        .iter()
+        .filter(|result| result.outcome.verdict == MutationVerdict::Survived)
+        .count();
+    let skipped_or_invalid = autonomous
+        .mutation_results
+        .iter()
+        .filter(|result| {
+            matches!(
+                result.outcome.verdict,
+                MutationVerdict::SkippedUnsafe | MutationVerdict::Invalid
+            )
+        })
+        .count();
+    if survived > 0 {
+        reasons.push(format!("{survived} bounded mutation challenge(s) survived"));
+    }
+    if skipped_or_invalid > 0 {
+        reasons.push(format!(
+            "{skipped_or_invalid} bounded mutation challenge(s) were skipped or invalid"
+        ));
+    }
+    let containment_unproven =
+        autonomous.external_side_effect_containment != ExternalSideEffectContainment::ProvenBlocked;
+    if containment_unproven {
+        reasons.push("bounded verification side-effect containment is not proven".into());
+    }
+    if !autonomous.cleanup_proof.complete() {
+        reasons.push("bounded verification cleanup proof is incomplete".into());
+    }
+    if !autonomous.resource_budget.within_budget() {
+        reasons.push("bounded verification resource budget was not satisfied".into());
+    }
+    if !autonomous.stale_evidence_ids.is_empty() {
+        reasons.push("bounded verification contains stale evidence debt".into());
+    }
+    if !autonomous.unexpected_impact.is_empty() {
+        reasons.push(format!(
+            "{} unexpected impact target(s) remain outside the bounded prediction",
+            autonomous.unexpected_impact.len()
+        ));
+    }
+    if !autonomous.impact_comparison.inconclusive.is_empty() {
+        reasons.push(format!(
+            "{} impact target(s) remain inconclusive",
+            autonomous.impact_comparison.inconclusive.len()
+        ));
+    }
+
+    let rejected = matches!(
+        observed.deterministic_status,
+        ProductionDeterministicStatus::NoObservableChange
+            | ProductionDeterministicStatus::RegressionSignal
+    ) || !autonomous.contracts_evaluated.hard_failures.is_empty()
+        || !autonomous.cleanup_proof.complete();
+
+    let inconclusive = reference.is_none()
+        || !observed.reference_changed
+        || observed.deterministic_status == ProductionDeterministicStatus::Inconclusive
+        || !autonomous.contracts_evaluated.hard_unknowns.is_empty()
+        || survived > 0
+        || skipped_or_invalid > 0
+        || containment_unproven
+        || !autonomous.resource_budget.within_budget()
+        || !autonomous.stale_evidence_ids.is_empty()
+        || !autonomous.unexpected_impact.is_empty()
+        || !autonomous.impact_comparison.inconclusive.is_empty();
+
+    let verdict = if rejected {
+        BoundedVerificationVerdict::Rejected
+    } else if inconclusive {
+        BoundedVerificationVerdict::Inconclusive
+    } else {
+        BoundedVerificationVerdict::Verified
+    };
+
+    BoundedVerificationReceipt {
+        schema_version: 1,
+        scope: BoundedVerificationScope::CurrentTargetCurrentRoute,
+        canonical_route: observed.canonical_route.clone(),
+        reference,
+        snapshot_version: observed.snapshot_version,
+        verdict,
+        reasons: sorted_dedup(reasons),
+        evidence_ids: autonomous.evidence_ids.clone(),
+    }
 }
 
 pub fn build_production_observation_receipt(
@@ -601,7 +759,7 @@ pub fn build_production_observation_receipt(
         real_worktree_unchanged: shadow_proof.real_worktree_unchanged,
         external_side_effects_observed: false,
     };
-    let receipt = build_autonomous_receipt(AutonomousVerificationInput {
+    let mut receipt = build_autonomous_receipt(AutonomousVerificationInput {
         affected,
         shadow_proof,
         contracts,
@@ -624,6 +782,7 @@ pub fn build_production_observation_receipt(
         },
         cleanup_proof,
     });
+    receipt.bounded_verification = Some(build_bounded_target_verification(&observed, &receipt));
 
     Ok(receipt)
 }
@@ -657,6 +816,7 @@ pub struct AutonomousVerificationReceipt {
     pub skipped_states: Vec<SkippedState>,
     pub resource_budget: VerificationResourceBudget,
     pub cleanup_proof: VerificationCleanupProof,
+    pub bounded_verification: Option<BoundedVerificationReceipt>,
     pub final_verdict: AutonomousVerificationVerdict,
     pub reasons: Vec<String>,
 }
@@ -858,7 +1018,7 @@ pub fn build_autonomous_receipt(
     let evidence_ids = collect_evidence_ids(&input);
 
     AutonomousVerificationReceipt {
-        schema_version: 1,
+        schema_version: AUTONOMOUS_VERIFICATION_RECEIPT_SCHEMA_VERSION,
         base_revision: input.affected.base_revision.clone(),
         candidate_id: input.affected.change.candidate_id.clone(),
         patch_digest: input.affected.change.patch_digest.clone(),
@@ -877,6 +1037,7 @@ pub fn build_autonomous_receipt(
         skipped_states: input.skipped_states,
         resource_budget: input.resource_budget,
         cleanup_proof: input.cleanup_proof,
+        bounded_verification: None,
         final_verdict,
         reasons: sorted_dedup(reasons),
     }
@@ -1386,6 +1547,103 @@ mod tests {
     }
 
     #[test]
+    fn bounded_target_verifies_only_clean_exact_scope() {
+        let candidate = Uuid::new_v4();
+        let autonomous = build_autonomous_receipt(input(
+            candidate,
+            contracts(ContractVerdict::Pass, ContractStrength::Hard),
+        ));
+        let observed = ProductionObservedVerificationInput {
+            deterministic_status: ProductionDeterministicStatus::ChangeObserved,
+            canonical_route: "http://127.0.0.1:5173/settings".into(),
+            reference: Some("@e1".into()),
+            snapshot_version: 42,
+            reference_changed: true,
+            visual_region_count: 0,
+            regression_signals: Vec::new(),
+            evidence_ids: vec!["semantic:after".into()],
+            observed_runtime_ms: 100,
+        };
+        let bounded = build_bounded_target_verification(&observed, &autonomous);
+        assert_eq!(bounded.verdict, BoundedVerificationVerdict::Verified);
+        assert!(bounded.reasons.is_empty());
+        assert_eq!(bounded.reference.as_deref(), Some("@e1"));
+        assert_eq!(bounded.snapshot_version, 42);
+    }
+
+    #[test]
+    fn bounded_target_rejects_missing_change_or_regression_signal() {
+        let candidate = Uuid::new_v4();
+        let autonomous = build_autonomous_receipt(input(
+            candidate,
+            contracts(ContractVerdict::Pass, ContractStrength::Hard),
+        ));
+        for status in [
+            ProductionDeterministicStatus::NoObservableChange,
+            ProductionDeterministicStatus::RegressionSignal,
+        ] {
+            let observed = ProductionObservedVerificationInput {
+                deterministic_status: status,
+                canonical_route: "http://127.0.0.1:5173/settings".into(),
+                reference: Some("@e1".into()),
+                snapshot_version: 42,
+                reference_changed: false,
+                visual_region_count: 0,
+                regression_signals: Vec::new(),
+                evidence_ids: vec!["semantic:after".into()],
+                observed_runtime_ms: 100,
+            };
+            let bounded = build_bounded_target_verification(&observed, &autonomous);
+            assert_eq!(bounded.verdict, BoundedVerificationVerdict::Rejected);
+        }
+    }
+
+    #[test]
+    fn bounded_target_is_inconclusive_when_impact_scope_has_debt() {
+        let candidate = Uuid::new_v4();
+        let mut autonomous = build_autonomous_receipt(input(
+            candidate,
+            contracts(ContractVerdict::Pass, ContractStrength::Hard),
+        ));
+        autonomous.unexpected_impact.push(ImpactTarget {
+            kind: ImpactKind::VisualRegion,
+            id: "route#visual-region-0".into(),
+        });
+        autonomous
+            .impact_comparison
+            .inconclusive
+            .push(ImpactTarget {
+                kind: ImpactKind::Region,
+                id: "unknown-region".into(),
+            });
+        let observed = ProductionObservedVerificationInput {
+            deterministic_status: ProductionDeterministicStatus::ChangeObserved,
+            canonical_route: "http://127.0.0.1:5173/settings".into(),
+            reference: Some("@e1".into()),
+            snapshot_version: 42,
+            reference_changed: true,
+            visual_region_count: 0,
+            regression_signals: Vec::new(),
+            evidence_ids: vec!["semantic:after".into()],
+            observed_runtime_ms: 100,
+        };
+        let bounded = build_bounded_target_verification(&observed, &autonomous);
+        assert_eq!(bounded.verdict, BoundedVerificationVerdict::Inconclusive);
+        assert!(
+            bounded
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("unexpected impact"))
+        );
+        assert!(
+            bounded
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("remain inconclusive"))
+        );
+    }
+
+    #[test]
     fn complete_clean_proof_is_verified_and_serializable() {
         let candidate = Uuid::new_v4();
         let receipt = build_autonomous_receipt(input(
@@ -1397,6 +1655,8 @@ mod tests {
             AutonomousVerificationVerdict::Verified
         );
         let json = serde_json::to_string(&receipt).unwrap();
+        assert!(json.contains("\"schema_version\":2"));
+        assert!(json.contains("\"bounded_verification\":null"));
         assert!(json.contains("\"final_verdict\":\"verified\""));
         assert!(receipt.digest().starts_with("sha256:"));
     }
