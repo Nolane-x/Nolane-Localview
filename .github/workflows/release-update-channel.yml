@@ -1,0 +1,57 @@
+name: Release update channel check authority
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/src-tauri/src/update_channel.rs"
+      - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/permissions/localview.toml"
+      - "apps/desktop/src-tauri/tests/update_channel_contract.rs"
+      - "apps/desktop/src/api.ts"
+      - "apps/desktop/src/features/FloatingTools.tsx"
+      - "apps/desktop/src/i18n.ts"
+      - "apps/desktop/src/styles.css"
+      - "docs/PRODUCTION_CLOSURE_MATRIX.md"
+      - "docs/PRODUCTION_RELEASE.md"
+      - "docs/IMPLEMENTATION_STATUS.md"
+      - ".github/workflows/release-update-channel.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update-channel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Exact checked-out head
+        if: github.event_name == 'pull_request'
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install desktop system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Rustfmt update authority
+        run: |
+          rustfmt --edition 2024 --check apps/desktop/src-tauri/src/update_channel.rs
+          rustfmt --edition 2024 --check apps/desktop/src-tauri/tests/update_channel_contract.rs
+      - name: Update authority unit tests
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml update_channel::tests -- --nocapture
+      - name: Update authority source contract
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --test update_channel_contract -- --nocapture
+      - name: Desktop cargo check
+        run: cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+      - name: Frontend production build
+        working-directory: apps/desktop
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
