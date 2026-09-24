@@ -25,9 +25,9 @@ Status vocabulary:
 | W10 mixed-DPI physical proof | Exact same-HWND cross-monitor geometry/DPI proof on real Windows multi-monitor hardware | Externally blocked | PR #116; self-hosted Windows with at least 2 displays at distinct effective DPI |
 | Headless/CI/reporting/attestation | Bounded headless execution and deterministic report/attestation path | Closed | Wave 8 |
 | Clean-machine install/launch | Unsigned candidate can be installed/launched on clean supported systems before signing credentials exist | In progress | Fresh VM/machine install and first-launch smoke for supported OS targets |
-| Upgrade/rollback | Upgrade from previous supported build and rollback preserves/recovers expected state | In progress | Cross-version fixture and rollback evidence |
+| Upgrade/rollback | Initial supported release has no fictional predecessor; rollback-readable state is required now, and every later release must prove installer upgrade + rollback from the declared previous supported version | Closed for initial release | R10 rollback-readable Trusted Verify state + R15 executable release policy; from release 2 onward this row reopens unless previous-version upgrade/rollback evidence is present |
 | Updater software/channel | Trusted manifest/channel and fail-closed updater behavior exist independent of production signing secret | In progress | Implement/test channel logic; production key remains credential-dependent |
-| Provenance / SBOM | Release artifacts carry reproducible provenance/SBOM and digest linkage | In progress | Generate, validate and attach to release-candidate evidence |
+| Provenance / SBOM | Release artifacts carry reproducible provenance/SBOM and digest linkage | Closed | R11 exact-head artifact manifest, SPDX SBOM, provenance linkage and independent tamper verifier |
 | Windows code signing | Public Windows artifacts are signed and signature verified | Externally blocked | Signing identity/certificate not currently available |
 | macOS Developer ID + notarization | Public macOS artifacts are Developer ID signed and notarized | Externally blocked | Developer ID/notary credentials not currently available |
 | Documentation truth | README/security/status/coverage match current product behavior; historical research lives in Localview-document | In progress | Continue reference-safe archival and final truth audit |
