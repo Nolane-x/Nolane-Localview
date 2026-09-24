@@ -1,0 +1,36 @@
+name: Release upgrade and rollback policy
+
+on:
+  pull_request:
+    paths:
+      - "release-policy.json"
+      - "Cargo.toml"
+      - "apps/desktop/src-tauri/tauri.conf.json"
+      - "apps/desktop/src-tauri/src/trusted_verify_recovery.rs"
+      - "apps/desktop/src-tauri/tests/wave9_autonomous_verification_contract.rs"
+      - "tools/release/verify_release_policy.py"
+      - ".github/workflows/release-upgrade-policy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Exact checked-out head
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Validate release-policy inputs
+        run: |
+          python3 -m py_compile tools/release/verify_release_policy.py
+          python3 -m json.tool release-policy.json >/dev/null
+      - name: Verify initial/future upgrade policy and rollback-state contract
+        run: python3 tools/release/verify_release_policy.py
