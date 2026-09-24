@@ -48,7 +48,22 @@ Before publishing installers to end users, all of the following must be configur
 - macOS Developer ID signing and notarization;
 - update signing keys plus a trusted update manifest/channel;
 - installation/launch smoke on clean machines;
-- upgrade and rollback tests across at least the previous supported version;
+- upgrade and rollback tests across at least the previous supported version; for the initial supported release, where no prior supported tag exists, CI must instead prove the declared initial-release policy and rollback-readable persisted-state compatibility;
 - provenance/SBOM publication if the release policy requires them.
 
 Do not label an unsigned CI artifact as a production public release.
+
+
+## Initial supported release policy
+
+`release-policy.json` is the executable authority for whether a previous supported release exists.
+
+For the current 0.2.0 first supported release:
+
+- no prior supported Git tag exists, so inventing an installer predecessor is forbidden;
+- Trusted Verify primary recovery metadata remains schema-v1 readable;
+- Wave 9-only recovery context lives in a companion file ignored by the prior reader contract;
+- the companion commits before the rollback-readable primary metadata commit-point;
+- CI verifies the policy, exact product version, absence/presence of supported release tags and the rollback-state contract.
+
+After the first supported release is tagged, `initial_supported_release` must become false. Every subsequent release must declare `previous_supported_version` and enable both installer upgrade and installer rollback evidence; the policy verifier fails closed otherwise.
