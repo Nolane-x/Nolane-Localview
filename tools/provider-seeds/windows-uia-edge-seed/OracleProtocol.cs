@@ -93,6 +93,14 @@ internal sealed class OracleProtocol
                 case "get_verified_input_state":
                     Write(ReadVerifiedInputState("get_verified_input_state"));
                     break;
+                case "get_geometry_state":
+                    Write(_window.Dispatcher.Invoke(() =>
+                        GeometryOracle.ReadState(_window, "get_geometry_state")));
+                    break;
+                case "move_to_alternate_dpi_monitor":
+                    Write(_window.Dispatcher.Invoke(() =>
+                        GeometryOracle.MoveToAlternateDpiMonitor(_window)));
+                    break;
                 case "steal_foreground":
                     Write(_window.Dispatcher.Invoke(() =>
                     {

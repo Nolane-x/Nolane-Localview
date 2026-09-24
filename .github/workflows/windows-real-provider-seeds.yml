@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   windows-real-provider-seeds:
-    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W05/W06/W07/W08/W09/W11/W12
+    name: V4.3 L7 Windows real-provider seeds W01/W02/W03/W04/W05/W06/W07/W08/W09/W11/W12 + W10 capability
     runs-on: windows-latest
     timeout-minutes: 15
     env:
@@ -35,7 +35,7 @@ jobs:
           dotnet-version: 8.0.x
       - name: Compile and test isolated Windows seed package
         run: cargo test --manifest-path tools/provider-seeds/windows-uia-seed/Cargo.toml --all-targets -- --nocapture --test-threads=1
-      - name: Build WPF edge seed for W03/W05/W07/W08/W09/W11/W12
+      - name: Build WPF edge seed for W03/W05/W07/W08/W09/W10/W11/W12
         run: dotnet build tools/provider-seeds/windows-uia-edge-seed/LocalView.WindowsUiaEdgeSeed.csproj -c Release --nologo
       - name: Bind hosted Windows environment authority
         shell: pwsh
@@ -50,6 +50,35 @@ jobs:
           "LOCALVIEW_DISPLAY_TOPOLOGY=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "LOCALVIEW_DPI_SCALE=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "LOCALVIEW_PERMISSION_STATE=unknown:hosted-runner-not-exposed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: W10 capability probe records explicit non-closure evidence
+        shell: pwsh
+        run: |
+          $testName = "windows_real_provider_w10::w10_hosted_capability_probe_writes_explicit_non_closure_artifact"
+          $listed = cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w10 -- --list
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($listed | Select-String -SimpleMatch "${testName}: test")) {
+            throw "required W10 capability test is not registered: $testName"
+          }
+          cargo test --manifest-path $env:LOCALVIEW_L7_HARNESS_MANIFEST --test v43_real_provider_w10 $testName -- --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $capabilityPath = Join-Path $env:LOCALVIEW_L7_ARTIFACT_DIR "W10-CAPABILITY.json"
+          if (-not (Test-Path $capabilityPath)) {
+            throw "W10 capability probe did not publish W10-CAPABILITY.json"
+          }
+          $capability = Get-Content $capabilityPath -Raw | ConvertFrom-Json
+          if ($capability.candidate_sha -ne $env:LOCALVIEW_CANDIDATE_SHA) {
+            throw "W10 capability artifact candidate SHA drifted from the exact checked-out head"
+          }
+          if ($capability.measured -ne $false) {
+            throw "hosted W10 capability probe must remain measured=false; physical closure belongs to v43-w10-mixed-dpi-physical-lab.yml"
+          }
+          if ($capability.mints_real_provider_integration_pass -ne $false) {
+            throw "hosted W10 capability probe must never mint RealProviderIntegrationPass"
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$capability.reason)) {
+            throw "unmeasured W10 capability evidence must include an explicit reason"
+          }
       - name: W02 same-provider element ABA authority contract
         run: cargo test -p localview-validation-lab --test w02_same_provider_incarnation -- --nocapture --test-threads=1
       - name: Opaque callback reconciliation authority contract

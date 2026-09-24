@@ -6,6 +6,7 @@ mod custom_semantic_coverage;
 mod custom_semantic_coverage_contract;
 mod dispatch_context;
 mod event_buffer;
+mod geometry;
 mod pattern_dispatch;
 mod set_value_dispatch;
 #[cfg(windows)]
@@ -33,6 +34,7 @@ pub use custom_semantic_coverage::{
 };
 pub use dispatch_context::*;
 pub use event_buffer::*;
+pub use geometry::*;
 pub use pattern_dispatch::*;
 pub use set_value_dispatch::*;
 pub use subscription::*;

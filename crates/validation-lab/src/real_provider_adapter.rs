@@ -99,6 +99,13 @@ pub enum RealProviderCaseKind {
         input_state_conflict_blocked: bool,
         input_inserted: bool,
     },
+    W10MixedDpiGeometry {
+        distinct_effective_dpi_observed: bool,
+        coordinate_space_explicit: bool,
+        first_rect_matches_oracle: bool,
+        second_rect_matches_oracle: bool,
+        double_scaling_observed: bool,
+    },
     W11ModalBeforeDispatch {
         modal_blocker_observed: bool,
         input_inserted: bool,
@@ -357,6 +364,19 @@ fn apply_case_semantics(
             input_state_conflict_blocked,
             input_inserted,
         } => !*conflicting_modifier_observed || !*input_state_conflict_blocked || *input_inserted,
+        RealProviderCaseKind::W10MixedDpiGeometry {
+            distinct_effective_dpi_observed,
+            coordinate_space_explicit,
+            first_rect_matches_oracle,
+            second_rect_matches_oracle,
+            double_scaling_observed,
+        } => {
+            !*distinct_effective_dpi_observed
+                || !*coordinate_space_explicit
+                || !*first_rect_matches_oracle
+                || !*second_rect_matches_oracle
+                || *double_scaling_observed
+        }
         RealProviderCaseKind::W11ModalBeforeDispatch {
             modal_blocker_observed,
             input_inserted,
