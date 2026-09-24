@@ -1323,9 +1323,25 @@ function AiPanel({
           {verifyState.regressionSignals.length > 0 && (
             <ul>{verifyState.regressionSignals.map((item: string) => <li key={item}>{item}</li>)}</ul>
           )}
+          {verifyState.wave9Autonomous?.bounded_verification && (
+            <div className={`verify-autonomous ${verifyState.wave9Autonomous.bounded_verification.verdict}`}>
+              <span>
+                Wave 9 bounded target/current route · {verifyState.wave9Autonomous.bounded_verification.verdict.replace('_', ' ')}
+              </span>
+              {verifyState.wave9Autonomous.bounded_verification.reasons.length > 0 && (
+                <ul>
+                  {verifyState.wave9Autonomous.bounded_verification.reasons
+                    .slice(0, 4)
+                    .map((reason: string) => <li key={reason}>{reason}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
           {verifyState.wave9Autonomous && (
             <div className={`verify-autonomous ${verifyState.wave9Autonomous.final_verdict}`}>
-              <span>Wave 9 autonomous · {verifyState.wave9Autonomous.final_verdict.replace('_', ' ')}</span>
+              <span>
+                Wave 9 whole-impact autonomous · {verifyState.wave9Autonomous.final_verdict.replace('_', ' ')}
+              </span>
               {verifyState.wave9Autonomous.reasons.length > 0 && (
                 <ul>
                   {verifyState.wave9Autonomous.reasons
