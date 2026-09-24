@@ -85,6 +85,15 @@ REQUIRED_REPO_EVIDENCE = {
         "bounded_verification",
         "must never authorize the global Wave 9 handoff",
     ],
+    "README.md": [
+        "bounded V1 software-production closure",
+        "Whole-impact Autonomous Verified remains fail-closed",
+        "Public signed distribution is still externally blocked",
+    ],
+    "docs/SPEC_COVERAGE.md": [
+        "scope-explicit bounded `current_target_current_route` receipt",
+        "bounded verification never authorizes the whole-impact handoff",
+    ],
 }
 
 
@@ -139,10 +148,32 @@ def verify_repository_evidence() -> None:
                 fail(f"required closure evidence marker missing from {relative}: {marker}")
 
 
+def verify_no_stale_public_claims() -> None:
+    forbidden = {
+        "README.md": [
+            "canonical consequential DOM interaction authority",
+            "full Wave 9 contract/mutation/actual-impact/revalidation orchestration",
+            "durable Fix→Verify recovery across desktop restart",
+        ],
+        "docs/IMPLEMENTATION_STATUS.md": [
+            "Updater channel/signature authority remains the active release-software frontier.",
+        ],
+        "docs/SPEC_COVERAGE.md": [
+            "production contract-catalog execution, mutation challenges, complete denominator/revalidation authority and external side-effect containment are not proven",
+        ],
+    }
+    for relative, phrases in forbidden.items():
+        content = (ROOT / relative).read_text(encoding="utf-8")
+        for phrase in phrases:
+            if phrase in content:
+                fail(f"stale public production claim remains in {relative}: {phrase}")
+
+
 def main() -> None:
     text = MATRIX.read_text(encoding="utf-8")
     rows = parse_rows(text)
     verify_repository_evidence()
+    verify_no_stale_public_claims()
 
     unknown = {
         area: row["status"]
