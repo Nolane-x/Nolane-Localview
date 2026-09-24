@@ -335,7 +335,10 @@ historical plan / evidence / superseded design は別 archive に移し、produc
 
 ## License
 
-MIT OR Apache-2.0。
+以下のいずれかを選択できます：
+
+- [MIT](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
 
 <div align="center">
 
