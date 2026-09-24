@@ -93,14 +93,15 @@ def main() -> int:
     if notes_path.parent != (ROOT / "docs/releases").resolve() or not notes_path.is_file():
         fail("release notes file is missing or outside docs/releases")
     notes_text = notes_path.read_text(encoding="utf-8")
+    notes_lower = notes_text.lower()
     for marker in [
         "unsigned pre-release candidate",
-        "Windows code signing",
-        "macOS Developer ID",
+        "windows code signing",
+        "macos developer id",
         "production updater-signing authority",
-        "bounded V1",
+        "bounded v1",
     ]:
-        if marker not in notes_text:
+        if marker not in notes_lower:
             fail(f"release notes missing required truth marker: {marker}")
 
     print(json.dumps({
