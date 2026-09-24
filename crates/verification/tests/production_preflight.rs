@@ -180,6 +180,7 @@ fn live_production_observation_receipt_stays_inconclusive_until_remaining_author
             deterministic_status: ProductionDeterministicStatus::ChangeObserved,
             canonical_route: "http://127.0.0.1:5173/settings".into(),
             reference: Some("@e1".into()),
+            snapshot_version: 42,
             reference_changed: true,
             visual_region_count: 1,
             regression_signals: Vec::new(),
@@ -190,6 +191,21 @@ fn live_production_observation_receipt_stays_inconclusive_until_remaining_author
     .unwrap();
 
     assert_eq!(receipt.final_verdict, AutonomousVerificationVerdict::Inconclusive);
+    let bounded = receipt
+        .bounded_verification
+        .as_ref()
+        .expect("bounded production verification receipt");
+    assert_eq!(
+        bounded.scope,
+        localview_verification::BoundedVerificationScope::CurrentTargetCurrentRoute
+    );
+    assert_eq!(
+        bounded.verdict,
+        localview_verification::BoundedVerificationVerdict::Verified
+    );
+    assert_eq!(bounded.schema_version, 1);
+    assert_eq!(bounded.reference.as_deref(), Some("@e1"));
+    assert_eq!(bounded.snapshot_version, 42);
     assert_eq!(
         receipt.external_side_effect_containment,
         ExternalSideEffectContainment::ProvenBlocked
@@ -268,6 +284,7 @@ fn production_contract_catalog_keeps_inconclusive_deterministic_status_unknown()
             deterministic_status: ProductionDeterministicStatus::Inconclusive,
             canonical_route: "http://127.0.0.1:5173/settings".into(),
             reference: Some("@e1".into()),
+            snapshot_version: 42,
             reference_changed: false,
             visual_region_count: 0,
             regression_signals: Vec::new(),
@@ -277,6 +294,14 @@ fn production_contract_catalog_keeps_inconclusive_deterministic_status_unknown()
     )
     .unwrap();
     assert_eq!(receipt.final_verdict, AutonomousVerificationVerdict::Inconclusive);
+    assert_eq!(
+        receipt
+            .bounded_verification
+            .as_ref()
+            .expect("bounded receipt")
+            .verdict,
+        localview_verification::BoundedVerificationVerdict::Inconclusive
+    );
     assert_eq!(
         receipt.contracts_evaluated.hard_unknowns,
         vec!["trusted-verify.observable-change".to_string()]
