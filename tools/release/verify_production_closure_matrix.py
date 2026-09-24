@@ -121,7 +121,7 @@ REQUIRED_REPO_EVIDENCE = {
         "\"signed\": false",
     ],
     "docs/releases/v0.2.0-rc.1.md": [
-        "unsigned pre-release candidate",
+        "Unsigned pre-release candidate",
         "bounded V1",
         "production updater-signing authority",
     ],
