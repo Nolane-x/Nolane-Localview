@@ -201,7 +201,13 @@ fn live_production_observation_receipt_stays_inconclusive_until_remaining_author
     );
     assert_eq!(
         bounded.verdict,
-        localview_verification::BoundedVerificationVerdict::Verified
+        localview_verification::BoundedVerificationVerdict::Inconclusive
+    );
+    assert!(
+        bounded
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("unexpected impact target"))
     );
     assert_eq!(bounded.schema_version, 1);
     assert_eq!(bounded.reference.as_deref(), Some("@e1"));
