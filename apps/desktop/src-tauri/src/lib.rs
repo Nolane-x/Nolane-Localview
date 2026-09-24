@@ -8,6 +8,7 @@ mod trusted_ai;
 mod trusted_fix;
 mod trusted_verify;
 mod trusted_verify_recovery;
+mod update_channel;
 mod wave6_accessibility_interaction;
 pub mod visual_capture;
 pub mod workspace_surface;
@@ -3447,6 +3448,7 @@ pub fn run() {
             apply_fix_proposal,
             discard_fix_proposal,
             verify_fix_change,
+            update_channel::check_update_channel,
             open_source_for_selection,
             measure_current_selection,
             content_stress::capture_content_locale_stress,
