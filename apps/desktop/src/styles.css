@@ -194,6 +194,17 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   cursor:pointer
 }
 .settings-reset:hover{background:rgba(255,255,255,.055);color:#e2e6df}
+.settings-reset:disabled{opacity:.55;cursor:default}
+.settings-update-status{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  padding:10px 12px 0;
+  color:#aeb6aa;
+  font-size:10px;
+  line-height:1.45
+}
+.settings-update-status small{color:#737f8d;font-size:9px}
 .compact-status{
   display:inline-block;
   margin-top:12px;
