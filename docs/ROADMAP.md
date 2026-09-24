@@ -268,38 +268,36 @@ Production wiring now present on this branch:
 - the existing Trusted Fix transaction remains the only human-reviewed real-file write authority;
 - the existing Trusted Verify path still performs fresh semantic/source/visual partial revalidation after Apply.
 
-Library capability that is implemented but **not yet production-orchestrated end-to-end**:
+Bounded V1 production orchestration is now live:
 
-- affected-state compilation;
-- execution of the applicable hard/soft contract set for the real candidate;
-- mutation challenges against that production candidate;
-- predicted-versus-actual affected-state comparison;
-- issuance of a production `AutonomousVerificationReceipt` backed by fresh evidence;
-- complete partial/escalated revalidation accounting tied into that receipt.
+- exact-revision Trusted Fix preflight and durable restart-safe Verify context;
+- bounded affected-state/predicted-impact authority;
+- R13 live hard-contract catalog plus safe mutation challenges;
+- fresh post-Apply semantic/visual observation;
+- R17 schema-v2 receipt with an independent `current_target_current_route` verdict bound to the fresh snapshot;
+- explicit whole-impact receipt debt rather than a fabricated application-wide success.
 
 Truth boundaries:
 
-- a candidate is never called autonomous-`Verified` merely because Wave 9 libraries exist;
-- `external_side_effect_containment = not_proven` blocks the autonomous `Verified` verdict and the verified handoff;
-- a temp worktree, loopback address or source-only patch does **not** prove network/process/filesystem containment outside the shadow root;
-- unsupported executable isolation remains Inconclusive rather than being promoted to success;
-- the simpler human Trusted Verify receipt is not re-labelled as an autonomous proof receipt;
+- the bounded target/current-route verdict is never presented as proof of every possible application impact;
+- `validate_wave9_verified_handoff` does not consume `bounded_verification`;
+- whole-impact Autonomous Verified still requires a known affected-state denominator, complete revalidation accounting and every existing hard containment/cleanup/resource obligation;
+- unsupported or incomplete whole-impact proof remains Inconclusive;
 - no root-cause claim is invented from correlation-only evidence.
 
-Historical integration: PR #198 merged as `bded849d7fdb4a640b4cd12c802381b783bc42c2` after its exact head passed the then-current CI. That CI evidence remains evidence for the implemented Wave 9 library surface; it is not evidence that the complete pipeline was production-reachable.
+Historical PR #198 remains evidence for the original Wave 9 library surface. R10, R13 and R17 are the later production-reachability closures and must be used for current product claims.
 
 ## Wave 1–9 roadmap status
 
-Waves 1–8 retain their bounded software closures. Wave 9 is **Partial at the live-product level** until the remaining production orchestration and isolation/evidence gates above are satisfied. The repository must not use the former “Waves 1–9 live closure” wording as a production fact.
+Waves 1–8 retain their bounded software closures. Wave 9 is **closed for the bounded V1 target/current-route claim** while the broader whole-impact autonomous verdict remains post-V1 research breadth.
 
-Independently open:
+Independently open after bounded V1:
 
-- Wave 9 full production orchestration and real isolation authority;
-- native workspace composition/focus/crash/DPI policy before promotion to the default surface;
-- V4.3 W10 physical mixed-DPI proof on PR #116, which remains deferred and unmeasured on hosted CI;
+- whole-impact affected-state denominator/revalidation authority;
+- native child-WebView composition/focus/crash/DPI evidence before any default promotion;
+- V4.3 W10 physical mixed-DPI proof on PR #116, still requiring real multi-monitor Windows hardware;
 - broader Partial capabilities explicitly retained in `docs/SPEC_COVERAGE.md`;
 - analysis-concurrency authority only when a concrete concurrent owner exists;
-- security/production hardening and adversarial audit work;
 - later expanded causal, proof-carrying, multi-agent, content-addressed and attested-proof vertical slices.
 
 ## Later expanded-spec phases
