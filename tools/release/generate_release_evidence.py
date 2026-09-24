@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import subprocess
 import sys
 from datetime import datetime, timezone
 
@@ -20,6 +21,28 @@ def sha256_file(path: pathlib.Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def sha256_bytes(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def committed_blob_bytes(repo_root: pathlib.Path, candidate_sha: str, repo_path: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{candidate_sha}:{repo_path}"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise SystemExit(
+            f"cannot read committed Git blob {candidate_sha}:{repo_path}: {error}"
+        ) from error
+    if not result.stdout:
+        raise SystemExit(f"committed Git blob is empty: {candidate_sha}:{repo_path}")
+    return result.stdout
+
+
 def relative_files(root: pathlib.Path) -> list[pathlib.Path]:
     return sorted(
         (path for path in root.rglob("*") if path.is_file()),
@@ -27,7 +50,7 @@ def relative_files(root: pathlib.Path) -> list[pathlib.Path]:
     )
 
 
-def cargo_packages(lock_path: pathlib.Path) -> list[dict]:
+def cargo_packages(lock_text: str) -> list[dict]:
     # Cargo.lock package identity fields are simple quoted scalars. Parse only
     # those fields so the release tool works on Python 3.10 without adding a
     # runtime dependency solely for TOML parsing.
@@ -49,7 +72,7 @@ def cargo_packages(lock_path: pathlib.Path) -> list[dict]:
             packages.append(item)
         current = None
 
-    for raw_line in lock_path.read_text(encoding="utf-8").splitlines():
+    for raw_line in lock_text.splitlines():
         line = raw_line.strip()
         if line == "[[package]]":
             flush()
@@ -71,8 +94,8 @@ def cargo_packages(lock_path: pathlib.Path) -> list[dict]:
     return sorted(packages, key=lambda item: (item["name"], item["version"], item.get("source", "")))
 
 
-def npm_packages(lock_path: pathlib.Path) -> list[dict]:
-    data = json.loads(lock_path.read_text(encoding="utf-8"))
+def npm_packages(lock_text: str) -> list[dict]:
+    data = json.loads(lock_text)
     packages = []
     for location, package in data.get("packages", {}).items():
         if not location or not package.get("name") or not package.get("version"):
@@ -131,10 +154,6 @@ def build_evidence(
     platform: str,
     version: str,
 ) -> None:
-    cargo_lock = repo_root / "Cargo.lock"
-    npm_lock = repo_root / "apps" / "desktop" / "package-lock.json"
-    if not cargo_lock.is_file() or not npm_lock.is_file():
-        raise SystemExit("release evidence requires committed Cargo.lock and apps/desktop/package-lock.json")
     if not bundle_dir.is_dir():
         raise SystemExit(f"bundle directory does not exist: {bundle_dir}")
 
@@ -149,8 +168,18 @@ def build_evidence(
     if not artifacts:
         raise SystemExit("bundle directory contains no files")
 
-    cargo = cargo_packages(cargo_lock)
-    npm = npm_packages(npm_lock)
+    cargo_lock_bytes = committed_blob_bytes(repo_root, candidate_sha, "Cargo.lock")
+    npm_lock_bytes = committed_blob_bytes(
+        repo_root, candidate_sha, "apps/desktop/package-lock.json"
+    )
+    try:
+        cargo_lock_text = cargo_lock_bytes.decode("utf-8")
+        npm_lock_text = npm_lock_bytes.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise SystemExit("committed dependency lockfiles must be UTF-8") from error
+
+    cargo = cargo_packages(cargo_lock_text)
+    npm = npm_packages(npm_lock_text)
     dependencies = cargo + npm
     generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -173,8 +202,8 @@ def build_evidence(
         "builder": "github-actions",
         "release_class": "unsigned-release-candidate",
         "lockfiles": {
-            "Cargo.lock": sha256_file(cargo_lock),
-            "apps/desktop/package-lock.json": sha256_file(npm_lock),
+            "Cargo.lock": sha256_bytes(cargo_lock_bytes),
+            "apps/desktop/package-lock.json": sha256_bytes(npm_lock_bytes),
         },
         "artifact_manifest_sha256": "",
         "sbom_sha256": "",
