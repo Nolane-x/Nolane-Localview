@@ -250,56 +250,40 @@ Truth boundaries:
 
 Closure PR: #196. Exact-head dedicated Wave 8 and full repository CI were green before merge.
 
-## Wave 9 — Autonomous verification — production closure reopened
+## Wave 9 — Autonomous verification — bounded V1 software scope closed
 
-The 2026-09-22 production audit disproved the earlier end-to-end closure claim. PR #198 landed substantial Wave 9 libraries and contracts, but the live Trusted Fix/Verify call graph did not execute the complete autonomous pipeline. In particular, `ShadowWorkspace::prepare` and autonomous receipt construction were not reachable from the human Apply path before this audit.
+The 2026-09-22 production audit correctly reopened the earlier end-to-end claim: PR #198 had landed substantial Wave 9 libraries, but the live Trusted Fix/Verify path did not yet execute the full production pipeline. Subsequent production-closure work addressed that gap without converting bounded evidence into a whole-app proof.
 
-Production wiring now present on this branch:
+Current bounded V1 production wiring:
 
-- human `apply_fix_proposal` reaches `FixProposalStore::begin_apply`;
-- `begin_apply` attempts to derive an exact Git revision and, when that authority exists and binds the reviewed preimage, executes a disposable `SemanticOnly` candidate through `run_production_candidate_preflight`;
-- for supported Git candidates, production preflight calls `ShadowWorkspace::prepare -> proof -> cleanup` before the existing real-file Apply transaction, then binds the exact candidate/file to a bounded affected-state slice for the current canonical route/stable ref and derives predicted impact; dependency completeness and the affected-state denominator remain explicitly unknown, so this evidence cannot promote the preflight beyond `Inconclusive`;
-- when exact Git/shadow authority is unavailable, the preflight is explicitly recorded as `Inconclusive` with no shadow proof and the existing human-reviewed Trusted Fix authority remains usable;
-- the shadow worktree is source-only: LocalView materializes only validated candidate files from exact committed blobs, applies the bounded patch there, and never checks out or launches the project as part of this preflight;
-- Git commands issued by the shadow layer disable repository hooks/fsmonitor inheritance and external-diff inheritance;
-- cleanup and real-worktree equality remain explicit proof obligations;
-- external side-effect containment is represented as `not_proven` unless an actual isolation authority proves otherwise;
-- production preflight has no `Verified` state. With current platform authority, both a clean supported shadow and an unsupported/no-Git preflight are truthfully `Inconclusive`; once a shadow proof exists, identity, real-worktree, revision or cleanup failures reject/fail closed;
-- the existing Trusted Fix transaction remains the only human-reviewed real-file write authority;
-- the existing Trusted Verify path still performs fresh semantic/source/visual partial revalidation after Apply.
+- R10 carries exact candidate/file identity, bounded affected-state prediction and Wave 9 preflight context through durable Trusted Verify recovery, then consumes fresh post-Apply semantic/visual evidence;
+- R12 proves the source-only `SemanticOnly` preflight blocks repository-controlled hooks/filter/fsmonitor/external-diff side effects and detects real-worktree tampering;
+- R13 executes the fixed production hard-contract catalog plus safe synthetic mutation challenges on bounded synthetic state;
+- actual observed impact is compared against the bounded prediction and unresolved/unexpected impact remains explicit debt rather than being silently accepted;
+- R17 adds a scope-explicit `current_target_current_route` bounded receipt. It may be `Verified` only when the exact selected target changed on fresh evidence, hard contracts are known/pass, safe mutation challenges are killed, external-side-effect containment is `ProvenBlocked`, cleanup/resource obligations are satisfied and no stale/unexpected/inconclusive debt remains;
+- the independent whole-impact `final_verdict` retains the stronger dependency-denominator and complete-revalidation obligations. A bounded `Verified` result cannot authorize the whole-impact handoff;
+- Autonomous receipt schema v2 is enforced at the handoff boundary, and unsupported schema or incomplete authority fails closed.
 
-Library capability that is implemented but **not yet production-orchestrated end-to-end**:
+Truth boundaries that remain deliberate:
 
-- affected-state compilation;
-- execution of the applicable hard/soft contract set for the real candidate;
-- mutation challenges against that production candidate;
-- predicted-versus-actual affected-state comparison;
-- issuance of a production `AutonomousVerificationReceipt` backed by fresh evidence;
-- complete partial/escalated revalidation accounting tied into that receipt.
+- whole-impact Autonomous Verified is not a bounded V1 supported behavior until the dependency universe has a completeness certificate and all required affected state can be revalidated;
+- a temp worktree, loopback address or source-only patch does not by itself prove arbitrary network/process/filesystem isolation;
+- the simpler human Trusted Verify receipt is not relabelled as a whole-impact autonomous proof;
+- correlation-only evidence does not become a root-cause claim.
 
-Truth boundaries:
-
-- a candidate is never called autonomous-`Verified` merely because Wave 9 libraries exist;
-- `external_side_effect_containment = not_proven` blocks the autonomous `Verified` verdict and the verified handoff;
-- a temp worktree, loopback address or source-only patch does **not** prove network/process/filesystem containment outside the shadow root;
-- unsupported executable isolation remains Inconclusive rather than being promoted to success;
-- the simpler human Trusted Verify receipt is not re-labelled as an autonomous proof receipt;
-- no root-cause claim is invented from correlation-only evidence.
-
-Historical integration: PR #198 merged as `bded849d7fdb4a640b4cd12c802381b783bc42c2` after its exact head passed the then-current CI. That CI evidence remains evidence for the implemented Wave 9 library surface; it is not evidence that the complete pipeline was production-reachable.
+Historical integration: PR #198 merged as `bded849d7fdb4a640b4cd12c802381b783bc42c2`. Its CI remains historical evidence for the library surface at that time, not evidence for the later production-reachable bounded pipeline.
 
 ## Wave 1–9 roadmap status
 
-Waves 1–8 retain their bounded software closures. Wave 9 is **Partial at the live-product level** until the remaining production orchestration and isolation/evidence gates above are satisfied. The repository must not use the former “Waves 1–9 live closure” wording as a production fact.
+Waves 1–8 retain their bounded software closures. Wave 9's **bounded V1 target/current-route verification path is software-closed**; the R17 exact-head campaign passed and merged as `e4972adc91764f1786c12fc5b747a42f2c0911e2`. The broader whole-impact autonomous-verification capability remains Post-V1 breadth and must continue to fail closed while its completeness obligations are absent.
 
-Independently open:
+Independently open or intentionally outside bounded V1:
 
-- Wave 9 full production orchestration and real isolation authority;
-- native workspace composition/focus/crash/DPI policy before promotion to the default surface;
-- V4.3 W10 physical mixed-DPI proof on PR #116, which remains deferred and unmeasured on hosted CI;
+- whole-impact Autonomous Verified with a completeness-certified dependency denominator and complete revalidation universe;
+- native child-WebView composition/focus/z-order/minimize-restore/DPI proof before promotion to the default workspace;
+- V4.3 W10 physical mixed-DPI proof on PR #116, deferred to real multi-monitor Windows hardware;
+- Windows code signing, macOS Developer ID/notarization and production updater-signing authority for public signed distribution;
 - broader Partial capabilities explicitly retained in `docs/SPEC_COVERAGE.md`;
-- analysis-concurrency authority only when a concrete concurrent owner exists;
-- security/production hardening and adversarial audit work;
 - later expanded causal, proof-carrying, multi-agent, content-addressed and attested-proof vertical slices.
 
 ## Later expanded-spec phases

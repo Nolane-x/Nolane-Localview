@@ -12,6 +12,7 @@ commands.allow = [
   "apply_fix_proposal",
   "discard_fix_proposal",
   "verify_fix_change",
+  "check_update_channel",
   "pause_runtime",
   "resume_runtime",
   "open_preview",

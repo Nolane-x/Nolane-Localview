@@ -136,9 +136,13 @@ LocalView's control API binds to `127.0.0.1`, requires a generated bearer token 
 
 ## Direction
 
-LocalView is now in production-closure work rather than bootstrap implementation. The highest-value remaining blocks are canonical consequential DOM interaction authority, full Wave 9 contract/mutation/actual-impact/revalidation orchestration, durable Fix→Verify recovery across desktop restart, signed/notarized public releases with updater/upgrade evidence, and the remaining native/framework depth documented as Partial in `docs/SPEC_COVERAGE.md`.
+LocalView is in bounded V1 software-production closure. The durable consequential action chain, two-phase CLI/MCP authority, restart-safe Trusted Fix/Verify recovery, production hard-contract/safe-mutation catalogs, clean-machine install/first-launch proof, release provenance/SBOM and first-release rollback policy are implemented.
 
-See `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/SPEC_COVERAGE.md` and `docs/PRODUCTION_RELEASE.md` for the current architecture, truthful coverage frontier and release gates.
+Wave 9 exposes a scope-explicit bounded verification result for the exact selected target on the current canonical route. Whole-impact Autonomous Verified remains fail-closed and outside the V1 supported claim until a completeness-certified dependency denominator and complete revalidation universe exist. The native child-WebView workspace also remains opt-in/post-V1 until composition/focus/z-order/minimize-restore/DPI evidence is complete; the proven dashboard/iframe workspace remains the V1 default.
+
+Public signed distribution is still externally blocked by Windows code-signing credentials, macOS Developer ID/notarization credentials, production updater-signing authority and the physical W10 mixed-DPI lab evidence where that topology is claimed. R16 provides a user-triggered, fail-closed update-channel check only; it does not download or install updates.
+
+See `docs/PRODUCTION_CLOSURE_MATRIX.md`, `docs/IMPLEMENTATION_STATUS.md`, `docs/SPEC_COVERAGE.md` and `docs/PRODUCTION_RELEASE.md` for the exact bounded V1 claim, broader research frontier and publication gates.
 
 ## License
 
