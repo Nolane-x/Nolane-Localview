@@ -3,7 +3,7 @@ name: Software production closure truth
 on:
   pull_request:
     paths:
-      - "README.md"
+      - "README*.md"
       - "docs/SECURITY.md"
       - "docs/PRODUCTION_CLOSURE_MATRIX.md"
       - "docs/IMPLEMENTATION_STATUS.md"
@@ -11,6 +11,10 @@ on:
       - "docs/SPEC_COVERAGE.md"
       - "docs/ROADMAP.md"
       - "release-policy.json"
+      - "release-candidate.json"
+      - "docs/releases/**"
+      - "release-candidate.json"
+      - "docs/releases/**"
       - "tools/release/**"
       - "apps/desktop/**"
       - "apps/daemon/**"
@@ -27,7 +31,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "README.md"
+      - "README*.md"
       - "docs/SECURITY.md"
       - "docs/PRODUCTION_CLOSURE_MATRIX.md"
       - "docs/IMPLEMENTATION_STATUS.md"
