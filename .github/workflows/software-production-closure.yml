@@ -3,14 +3,16 @@ name: Software production closure truth
 on:
   pull_request:
     paths:
-      - "README.md"
+      - "README*.md"
       - "docs/SECURITY.md"
       - "docs/PRODUCTION_CLOSURE_MATRIX.md"
       - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/PRODUCTION_RELEASE.md"
       - "docs/SPEC_COVERAGE.md"
       - "docs/ROADMAP.md"
+      - "docs/releases/**"
       - "release-policy.json"
+      - "release-candidate.json"
       - "tools/release/**"
       - "apps/desktop/**"
       - "apps/daemon/**"
@@ -23,18 +25,21 @@ on:
       - "crates/planner/**"
       - "crates/state-space/**"
       - ".github/workflows/release-*.yml"
+      - ".github/workflows/publish-release-candidate.yml"
       - ".github/workflows/software-production-closure.yml"
   push:
     branches: [main]
     paths:
-      - "README.md"
+      - "README*.md"
       - "docs/SECURITY.md"
       - "docs/PRODUCTION_CLOSURE_MATRIX.md"
       - "docs/IMPLEMENTATION_STATUS.md"
       - "docs/PRODUCTION_RELEASE.md"
       - "docs/SPEC_COVERAGE.md"
       - "docs/ROADMAP.md"
+      - "docs/releases/**"
       - "release-policy.json"
+      - "release-candidate.json"
       - "tools/release/**"
       - "apps/desktop/**"
       - "apps/daemon/**"
@@ -47,6 +52,7 @@ on:
       - "crates/planner/**"
       - "crates/state-space/**"
       - ".github/workflows/release-*.yml"
+      - ".github/workflows/publish-release-candidate.yml"
       - ".github/workflows/software-production-closure.yml"
   workflow_dispatch:
 
@@ -69,12 +75,16 @@ jobs:
       - name: Exact checked-out head
         if: github.event_name == 'pull_request'
         run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-      - name: Syntax-check closure verifier
-        run: python3 -m py_compile tools/release/verify_production_closure_matrix.py
+      - name: Syntax-check release verifiers
+        run: |
+          python3 -m py_compile tools/release/verify_production_closure_matrix.py
+          python3 -m py_compile tools/release/verify_release_candidate_manifest.py
       - name: Verify bounded V1 production closure matrix
         run: python3 tools/release/verify_production_closure_matrix.py
       - name: Verify initial/future release policy
         run: python3 tools/release/verify_release_policy.py
+      - name: Verify release candidate manifest
+        run: python3 tools/release/verify_release_candidate_manifest.py
       - name: Negative proof — In progress status must fail closed
         shell: bash
         run: |

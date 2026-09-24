@@ -1,0 +1,238 @@
+name: Publish v0.2.0 release candidate
+
+on:
+  pull_request:
+    paths:
+      - "release-candidate.json"
+      - "docs/releases/v0.2.0-rc.1.md"
+      - "tools/release/**"
+      - "apps/desktop/**"
+      - "apps/daemon/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".github/workflows/publish-release-candidate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "release-candidate.json"
+      - "docs/releases/v0.2.0-rc.1.md"
+      - ".github/workflows/publish-release-candidate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localview-publish-v0.2.0-rc.1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Exact checked-out head
+        if: github.event_name == 'pull_request'
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Validate release candidate manifest
+        run: |
+          python3 -m py_compile tools/release/verify_release_candidate_manifest.py
+          python3 -m json.tool release-candidate.json >/dev/null
+          python3 tools/release/verify_release_candidate_manifest.py
+
+  bundle:
+    name: Release bundle (${{ matrix.name }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+          - name: macos
+            os: macos-latest
+          - name: windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Exact checked-out head
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install Linux Tauri dependencies
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+      - name: Verify locked dependency graph
+        run: cargo check --workspace --locked
+      - name: Install desktop dependencies from lockfile
+        working-directory: apps/desktop
+        run: npm ci --no-audit --no-fund
+      - name: Verify release evidence generator contract
+        run: python3 -m unittest tools/release/test_release_evidence.py
+      - name: Verify daemon sidecar production contract
+        run: cargo test --locked -p localview-desktop --test daemon_sidecar_contract
+      - name: Build exact-head Tauri bundle
+        working-directory: apps/desktop
+        run: npm run tauri build
+      - name: Generate and verify release evidence
+        shell: bash
+        env:
+          LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("release-candidate.json", encoding="utf-8"))["version"])')"
+          test -d target/release/bundle
+          python3 tools/release/generate_release_evidence.py \
+            --repo-root . \
+            --bundle-dir target/release/bundle \
+            --output-dir target/release/release-evidence \
+            --candidate-sha "$LOCALVIEW_CANDIDATE_SHA" \
+            --platform "${{ matrix.name }}" \
+            --version "$version"
+          python3 tools/release/verify_release_evidence.py \
+            --repo-root . \
+            --bundle-dir target/release/bundle \
+            --evidence-dir target/release/release-evidence \
+            --candidate-sha "$LOCALVIEW_CANDIDATE_SHA" \
+            --platform "${{ matrix.name }}" \
+            --version "$version"
+      - name: Assert dependency locks remain immutable
+        shell: bash
+        run: git diff --exit-code -- Cargo.lock apps/desktop/package-lock.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: localview-release-${{ matrix.name }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            target/release/bundle/**
+            target/release/release-evidence/**
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub pre-release
+    if: github.event_name == 'push'
+    needs: bundle
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: localview-release-*-${{ github.sha }}
+          path: release-assets
+          merge-multiple: false
+      - name: Re-verify downloaded release evidence
+        shell: bash
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("release-candidate.json", encoding="utf-8"))["version"])')"
+          for platform in linux macos windows; do
+            root="release-assets/localview-release-$platform-${GITHUB_SHA}"
+            test -d "$root/bundle"
+            test -d "$root/release-evidence"
+            python3 tools/release/verify_release_evidence.py \
+              --repo-root . \
+              --bundle-dir "$root/bundle" \
+              --evidence-dir "$root/release-evidence" \
+              --candidate-sha "${GITHUB_SHA}" \
+              --platform "$platform" \
+              --version "$version"
+          done
+      - name: Prepare immutable release assets
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import shutil
+          import subprocess
+
+          root = pathlib.Path("release-assets")
+          publish = pathlib.Path("publish")
+          publish.mkdir(exist_ok=True)
+          manifest = json.loads(pathlib.Path("release-candidate.json").read_text(encoding="utf-8"))
+          tag = manifest["tag"]
+
+          for platform in ("linux", "macos", "windows"):
+              matches = list(root.glob(f"localview-release-{platform}-*"))
+              if len(matches) != 1:
+                  raise SystemExit(f"expected exactly one downloaded artifact root for {platform}, got {len(matches)}")
+              source = matches[0]
+              archive = publish / f"LocalView-{tag}-{platform}.tar.gz"
+              subprocess.run(
+                  ["tar", "-czf", str(archive), "-C", str(source), "."],
+                  check=True,
+              )
+              evidence = source / "release-evidence"
+              for filename in ("artifact-manifest.json", "sbom.spdx.json", "provenance.json"):
+                  shutil.copy2(
+                      evidence / filename,
+                      publish / f"LocalView-{tag}-{platform}-{filename}",
+                  )
+
+          lines = []
+          for path in sorted(publish.iterdir()):
+              if path.name == "SHA256SUMS":
+                  continue
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              lines.append(f"{digest}  {path.name}")
+          (publish / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          test -s publish/SHA256SUMS
+          find publish -maxdepth 1 -type f -print | sort
+      - name: Publish or resume exact-commit pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(python3 -c 'import json; print(json.load(open("release-candidate.json", encoding="utf-8"))["tag"])')"
+          title="$(python3 -c 'import json; print(json.load(open("release-candidate.json", encoding="utf-8"))["title"])')"
+          notes="$(python3 -c 'import json; print(json.load(open("release-candidate.json", encoding="utf-8"))["notes"])')"
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$tag" >/tmp/tag.json 2>/dev/null; then
+            tag_sha="$(python3 -c 'import json; print(json.load(open("/tmp/tag.json", encoding="utf-8"))["object"]["sha"])')"
+            test "$tag_sha" = "${GITHUB_SHA}" || {
+              echo "Existing tag $tag points to $tag_sha, expected ${GITHUB_SHA}" >&2
+              exit 1
+            }
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" publish/* --clobber
+          else
+            gh release create "$tag" publish/* \
+              --target "${GITHUB_SHA}" \
+              --title "$title" \
+              --notes-file "$notes" \
+              --prerelease
+          fi

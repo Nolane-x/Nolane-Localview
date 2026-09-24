@@ -86,9 +86,49 @@ REQUIRED_REPO_EVIDENCE = {
         "must never authorize the global Wave 9 handoff",
     ],
     "README.md": [
-        "bounded V1 software-production closure",
-        "Whole-impact Autonomous Verified remains fail-closed",
-        "Public signed distribution is still externally blocked",
+        "Bounded V1 software-production: complete on `main`.",
+        "independent whole-impact autonomous verdict remains fail-closed",
+        "external publication blockers for a signed final release",
+    ],
+    "README.vi.md": [
+        "Bounded V1 software-production đã hoàn thành",
+        "unsigned pre-release candidate",
+        "Windows code-signing credential",
+    ],
+    "README.zh-CN.md": [
+        "Bounded V1 software-production 已在",
+        "unsigned pre-release candidate",
+        "Windows code-signing credentials",
+    ],
+    "README.ja.md": [
+        "Bounded V1 software-production は",
+        "unsigned pre-release candidate",
+        "Windows code-signing credentials",
+    ],
+    "README.ko.md": [
+        "Bounded V1 software-production은",
+        "unsigned pre-release candidate",
+        "Windows code-signing credentials",
+    ],
+    "README.es.md": [
+        "Bounded V1 software-production está completo",
+        "unsigned pre-release candidate",
+        "Windows code signing",
+    ],
+    "release-candidate.json": [
+        "\"schema\": \"localview-release-candidate-v1\"",
+        "\"tag\": \"v0.2.0-rc.1\"",
+        "\"signed\": false",
+    ],
+    "docs/releases/v0.2.0-rc.1.md": [
+        "Unsigned pre-release candidate",
+        "bounded V1",
+        "production updater-signing authority",
+    ],
+    ".github/workflows/publish-release-candidate.yml": [
+        "Publish v0.2.0 release candidate",
+        "gh release create",
+        "--prerelease",
     ],
     "docs/SPEC_COVERAGE.md": [
         "scope-explicit bounded `current_target_current_route` receipt",
@@ -192,6 +232,9 @@ def main() -> None:
     rows = parse_rows(text)
     verify_repository_evidence()
     verify_no_stale_public_claims()
+    candidate_verifier = ROOT / "tools/release/verify_release_candidate_manifest.py"
+    if not candidate_verifier.is_file():
+        fail("release candidate manifest verifier is missing")
 
     unknown = {
         area: row["status"]

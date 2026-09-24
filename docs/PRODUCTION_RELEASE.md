@@ -97,3 +97,24 @@ The V1 release claim is intentionally narrower than every research capability re
 - manual update checking may be enabled through the pinned R16 channel, while automatic update installation stays disabled until production update-signature authority exists.
 
 Software-production completion is evaluated against these bounded claims. Public signed publication still additionally requires the external signing/notarization credentials listed above.
+
+
+## Automated v0.2.0-rc.1 publication
+
+The repository contains an executable release-candidate manifest at `release-candidate.json` and the exact release notes at `docs/releases/v0.2.0-rc.1.md`.
+
+`.github/workflows/publish-release-candidate.yml` is the publication authority for the first distributable candidate:
+
+1. pull requests validate the manifest and build Windows, macOS and Linux bundles without publishing anything;
+2. each platform regenerates and verifies its artifact manifest, SPDX SBOM and provenance against the exact candidate SHA;
+3. only after the reviewed change lands on `main` does the push job gain `contents: write`;
+4. the publish job re-downloads and independently re-verifies all three platform artifact/evidence sets;
+5. each platform is packaged into a release archive and its evidence files are also attached separately;
+6. `SHA256SUMS` is generated over the publication assets;
+7. the tag/release is created as `v0.2.0-rc.1` with GitHub's prerelease flag.
+
+The workflow is fail-closed around tag identity. If `v0.2.0-rc.1` already exists but points at a different commit, publication fails instead of moving or replacing the tag. A rerun on the same exact commit may replace release assets with byte-equivalent regenerated assets.
+
+The release candidate remains explicitly unsigned. Its archives contain release-candidate bundle output and evidence; they are not a substitute for Windows code-signing verification, macOS Developer ID/notarization, or production updater-signature verification.
+
+The prerelease tag `v0.2.0-rc.1` is intentionally not a supported final-release tag for the initial-release upgrade policy. The future signed final release remains `v0.2.0` once the external signing/notarization requirements are available and proven.
