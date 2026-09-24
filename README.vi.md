@@ -393,7 +393,10 @@ Historical plans/evidence/superseded design được đưa sang kho archive riê
 
 ## License
 
-MIT OR Apache-2.0, tùy lựa chọn.
+Được cấp phép theo một trong hai giấy phép, tùy lựa chọn:
+
+- [MIT](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
 
 <div align="center">
 

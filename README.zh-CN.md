@@ -338,7 +338,10 @@ LocalView 的 evidence、fresh observation、exact lineage、bounded authority �
 
 ## License
 
-MIT OR Apache-2.0。
+可任选以下许可证之一：
+
+- [MIT](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
 
 <div align="center">
 

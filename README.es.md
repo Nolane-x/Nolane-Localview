@@ -337,7 +337,10 @@ Esta idea impulsa evidence, fresh observation, exact lineage, bounded authority 
 
 ## Licencia
 
-MIT OR Apache-2.0.
+Puede elegir cualquiera de estas licencias:
+
+- [MIT](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
 
 <div align="center">
 

@@ -452,8 +452,8 @@ Historical research and completed implementation material should be archived rat
 
 Licensed under either of:
 
-- MIT
-- Apache License 2.0
+- [MIT](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
 
 at your option.
 

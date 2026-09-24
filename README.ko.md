@@ -335,7 +335,10 @@ Unknown은 success가 아니라 unknown으로 남습니다.
 
 ## License
 
-MIT OR Apache-2.0.
+다음 두 라이선스 중 하나를 선택할 수 있습니다:
+
+- [MIT](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
 
 <div align="center">
 

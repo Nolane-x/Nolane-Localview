@@ -121,15 +121,34 @@ jobs:
             --candidate-sha "$LOCALVIEW_CANDIDATE_SHA" \
             --platform "${{ matrix.name }}" \
             --version "$version"
+      - name: Package and locally re-verify transport archive
+        shell: bash
+        env:
+          LOCALVIEW_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("release-candidate.json", encoding="utf-8"))["version"])')"
+          rm -rf target/release/release-payload target/release/release-roundtrip
+          mkdir -p target/release/release-payload/release-evidence target/release/release-roundtrip
+          tar -czf target/release/release-payload/bundle.tar.gz -C target/release bundle
+          cp target/release/release-evidence/artifact-manifest.json target/release/release-payload/release-evidence/
+          cp target/release/release-evidence/sbom.spdx.json target/release/release-payload/release-evidence/
+          cp target/release/release-evidence/provenance.json target/release/release-payload/release-evidence/
+          tar -xzf target/release/release-payload/bundle.tar.gz -C target/release/release-roundtrip
+          test -d target/release/release-roundtrip/bundle
+          python3 tools/release/verify_release_evidence.py \
+            --repo-root . \
+            --bundle-dir target/release/release-roundtrip/bundle \
+            --evidence-dir target/release/release-payload/release-evidence \
+            --candidate-sha "$LOCALVIEW_CANDIDATE_SHA" \
+            --platform "${{ matrix.name }}" \
+            --version "$version"
       - name: Assert dependency locks remain immutable
         shell: bash
         run: git diff --exit-code -- Cargo.lock apps/desktop/package-lock.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: localview-release-${{ matrix.name }}-${{ github.event.pull_request.head.sha || github.sha }}
-          path: |
-            target/release/bundle/**
-            target/release/release-evidence/**
+          path: target/release/release-payload/**
           if-no-files-found: error
           retention-days: 30
 
@@ -157,11 +176,15 @@ jobs:
           version="$(python3 -c 'import json; print(json.load(open("release-candidate.json", encoding="utf-8"))["version"])')"
           for platform in linux macos windows; do
             root="release-assets/localview-release-$platform-${GITHUB_SHA}"
-            test -d "$root/bundle"
+            test -f "$root/bundle.tar.gz"
             test -d "$root/release-evidence"
+            rm -rf "$root/verified"
+            mkdir -p "$root/verified"
+            tar -xzf "$root/bundle.tar.gz" -C "$root/verified"
+            test -d "$root/verified/bundle"
             python3 tools/release/verify_release_evidence.py \
               --repo-root . \
-              --bundle-dir "$root/bundle" \
+              --bundle-dir "$root/verified/bundle" \
               --evidence-dir "$root/release-evidence" \
               --candidate-sha "${GITHUB_SHA}" \
               --platform "$platform" \
@@ -175,7 +198,6 @@ jobs:
           import json
           import pathlib
           import shutil
-          import subprocess
 
           root = pathlib.Path("release-assets")
           publish = pathlib.Path("publish")
@@ -189,10 +211,7 @@ jobs:
                   raise SystemExit(f"expected exactly one downloaded artifact root for {platform}, got {len(matches)}")
               source = matches[0]
               archive = publish / f"LocalView-{tag}-{platform}.tar.gz"
-              subprocess.run(
-                  ["tar", "-czf", str(archive), "-C", str(source), "."],
-                  check=True,
-              )
+              shutil.copy2(source / "bundle.tar.gz", archive)
               evidence = source / "release-evidence"
               for filename in ("artifact-manifest.json", "sbom.spdx.json", "provenance.json"):
                   shutil.copy2(
