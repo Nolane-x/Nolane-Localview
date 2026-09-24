@@ -136,9 +136,11 @@ LocalView's control API binds to `127.0.0.1`, requires a generated bearer token 
 
 ## Direction
 
-LocalView is now in production-closure work rather than bootstrap implementation. The highest-value remaining blocks are canonical consequential DOM interaction authority, full Wave 9 contract/mutation/actual-impact/revalidation orchestration, durable Fix→Verify recovery across desktop restart, signed/notarized public releases with updater/upgrade evidence, and the remaining native/framework depth documented as Partial in `docs/SPEC_COVERAGE.md`.
+LocalView's bounded V1 software path is in final production closure rather than bootstrap implementation. Consequential managed-WebView actions, durable Fix→Verify recovery, release-candidate provenance/SBOM, clean-machine install/first launch, and the initial-release rollback policy are closed by exact-head evidence. Wave 9 now distinguishes a scope-explicit **current target / current route** verification result from the stricter whole-impact autonomous verdict, so bounded proof is useful without claiming a complete application-wide dependency universe.
 
-See `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/SPEC_COVERAGE.md` and `docs/PRODUCTION_RELEASE.md` for the current architecture, truthful coverage frontier and release gates.
+The shipping V1 workspace remains the conservative iframe workspace; the native child-WebView default is post-V1 breadth until cross-platform composition/focus/DPI evidence exists. Public signed distribution is separately blocked by Windows/macOS signing credentials and signed updater-install authority. Broader framework/profiling/network/timeline depth remains explicitly Partial or post-V1 rather than silently expanding the release claim.
+
+See `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/SPEC_COVERAGE.md`, `docs/PRODUCTION_CLOSURE_MATRIX.md` and `docs/PRODUCTION_RELEASE.md` for the exact production boundary and public-release gates.
 
 ## License
 
