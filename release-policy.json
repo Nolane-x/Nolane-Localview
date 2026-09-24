@@ -1,0 +1,14 @@
+{
+  "schema": "localview-release-policy-v1",
+  "current_version": "0.2.0",
+  "initial_supported_release": true,
+  "previous_supported_version": null,
+  "installer_upgrade_required": false,
+  "installer_rollback_required": false,
+  "state_rollback_compatibility_required": true,
+  "required_state_compatibility_contracts": [
+    "trusted-verify-v1-primary-backward-readable",
+    "wave9-companion-ignored-by-previous-reader",
+    "wave9-companion-committed-before-primary"
+  ]
+}
