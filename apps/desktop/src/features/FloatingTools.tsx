@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { COMMAND_IDS, type CommandId } from '../commands';
-import type { AiFixCapability, AiProviderCapability, ResponsivePresetId, VerifyScope, VerifyStatus, Wave9AutonomousReceipt } from '../api';
+import { api, type AiFixCapability, type AiProviderCapability, type ResponsivePresetId, type UpdateChannelReceipt, type VerifyScope, type VerifyStatus, type Wave9AutonomousReceipt } from '../api';
 import type { ActionCorrelationReceipt, DashboardState, LiveSessionState, ObserverEvent, Session } from '../types';
 import { LOCALE_OPTIONS, translate, type MessageKey, type SupportedLocale } from '../i18n';
 import type { LocalViewPreferences } from '../preferences';
@@ -732,6 +732,12 @@ function AdvancedPanel({ current, live, locale, onOpenNative }: { current?: Sess
 }
 
 /* Language selector, Show target bar, Show tool rail */
+type UpdateCheckState =
+  | { status: 'idle' }
+  | { status: 'checking' }
+  | { status: 'success'; receipt: UpdateChannelReceipt }
+  | { status: 'failure' };
+
 function SettingsPanel({
   locale,
   preferences,
@@ -743,6 +749,31 @@ function SettingsPanel({
   onPreferencesChange: (patch: Partial<LocalViewPreferences>) => void;
   onResetWorkspace: () => void;
 }) {
+  const [updateState, setUpdateState] = useState<UpdateCheckState>({ status: 'idle' });
+
+  const checkUpdates = async () => {
+    if (updateState.status === 'checking') return;
+    setUpdateState({ status: 'checking' });
+    try {
+      const receipt = await api.checkUpdateChannel();
+      setUpdateState({ status: 'success', receipt });
+    } catch {
+      setUpdateState({ status: 'failure' });
+    }
+  };
+
+  const updateStatus = updateState.status === 'checking'
+    ? translate(locale, 'settings.checkingUpdates')
+    : updateState.status === 'failure'
+      ? translate(locale, 'settings.updateCheckFailed')
+      : updateState.status === 'success'
+        ? updateState.receipt.reason === 'channel_not_configured'
+          ? translate(locale, 'settings.updateChannelNotConfigured')
+          : updateState.receipt.reason === 'update_available_manual_only'
+            ? translate(locale, 'settings.updateAvailableManualOnly')
+            : translate(locale, 'settings.upToDate')
+        : undefined;
+
   return (
     <div className="settings-panel">
       <section className="settings-section">
@@ -802,6 +833,38 @@ function SettingsPanel({
         </label>
         <button className="settings-reset" onClick={onResetWorkspace}>
           {translate(locale, 'action.resetWorkspace')}
+        </button>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-title">
+          <strong>{translate(locale, 'settings.updates')}</strong>
+        </div>
+        {updateStatus && (
+          <div className="settings-update-status" role="status" aria-live="polite">
+            <span>{updateStatus}</span>
+            {updateState.status === 'success' && (
+              <small>
+                {updateState.receipt.currentVersion}
+                {updateState.receipt.latestVersion
+                  && updateState.receipt.latestVersion !== updateState.receipt.currentVersion
+                  ? ` → ${updateState.receipt.latestVersion}`
+                  : ''}
+              </small>
+            )}
+          </div>
+        )}
+        <button
+          className="settings-reset"
+          disabled={updateState.status === 'checking'}
+          onClick={() => void checkUpdates()}
+        >
+          {translate(
+            locale,
+            updateState.status === 'checking'
+              ? 'settings.checkingUpdates'
+              : 'settings.checkUpdates',
+          )}
         </button>
       </section>
     </div>
