@@ -52,6 +52,9 @@ fn trusted_verify_requires_verified_complete_clean_receipt() {
         "pub fn validate_wave9_verified_handoff",
         "#[cfg(test)]",
     );
+    assert!(
+        body.contains("receipt.schema_version != AUTONOMOUS_VERIFICATION_RECEIPT_SCHEMA_VERSION")
+    );
     assert!(body.contains("receipt.base_revision != expected_base_revision"));
     assert!(body.contains("AutonomousVerificationVerdict::Verified"));
     assert!(body.contains("receipt.cleanup_proof.complete()"));
@@ -62,6 +65,10 @@ fn trusted_verify_requires_verified_complete_clean_receipt() {
     assert!(body.contains("ProvenBlocked"));
     assert!(body.contains("unexpected_impact"));
     assert!(body.contains("stale_evidence_ids"));
+    assert!(
+        !body.contains("bounded_verification"),
+        "bounded target verification must never authorize the global Wave 9 handoff"
+    );
 }
 
 #[test]
