@@ -403,8 +403,13 @@ pub fn validate_wave9_verified_handoff(
     receipt: &localview_verification::AutonomousVerificationReceipt,
     expected_base_revision: &str,
 ) -> Result<(), String> {
-    use localview_verification::AutonomousVerificationVerdict;
+    use localview_verification::{
+        AUTONOMOUS_VERIFICATION_RECEIPT_SCHEMA_VERSION, AutonomousVerificationVerdict,
+    };
 
+    if receipt.schema_version != AUTONOMOUS_VERIFICATION_RECEIPT_SCHEMA_VERSION {
+        return Err("Wave 9 receipt schema is not authorized for handoff".into());
+    }
     if expected_base_revision.trim().is_empty() || receipt.base_revision != expected_base_revision {
         return Err(
             "Wave 9 receipt base revision does not match the current trusted revision".into(),
