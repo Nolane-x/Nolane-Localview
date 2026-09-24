@@ -1547,6 +1547,31 @@ mod tests {
     }
 
     #[test]
+    fn bounded_target_verifies_only_clean_exact_scope() {
+        let candidate = Uuid::new_v4();
+        let autonomous = build_autonomous_receipt(input(
+            candidate,
+            contracts(ContractVerdict::Pass, ContractStrength::Hard),
+        ));
+        let observed = ProductionObservedVerificationInput {
+            deterministic_status: ProductionDeterministicStatus::ChangeObserved,
+            canonical_route: "http://127.0.0.1:5173/settings".into(),
+            reference: Some("@e1".into()),
+            snapshot_version: 42,
+            reference_changed: true,
+            visual_region_count: 0,
+            regression_signals: Vec::new(),
+            evidence_ids: vec!["semantic:after".into()],
+            observed_runtime_ms: 100,
+        };
+        let bounded = build_bounded_target_verification(&observed, &autonomous);
+        assert_eq!(bounded.verdict, BoundedVerificationVerdict::Verified);
+        assert!(bounded.reasons.is_empty());
+        assert_eq!(bounded.reference.as_deref(), Some("@e1"));
+        assert_eq!(bounded.snapshot_version, 42);
+    }
+
+    #[test]
     fn bounded_target_rejects_missing_change_or_regression_signal() {
         let candidate = Uuid::new_v4();
         let autonomous = build_autonomous_receipt(input(
