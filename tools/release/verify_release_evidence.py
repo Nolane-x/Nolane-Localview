@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import subprocess
 import sys
 
 
@@ -14,6 +15,28 @@ def sha256_file(path: pathlib.Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def sha256_bytes(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def committed_blob_bytes(repo_root: pathlib.Path, candidate_sha: str, repo_path: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{candidate_sha}:{repo_path}"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise SystemExit(
+            f"cannot read committed Git blob {candidate_sha}:{repo_path}: {error}"
+        ) from error
+    if not result.stdout:
+        raise SystemExit(f"committed Git blob is empty: {candidate_sha}:{repo_path}")
+    return result.stdout
 
 
 def artifact_inventory(bundle_dir: pathlib.Path) -> list[dict]:
@@ -83,13 +106,17 @@ def verify(
     if claims.get("macos_notarization_verified") is not False:
         raise SystemExit("unsigned candidate cannot claim macOS notarization")
 
-    cargo_lock = repo_root / "Cargo.lock"
-    npm_lock = repo_root / "apps" / "desktop" / "package-lock.json"
+    if len(candidate_sha) != 40 or any(ch not in "0123456789abcdef" for ch in candidate_sha):
+        raise SystemExit("candidate SHA must be an exact 40-character lowercase Git SHA")
+    committed_cargo_lock = committed_blob_bytes(repo_root, candidate_sha, "Cargo.lock")
+    committed_npm_lock = committed_blob_bytes(
+        repo_root, candidate_sha, "apps/desktop/package-lock.json"
+    )
     if provenance.get("lockfiles") != {
-        "Cargo.lock": sha256_file(cargo_lock),
-        "apps/desktop/package-lock.json": sha256_file(npm_lock),
+        "Cargo.lock": sha256_bytes(committed_cargo_lock),
+        "apps/desktop/package-lock.json": sha256_bytes(committed_npm_lock),
     }:
-        raise SystemExit("provenance lockfile digests do not match committed bytes")
+        raise SystemExit("provenance lockfile digests do not match committed Git blobs")
     if provenance.get("artifact_manifest_sha256") != sha256_file(manifest_path):
         raise SystemExit("provenance artifact-manifest digest mismatch")
     if provenance.get("sbom_sha256") != sha256_file(sbom_path):
