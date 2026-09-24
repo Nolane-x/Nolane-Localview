@@ -102,6 +102,17 @@ export interface Wave9AutonomousReceipt {
   unexpected_impact: Array<{ kind: string; id: string }>;
 }
 
+export interface UpdateChannelReceipt {
+  configured: boolean;
+  channel: string;
+  currentVersion: string;
+  latestVersion?: string | null;
+  updateAvailable: boolean;
+  installAuthorized: false;
+  signaturePresent: boolean;
+  reason: 'channel_not_configured' | 'up_to_date' | 'update_available_manual_only';
+}
+
 export interface HumanVerifyChangeReceipt {
   verificationId: string;
   reference: string;
@@ -260,6 +271,8 @@ export const api = {
     invoke<void>('discard_fix_proposal', { proposalId }),
   verifyFixChange: ({ verificationId }: HumanVerifyChangeRequest) =>
     invoke<HumanVerifyChangeReceipt>('verify_fix_change', { verificationId }),
+  checkUpdateChannel: () =>
+    invoke<UpdateChannelReceipt>('check_update_channel'),
   captureCurrentViewport: (sessionId: string) => invoke<VisualCaptureReceipt>('capture_current_viewport', { sessionId, revision: null }),
   captureResponsiveSweep: ({ sessionId, presets }: ResponsiveSweepRequest) =>
     invoke<ResponsiveSweepReceipt>('capture_responsive_sweep', { sessionId, presets }),
