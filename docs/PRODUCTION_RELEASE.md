@@ -85,3 +85,31 @@ When configured, the check path:
 - never downloads or installs the artifact.
 
 A detached signature field in the manifest is informational only in R16. It never sets `installAuthorized`. Signed automatic update installation remains externally blocked until a production signing key and concrete signature-verification authority are configured and proven.
+
+
+## Bounded V1 software-production claim
+
+The V1 software-production claim is deliberately narrower than the full research roadmap.
+
+Included in the V1 claim:
+
+- self-contained desktop + daemon packaging;
+- managed-surface ownership and two-phase consequential actions;
+- Trusted Fix with durable restart-safe Verify context;
+- scope-explicit current-target/current-route post-Apply verification;
+- native viewport capture through WebView2, WKWebView and WebKitGTK;
+- bounded headless/report/attestation paths;
+- unsigned clean-machine install + first launch;
+- truthful initial-release rollback-state compatibility and future upgrade/rollback policy;
+- release provenance/SBOM evidence;
+- user-triggered check-only update-channel metadata.
+
+Not included in the V1 claim:
+
+- whole-application `Autonomous Verified` without a complete affected-state universe;
+- native child-WebView workspace as the default;
+- W10 mixed-DPI physical closure;
+- signed automatic updater install/apply;
+- broader profiling/framework/network/timeline capabilities still marked Partial.
+
+This software-production claim does **not** convert unsigned CI artifacts into public production releases. Windows code signing, macOS Developer ID/notarization, signed updater-install authority and the final signed-artifact smoke campaign remain public-distribution gates.
