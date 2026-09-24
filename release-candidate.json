@@ -1,0 +1,10 @@
+{
+  "schema": "localview-release-candidate-v1",
+  "tag": "v0.2.0-rc.1",
+  "version": "0.2.0",
+  "title": "LocalView v0.2.0-rc.1",
+  "prerelease": true,
+  "signed": false,
+  "public_production_release": false,
+  "notes": "docs/releases/v0.2.0-rc.1.md"
+}
