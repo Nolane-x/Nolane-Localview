@@ -77,3 +77,21 @@ Trusted Ask AI/Fix provider endpoints remain loopback-only. The shared provider 
 Security-sensitive helper execution in this audit lane does not resolve through an attacker-controlled `PATH`. Listener discovery selects fixed absolute OS utility paths and strips common loader-injection variables before execution. Trusted Open Source launching uses absolute platform launcher paths (`/usr/bin/open`, `/usr/bin/xdg-open`, or `%SystemRoot%\\System32\\rundll32.exe`) and passes the already-canonicalized project file as one argv item rather than through a shell.
 
 This is a scoped claim, not a repository-wide claim that every subprocess has been hardened. In particular, components outside this audit ownership that still invoke tools by name require their own process-trust review before being treated as hostile-`PATH` safe.
+
+
+## Update-check boundary
+
+The V1 update surface is **check-only** and user-triggered.
+
+- no update request is sent at application startup;
+- the manifest endpoint is compiled into the build with `LOCALVIEW_UPDATE_MANIFEST_URL`; an unconfigured build performs no update-channel network request;
+- the endpoint must use default-port HTTPS without credentials, query strings or fragments;
+- redirects are disabled;
+- the manifest body is bounded to 64 KiB and the fixed stable-channel schema is validated;
+- the current platform must have exactly one artifact metadata entry;
+- artifact metadata must stay on the same pinned origin as the manifest;
+- SHA-256 and detached-signature fields are metadata only in V1;
+- `installAuthorized` is always false;
+- the check path contains no artifact download, filesystem write, process spawn or installer/apply authority.
+
+HTTPS, a digest field, or the mere presence of a detached-signature string is **not** treated as production update-signature verification. Automatic download/install remains externally blocked until LocalView has a real production signing key and a proven signature-verification authority.
