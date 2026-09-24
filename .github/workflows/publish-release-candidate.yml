@@ -129,7 +129,7 @@ jobs:
           version="$(python3 -c 'import json; print(json.load(open("release-candidate.json", encoding="utf-8"))["version"])')"
           rm -rf target/release/release-payload target/release/release-roundtrip
           mkdir -p target/release/release-payload/release-evidence target/release/release-roundtrip
-          tar -czf target/release/release-payload/bundle.tar.gz -C target/release bundle
+          COPYFILE_DISABLE=1 tar -czf target/release/release-payload/bundle.tar.gz -C target/release bundle
           cp target/release/release-evidence/artifact-manifest.json target/release/release-payload/release-evidence/
           cp target/release/release-evidence/sbom.spdx.json target/release/release-payload/release-evidence/
           cp target/release/release-evidence/provenance.json target/release/release-payload/release-evidence/
