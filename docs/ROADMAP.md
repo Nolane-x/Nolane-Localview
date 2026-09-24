@@ -275,7 +275,7 @@ Historical integration: PR #198 merged as `bded849d7fdb4a640b4cd12c802381b783bc4
 
 ## Wave 1–9 roadmap status
 
-Waves 1–8 retain their bounded software closures. Wave 9's **bounded V1 target/current-route verification path is software-closed** once the R17 exact-head campaign lands. The broader whole-impact autonomous-verification capability remains Post-V1 breadth and must continue to fail closed while its completeness obligations are absent.
+Waves 1–8 retain their bounded software closures. Wave 9's **bounded V1 target/current-route verification path is software-closed**; the R17 exact-head campaign passed and merged as `e4972adc91764f1786c12fc5b747a42f2c0911e2`. The broader whole-impact autonomous-verification capability remains Post-V1 breadth and must continue to fail closed while its completeness obligations are absent.
 
 Independently open or intentionally outside bounded V1:
 
